@@ -1,0 +1,184 @@
+.inventory-summary {
+  background: white;
+  border-radius: 8px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  overflow: hidden;
+}
+
+.summary-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1.5rem;
+  border-bottom: 1px solid #e0e0e0;
+}
+
+.summary-header h2 {
+  margin: 0;
+  font-size: 1.5rem;
+  color: #2c3e50;
+}
+
+.inventory-items {
+  padding: 1.5rem;
+}
+
+.inventory-item-card {
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  padding: 1.5rem;
+  margin-bottom: 1.5rem;
+  background: #fafafa;
+}
+
+.inventory-item-card:last-child {
+  margin-bottom: 0;
+}
+
+.item-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 1rem;
+}
+
+.item-info h3 {
+  margin: 0 0 0.5rem 0;
+  font-size: 1.25rem;
+  color: #2c3e50;
+}
+
+.item-details {
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+  font-size: 0.9rem;
+  color: #7f8c8d;
+}
+
+.item-sku {
+  font-weight: 600;
+  color: #34495e;
+}
+
+.item-type {
+  text-transform: capitalize;
+  padding: 0.25rem 0.5rem;
+  background: #ecf0f1;
+  border-radius: 4px;
+}
+
+.item-vendor {
+  color: #3498db;
+}
+
+.item-total {
+  text-align: right;
+  padding: 0.75rem 1.25rem;
+  background: #3498db;
+  color: white;
+  border-radius: 8px;
+  min-width: 120px;
+}
+
+.total-quantity {
+  font-size: 1.75rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.total-unit {
+  font-size: 0.9rem;
+  opacity: 0.9;
+  margin-top: 0.25rem;
+}
+
+.item-description {
+  margin: 1rem 0;
+  padding: 0.75rem;
+  background: white;
+  border-left: 3px solid #3498db;
+  color: #555;
+  font-size: 0.95rem;
+}
+
+.item-lots {
+  margin-top: 1.5rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid #e0e0e0;
+}
+
+.item-lots h4 {
+  margin: 0 0 1rem 0;
+  font-size: 1rem;
+  color: #2c3e50;
+}
+
+.lots-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: white;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.lots-table thead {
+  background-color: #f8f9fa;
+}
+
+.lots-table th {
+  padding: 0.75rem;
+  text-align: left;
+  font-weight: 600;
+  color: #2c3e50;
+  font-size: 0.9rem;
+  border-bottom: 2px solid #e0e0e0;
+}
+
+.lots-table td {
+  padding: 0.75rem;
+  border-bottom: 1px solid #e0e0e0;
+  font-size: 0.9rem;
+}
+
+.lots-table tbody tr:hover {
+  background-color: #f8f9fa;
+}
+
+.empty-state {
+  text-align: center;
+  padding: 4rem 2rem;
+  color: #7f8c8d;
+}
+
+.empty-state p {
+  margin: 0.5rem 0;
+  font-size: 1.1rem;
+}
+
+.loading {
+  text-align: center;
+  padding: 3rem;
+  color: #7f8c8d;
+  font-size: 1.1rem;
+}
+
+.btn {
+  padding: 0.5rem 1rem;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-weight: 500;
+  transition: all 0.2s;
+}
+
+.btn-secondary {
+  background-color: #95a5a6;
+  color: white;
+}
+
+.btn-secondary:hover {
+  background-color: #7f8c8d;
+}
+

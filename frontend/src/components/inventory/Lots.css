@@ -1,0 +1,124 @@
+.lots-container,
+.batches-container,
+.formulas-container,
+.orders-container {
+  background: white;
+  border-radius: 8px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  overflow: hidden;
+}
+
+.lots-header,
+.batches-header,
+.formulas-header,
+.orders-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1.5rem;
+  border-bottom: 1px solid #e0e0e0;
+}
+
+.lots-header h2,
+.batches-header h2,
+.formulas-header h2,
+.orders-header h2 {
+  margin: 0;
+  font-size: 1.5rem;
+  color: #2c3e50;
+}
+
+.lots-table-container,
+.batches-table-container,
+.formulas-table-container,
+.orders-table-container {
+  overflow-x: auto;
+}
+
+.lots-table,
+.batches-table,
+.formulas-table,
+.orders-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.lots-table thead,
+.batches-table thead,
+.formulas-table thead,
+.orders-table thead {
+  background-color: #f8f9fa;
+}
+
+.lots-table th,
+.batches-table th,
+.formulas-table th,
+.orders-table th {
+  padding: 1rem;
+  text-align: left;
+  font-weight: 600;
+  color: #2c3e50;
+  border-bottom: 2px solid #e0e0e0;
+}
+
+.lots-table td,
+.batches-table td,
+.formulas-table td,
+.orders-table td {
+  padding: 1rem;
+  border-bottom: 1px solid #e0e0e0;
+}
+
+.lots-table tbody tr:hover,
+.batches-table tbody tr:hover,
+.formulas-table tbody tr:hover,
+.orders-table tbody tr:hover {
+  background-color: #f8f9fa;
+}
+
+.empty-state {
+  text-align: center;
+  padding: 3rem;
+  color: #7f8c8d;
+}
+
+.loading {
+  text-align: center;
+  padding: 3rem;
+  color: #7f8c8d;
+}
+
+.badge {
+  display: inline-block;
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.85rem;
+  font-weight: 500;
+  text-transform: capitalize;
+}
+
+.badge-draft {
+  background-color: #ecf0f1;
+  color: #2c3e50;
+}
+
+.badge-issued {
+  background-color: #3498db;
+  color: white;
+}
+
+.badge-received {
+  background-color: #f39c12;
+  color: white;
+}
+
+.badge-completed {
+  background-color: #27ae60;
+  color: white;
+}
+
+.badge-cancelled {
+  background-color: #e74c3c;
+  color: white;
+}
+
