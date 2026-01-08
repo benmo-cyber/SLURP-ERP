@@ -1,5 +1,5 @@
 {
-  "name": "wwi-erp-frontend",
+  "name": "slurp-frontend",
   "version": "1.0.0",
   "type": "module",
   "scripts": {
@@ -11,7 +11,8 @@
     "axios": "^1.6.2",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
-    "react-router-dom": "^6.20.0"
+    "react-router-dom": "^6.20.0",
+    "recharts": "^3.6.0"
   },
   "devDependencies": {
     "@types/react": "^18.2.43",
@@ -21,4 +22,3 @@
     "vite": "^5.0.8"
   }
 }
-
