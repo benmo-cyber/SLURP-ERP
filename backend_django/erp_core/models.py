@@ -81,12 +81,41 @@ class FinishedProductSpecification(models.Model):
 
 
 class LotNumberSequence(models.Model):
-    date_prefix = models.CharField(max_length=6, unique=True)
+    """Sequence tracking for lot numbers (format: 1yy00000)"""
+    year_prefix = models.CharField(max_length=2, unique=True, null=True, blank=True)  # yy
+    date_prefix = models.CharField(max_length=6, unique=True, null=True, blank=True)  # Legacy field
     sequence_number = models.IntegerField(default=0)
     last_updated = models.DateTimeField(auto_now=True)
     
     class Meta:
-        ordering = ['-date_prefix', '-sequence_number']
+        ordering = ['-year_prefix', '-sequence_number']
+
+class PONumberSequence(models.Model):
+    """Sequence tracking for PO numbers (format: 2yy0000)"""
+    year_prefix = models.CharField(max_length=2, unique=True)  # yy
+    sequence_number = models.IntegerField(default=0)
+    last_updated = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        ordering = ['-year_prefix', '-sequence_number']
+
+class SalesOrderNumberSequence(models.Model):
+    """Sequence tracking for sales order numbers (format: 3yy0000)"""
+    year_prefix = models.CharField(max_length=2, unique=True)  # yy
+    sequence_number = models.IntegerField(default=0)
+    last_updated = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        ordering = ['-year_prefix', '-sequence_number']
+
+class InvoiceNumberSequence(models.Model):
+    """Sequence tracking for invoice numbers (format: 4yy0000)"""
+    year_prefix = models.CharField(max_length=2, unique=True)  # yy
+    sequence_number = models.IntegerField(default=0)
+    last_updated = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        ordering = ['-year_prefix', '-sequence_number']
 
 
 class Lot(models.Model):
@@ -97,6 +126,7 @@ class Lot(models.Model):
     ]
     
     lot_number = models.CharField(max_length=20, unique=True, db_index=True)
+    vendor_lot_number = models.CharField(max_length=100, blank=True, null=True, help_text='Vendor lot number from check-in form')
     item = models.ForeignKey(Item, on_delete=models.CASCADE, related_name='lots')
     quantity = models.FloatField()
     quantity_remaining = models.FloatField()
@@ -292,6 +322,7 @@ class SalesOrder(models.Model):
     so_number = models.CharField(max_length=100, unique=True, db_index=True)
     customer_name = models.CharField(max_length=255)
     customer_id = models.CharField(max_length=100, blank=True, null=True)
+    customer_reference_number = models.CharField(max_length=255, blank=True, null=True, help_text='Customer PO number or reference number')
     order_date = models.DateTimeField(auto_now_add=True)
     expected_ship_date = models.DateTimeField(blank=True, null=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='draft')

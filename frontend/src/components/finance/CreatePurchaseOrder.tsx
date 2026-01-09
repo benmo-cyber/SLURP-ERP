@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { createPurchaseOrder } from '../../api/purchaseOrders'
 import { getVendors } from '../../api/quality'
 import { getItems } from '../../api/inventory'
@@ -9,6 +9,11 @@ interface Vendor {
   id: number
   name: string
   address?: string
+  vendor_id?: string
+  contact_name?: string
+  email?: string
+  phone?: string
+  approval_status?: string
 }
 
 interface Item {
@@ -22,6 +27,8 @@ interface Item {
 
 interface POItem {
   item_id: number | null
+  sku: string | null  // Selected SKU
+  vendor: string | null  // Selected vendor for this SKU
   description: string
   unit_cost: number
   unit_of_measure: string
@@ -40,6 +47,7 @@ function CreatePurchaseOrder({ onClose, onSuccess }: CreatePurchaseOrderProps) {
   const [vendors, setVendors] = useState<Vendor[]>([])
   const [items, setItems] = useState<Item[]>([])
   const [loading, setLoading] = useState(false)
+  const [loadingVendors, setLoadingVendors] = useState(true)
   
   const [formData, setFormData] = useState({
     order_number: '',
@@ -66,7 +74,7 @@ function CreatePurchaseOrder({ onClose, onSuccess }: CreatePurchaseOrderProps) {
   })
 
   const [poItems, setPoItems] = useState<POItem[]>([
-    { item_id: null, description: '', unit_cost: 0, unit_of_measure: '', quantity: 0, notes: '', original_unit: '', costMasterData: null }
+    { item_id: null, sku: null, vendor: null, description: '', unit_cost: 0, unit_of_measure: '', quantity: 0, notes: '', original_unit: '', costMasterData: null }
   ])
 
   useEffect(() => {
@@ -74,18 +82,37 @@ function CreatePurchaseOrder({ onClose, onSuccess }: CreatePurchaseOrderProps) {
     loadItems()
   }, [])
 
+  // Memoize vendor options to prevent unnecessary re-renders
+  const vendorOptions = useMemo(() => {
+    return vendors.map(vendor => ({
+      id: vendor.id,
+      name: vendor.name,
+      value: String(vendor.id)
+    }))
+  }, [vendors])
+
+
   const loadVendors = async () => {
     try {
+      setLoadingVendors(true)
       const data = await getVendors()
-      setVendors(data)
-    } catch (error) {
+      const vendorsList = Array.isArray(data) ? data : []
+      setVendors(vendorsList)
+      if (vendorsList.length === 0) {
+        console.warn('No vendors found in the system')
+      }
+    } catch (error: any) {
       console.error('Failed to load vendors:', error)
+      alert(`Failed to load vendors: ${error.response?.data?.detail || error.message || 'Unknown error'}`)
+      setVendors([])
+    } finally {
+      setLoadingVendors(false)
     }
   }
 
   const loadItems = async () => {
     try {
-      // Only load items from approved vendors
+      // Load all items to get unique SKUs and vendors
       const data = await getItems(true)
       setItems(data)
     } catch (error) {
@@ -93,124 +120,142 @@ function CreatePurchaseOrder({ onClose, onSuccess }: CreatePurchaseOrderProps) {
     }
   }
 
-  const handleVendorChange = (vendorId: string) => {
-    setFormData({ ...formData, vendor_id: vendorId })
-    if (vendorId) {
-      const vendor = vendors.find(v => v.id === parseInt(vendorId))
-      if (vendor && vendor.address) {
-        setFormData(prev => ({ ...prev, vendor_address: vendor.address || '' }))
+  // Get unique SKUs from items
+  const getUniqueSkus = () => {
+    const skuSet = new Set<string>()
+    items.forEach(item => {
+      if (item.sku) {
+        skuSet.add(item.sku)
       }
+    })
+    return Array.from(skuSet).sort()
+  }
+
+  // Get vendors for a specific SKU
+  const getVendorsForSku = (sku: string) => {
+    return items
+      .filter(item => item.sku === sku)
+      .map(item => ({
+        id: item.id,
+        vendor: (item as any).vendor || 'Unknown',
+        name: item.name,
+        unit_of_measure: item.unit_of_measure,
+        price: item.price,
+        pack_size: item.pack_size
+      }))
+      .filter((item, index, self) => 
+        index === self.findIndex(i => i.vendor === item.vendor)
+      )
+  }
+
+  const handleVendorChange = (vendorId: string) => {
+    // Ensure vendorId is a string and normalize it
+    const vendorIdStr = vendorId ? String(vendorId).trim() : ''
+    
+    if (vendorIdStr) {
+      const vendor = vendors.find(v => String(v.id) === vendorIdStr)
+      
+      if (vendor) {
+        // Update vendor address fields if available - do it in one state update
+        setFormData(prev => ({ 
+          ...prev, 
+          vendor_id: vendorIdStr,
+          vendor_address: vendor.address || prev.vendor_address || ''
+        }))
+      } else {
+        // Vendor not found, just update the ID
+        setFormData(prev => ({ ...prev, vendor_id: vendorIdStr }))
+      }
+    } else {
+      // Clear vendor address when no vendor selected
+      setFormData(prev => ({ 
+        ...prev, 
+        vendor_id: '',
+        vendor_address: '',
+        vendor_city: '',
+        vendor_state: '',
+        vendor_zip: '',
+        vendor_country: ''
+      }))
     }
   }
 
   const handleItemChange = async (index: number, field: keyof POItem, value: any) => {
-    // If changing item_id, we need to handle async price loading
-    if (field === 'item_id') {
+    // Handle SKU selection
+    if (field === 'sku') {
       const updated = [...poItems]
+      updated[index] = { 
+        ...updated[index], 
+        sku: value || null,
+        vendor: null, // Reset vendor when SKU changes
+        item_id: null, // Reset item_id
+        description: '',
+        unit_cost: 0,
+        unit_of_measure: '',
+        costMasterData: null
+      }
+      setPoItems(updated)
+      return
+    }
+    
+    // Handle vendor selection for a SKU
+    if (field === 'vendor') {
+      const updated = [...poItems]
+      const currentItem = updated[index]
       
-      if (value) {
-        const itemId = typeof value === 'string' ? parseInt(value) : value
-        const item = items.find(i => i.id === itemId)
+      if (currentItem.sku && value) {
+        // Find the item matching SKU + vendor
+        const matchingItem = items.find(i => 
+          i.sku === currentItem.sku && 
+          ((i as any).vendor === value || (!(i as any).vendor && value === 'Unknown'))
+        )
         
-        if (item) {
-          // Store original unit
-          const originalUnit = item.unit_of_measure
-          
-          // Update description and unit of measure immediately
+        if (matchingItem) {
+          // Update with the matching item - preserve vendor value
+          const vendorValue = String(value || '').trim()
           updated[index] = { 
             ...updated[index], 
-            item_id: itemId,
-            description: item.name,
-            unit_of_measure: originalUnit,
-            original_unit: originalUnit
+            vendor: vendorValue,
+            item_id: matchingItem.id,
+            description: matchingItem.name,
+            unit_of_measure: matchingItem.unit_of_measure,
+            original_unit: matchingItem.unit_of_measure
           }
           setPoItems(updated)
           
-          // Then load pricing asynchronously
-          let priceToSet = 0
-          let priceSet = false
-          let costMasterData = null
-          
-          // Pull pricing from CostMaster first
-          if (item.sku) {
-            try {
-              const costMaster = await getCostMasterByProductCode(item.sku)
-              if (costMaster) {
-                costMasterData = costMaster
-                // Use price based on item's unit of measure
-                if (originalUnit === 'lbs' && costMaster.price_per_lb) {
-                  priceToSet = costMaster.price_per_lb
-                  priceSet = true
-                } else if (originalUnit === 'kg' && costMaster.price_per_kg) {
-                  priceToSet = costMaster.price_per_kg
-                  priceSet = true
-                } else if (originalUnit === 'lbs' && costMaster.price_per_kg) {
-                  // Convert kg to lbs
-                  priceToSet = costMaster.price_per_kg / 2.20462
-                  priceSet = true
-                } else if (originalUnit === 'kg' && costMaster.price_per_lb) {
-                  // Convert lbs to kg
-                  priceToSet = costMaster.price_per_lb * 2.20462
-                  priceSet = true
-                }
-              }
-            } catch (error) {
-              console.error('Failed to load cost master:', error)
-            }
+          // Load pricing asynchronously - use functional update to preserve vendor
+          await loadItemPricing(index, matchingItem, vendorValue)
+        } else {
+          // Vendor not found, but still set it
+          const vendorValue = String(value || '').trim()
+          updated[index] = { 
+            ...updated[index], 
+            vendor: vendorValue
           }
-          
-          // Fall back to item's price field if CostMaster doesn't have pricing
-          if (!priceSet && item.price) {
-            priceToSet = item.price
-            priceSet = true
-          }
-          
-          // Update price if we found one
-          if (priceSet) {
-            const finalUpdated = [...poItems]
-            finalUpdated[index] = { 
-              ...finalUpdated[index], 
-              item_id: itemId,
-              description: item.name,
-              unit_of_measure: originalUnit,
-              original_unit: originalUnit,
-              unit_cost: priceToSet,
-              costMasterData: costMasterData
-            }
-            setPoItems(finalUpdated)
-          } else {
-            // Even if no price, store the cost master data if we have it
-            if (costMasterData) {
-              const finalUpdated = [...poItems]
-              finalUpdated[index] = { 
-                ...finalUpdated[index], 
-                costMasterData: costMasterData
-              }
-              setPoItems(finalUpdated)
-            }
-          }
+          setPoItems(updated)
         }
-      } else {
-        // Clearing the selection
+      } else if (!value) {
+        // Clear vendor selection
         updated[index] = { 
           ...updated[index], 
+          vendor: null,
           item_id: null,
           description: '',
-          unit_of_measure: '',
           unit_cost: 0,
-          original_unit: '',
+          unit_of_measure: '',
           costMasterData: null
         }
         setPoItems(updated)
       }
-    } else if (field === 'unit_of_measure') {
-      // When unit of measure changes, recalculate unit cost
+      return
+    }
+    
+    // Handle unit_of_measure changes
+    if (field === 'unit_of_measure') {
       const updated = [...poItems]
       const currentItem = { ...updated[index] }
       const newUnit = value
       const oldUnit = currentItem.unit_of_measure
-      
-      console.log('Unit change:', { index, oldUnit, newUnit, currentCost: currentItem.unit_cost, hasCostMaster: !!currentItem.costMasterData, itemId: currentItem.item_id })
       
       // Only allow toggle for lbs/kg items
       if (currentItem.item_id && (oldUnit === 'lbs' || oldUnit === 'kg') && (newUnit === 'lbs' || newUnit === 'kg')) {
@@ -247,8 +292,6 @@ function CreatePurchaseOrder({ onClose, onSuccess }: CreatePurchaseOrderProps) {
           }
         }
         
-        console.log('New price calculated:', newPrice)
-        
         updated[index] = {
           ...currentItem,
           unit_of_measure: newUnit,
@@ -261,16 +304,117 @@ function CreatePurchaseOrder({ onClose, onSuccess }: CreatePurchaseOrderProps) {
         updated[index] = { ...currentItem, unit_of_measure: value }
         setPoItems(updated)
       }
+      return
+    }
+    
+    // For other fields, update immediately
+    const updated = [...poItems]
+    updated[index] = { ...updated[index], [field]: value }
+    setPoItems(updated)
+  }
+
+  // Helper function to load item pricing
+  const loadItemPricing = async (index: number, item: Item, vendorValue?: string) => {
+    let priceToSet = 0
+    let priceSet = false
+    let costMasterData = null
+    
+    // Priority 1: Use the item's price directly (this is vendor-specific and most accurate)
+    if (item.price && item.price > 0) {
+      priceToSet = item.price
+      priceSet = true
+    }
+    
+    // Priority 2: Try to pull pricing from CostMaster filtered by vendor (if item price not available)
+    if (!priceSet && item.sku && vendorValue) {
+      try {
+        const costMaster = await getCostMasterByProductCode(item.sku, vendorValue)
+        if (costMaster) {
+          costMasterData = costMaster
+          const originalUnit = item.unit_of_measure
+          // Use price based on item's unit of measure
+          if (originalUnit === 'lbs' && costMaster.price_per_lb) {
+            priceToSet = costMaster.price_per_lb
+            priceSet = true
+          } else if (originalUnit === 'kg' && costMaster.price_per_kg) {
+            priceToSet = costMaster.price_per_kg
+            priceSet = true
+          } else if (originalUnit === 'lbs' && costMaster.price_per_kg) {
+            // Convert kg to lbs
+            priceToSet = costMaster.price_per_kg / 2.20462
+            priceSet = true
+          } else if (originalUnit === 'kg' && costMaster.price_per_lb) {
+            // Convert lbs to kg
+            priceToSet = costMaster.price_per_lb * 2.20462
+            priceSet = true
+          }
+        }
+      } catch (error) {
+        console.error('Failed to load cost master:', error)
+      }
+    }
+    
+    // Priority 3: Fallback to CostMaster without vendor filter (only if no vendor-specific pricing found)
+    if (!priceSet && item.sku) {
+      try {
+        const costMaster = await getCostMasterByProductCode(item.sku)
+        if (costMaster) {
+          costMasterData = costMaster
+          const originalUnit = item.unit_of_measure
+          // Use price based on item's unit of measure
+          if (originalUnit === 'lbs' && costMaster.price_per_lb) {
+            priceToSet = costMaster.price_per_lb
+            priceSet = true
+          } else if (originalUnit === 'kg' && costMaster.price_per_kg) {
+            priceToSet = costMaster.price_per_kg
+            priceSet = true
+          } else if (originalUnit === 'lbs' && costMaster.price_per_kg) {
+            // Convert kg to lbs
+            priceToSet = costMaster.price_per_kg / 2.20462
+            priceSet = true
+          } else if (originalUnit === 'kg' && costMaster.price_per_lb) {
+            // Convert lbs to kg
+            priceToSet = costMaster.price_per_lb * 2.20462
+            priceSet = true
+          }
+        }
+      } catch (error) {
+        console.error('Failed to load cost master (fallback):', error)
+      }
+    }
+    
+    // Update price if we found one - use functional update to preserve all fields including vendor
+    if (priceSet) {
+      setPoItems(prev => {
+        const updated = [...prev]
+        updated[index] = { 
+          ...updated[index], 
+          unit_cost: priceToSet,
+          costMasterData: costMasterData,
+          // Preserve vendor if it was passed
+          vendor: vendorValue !== undefined ? vendorValue : updated[index].vendor
+        }
+        return updated
+      })
     } else {
-      // For other fields, update immediately
-      const updated = [...poItems]
-      updated[index] = { ...updated[index], [field]: value }
-      setPoItems(updated)
+      // Even if no price, store the cost master data if we have it
+      if (costMasterData) {
+        setPoItems(prev => {
+          const updated = [...prev]
+          updated[index] = { 
+            ...updated[index], 
+            costMasterData: costMasterData,
+            // Preserve vendor if it was passed
+            vendor: vendorValue !== undefined ? vendorValue : updated[index].vendor
+          }
+          return updated
+        })
+      }
     }
   }
 
   const addItem = () => {
-    setPoItems([...poItems, { item_id: null, description: '', unit_cost: 0, unit_of_measure: '', quantity: 0, notes: '', original_unit: '', costMasterData: null }])
+    setPoItems([...poItems, { item_id: null, sku: null, vendor: null, description: '', unit_cost: 0, unit_of_measure: '', quantity: 0, notes: '', original_unit: '', costMasterData: null }])
   }
 
   const removeItem = (index: number) => {
@@ -296,8 +440,18 @@ function CreatePurchaseOrder({ onClose, onSuccess }: CreatePurchaseOrderProps) {
       return
     }
 
-    if (poItems.length === 0 || poItems.some(item => !item.item_id || item.quantity <= 0)) {
-      alert('Please add at least one item with valid quantity')
+    // Validate items
+    const invalidItems = poItems.filter(item => !item.item_id || item.quantity <= 0)
+    if (poItems.length === 0 || invalidItems.length > 0) {
+      alert('Please add at least one item with a selected SKU/Vendor and valid quantity greater than 0')
+      return
+    }
+    
+    // Filter out any items without item_id (shouldn't happen after validation, but just in case)
+    const validItems = poItems.filter(item => item.item_id && item.quantity > 0)
+    
+    if (validItems.length === 0) {
+      alert('No valid items to add to purchase order')
       return
     }
 
@@ -311,24 +465,32 @@ function CreatePurchaseOrder({ onClose, onSuccess }: CreatePurchaseOrderProps) {
         // Set required_date from expected_delivery_date if not provided
         required_date: formData.required_date || formData.expected_delivery_date || null,
         expected_delivery_date: formData.expected_delivery_date || formData.required_date || null,
-        items: poItems.map(item => ({
+        items: validItems.map(item => ({
           item_id: item.item_id,
-          description: item.description,
-          unit_cost: item.unit_cost,
+          unit_cost: item.unit_cost || 0,
           quantity: item.quantity,
-          notes: item.notes || '',
+          notes: '', // Notes field removed from UI
         })),
         discount: formData.discount || 0,
         shipping_cost: formData.shipping_cost || 0,
         status: 'draft',
       }
 
+      console.log('Sending purchase order payload:', JSON.stringify(payload, null, 2))
       await createPurchaseOrder(payload)
       onSuccess()
       onClose()
     } catch (error: any) {
       console.error('Failed to create purchase order:', error)
-      alert(error.response?.data?.detail || error.response?.data?.message || 'Failed to create purchase order')
+      console.error('Error response:', error.response?.data)
+      console.error('Error status:', error.response?.status)
+      const errorMessage = error.response?.data?.detail || 
+                          error.response?.data?.message || 
+                          error.response?.data?.error ||
+                          (error.response?.data && JSON.stringify(error.response.data)) ||
+                          error.message || 
+                          'Failed to create purchase order'
+      alert(`Failed to create purchase order: ${errorMessage}`)
     } finally {
       setLoading(false)
     }
@@ -375,15 +537,37 @@ function CreatePurchaseOrder({ onClose, onSuccess }: CreatePurchaseOrderProps) {
                 <div className="form-group">
                   <label>Vendor *</label>
                   <select
-                    value={formData.vendor_id}
-                    onChange={(e) => handleVendorChange(e.target.value)}
+                    value={formData.vendor_id || ''}
+                    onChange={(e) => {
+                      const selectedValue = e.target.value
+                      handleVendorChange(selectedValue)
+                    }}
                     required
+                    disabled={loading || loadingVendors}
+                    style={{ width: '100%' }}
                   >
-                    <option value="">Select Vendor</option>
-                    {vendors.map(vendor => (
-                      <option key={vendor.id} value={vendor.id}>{vendor.name}</option>
+                    <option value="">
+                      {loadingVendors ? 'Loading vendors...' : 'Select Vendor'}
+                    </option>
+                    {!loadingVendors && vendorOptions.length > 0 && vendorOptions.map(vendor => (
+                      <option key={vendor.id} value={vendor.value}>
+                        {vendor.name}
+                      </option>
                     ))}
+                    {!loadingVendors && vendorOptions.length === 0 && (
+                      <option value="" disabled>No vendors available</option>
+                    )}
                   </select>
+                  {!loadingVendors && vendors.length === 0 && (
+                    <small style={{ color: '#dc3545', display: 'block', marginTop: '5px' }}>
+                      No vendors found. Please create vendors first.
+                    </small>
+                  )}
+                  {loadingVendors && (
+                    <small style={{ color: '#666', display: 'block', marginTop: '5px' }}>
+                      Loading vendors...
+                    </small>
+                  )}
                 </div>
                 <div className="form-group">
                   <label>Address</label>
@@ -532,44 +716,80 @@ function CreatePurchaseOrder({ onClose, onSuccess }: CreatePurchaseOrderProps) {
           <div className="po-form-section">
             <div className="section-header">
               <h3>Items</h3>
-              <button type="button" onClick={addItem} className="btn btn-secondary">+ Add Item</button>
+              <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                {poItems.length > 1 && (
+                  <button 
+                    type="button" 
+                    onClick={() => {
+                      const lastIndex = poItems.length - 1
+                      if (lastIndex >= 0) {
+                        removeItem(lastIndex)
+                      }
+                    }} 
+                    className="btn btn-danger btn-sm"
+                    style={{ fontSize: '0.85rem', padding: '0.4rem 0.8rem' }}
+                  >
+                    Remove Last Item
+                  </button>
+                )}
+                <button type="button" onClick={addItem} className="btn btn-secondary">+ Add Item</button>
+              </div>
             </div>
             
             <table className="po-items-table">
               <thead>
                 <tr>
-                  <th>Item #</th>
+                  <th>SKU</th>
+                  <th>Vendor</th>
                   <th>Description</th>
                   <th>Unit of Measure</th>
                   <th>Unit Cost</th>
                   <th>Qty</th>
                   <th>Amount</th>
-                  <th>Notes</th>
-                  <th>Actions</th>
                 </tr>
               </thead>
               <tbody>
-                {poItems.map((item, index) => (
+                {poItems.map((item, index) => {
+                  const uniqueSkus = getUniqueSkus()
+                  const vendorsForSku = item.sku ? getVendorsForSku(item.sku) : []
+                  
+                  return (
                   <tr key={index}>
                     <td>
                       <select
-                        value={item.item_id ? String(item.item_id) : ''}
+                        value={item.sku || ''}
                         onChange={(e) => {
-                          const selectedValue = e.target.value
-                          console.log('Item selected:', selectedValue, 'Items available:', items.length)
-                          handleItemChange(index, 'item_id', selectedValue || null)
+                          handleItemChange(index, 'sku', e.target.value || null)
                         }}
                         required
                         className="item-select"
                       >
-                        <option value="">Select Item</option>
-                        {items.length === 0 ? (
-                          <option disabled>No items available</option>
-                        ) : (
-                          items.map(i => (
-                            <option key={i.id} value={String(i.id)}>{i.sku} - {i.name}</option>
-                          ))
-                        )}
+                        <option value="">Select SKU</option>
+                        {uniqueSkus.map(sku => (
+                          <option key={sku} value={sku}>{sku}</option>
+                        ))}
+                      </select>
+                    </td>
+                    <td>
+                      <select
+                        value={item.vendor || ''}
+                        onChange={(e) => {
+                          const selectedValue = e.target.value
+                          handleItemChange(index, 'vendor', selectedValue || null)
+                        }}
+                        required
+                        disabled={!item.sku}
+                        className="item-select"
+                      >
+                        <option value="">{item.sku ? 'Select Vendor' : 'Select SKU first'}</option>
+                        {vendorsForSku.map(v => {
+                          const vendorValue = String(v.vendor || '')
+                          return (
+                            <option key={`${item.sku}_${v.vendor}`} value={vendorValue}>
+                              {v.vendor}
+                            </option>
+                          )
+                        })}
                       </select>
                     </td>
                     <td>
@@ -589,7 +809,6 @@ function CreatePurchaseOrder({ onClose, onSuccess }: CreatePurchaseOrderProps) {
                             onClick={(e) => {
                               e.preventDefault()
                               e.stopPropagation()
-                              console.log('Toggling to lbs, current:', item.unit_of_measure, 'cost:', item.unit_cost)
                               handleItemChange(index, 'unit_of_measure', 'lbs')
                             }}
                           >
@@ -601,7 +820,6 @@ function CreatePurchaseOrder({ onClose, onSuccess }: CreatePurchaseOrderProps) {
                             onClick={(e) => {
                               e.preventDefault()
                               e.stopPropagation()
-                              console.log('Toggling to kg, current:', item.unit_of_measure, 'cost:', item.unit_cost)
                               handleItemChange(index, 'unit_of_measure', 'kg')
                             }}
                           >
@@ -639,33 +857,23 @@ function CreatePurchaseOrder({ onClose, onSuccess }: CreatePurchaseOrderProps) {
                           onChange={(e) => handleItemChange(index, 'quantity', parseFloat(e.target.value) || 0)}
                           className="number-input"
                           required
+                          style={{ width: '100%' }}
                         />
                       </div>
                     </td>
                     <td>${(item.unit_cost * item.quantity).toFixed(2)}</td>
-                    <td>
-                      <input
-                        type="text"
-                        value={item.notes}
-                        onChange={(e) => handleItemChange(index, 'notes', e.target.value)}
-                      />
-                    </td>
-                    <td>
-                      {poItems.length > 1 && (
-                        <button type="button" onClick={() => removeItem(index)} className="btn btn-danger btn-sm">Remove</button>
-                      )}
-                    </td>
                   </tr>
-                ))}
+                  )
+                })}
               </tbody>
               <tfoot>
                 <tr>
-                  <td colSpan={4} className="text-right"><strong>SUBTOTAL</strong></td>
+                  <td colSpan={5} className="text-right"><strong>SUBTOTAL</strong></td>
                   <td><strong>${calculateSubtotal().toFixed(2)}</strong></td>
-                  <td colSpan={2}></td>
+                  <td></td>
                 </tr>
                 <tr>
-                  <td colSpan={4} className="text-right"><strong>DISCOUNT</strong></td>
+                  <td colSpan={5} className="text-right"><strong>DISCOUNT</strong></td>
                   <td>
                     <input
                       type="number"
@@ -674,13 +882,13 @@ function CreatePurchaseOrder({ onClose, onSuccess }: CreatePurchaseOrderProps) {
                       value={formData.discount}
                       onChange={(e) => setFormData({ ...formData, discount: parseFloat(e.target.value) || 0 })}
                       className="number-input"
-                      style={{ width: '100px', textAlign: 'right' }}
+                      style={{ width: '100%', textAlign: 'right' }}
                     />
                   </td>
-                  <td colSpan={2}></td>
+                  <td></td>
                 </tr>
                 <tr>
-                  <td colSpan={4} className="text-right"><strong>SHIPPING</strong></td>
+                  <td colSpan={5} className="text-right"><strong>SHIPPING</strong></td>
                   <td>
                     <input
                       type="number"
@@ -689,15 +897,15 @@ function CreatePurchaseOrder({ onClose, onSuccess }: CreatePurchaseOrderProps) {
                       value={formData.shipping_cost}
                       onChange={(e) => setFormData({ ...formData, shipping_cost: parseFloat(e.target.value) || 0 })}
                       className="number-input"
-                      style={{ width: '100px', textAlign: 'right' }}
+                      style={{ width: '100%', textAlign: 'right' }}
                     />
                   </td>
-                  <td colSpan={2}></td>
+                  <td></td>
                 </tr>
                 <tr>
-                  <td colSpan={4} className="text-right"><strong>TOTAL</strong></td>
+                  <td colSpan={5} className="text-right"><strong>TOTAL</strong></td>
                   <td><strong>${calculateTotal().toFixed(2)}</strong></td>
-                  <td colSpan={2}></td>
+                  <td></td>
                 </tr>
               </tfoot>
             </table>

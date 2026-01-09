@@ -28,7 +28,7 @@ interface Lot {
   lot_number: string
   item: Item
   quantity_remaining: number
-  unit_of_measure: string
+  status: string
 }
 
 interface CreateBatchTicketProps {
@@ -64,12 +64,12 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
   }, [selectedFinishedGood, formulas])
 
   useEffect(() => {
-    if (selectedFormula) {
+    if (selectedFormula && allLots.length > 0) {
       loadAvailableLots(selectedFormula)
     } else {
       setAvailableLots([])
     }
-  }, [selectedFormula])
+  }, [selectedFormula, allLots])
 
   const loadData = async () => {
     try {
@@ -80,13 +80,40 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
         getLots()
       ])
       
+      console.log('Loaded lots data:', lotsData)
+      console.log('Total lots received:', lotsData.length)
+      
       const finishedGoods = itemsData.filter((item: Item) => item.item_type === 'finished_good')
       setFinishedGoods(finishedGoods)
       setFormulas(formulasData)
-      setAllLots(lotsData.filter((lot: Lot) => lot.quantity_remaining > 0))
+      
+      // Filter to only show accepted lots with remaining quantity
+      // If status is not set, assume it's accepted (for backward compatibility)
+      const validLots = lotsData.filter((lot: Lot) => {
+        const hasItem = lot.item && lot.item.sku
+        // Status might be undefined/null for older lots, so treat as accepted if not set
+        const isAccepted = !lot.status || lot.status === 'accepted'
+        const hasQuantity = lot.quantity_remaining && lot.quantity_remaining > 0
+        
+        if (!hasItem) {
+          console.warn('Lot missing item:', lot)
+        }
+        if (!isAccepted) {
+          console.log('Lot not accepted:', lot.lot_number, 'status:', lot.status)
+        }
+        if (!hasQuantity) {
+          console.log('Lot has no remaining quantity:', lot.lot_number, 'remaining:', lot.quantity_remaining)
+        }
+        
+        return hasItem && isAccepted && hasQuantity
+      })
+      
+      console.log('Filtered valid lots:', validLots.length, 'out of', lotsData.length)
+      console.log('Valid lots:', validLots)
+      setAllLots(validLots)
     } catch (error) {
       console.error('Failed to load data:', error)
-      alert('Failed to load data')
+      alert('Failed to load data. Please check the console for details.')
     } finally {
       setLoading(false)
     }
@@ -101,9 +128,37 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
     // Filter lots to only show those that match formula ingredients by SKU (not vendor-specific item.id)
     // This allows interchangeability of materials from different vendors
     const ingredientSkus = formula.ingredients.map(ing => ing.item.sku)
-    const filteredLots = allLots.filter((lot: Lot) => 
-      ingredientSkus.includes(lot.item.sku) && lot.quantity_remaining > 0
-    )
+    
+    console.log('Filtering lots for formula:', {
+      formulaId: formula.id,
+      ingredientSkus,
+      totalLots: allLots.length,
+      allLotSkus: allLots.map(l => l.item?.sku).filter(Boolean)
+    })
+    
+    const filteredLots = allLots.filter((lot: Lot) => {
+      const matchesSku = lot.item && lot.item.sku && ingredientSkus.includes(lot.item.sku)
+      // Status might be undefined/null for older lots, so treat as accepted if not set
+      const isAccepted = !lot.status || lot.status === 'accepted'
+      const hasQuantity = lot.quantity_remaining && lot.quantity_remaining > 0
+      
+      if (matchesSku && !isAccepted) {
+        console.log('Lot matches SKU but not accepted:', lot.lot_number, lot.item.sku, 'status:', lot.status)
+      }
+      if (matchesSku && !hasQuantity) {
+        console.log('Lot matches SKU but no quantity:', lot.lot_number, lot.item.sku, 'remaining:', lot.quantity_remaining)
+      }
+      
+      return matchesSku && isAccepted && hasQuantity
+    })
+    
+    console.log('Available lots for formula:', {
+      ingredientSkus,
+      totalLots: allLots.length,
+      filteredLots: filteredLots.length,
+      lots: filteredLots.map(l => ({ id: l.id, lot_number: l.lot_number, sku: l.item?.sku, qty: l.quantity_remaining }))
+    })
+    
     setAvailableLots(filteredLots)
   }
 
@@ -273,6 +328,19 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
                 <label className="section-label">Select Lots (Available from Inventory) *</label>
                 <p className="section-hint">Select specific lots and enter quantities to use for each ingredient</p>
                 
+                {availableLots.length === 0 && allLots.length > 0 && (
+                  <div className="warning-message" style={{ padding: '10px', background: '#fff3cd', border: '1px solid #ffc107', borderRadius: '4px', marginBottom: '15px' }}>
+                    ⚠️ No lots match the formula ingredients. Available lots: {allLots.length}. 
+                    Check console for details.
+                  </div>
+                )}
+                
+                {allLots.length === 0 && (
+                  <div className="warning-message" style={{ padding: '10px', background: '#f8d7da', border: '1px solid #dc3545', borderRadius: '4px', marginBottom: '15px' }}>
+                    ⚠️ No available lots found in inventory. Please check in some materials first.
+                  </div>
+                )}
+                
                 {selectedFormula.ingredients.map((ingredient) => {
                   // Match by SKU to allow vendor interchangeability
                   const ingredientLots = availableLots.filter(lot => lot.item.sku === ingredient.item.sku)
@@ -300,7 +368,7 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
                             Required: {requiredQtyDisplay} {quantityUnit === 'kg' ? 'kg' : 'lbs'}
                           </span>
                           <span className={`selected-qty ${totalSelected > 0 ? 'has-selection' : ''}`}>
-                            Selected: {totalSelected.toLocaleString()} {ingredientLots[0]?.unit_of_measure || 'lbs'}
+                            Selected: {totalSelected.toLocaleString()} {ingredientLots[0]?.item.unit_of_measure || 'lbs'}
                           </span>
                         </div>
                       </div>
@@ -316,7 +384,7 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
                               <div className="lot-card-header">
                                 <span className="lot-number-badge">{lot.lot_number}</span>
                                 <span className="lot-available-badge">
-                                  {lot.quantity_remaining.toLocaleString()} {lot.unit_of_measure} available
+                                  {lot.quantity_remaining.toLocaleString()} {lot.item.unit_of_measure} available
                                 </span>
                               </div>
                               <div className="lot-quantity-section">
@@ -332,7 +400,7 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
                                     placeholder="0.00"
                                     className="quantity-input"
                                   />
-                                  <span className="unit-label">{lot.unit_of_measure}</span>
+                                  <span className="unit-label">{lot.item.unit_of_measure}</span>
                                 </div>
                                 {selectedLots[lot.id] && (
                                   <button

@@ -34,8 +34,12 @@ export const deleteCostMaster = async (id: number) => {
   return response.data
 }
 
-export const getCostMasterByProductCode = async (productCode: string) => {
-  const response = await api.get(`/cost-master/?product_code=${productCode}`)
+export const getCostMasterByProductCode = async (productCode: string, vendor?: string) => {
+  let url = `/cost-master/?product_code=${productCode}`
+  if (vendor) {
+    url += `&vendor=${encodeURIComponent(vendor)}`
+  }
+  const response = await api.get(url)
   const data = response.data.results || response.data
   return Array.isArray(data) && data.length > 0 ? data[0] : null
 }

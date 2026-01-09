@@ -44,6 +44,7 @@ interface CheckInRow {
   product_id: number | null
   product_unit: string
   lot_number: string
+  vendor_lot_number: string
   quantity: string
   quantity_unit: string
   po_quantity_ordered: number
@@ -78,6 +79,7 @@ function CheckInForm({ onClose, onSuccess }: CheckInFormProps) {
       product_id: null,
       product_unit: '',
       lot_number: '',
+      vendor_lot_number: '',
       quantity: '',
       quantity_unit: 'lbs',
       po_quantity_ordered: 0,
@@ -421,6 +423,7 @@ function CheckInForm({ onClose, onSuccess }: CheckInFormProps) {
       product_id: null,
       product_unit: '',
       lot_number: '',
+      vendor_lot_number: '',
       quantity: '',
       quantity_unit: 'lbs',
       po_quantity_ordered: 0,
@@ -497,6 +500,7 @@ function CheckInForm({ onClose, onSuccess }: CheckInFormProps) {
           quantity: quantity,
           received_date: receivedDate,
           po_number: row.po_number || null,
+          vendor_lot_number: row.vendor_lot_number && row.vendor_lot_number.trim() ? row.vendor_lot_number.trim() : null,
           status: row.status,
           short_reason: row.short_reason && row.short_reason.trim() ? row.short_reason.trim() : null,
         }
@@ -632,11 +636,11 @@ function CheckInForm({ onClose, onSuccess }: CheckInFormProps) {
                     <td>
                       <input
                         type="text"
-                        value={row.lot_number}
-                        onChange={(e) => handleRowChange(index, 'lot_number', e.target.value)}
-                        placeholder="Auto-generated"
+                        value={row.vendor_lot_number}
+                        onChange={(e) => handleRowChange(index, 'vendor_lot_number', e.target.value)}
+                        placeholder="Vendor Lot #"
                         className="table-input"
-                        readOnly
+                        title="Enter vendor lot number from the material"
                       />
                     </td>
                     <td>

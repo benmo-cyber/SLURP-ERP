@@ -14,10 +14,11 @@
 .create-po-modal {
   background: white;
   border-radius: 8px;
-  max-width: 1200px;
-  width: 90%;
+  max-width: 1400px;
+  width: 95%;
   max-height: 90vh;
   overflow-y: auto;
+  overflow-x: hidden;
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
 }
 
@@ -148,14 +149,34 @@
   width: 100%;
   border-collapse: collapse;
   margin-top: 1rem;
+  table-layout: fixed;
 }
 
 .po-items-table th,
 .po-items-table td {
-  padding: 0.75rem;
+  padding: 0.5rem;
   text-align: left;
   border-bottom: 1px solid #ddd;
   vertical-align: middle;
+}
+
+.po-items-table th {
+  white-space: nowrap;
+}
+
+.po-items-table td {
+  overflow: hidden;
+  word-wrap: break-word;
+}
+
+.po-items-table td:nth-child(3) {
+  white-space: normal;
+  word-break: break-word;
+}
+
+.po-items-table td:nth-child(7) {
+  text-align: right;
+  white-space: nowrap;
 }
 
 .po-items-table th {
@@ -163,17 +184,28 @@
   font-weight: 600;
 }
 
+.po-items-table th:nth-child(1) { width: 12%; } /* SKU */
+.po-items-table th:nth-child(2) { width: 15%; } /* Vendor */
+.po-items-table th:nth-child(3) { width: 30%; } /* Description */
+.po-items-table th:nth-child(4) { width: 12%; } /* Unit of Measure */
+.po-items-table th:nth-child(5) { width: 12%; } /* Unit Cost */
+.po-items-table th:nth-child(6) { width: 12%; } /* Qty */
+.po-items-table th:nth-child(7) { width: 7%; }  /* Amount */
+
 .po-items-table input,
 .po-items-table select {
   width: 100%;
-  padding: 0.5rem;
+  padding: 0.4rem;
   border: 1px solid #ddd;
   border-radius: 4px;
   box-sizing: border-box;
+  font-size: 13px;
+  max-width: 100%;
 }
 
 .number-input {
-  width: 100px;
+  min-width: 100px;
+  width: 100%;
   box-sizing: border-box;
 }
 
@@ -184,7 +216,9 @@
 }
 
 .item-select {
-  min-width: 200px;
+  min-width: 100px;
+  font-size: 13px;
+  max-width: 100%;
 }
 
 .unit-toggle-group {

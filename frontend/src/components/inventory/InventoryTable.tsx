@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { getInventoryDetails, getLotsBySkuVendor } from '../../api/inventory'
+import { getInventoryDetails, getLotsBySkuVendor, updateLot } from '../../api/inventory'
 import { getFinishedProductSpecification, getFpsPdfUrl } from '../../api/production'
 import './InventoryTable.css'
 
@@ -8,7 +8,7 @@ interface InventoryDetail {
   item_id: number
   item_sku: string
   description: string
-  vendor: string
+  vendor?: string
   pack_size?: number
   pack_size_unit: string
   total_quantity: number
@@ -20,11 +20,15 @@ interface InventoryDetail {
   quantity_remaining: number
   lot_count?: number
   item_type?: string
+  level?: 'sku' | 'vendor'  // Hierarchy level
+  vendor_count?: number  // Number of vendors for SKU
+  vendors?: InventoryDetail[]  // Nested vendor entries
 }
 
 interface Lot {
   id: number
   lot_number: string
+  vendor_lot_number?: string
   quantity: number
   quantity_remaining: number
   received_date: string
@@ -46,6 +50,8 @@ function InventoryTable() {
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set())
   const [lotDetails, setLotDetails] = useState<Map<string, Lot[]>>(new Map())
   const [loadingLots, setLoadingLots] = useState<Set<string>>(new Set())
+  const [editingLot, setEditingLot] = useState<{lotId: number, field: 'vendor_lot_number' | 'expiration_date'} | null>(null)
+  const [editValue, setEditValue] = useState<string>('')
 
   useEffect(() => {
     loadData()
@@ -59,21 +65,29 @@ function InventoryTable() {
   const loadData = async () => {
     try {
       setLoading(true)
+      console.log('Loading inventory details...')
       const data = await getInventoryDetails()
-      setInventoryDetails(data)
-    } catch (error) {
+      console.log('Inventory data received:', data)
+      console.log('Number of entries:', Array.isArray(data) ? data.length : 'Not an array')
+      if (Array.isArray(data) && data.length > 0) {
+        console.log('First entry:', data[0])
+      }
+      setInventoryDetails(Array.isArray(data) ? data : [])
+    } catch (error: any) {
       console.error('Failed to load inventory:', error)
-      alert('Failed to load inventory data. Make sure the backend server is running.')
+      console.error('Error response:', error.response?.data)
+      console.error('Error status:', error.response?.status)
+      alert(`Failed to load inventory data: ${error.message || 'Unknown error'}. Make sure the backend server is running on http://localhost:8000`)
     } finally {
       setLoading(false)
     }
   }
 
   const loadFpsLinks = async () => {
-    // Get unique item IDs for finished goods
+    // Get unique item IDs for finished goods (from master SKU rows)
     const finishedGoodItemIds = new Set<number>()
     inventoryDetails.forEach(detail => {
-      if (detail.item_type === 'finished_good') {
+      if (detail.item_type === 'finished_good' && detail.level === 'sku') {
         finishedGoodItemIds.add(detail.item_id)
       }
     })
@@ -108,7 +122,20 @@ function InventoryTable() {
     return unitDisplay
   }
 
-  const toggleRowExpansion = async (detail: InventoryDetail) => {
+  const toggleSkuExpansion = (sku: string) => {
+    const rowKey = `SKU_${sku}`
+    const isExpanded = expandedRows.has(rowKey)
+    
+    if (isExpanded) {
+      const newExpanded = new Set(expandedRows)
+      newExpanded.delete(rowKey)
+      setExpandedRows(newExpanded)
+    } else {
+      setExpandedRows(new Set([...expandedRows, rowKey]))
+    }
+  }
+
+  const toggleVendorExpansion = async (detail: InventoryDetail) => {
     const rowKey = `${detail.item_sku}_${detail.vendor}`
     const isExpanded = expandedRows.has(rowKey)
     
@@ -191,123 +218,299 @@ function InventoryTable() {
               </tr>
             ) : (
               inventoryDetails.map((detail) => {
-                const unit = detail.pack_size_unit
-                const displayTQ = unit !== 'ea' ? convertQuantity(detail.total_quantity, unit) : detail.total_quantity.toFixed(0)
-                const displayAllocSales = unit !== 'ea' ? convertQuantity(detail.allocated_to_sales, unit) : detail.allocated_to_sales.toFixed(0)
-                const displayAllocProd = unit !== 'ea' ? convertQuantity(detail.allocated_to_production, unit) : detail.allocated_to_production.toFixed(0)
-                const displayOnHold = unit !== 'ea' ? convertQuantity(detail.on_hold, unit) : detail.on_hold.toFixed(0)
-                const displayOnOrder = unit !== 'ea' ? convertQuantity(detail.on_order, unit) : detail.on_order.toFixed(0)
-                const displayAvailable = unit !== 'ea' ? convertQuantity(detail.available, unit) : detail.available.toFixed(0)
-                const displayUnit = getDisplayUnit(unit)
-                const packSizeDisplay = detail.pack_size ? `${detail.pack_size} ${unit}` : '-'
+                // Master SKU row
+                if (detail.level === 'sku') {
+                  const unit = detail.pack_size_unit
+                  const displayTQ = unit !== 'ea' ? convertQuantity(detail.total_quantity, unit) : detail.total_quantity.toFixed(0)
+                  const displayAllocSales = unit !== 'ea' ? convertQuantity(detail.allocated_to_sales, unit) : detail.allocated_to_sales.toFixed(0)
+                  const displayAllocProd = unit !== 'ea' ? convertQuantity(detail.allocated_to_production, unit) : detail.allocated_to_production.toFixed(0)
+                  const displayOnHold = unit !== 'ea' ? convertQuantity(detail.on_hold, unit) : detail.on_hold.toFixed(0)
+                  const displayOnOrder = unit !== 'ea' ? convertQuantity(detail.on_order, unit) : detail.on_order.toFixed(0)
+                  const displayAvailable = unit !== 'ea' ? convertQuantity(detail.available, unit) : detail.available.toFixed(0)
+                  const displayUnit = getDisplayUnit(unit)
 
-                const hasFps = fpsLinks.has(detail.item_id) && detail.item_type === 'finished_good'
-                const fpsId = fpsLinks.get(detail.item_id)
+                  const hasFps = fpsLinks.has(detail.item_id) && detail.item_type === 'finished_good'
+                  const fpsId = fpsLinks.get(detail.item_id)
 
-                const rowKey = `${detail.item_sku}_${detail.vendor}`
-                const isExpanded = expandedRows.has(rowKey)
-                const lots = lotDetails.get(rowKey) || []
-                const isLoadingLots = loadingLots.has(rowKey)
+                  const skuRowKey = `SKU_${detail.item_sku}`
+                  const isSkuExpanded = expandedRows.has(skuRowKey)
+                  const vendors = detail.vendors || []
 
-                return (
-                  <React.Fragment key={detail.id}>
-                    <tr className={detail.on_hold > 0 ? 'on-hold' : ''}>
-                      <td>{detail.item_id}</td>
-                      <td>
-                        <div className="sku-cell">
-                          <span>{detail.item_sku}</span>
-                          {detail.lot_count && detail.lot_count > 0 && (
-                            <button
-                              className="expand-btn"
-                              onClick={() => toggleRowExpansion(detail)}
-                              title={isExpanded ? 'Collapse lot details' : 'Expand lot details'}
+                  return (
+                    <React.Fragment key={detail.id}>
+                      <tr className={`sku-master-row ${detail.on_hold > 0 ? 'on-hold' : ''}`}>
+                        <td>{detail.item_id}</td>
+                        <td>
+                          <div className="sku-cell">
+                            <span className="sku-master-label">{detail.item_sku}</span>
+                            {vendors.length > 0 && (
+                              <button
+                                className="expand-btn"
+                                onClick={() => toggleSkuExpansion(detail.item_sku)}
+                                title={isSkuExpanded ? 'Collapse vendor breakdown' : 'Expand vendor breakdown'}
+                              >
+                                {isSkuExpanded ? '▼' : '▶'}
+                              </button>
+                            )}
+                            {vendors.length > 1 && (
+                              <span className="vendor-count-badge">({vendors.length} vendors)</span>
+                            )}
+                          </div>
+                        </td>
+                        <td>
+                          {hasFps && fpsId ? (
+                            <a
+                              href={getFpsPdfUrl(fpsId)}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="fps-link"
+                              onClick={(e) => e.stopPropagation()}
                             >
-                              {isExpanded ? '▼' : '▶'}
-                            </button>
-                          )}
-                        </div>
-                      </td>
-                      <td>
-                        {hasFps && fpsId ? (
-                          <a
-                            href={getFpsPdfUrl(fpsId)}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="fps-link"
-                            onClick={(e) => e.stopPropagation()}
-                          >
-                            {detail.description}
-                          </a>
-                        ) : (
-                          detail.description
-                        )}
-                      </td>
-                      <td>{detail.vendor}</td>
-                      <td>{packSizeDisplay}</td>
-                      <td>{displayTQ} {displayUnit}</td>
-                      <td>{displayAllocSales} {displayUnit}</td>
-                      <td>{displayAllocProd} {displayUnit}</td>
-                      <td>{displayOnHold} {displayUnit}</td>
-                      <td>{displayOnOrder} {displayUnit}</td>
-                      <td className={detail.available > 0 ? 'available' : 'unavailable'}>
-                        {displayAvailable} {displayUnit}
-                      </td>
-                      <td>{detail.lot_count || 0}</td>
-                    </tr>
-                    {isExpanded && (
-                      <tr className="lot-details-row">
-                        <td colSpan={12} className="lot-details-cell">
-                          {isLoadingLots ? (
-                            <div className="loading-lots">Loading lot details...</div>
-                          ) : lots.length === 0 ? (
-                            <div className="no-lots">No lots found</div>
+                              <strong>{detail.description}</strong>
+                            </a>
                           ) : (
-                            <div className="lot-breakdown">
-                              <h4>Lot Breakdown for {detail.item_sku} - {detail.vendor}</h4>
-                              <table className="lot-table">
-                                <thead>
-                                  <tr>
-                                    <th>Lot Number</th>
-                                    <th>Received Date</th>
-                                    <th>Expiration Date</th>
-                                    <th>Quantity</th>
-                                    <th>Remaining</th>
-                                    <th>Status</th>
-                                  </tr>
-                                </thead>
-                                <tbody>
-                                  {lots.map((lot) => {
-                                    const lotUnit = lot.item.unit_of_measure
-                                    const displayQty = lotUnit !== 'ea' ? convertQuantity(lot.quantity, lotUnit) : lot.quantity.toFixed(0)
-                                    const displayRemaining = lotUnit !== 'ea' ? convertQuantity(lot.quantity_remaining, lotUnit) : lot.quantity_remaining.toFixed(0)
-                                    const lotDisplayUnit = getDisplayUnit(lotUnit)
-                                    const receivedDate = new Date(lot.received_date).toLocaleDateString()
-                                    const expDate = lot.expiration_date ? new Date(lot.expiration_date).toLocaleDateString() : 'N/A'
-                                    
-                                    return (
-                                      <tr key={lot.id}>
-                                        <td>{lot.lot_number}</td>
-                                        <td>{receivedDate}</td>
-                                        <td>{expDate}</td>
-                                        <td>{displayQty} {lotDisplayUnit}</td>
-                                        <td>{displayRemaining} {lotDisplayUnit}</td>
-                                        <td>
-                                          <span className={`status-badge status-${lot.status}`}>
-                                            {lot.status}
-                                          </span>
-                                        </td>
-                                      </tr>
-                                    )
-                                  })}
-                                </tbody>
-                              </table>
-                            </div>
+                            <strong>{detail.description}</strong>
                           )}
                         </td>
+                        <td>
+                          <strong>All Vendors</strong>
+                        </td>
+                        <td>-</td>
+                        <td><strong>{displayTQ} {displayUnit}</strong></td>
+                        <td><strong>{displayAllocSales} {displayUnit}</strong></td>
+                        <td><strong>{displayAllocProd} {displayUnit}</strong></td>
+                        <td><strong>{displayOnHold} {displayUnit}</strong></td>
+                        <td><strong>{displayOnOrder} {displayUnit}</strong></td>
+                        <td className={detail.available > 0 ? 'available' : 'unavailable'}>
+                          <strong>{displayAvailable} {displayUnit}</strong>
+                        </td>
+                        <td><strong>{detail.lot_count || 0}</strong></td>
                       </tr>
-                    )}
-                  </React.Fragment>
-                )
+                      {isSkuExpanded && vendors.map((vendorDetail) => {
+                        const vendorUnit = vendorDetail.pack_size_unit
+                        const vendorDisplayTQ = vendorUnit !== 'ea' ? convertQuantity(vendorDetail.total_quantity, vendorUnit) : vendorDetail.total_quantity.toFixed(0)
+                        const vendorDisplayAllocSales = vendorUnit !== 'ea' ? convertQuantity(vendorDetail.allocated_to_sales, vendorUnit) : vendorDetail.allocated_to_sales.toFixed(0)
+                        const vendorDisplayAllocProd = vendorUnit !== 'ea' ? convertQuantity(vendorDetail.allocated_to_production, vendorUnit) : vendorDetail.allocated_to_production.toFixed(0)
+                        const vendorDisplayOnHold = vendorUnit !== 'ea' ? convertQuantity(vendorDetail.on_hold, vendorUnit) : vendorDetail.on_hold.toFixed(0)
+                        const vendorDisplayOnOrder = vendorUnit !== 'ea' ? convertQuantity(vendorDetail.on_order, vendorUnit) : vendorDetail.on_order.toFixed(0)
+                        const vendorDisplayAvailable = vendorUnit !== 'ea' ? convertQuantity(vendorDetail.available, vendorUnit) : vendorDetail.available.toFixed(0)
+                        const vendorDisplayUnit = getDisplayUnit(vendorUnit)
+                        const vendorPackSizeDisplay = vendorDetail.pack_size ? `${vendorDetail.pack_size} ${vendorUnit}` : '-'
+
+                        const vendorRowKey = `${vendorDetail.item_sku}_${vendorDetail.vendor}`
+                        const isVendorExpanded = expandedRows.has(vendorRowKey)
+                        const vendorLots = lotDetails.get(vendorRowKey) || []
+                        const isLoadingVendorLots = loadingLots.has(vendorRowKey)
+
+                        return (
+                          <React.Fragment key={vendorDetail.id}>
+                            <tr className={`vendor-row ${vendorDetail.on_hold > 0 ? 'on-hold' : ''}`}>
+                              <td></td>
+                              <td>
+                                <div className="sku-cell" style={{ paddingLeft: '1.5rem' }}>
+                                  <span style={{ color: '#666' }}>↳ {vendorDetail.item_sku}</span>
+                                  {vendorDetail.lot_count && vendorDetail.lot_count > 0 && (
+                                    <button
+                                      className="expand-btn"
+                                      onClick={() => toggleVendorExpansion(vendorDetail)}
+                                      title={isVendorExpanded ? 'Collapse lot details' : 'Expand lot details'}
+                                    >
+                                      {isVendorExpanded ? '▼' : '▶'}
+                                    </button>
+                                  )}
+                                </div>
+                              </td>
+                              <td style={{ paddingLeft: '1.5rem', color: '#666' }}>
+                                {vendorDetail.description}
+                              </td>
+                              <td style={{ paddingLeft: '1.5rem', color: '#666' }}>
+                                {vendorDetail.vendor}
+                              </td>
+                              <td style={{ paddingLeft: '1.5rem', color: '#666' }}>
+                                {vendorPackSizeDisplay}
+                              </td>
+                              <td style={{ paddingLeft: '1.5rem', color: '#666' }}>
+                                {vendorDisplayTQ} {vendorDisplayUnit}
+                              </td>
+                              <td style={{ paddingLeft: '1.5rem', color: '#666' }}>
+                                {vendorDisplayAllocSales} {vendorDisplayUnit}
+                              </td>
+                              <td style={{ paddingLeft: '1.5rem', color: '#666' }}>
+                                {vendorDisplayAllocProd} {vendorDisplayUnit}
+                              </td>
+                              <td style={{ paddingLeft: '1.5rem', color: '#666' }}>
+                                {vendorDisplayOnHold} {vendorDisplayUnit}
+                              </td>
+                              <td style={{ paddingLeft: '1.5rem', color: '#666' }}>
+                                {vendorDisplayOnOrder} {vendorDisplayUnit}
+                              </td>
+                              <td className={vendorDetail.available > 0 ? 'available' : 'unavailable'} style={{ paddingLeft: '1.5rem' }}>
+                                {vendorDisplayAvailable} {vendorDisplayUnit}
+                              </td>
+                              <td style={{ paddingLeft: '1.5rem', color: '#666' }}>
+                                {vendorDetail.lot_count || 0}
+                              </td>
+                            </tr>
+                            {isVendorExpanded && (
+                              <tr className="lot-details-row">
+                                <td colSpan={12} className="lot-details-cell" style={{ paddingLeft: '3rem' }}>
+                                  {isLoadingVendorLots ? (
+                                    <div className="loading-lots">Loading lot details...</div>
+                                  ) : vendorLots.length === 0 ? (
+                                    <div className="no-lots">No lots found</div>
+                                  ) : (
+                                    <div className="lot-breakdown">
+                                      <h4>Lot Breakdown for {vendorDetail.item_sku} - {vendorDetail.vendor}</h4>
+                                      <table className="lot-table">
+                                        <thead>
+                                          <tr>
+                                            <th>Vendor Lot #</th>
+                                            <th>Internal Lot #</th>
+                                            <th>Received Date</th>
+                                            <th>Expiration Date</th>
+                                            <th>Quantity</th>
+                                            <th>Remaining</th>
+                                            <th>Status</th>
+                                          </tr>
+                                        </thead>
+                                        <tbody>
+                                          {vendorLots.map((lot) => {
+                                            const lotUnit = lot.item.unit_of_measure
+                                            const displayQty = lotUnit !== 'ea' ? convertQuantity(lot.quantity, lotUnit) : lot.quantity.toFixed(0)
+                                            const displayRemaining = lotUnit !== 'ea' ? convertQuantity(lot.quantity_remaining, lotUnit) : lot.quantity_remaining.toFixed(0)
+                                            const lotDisplayUnit = getDisplayUnit(lotUnit)
+                                            const receivedDate = new Date(lot.received_date).toLocaleDateString()
+                                            const expDate = lot.expiration_date ? new Date(lot.expiration_date).toLocaleDateString() : 'N/A'
+                                            
+                                            const isEditingVendorLot = editingLot?.lotId === lot.id && editingLot?.field === 'vendor_lot_number'
+                                            const isEditingExpDate = editingLot?.lotId === lot.id && editingLot?.field === 'expiration_date'
+                                            
+                                            const handleFieldClick = (lotId: number, field: 'vendor_lot_number' | 'expiration_date', currentValue: string) => {
+                                              setEditingLot({ lotId, field })
+                                              if (field === 'expiration_date' && currentValue !== 'N/A') {
+                                                // Convert displayed date back to YYYY-MM-DD format for input
+                                                const dateObj = new Date(currentValue)
+                                                const year = dateObj.getFullYear()
+                                                const month = String(dateObj.getMonth() + 1).padStart(2, '0')
+                                                const day = String(dateObj.getDate()).padStart(2, '0')
+                                                setEditValue(`${year}-${month}-${day}`)
+                                              } else {
+                                                setEditValue(currentValue === '-' || currentValue === 'N/A' ? '' : currentValue)
+                                              }
+                                            }
+                                            
+                                            const handleFieldSave = async () => {
+                                              if (!editingLot) return
+                                              
+                                              try {
+                                                const updateData: any = {}
+                                                if (editingLot.field === 'vendor_lot_number') {
+                                                  updateData.vendor_lot_number = editValue.trim() || null
+                                                } else if (editingLot.field === 'expiration_date') {
+                                                  updateData.expiration_date = editValue.trim() || null
+                                                }
+                                                
+                                                await updateLot(lot.id, updateData)
+                                                
+                                                // Update local state
+                                                const updatedLots = vendorLots.map(l => 
+                                                  l.id === lot.id 
+                                                    ? { ...l, ...updateData }
+                                                    : l
+                                                )
+                                                setLotDetails(new Map([...lotDetails, [vendorRowKey, updatedLots]]))
+                                                
+                                                setEditingLot(null)
+                                                setEditValue('')
+                                              } catch (error) {
+                                                console.error('Failed to update lot:', error)
+                                                alert('Failed to update lot. Please try again.')
+                                              }
+                                            }
+                                            
+                                            const handleFieldCancel = () => {
+                                              setEditingLot(null)
+                                              setEditValue('')
+                                            }
+                                            
+                                            const handleKeyDown = (e: React.KeyboardEvent) => {
+                                              if (e.key === 'Enter') {
+                                                handleFieldSave()
+                                              } else if (e.key === 'Escape') {
+                                                handleFieldCancel()
+                                              }
+                                            }
+                                            
+                                            return (
+                                              <tr key={lot.id}>
+                                                <td 
+                                                  className="editable-cell"
+                                                  onClick={() => handleFieldClick(lot.id, 'vendor_lot_number', lot.vendor_lot_number || '-')}
+                                                  title="Click to edit vendor lot number"
+                                                >
+                                                  {isEditingVendorLot ? (
+                                                    <input
+                                                      type="text"
+                                                      value={editValue}
+                                                      onChange={(e) => setEditValue(e.target.value)}
+                                                      onBlur={handleFieldSave}
+                                                      onKeyDown={handleKeyDown}
+                                                      autoFocus
+                                                      className="inline-edit-input"
+                                                      onClick={(e) => e.stopPropagation()}
+                                                    />
+                                                  ) : (
+                                                    lot.vendor_lot_number || '-'
+                                                  )}
+                                                </td>
+                                                <td>{lot.lot_number}</td>
+                                                <td>{receivedDate}</td>
+                                                <td 
+                                                  className="editable-cell"
+                                                  onClick={() => handleFieldClick(lot.id, 'expiration_date', expDate)}
+                                                  title="Click to edit expiration date"
+                                                >
+                                                  {isEditingExpDate ? (
+                                                    <input
+                                                      type="date"
+                                                      value={editValue}
+                                                      onChange={(e) => setEditValue(e.target.value)}
+                                                      onBlur={handleFieldSave}
+                                                      onKeyDown={handleKeyDown}
+                                                      autoFocus
+                                                      className="inline-edit-input"
+                                                      onClick={(e) => e.stopPropagation()}
+                                                    />
+                                                  ) : (
+                                                    expDate
+                                                  )}
+                                                </td>
+                                                <td>{displayQty} {lotDisplayUnit}</td>
+                                                <td>{displayRemaining} {lotDisplayUnit}</td>
+                                                <td>
+                                                  <span className={`status-badge status-${lot.status}`}>
+                                                    {lot.status}
+                                                  </span>
+                                                </td>
+                                              </tr>
+                                            )
+                                          })}
+                                        </tbody>
+                                      </table>
+                                    </div>
+                                  )}
+                                </td>
+                              </tr>
+                            )}
+                          </React.Fragment>
+                        )
+                      })}
+                    </React.Fragment>
+                  )
+                }
+                
+                // Legacy support: if no level specified, treat as vendor row (backward compatibility)
+                return null
               })
             )}
           </tbody>

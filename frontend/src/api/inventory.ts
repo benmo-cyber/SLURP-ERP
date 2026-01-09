@@ -70,6 +70,11 @@ export const reverseCheckIn = async (lotId: number) => {
   return response.data
 }
 
+export const updateLot = async (lotId: number, data: any) => {
+  const response = await api.patch(`/lots/${lotId}/`, data)
+  return response.data
+}
+
 // Production Batches API
 export const getProductionBatches = async () => {
   const response = await api.get('/production-batches/')

@@ -29,7 +29,7 @@ function CreateSalesOrder({ onClose, onSuccess }: CreateSalesOrderProps) {
   const [loading, setLoading] = useState(false)
   
   const [formData, setFormData] = useState({
-    customer_po_number: '',
+    customer_reference_number: '',
     customer_name: '',
     customer_id: '',
     customer_address: '',
@@ -132,7 +132,7 @@ function CreateSalesOrder({ onClose, onSuccess }: CreateSalesOrderProps) {
       setLoading(true)
       
       const payload = {
-        customer_po_number: formData.customer_po_number || null,
+        customer_reference_number: formData.customer_reference_number || null,
         customer_name: formData.customer_name,
         customer_id: formData.customer_id || null,
         customer_address: formData.customer_address || null,
@@ -193,12 +193,16 @@ function CreateSalesOrder({ onClose, onSuccess }: CreateSalesOrderProps) {
             <h3>Customer Information</h3>
             <div className="form-row">
               <div className="form-group">
-                <label>Customer PO Number</label>
+                <label>Customer Reference Number (Optional)</label>
                 <input
                   type="text"
-                  value={formData.customer_po_number}
-                  onChange={(e) => setFormData({ ...formData, customer_po_number: e.target.value })}
+                  value={formData.customer_reference_number}
+                  onChange={(e) => setFormData({ ...formData, customer_reference_number: e.target.value })}
+                  placeholder="Defaults to Customer PO Number if not provided"
                 />
+                <small style={{ color: '#666', fontSize: '0.85rem' }}>
+                  If not provided, Customer PO Number will be used as reference
+                </small>
               </div>
               <div className="form-group">
                 <label>Customer Name *</label>
@@ -210,11 +214,12 @@ function CreateSalesOrder({ onClose, onSuccess }: CreateSalesOrderProps) {
                 />
               </div>
               <div className="form-group">
-                <label>Customer ID</label>
+                <label>Customer PO Number</label>
                 <input
                   type="text"
                   value={formData.customer_id}
                   onChange={(e) => setFormData({ ...formData, customer_id: e.target.value })}
+                  placeholder="Used as reference if Customer Reference Number not provided"
                 />
               </div>
             </div>

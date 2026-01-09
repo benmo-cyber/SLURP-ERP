@@ -24,17 +24,18 @@ from .serializers import (
 
 
 def generate_lot_number():
-    """Generate a unique lot number in format YYMMDD######"""
+    """Generate a unique lot number in format 1yy00000 (7 digits: 1 + year + 5-digit sequence)"""
     from django.db import transaction
+    from .models import LotNumberSequence
     
     today = timezone.now()
-    date_prefix = today.strftime('%y%m%d')
+    year_prefix = today.strftime('%y')  # 2-digit year
     
     # Use select_for_update to lock the row and prevent race conditions
     with transaction.atomic():
-        # Get or create sequence for today with lock
+        # Get or create sequence for this year with lock
         sequence, created = LotNumberSequence.objects.select_for_update().get_or_create(
-            date_prefix=date_prefix,
+            year_prefix=year_prefix,
             defaults={'sequence_number': 0}
         )
         
@@ -42,8 +43,8 @@ def generate_lot_number():
         sequence.sequence_number += 1
         sequence.save()
         
-        # Format: YYMMDD + 6-digit sequence
-        lot_number = f"{date_prefix}{sequence.sequence_number:06d}"
+        # Format: 1 + yy + 5-digit sequence (1yy00000)
+        lot_number = f"1{year_prefix}{sequence.sequence_number:05d}"
         
         # Double-check uniqueness (in case of any edge case)
         max_retries = 10
@@ -51,15 +52,115 @@ def generate_lot_number():
         while Lot.objects.filter(lot_number=lot_number).exists() and retry_count < max_retries:
             sequence.sequence_number += 1
             sequence.save()
-            lot_number = f"{date_prefix}{sequence.sequence_number:06d}"
+            lot_number = f"1{year_prefix}{sequence.sequence_number:05d}"
             retry_count += 1
         
         if retry_count >= max_retries:
             # Fallback: add timestamp milliseconds for uniqueness
             import time
-            lot_number = f"{date_prefix}{sequence.sequence_number:06d}{int(time.time() * 1000) % 10000:04d}"
+            lot_number = f"1{year_prefix}{sequence.sequence_number:05d}{int(time.time() * 1000) % 1000:03d}"
     
     return lot_number
+
+def generate_po_number():
+    """Generate a unique PO number in format 2yy0000 (7 digits: 2 + year + 4-digit sequence)"""
+    from django.db import transaction
+    from .models import PONumberSequence
+    
+    today = timezone.now()
+    year_prefix = today.strftime('%y')  # 2-digit year
+    
+    with transaction.atomic():
+        sequence, created = PONumberSequence.objects.select_for_update().get_or_create(
+            year_prefix=year_prefix,
+            defaults={'sequence_number': 0}
+        )
+        
+        sequence.sequence_number += 1
+        sequence.save()
+        
+        # Format: 2 + yy + 4-digit sequence (2yy0000)
+        po_number = f"2{year_prefix}{sequence.sequence_number:04d}"
+        
+        # Double-check uniqueness
+        max_retries = 10
+        retry_count = 0
+        from .models import PurchaseOrder
+        while PurchaseOrder.objects.filter(po_number=po_number).exists() and retry_count < max_retries:
+            sequence.sequence_number += 1
+            sequence.save()
+            po_number = f"2{year_prefix}{sequence.sequence_number:04d}"
+            retry_count += 1
+    
+    return po_number
+
+def generate_sales_order_number():
+    """Generate a unique sales order number in format 3yy0000 (7 digits: 3 + year + 4-digit sequence)"""
+    from django.db import transaction
+    from .models import SalesOrderNumberSequence
+    
+    today = timezone.now()
+    year_prefix = today.strftime('%y')  # 2-digit year
+    
+    with transaction.atomic():
+        sequence, created = SalesOrderNumberSequence.objects.select_for_update().get_or_create(
+            year_prefix=year_prefix,
+            defaults={'sequence_number': 0}
+        )
+        
+        sequence.sequence_number += 1
+        sequence.save()
+        
+        # Format: 3 + yy + 4-digit sequence (3yy0000)
+        so_number = f"3{year_prefix}{sequence.sequence_number:04d}"
+        
+        # Double-check uniqueness
+        max_retries = 10
+        retry_count = 0
+        from .models import SalesOrder
+        while SalesOrder.objects.filter(so_number=so_number).exists() and retry_count < max_retries:
+            sequence.sequence_number += 1
+            sequence.save()
+            so_number = f"3{year_prefix}{sequence.sequence_number:04d}"
+            retry_count += 1
+    
+    return so_number
+
+def generate_invoice_number():
+    """Generate a unique invoice number in format 4yy0000 (7 digits: 4 + year + 4-digit sequence)"""
+    from django.db import transaction
+    from .models import InvoiceNumberSequence
+    
+    today = timezone.now()
+    year_prefix = today.strftime('%y')  # 2-digit year
+    
+    with transaction.atomic():
+        sequence, created = InvoiceNumberSequence.objects.select_for_update().get_or_create(
+            year_prefix=year_prefix,
+            defaults={'sequence_number': 0}
+        )
+        
+        sequence.sequence_number += 1
+        sequence.save()
+        
+        # Format: 4 + yy + 4-digit sequence (4yy0000)
+        invoice_number = f"4{year_prefix}{sequence.sequence_number:04d}"
+        
+        # Double-check uniqueness (if Invoice model exists)
+        try:
+            from .models import Invoice
+            max_retries = 10
+            retry_count = 0
+            while Invoice.objects.filter(invoice_number=invoice_number).exists() and retry_count < max_retries:
+                sequence.sequence_number += 1
+                sequence.save()
+                invoice_number = f"4{year_prefix}{sequence.sequence_number:04d}"
+                retry_count += 1
+        except ImportError:
+            # Invoice model doesn't exist yet, that's okay
+            pass
+    
+    return invoice_number
 
 
 class ItemViewSet(viewsets.ModelViewSet):
@@ -287,13 +388,14 @@ class LotViewSet(viewsets.ModelViewSet):
     
     @action(detail=False, methods=['get'])
     def inventory_details(self, request):
-        """Get inventory details grouped by item and vendor"""
+        """Get inventory details grouped hierarchically: SKU -> Vendor -> Lots"""
         from django.db.models import Sum, Q
         from .models import SalesOrderItem, ProductionBatchInput, Item, CostMaster, PurchaseOrder
         
         # Get all items
         items = Item.objects.all()
         inventory_data = []
+        sku_master_data = {}  # Store master SKU aggregations
         
         # Pre-calculate item-level sales allocations
         item_sales_allocations = {}
@@ -314,7 +416,13 @@ class LotViewSet(viewsets.ModelViewSet):
             items_by_sku[item.sku].append(item)
         
         # For each unique SKU, get all vendors
+        # CRITICAL: Process every SKU, even if it has no lots or vendors
         for sku, sku_items in items_by_sku.items():
+            if not sku_items:
+                continue  # Skip if no items (shouldn't happen)
+            
+            # DEBUG: Ensure we're processing this SKU
+            print(f"Processing SKU: {sku} with {len(sku_items)} items")
             # Use the first item as representative for SKU-level data
             item = sku_items[0]
             # Get vendors for this SKU from CostMaster
@@ -347,29 +455,36 @@ class LotViewSet(viewsets.ModelViewSet):
                 else:
                     lots_without_vendor.append(lot)
             
-            # Get unique vendors from CostMaster, but only if there's an Item for that vendor
+            # Get unique vendors from all items with this SKU (this ensures all items are represented)
+            # IMPORTANT: Include items with null/empty vendor as "Unknown"
+            item_vendors = set()
+            for sku_item in sku_items:
+                vendor_name = sku_item.vendor if sku_item.vendor else "Unknown"
+                item_vendors.add(vendor_name)
+            
+            # ALWAYS ensure we have at least one vendor entry (even if empty)
+            if not item_vendors:
+                item_vendors.add("Unknown")
+            
+            # Also get vendors from CostMaster and lots
             cost_master_vendors = set()
             for cm in cost_masters:
                 if cm.vendor:
-                    # Only include vendor if there's an Item with this SKU and vendor
                     item_exists = Item.objects.filter(sku=sku, vendor=cm.vendor).exists()
                     if item_exists:
                         cost_master_vendors.add(cm.vendor)
             
-            # Add vendors from all items with this SKU
-            for sku_item in sku_items:
-                if sku_item.vendor:
-                    cost_master_vendors.add(sku_item.vendor)
+            # Combine all vendor sources - items, cost master, and lots
+            all_vendors = item_vendors.union(cost_master_vendors).union(set(vendor_lots_map.keys()))
             
-            # Combine vendors from CostMaster (that have Items) and from actual lots
-            all_vendors = cost_master_vendors.union(set(vendor_lots_map.keys()))
+            # If we have lots without vendor info, ensure "Unknown" is in the list
+            if lots_without_vendor and "Unknown" not in all_vendors:
+                all_vendors.add("Unknown")
             
-            # If no vendors found anywhere, use "Unknown" but only if there are lots
-            if not all_vendors and (lots_without_vendor or vendor_lots_map):
+            # CRITICAL: Ensure we always have at least one vendor entry for every SKU
+            # This guarantees all items are shown, even if they have no vendor and no lots
+            if not all_vendors:
                 all_vendors = {"Unknown"}
-            elif not all_vendors:
-                # No vendors and no lots - skip this item entirely
-                continue
             
             # Create an inventory entry for each vendor
             for vendor_name in sorted(all_vendors):
@@ -380,11 +495,23 @@ class LotViewSet(viewsets.ModelViewSet):
                 if vendor_name == sorted(all_vendors)[0] and lots_without_vendor:
                     vendor_lots.extend(lots_without_vendor)
                 
-                # Only create inventory entry if there are lots OR if there's an Item for this vendor
+                # Find the vendor-specific item - prioritize exact match
                 vendor_item = Item.objects.filter(sku=sku, vendor=vendor_name).first()
-                if not vendor_lots and not vendor_item:
-                    # Skip this vendor - no lots and no Item record
-                    continue
+                
+                # If no exact match and vendor is "Unknown", use any item with this SKU
+                if not vendor_item:
+                    if vendor_name == "Unknown":
+                        vendor_item = Item.objects.filter(sku=sku).first()
+                    else:
+                        # Try to find item with null/empty vendor for this SKU
+                        vendor_item = Item.objects.filter(sku=sku, vendor__isnull=True).first() or \
+                                     Item.objects.filter(sku=sku, vendor='').first() or \
+                                     Item.objects.filter(sku=sku).first()
+                
+                # Always create entry - we know we have items for this SKU
+                # If vendor_item is still None, use the first item from sku_items
+                if not vendor_item:
+                    vendor_item = sku_items[0]  # Use first item as fallback
                 
                 # Use the vendor-specific item if it exists, otherwise use the first item
                 display_item = vendor_item if vendor_item else item
@@ -422,8 +549,8 @@ class LotViewSet(viewsets.ModelViewSet):
                 # Get on_order from the vendor-specific item
                 on_order = vendor_item.on_order if vendor_item else 0.0
                 
-                # Create inventory entry (one per SKU+vendor combination)
-                inventory_data.append({
+                # Create vendor-level inventory entry (nested under SKU)
+                vendor_entry = {
                     'id': f"{sku}_{vendor_name}",  # Composite ID based on SKU+vendor
                     'item_id': display_item.id,
                     'item_sku': sku,
@@ -439,7 +566,85 @@ class LotViewSet(viewsets.ModelViewSet):
                     'available': available,
                     'quantity_remaining': quantity_remaining,
                     'lot_count': len(vendor_lots),
-                })
+                    'item_type': display_item.item_type,
+                    'level': 'vendor',  # Mark as vendor level
+                }
+                
+                # Initialize or update master SKU aggregation
+                if sku not in sku_master_data:
+                    sku_master_data[sku] = {
+                        'id': f"SKU_{sku}",  # Master SKU ID
+                        'item_sku': sku,
+                        'description': display_item.name,
+                        'item_id': display_item.id,  # Use first item's ID for FPS lookup
+                        'item_type': display_item.item_type,
+                        'pack_size_unit': display_item.unit_of_measure,
+                        'total_quantity': 0.0,
+                        'allocated_to_sales': 0.0,
+                        'allocated_to_production': 0.0,
+                        'on_hold': 0.0,
+                        'on_order': 0.0,
+                        'available': 0.0,
+                        'quantity_remaining': 0.0,
+                        'lot_count': 0,
+                        'vendor_count': 0,
+                        'level': 'sku',  # Mark as SKU master level
+                        'vendors': [],  # Store vendor entries
+                    }
+                
+                # Aggregate to master SKU totals
+                master = sku_master_data[sku]
+                master['total_quantity'] += total_quantity
+                master['allocated_to_sales'] += allocated_to_sales
+                master['allocated_to_production'] += allocated_to_production
+                master['on_hold'] += on_hold
+                master['on_order'] += on_order
+                master['available'] += available
+                master['quantity_remaining'] += quantity_remaining
+                master['lot_count'] += len(vendor_lots)
+                master['vendor_count'] += 1
+                master['vendors'].append(vendor_entry)
+            
+            # CRITICAL FALLBACK: If no vendor entries were created for this SKU, 
+            # create a default entry to ensure the SKU appears in inventory
+            # This handles edge cases where vendor matching fails
+            if sku not in sku_master_data:
+                # This ensures all SKUs are represented even if vendor logic fails
+                first_item = sku_items[0]
+                total_sales_alloc = sum(item_sales_allocations.get(i.id, 0.0) for i in sku_items)
+                total_on_order = sum(getattr(i, 'on_order', 0.0) or 0.0 for i in sku_items)
+                
+                sku_master_data[sku] = {
+                    'id': f"SKU_{sku}",
+                    'item_sku': sku,
+                    'description': first_item.name,
+                    'item_id': first_item.id,
+                    'item_type': first_item.item_type,
+                    'pack_size_unit': first_item.unit_of_measure,
+                    'total_quantity': 0.0,
+                    'allocated_to_sales': total_sales_alloc,
+                    'allocated_to_production': 0.0,
+                    'on_hold': 0.0,
+                    'on_order': total_on_order,
+                    'available': 0.0,
+                    'quantity_remaining': 0.0,
+                    'lot_count': 0,
+                    'vendor_count': 0,
+                    'level': 'sku',
+                    'vendors': [],
+                }
+        
+        # Convert master SKU data to list and return
+        for sku, master_data in sku_master_data.items():
+            inventory_data.append(master_data)
+        
+        # DEBUG: Log what we're returning
+        print(f"[INVENTORY DEBUG] Returning {len(inventory_data)} SKU entries")
+        if inventory_data:
+            print(f"[INVENTORY DEBUG] First entry: SKU={inventory_data[0].get('item_sku')}, level={inventory_data[0].get('level')}")
+        else:
+            print(f"[INVENTORY DEBUG] WARNING: No inventory data to return!")
+            print(f"[INVENTORY DEBUG] Items in DB: {items.count()}, SKUs grouped: {len(items_by_sku)}")
         
         return Response(inventory_data)
     
@@ -613,32 +818,9 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
                     status=status.HTTP_400_BAD_REQUEST
                 )
         
-        # Generate PO number if not provided (format: YYMMDD######)
+        # Generate PO number if not provided (format: 2yy0000)
         if not data.get('po_number'):
-            from datetime import datetime
-            date_prefix = datetime.now().strftime('%y%m%d')
-            
-            # Find the highest sequence number for today (PO numbers start with date prefix)
-            existing_pos = PurchaseOrder.objects.filter(
-                po_number__startswith=date_prefix
-            ).order_by('-po_number').first()
-            
-            if existing_pos:
-                # Extract sequence number from the end (last 6 digits after date prefix)
-                try:
-                    # PO number format: YYMMDD###### (10 digits total)
-                    if len(existing_pos.po_number) >= 10:
-                        seq_str = existing_pos.po_number[6:]  # Get last 6 digits
-                        seq = int(seq_str) + 1
-                    else:
-                        seq = 1
-                except (ValueError, IndexError):
-                    seq = 1
-            else:
-                seq = 1
-            
-            # Format as YYMMDD###### (10 digits total: 6 for date + 6 for sequence)
-            data['po_number'] = f'{date_prefix}{seq:06d}'
+            data['po_number'] = generate_po_number()
         
         # Ensure po_type is set
         if 'po_type' not in data:
@@ -653,30 +835,49 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
             data['expected_delivery_date'] = data['required_date']
         
         # Create the purchase order
-        serializer = self.get_serializer(data=data)
-        serializer.is_valid(raise_exception=True)
-        purchase_order = serializer.save()
+        try:
+            serializer = self.get_serializer(data=data)
+            serializer.is_valid(raise_exception=True)
+            purchase_order = serializer.save()
+        except Exception as e:
+            import traceback
+            print(f"Error creating PurchaseOrder: {e}")
+            traceback.print_exc()
+            return Response(
+                {'error': f'Failed to create purchase order: {str(e)}', 'details': str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
         
         # Create purchase order items
         for item_data in items_data:
             try:
+                item_id = item_data.get('item_id')
+                if not item_id:
+                    raise ValueError(f'item_id is required for item: {item_data}')
+                
                 # Map unit_cost to unit_price (database has unit_price, not unit_cost)
                 unit_price = item_data.get('unit_cost', item_data.get('unit_price', 0))
+                quantity_ordered = item_data.get('quantity', item_data.get('quantity_ordered', 0))
+                
+                if quantity_ordered <= 0:
+                    raise ValueError(f'quantity must be greater than 0, got: {quantity_ordered}')
+                
                 PurchaseOrderItem.objects.create(
                     purchase_order=purchase_order,
-                    item_id=item_data.get('item_id'),
-                    quantity_ordered=item_data.get('quantity', item_data.get('quantity_ordered', 0)),
+                    item_id=item_id,
+                    quantity_ordered=quantity_ordered,
                     unit_price=unit_price,  # Use unit_price as that's what exists in DB
                     notes=item_data.get('notes', ''),
                 )
             except Exception as e:
                 import traceback
                 print(f"Error creating PurchaseOrderItem: {e}")
+                print(f"Item data: {item_data}")
                 traceback.print_exc()
                 # Delete the purchase order if item creation fails
                 purchase_order.delete()
                 return Response(
-                    {'error': f'Failed to create purchase order item: {str(e)}'},
+                    {'error': f'Failed to create purchase order item: {str(e)}', 'item_data': item_data},
                     status=status.HTTP_500_INTERNAL_SERVER_ERROR
                 )
         
@@ -828,6 +1029,36 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
 class SalesOrderViewSet(viewsets.ModelViewSet):
     queryset = SalesOrder.objects.prefetch_related('items__item').all()
     serializer_class = SalesOrderSerializer
+    
+    def create(self, request, *args, **kwargs):
+        # Make a mutable copy of request.data
+        data = request.data.copy()
+        items_data = data.pop('items', [])
+        
+        # Generate sales order number if not provided (format: 3yy0000)
+        if not data.get('so_number'):
+            data['so_number'] = generate_sales_order_number()
+        
+        # Handle customer reference number
+        # If customer_reference_number is not provided, use customer_id as default
+        if not data.get('customer_reference_number') and data.get('customer_id'):
+            data['customer_reference_number'] = data.get('customer_id')
+        
+        # Create the sales order
+        serializer = self.get_serializer(data=data)
+        serializer.is_valid(raise_exception=True)
+        sales_order = serializer.save()
+        
+        # Create sales order items
+        for item_data in items_data:
+            SalesOrderItem.objects.create(
+                sales_order=sales_order,
+                **item_data
+            )
+        
+        # Return the created sales order with items
+        serializer = self.get_serializer(sales_order)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
 
 
 class InventoryTransactionViewSet(viewsets.ModelViewSet):
