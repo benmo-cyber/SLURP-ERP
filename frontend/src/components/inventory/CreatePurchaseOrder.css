@@ -207,6 +207,7 @@
   min-width: 100px;
   width: 100%;
   box-sizing: border-box;
+  /* Spinner arrows removed globally in index.css */
 }
 
 .read-only-input {

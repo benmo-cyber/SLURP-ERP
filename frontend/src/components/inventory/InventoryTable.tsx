@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { getInventoryDetails, getLotsBySkuVendor, updateLot } from '../../api/inventory'
 import { getFinishedProductSpecification, getFpsPdfUrl } from '../../api/production'
+import { formatNumber } from '../../utils/formatNumber'
 import './InventoryTable.css'
 
 interface InventoryDetail {
@@ -122,11 +123,11 @@ function InventoryTable() {
   // Convert quantity based on unit display preference
   const convertQuantity = (quantity: number, unit: string) => {
     if (unitDisplay === 'kg' && unit === 'lbs') {
-      return (quantity * 0.453592).toFixed(2)
+      return formatNumber(quantity * 0.453592)
     } else if (unitDisplay === 'lbs' && unit === 'kg') {
-      return (quantity * 2.20462).toFixed(2)
+      return formatNumber(quantity * 2.20462)
     }
-    return quantity.toFixed(2)
+    return formatNumber(quantity)
   }
 
   const getDisplayUnit = (unit: string) => {
@@ -233,12 +234,12 @@ function InventoryTable() {
                 // Master SKU row
                 if (detail.level === 'sku') {
                   const unit = detail.pack_size_unit
-                  const displayTQ = unit !== 'ea' ? convertQuantity(detail.total_quantity, unit) : detail.total_quantity.toFixed(0)
-                  const displayAllocSales = unit !== 'ea' ? convertQuantity(detail.allocated_to_sales, unit) : detail.allocated_to_sales.toFixed(0)
-                  const displayAllocProd = unit !== 'ea' ? convertQuantity(detail.allocated_to_production, unit) : detail.allocated_to_production.toFixed(0)
-                  const displayOnHold = unit !== 'ea' ? convertQuantity(detail.on_hold, unit) : detail.on_hold.toFixed(0)
-                  const displayOnOrder = unit !== 'ea' ? convertQuantity(detail.on_order, unit) : detail.on_order.toFixed(0)
-                  const displayAvailable = unit !== 'ea' ? convertQuantity(detail.available, unit) : detail.available.toFixed(0)
+                  const displayTQ = unit !== 'ea' ? convertQuantity(detail.total_quantity, unit) : formatNumber(detail.total_quantity, 0)
+                  const displayAllocSales = unit !== 'ea' ? convertQuantity(detail.allocated_to_sales, unit) : formatNumber(detail.allocated_to_sales, 0)
+                  const displayAllocProd = unit !== 'ea' ? convertQuantity(detail.allocated_to_production, unit) : formatNumber(detail.allocated_to_production, 0)
+                  const displayOnHold = unit !== 'ea' ? convertQuantity(detail.on_hold, unit) : formatNumber(detail.on_hold, 0)
+                  const displayOnOrder = unit !== 'ea' ? convertQuantity(detail.on_order, unit) : formatNumber(detail.on_order, 0)
+                  const displayAvailable = unit !== 'ea' ? convertQuantity(detail.available, unit) : formatNumber(detail.available, 0)
                   const displayUnit = getDisplayUnit(unit)
 
                   const hasFps = fpsLinks.has(detail.item_id) && detail.item_type === 'finished_good'
@@ -300,12 +301,12 @@ function InventoryTable() {
                       </tr>
                       {isSkuExpanded && vendors.map((vendorDetail) => {
                         const vendorUnit = vendorDetail.pack_size_unit
-                        const vendorDisplayTQ = vendorUnit !== 'ea' ? convertQuantity(vendorDetail.total_quantity, vendorUnit) : vendorDetail.total_quantity.toFixed(0)
-                        const vendorDisplayAllocSales = vendorUnit !== 'ea' ? convertQuantity(vendorDetail.allocated_to_sales, vendorUnit) : vendorDetail.allocated_to_sales.toFixed(0)
-                        const vendorDisplayAllocProd = vendorUnit !== 'ea' ? convertQuantity(vendorDetail.allocated_to_production, vendorUnit) : vendorDetail.allocated_to_production.toFixed(0)
-                        const vendorDisplayOnHold = vendorUnit !== 'ea' ? convertQuantity(vendorDetail.on_hold, vendorUnit) : vendorDetail.on_hold.toFixed(0)
-                        const vendorDisplayOnOrder = vendorUnit !== 'ea' ? convertQuantity(vendorDetail.on_order, vendorUnit) : vendorDetail.on_order.toFixed(0)
-                        const vendorDisplayAvailable = vendorUnit !== 'ea' ? convertQuantity(vendorDetail.available, vendorUnit) : vendorDetail.available.toFixed(0)
+                        const vendorDisplayTQ = vendorUnit !== 'ea' ? convertQuantity(vendorDetail.total_quantity, vendorUnit) : formatNumber(vendorDetail.total_quantity, 0)
+                        const vendorDisplayAllocSales = vendorUnit !== 'ea' ? convertQuantity(vendorDetail.allocated_to_sales, vendorUnit) : formatNumber(vendorDetail.allocated_to_sales, 0)
+                        const vendorDisplayAllocProd = vendorUnit !== 'ea' ? convertQuantity(vendorDetail.allocated_to_production, vendorUnit) : formatNumber(vendorDetail.allocated_to_production, 0)
+                        const vendorDisplayOnHold = vendorUnit !== 'ea' ? convertQuantity(vendorDetail.on_hold, vendorUnit) : formatNumber(vendorDetail.on_hold, 0)
+                        const vendorDisplayOnOrder = vendorUnit !== 'ea' ? convertQuantity(vendorDetail.on_order, vendorUnit) : formatNumber(vendorDetail.on_order, 0)
+                        const vendorDisplayAvailable = vendorUnit !== 'ea' ? convertQuantity(vendorDetail.available, vendorUnit) : formatNumber(vendorDetail.available, 0)
                         const vendorDisplayUnit = getDisplayUnit(vendorUnit)
                         const vendorPackSizeDisplay = vendorDetail.pack_size ? `${vendorDetail.pack_size} ${vendorUnit}` : '-'
 
@@ -388,8 +389,8 @@ function InventoryTable() {
                                         <tbody>
                                           {vendorLots.map((lot) => {
                                             const lotUnit = lot.item.unit_of_measure
-                                            const displayQty = lotUnit !== 'ea' ? convertQuantity(lot.quantity, lotUnit) : lot.quantity.toFixed(0)
-                                            const displayRemaining = lotUnit !== 'ea' ? convertQuantity(lot.quantity_remaining, lotUnit) : lot.quantity_remaining.toFixed(0)
+                                            const displayQty = lotUnit !== 'ea' ? convertQuantity(lot.quantity, lotUnit) : formatNumber(lot.quantity, 0)
+                                            const displayRemaining = lotUnit !== 'ea' ? convertQuantity(lot.quantity_remaining, lotUnit) : formatNumber(lot.quantity_remaining, 0)
                                             const lotDisplayUnit = getDisplayUnit(lotUnit)
                                             const receivedDate = new Date(lot.received_date).toLocaleDateString()
                                             const expDate = lot.expiration_date ? new Date(lot.expiration_date).toLocaleDateString() : 'N/A'

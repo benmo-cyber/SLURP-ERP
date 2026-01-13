@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { getProductionBatch } from '../../api/inventory'
+import { formatNumber } from '../../utils/formatNumber'
 import './BatchDetailView.css'
 
 interface Lot {
@@ -61,6 +62,14 @@ function BatchDetailView({ batchId, onClose }: BatchDetailViewProps) {
   const [loading, setLoading] = useState(true)
   const [unitDisplay, setUnitDisplay] = useState<'lbs' | 'kg'>('lbs')
 
+  // Format production date to avoid timezone conversion issues
+  const formatProductionDate = (dateString: string): string => {
+    // Extract just the date part (YYYY-MM-DD) to avoid timezone conversion
+    const datePart = dateString.split('T')[0]
+    const [year, month, day] = datePart.split('-')
+    return `${parseInt(month)}/${parseInt(day)}/${year}`
+  }
+
   useEffect(() => {
     loadBatch()
   }, [batchId])
@@ -101,13 +110,13 @@ function BatchDetailView({ batchId, onClose }: BatchDetailViewProps) {
 
   // Convert quantity based on unit display preference
   const convertQuantity = (quantity: number, unit: string) => {
-    if (unit === 'ea') return quantity.toFixed(0)
+    if (unit === 'ea') return formatNumber(quantity, 0)
     if (unitDisplay === 'kg' && unit === 'lbs') {
-      return (quantity * 0.453592).toFixed(2)
+      return formatNumber(quantity * 0.453592)
     } else if (unitDisplay === 'lbs' && unit === 'kg') {
-      return (quantity * 2.20462).toFixed(2)
+      return formatNumber(quantity * 2.20462)
     }
-    return quantity.toFixed(2)
+    return formatNumber(quantity)
   }
 
   const getDisplayUnit = (unit: string) => {
@@ -188,7 +197,7 @@ function BatchDetailView({ batchId, onClose }: BatchDetailViewProps) {
               )}
               <div className="info-item">
                 <label>Production Date:</label>
-                <span>{new Date(batch.production_date).toLocaleDateString()}</span>
+                <span>{formatProductionDate(batch.production_date)}</span>
               </div>
               {batch.closed_date && (
                 <div className="info-item">

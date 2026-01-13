@@ -77,3 +77,25 @@ main {
   padding: 0.5rem 1rem;
   font-size: 0.85rem;
 }
+
+/* Remove spinner arrows from all number inputs globally throughout SLURP */
+input[type="number"] {
+  -moz-appearance: textfield;
+}
+
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+/* Also for number-input class */
+.number-input {
+  -moz-appearance: textfield;
+}
+
+.number-input::-webkit-outer-spin-button,
+.number-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}

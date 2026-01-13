@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { getItems, getFormulas, getLots, createProductionBatch } from '../../api/inventory'
+import { formatNumber } from '../../utils/formatNumber'
 import './CreateBatchTicket.css'
 
 interface Item {
@@ -270,8 +271,8 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
 
   const convertWeight = (value: number, from: 'lbs' | 'kg', to: 'lbs' | 'kg'): number => {
     if (from === to) return value
-    if (from === 'lbs' && to === 'kg') return value / 2.2
-    if (from === 'kg' && to === 'lbs') return value * 2.2
+    if (from === 'lbs' && to === 'kg') return value / 2.20462
+    if (from === 'kg' && to === 'lbs') return value * 2.20462
     return value
   }
 
@@ -317,7 +318,7 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
         if (!isNaN(currentValue)) {
           // Convert input value from old unit to new unit
           const convertedInput = convertWeight(currentValue, quantityUnit, newUnit)
-          convertedInputValues[lotId] = convertedInput.toFixed(2)
+          convertedInputValues[lotId] = formatNumber(convertedInput)
           
           // Convert stored value: from old display unit to lot's native unit
           // First convert from old display unit to new display unit, then to lot's native unit
@@ -407,10 +408,10 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
         }
       })
 
-      // Validate that total quantity used equals quantity to produce (with small tolerance for floating point)
-      const tolerance = 0.01
+      // Validate that total quantity used equals quantity to produce (with tolerance for floating point precision)
+      const tolerance = 0.1  // Increased tolerance to account for conversion rounding differences
       if (Math.abs(totalQuantityUsedInLbs - quantityInLbs) > tolerance) {
-        alert(`Quantity mismatch: Total quantity used (${totalQuantityUsedInLbs.toFixed(2)} lbs) must equal quantity to produce (${quantityInLbs.toFixed(2)} lbs)`)
+        alert(`Quantity mismatch: Total quantity used (${formatNumber(totalQuantityUsedInLbs)} lbs) must equal quantity to produce (${formatNumber(quantityInLbs)} lbs)`)
         setSubmitting(false)
         return
       }
@@ -454,6 +455,7 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
       // Try to get detailed error message
       let errorMessage = 'Failed to create batch ticket'
       if (error.response?.data) {
+        console.log('Full error data:', JSON.stringify(error.response.data, null, 2))
         if (error.response.data.detail) {
           errorMessage = error.response.data.detail
         } else if (error.response.data.error) {
@@ -476,6 +478,9 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
           }
           if (errorParts.length > 0) {
             errorMessage = errorParts.join('\n')
+          } else {
+            // If we can't parse it, show the raw data
+            errorMessage = JSON.stringify(error.response.data)
           }
         }
       } else if (error.message) {
@@ -699,7 +704,7 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
                   // The quantity entered is in quantityUnit, and percentages are based on that
                   const baseQuantity = quantity ? parseFloat(quantity) : 0
                   const requiredQty = baseQuantity * (ingredient.percentage / 100)
-                  const requiredQtyDisplay = requiredQty.toFixed(2)
+                  const requiredQtyDisplay = formatNumber(requiredQty)
 
                   return (
                     <div key={ingredient.id} className="ingredient-group">
@@ -713,7 +718,7 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
                             Required: {requiredQtyDisplay} {quantityUnit === 'kg' ? 'kg' : 'lbs'}
                           </span>
                           <span className={`selected-qty ${totalSelected > 0 ? 'has-selection' : ''}`}>
-                            Selected: {totalSelected.toFixed(2)} {quantityUnit}
+                            Selected: {formatNumber(totalSelected)} {quantityUnit}
                           </span>
                         </div>
                       </div>
@@ -733,7 +738,7 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
                                     : lot.lot_number}
                                 </span>
                                 <span className="lot-available-badge">
-                                  {lot.quantity_remaining.toLocaleString()} {lot.item.unit_of_measure} available
+                                  {formatNumber(lot.quantity_remaining)} {lot.item.unit_of_measure} available
                                 </span>
                               </div>
                               <div className="lot-quantity-section">
@@ -797,7 +802,7 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
                             : lot.lot_number}
                         </span>
                         <span className="lot-available-badge">
-                          {lot.quantity_remaining.toLocaleString()} {lot.item.unit_of_measure} available
+                          {formatNumber(lot.quantity_remaining)} {lot.item.unit_of_measure} available
                         </span>
                       </div>
                       <div className="lot-quantity-section">

@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { getInvoices, updateInvoice, getAgingReport } from '../../api/invoices'
+import { formatCurrency } from '../../utils/formatNumber'
 import CreateInvoice from './CreateInvoice'
 import './Invoices.css'
 
@@ -132,32 +133,32 @@ function Invoices() {
           <div className="aging-buckets">
             <div className="aging-bucket">
               <h4>Current (Not Due)</h4>
-              <div className="bucket-total">${agingReport.buckets.current.total.toFixed(2)}</div>
+              <div className="bucket-total">{formatCurrency(agingReport.buckets.current.total)}</div>
               <div className="bucket-count">{agingReport.buckets.current.invoices.length} invoices</div>
             </div>
             <div className="aging-bucket">
               <h4>0-30 Days</h4>
-              <div className="bucket-total">${agingReport.buckets['0_30'].total.toFixed(2)}</div>
+              <div className="bucket-total">{formatCurrency(agingReport.buckets['0_30'].total)}</div>
               <div className="bucket-count">{agingReport.buckets['0_30'].invoices.length} invoices</div>
             </div>
             <div className="aging-bucket">
               <h4>31-60 Days</h4>
-              <div className="bucket-total">${agingReport.buckets['31_60'].total.toFixed(2)}</div>
+              <div className="bucket-total">{formatCurrency(agingReport.buckets['31_60'].total)}</div>
               <div className="bucket-count">{agingReport.buckets['31_60'].invoices.length} invoices</div>
             </div>
             <div className="aging-bucket">
               <h4>61-90 Days</h4>
-              <div className="bucket-total">${agingReport.buckets['61_90'].total.toFixed(2)}</div>
+              <div className="bucket-total">{formatCurrency(agingReport.buckets['61_90'].total)}</div>
               <div className="bucket-count">{agingReport.buckets['61_90'].invoices.length} invoices</div>
             </div>
             <div className="aging-bucket">
               <h4>90+ Days</h4>
-              <div className="bucket-total">${agingReport.buckets['90_plus'].total.toFixed(2)}</div>
+              <div className="bucket-total">{formatCurrency(agingReport.buckets['90_plus'].total)}</div>
               <div className="bucket-count">{agingReport.buckets['90_plus'].invoices.length} invoices</div>
             </div>
             <div className="aging-bucket grand-total">
               <h4>Grand Total</h4>
-              <div className="bucket-total">${agingReport.grand_total.toFixed(2)}</div>
+              <div className="bucket-total">{formatCurrency(agingReport.grand_total)}</div>
             </div>
           </div>
         </div>
@@ -217,7 +218,7 @@ function Invoices() {
                       {getAgingLabel(invoice.days_aging)}
                     </span>
                   </td>
-                  <td className="amount">${invoice.grand_total.toFixed(2)}</td>
+                  <td className="amount">{formatCurrency(invoice.grand_total)}</td>
                   <td>
                     {editingStatus === invoice.id ? (
                       <select

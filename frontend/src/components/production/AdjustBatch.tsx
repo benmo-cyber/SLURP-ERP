@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { getItems, getFormulas, getLots, getProductionBatch, updateProductionBatch } from '../../api/inventory'
+import { formatNumber } from '../../utils/formatNumber'
 import './AdjustBatch.css'
 
 interface Item {
@@ -26,6 +27,7 @@ interface FormulaItem {
 interface Lot {
   id: number
   lot_number: string
+  vendor_lot_number?: string | null
   item: Item
   quantity_remaining: number
   unit_of_measure: string
@@ -78,11 +80,11 @@ function AdjustBatch({ batch, onClose, onSuccess }: AdjustBatchProps) {
         setQuantityUnit(batchData.finished_good_item.unit_of_measure === 'kg' ? 'kg' : 'lbs')
       }
 
-      // Load existing inputs
+      // Load existing inputs - round quantities to 2 decimal places
       if (batchData.inputs && batchData.inputs.length > 0) {
         const existingInputs: { [key: number]: number } = {}
         batchData.inputs.forEach((input: any) => {
-          existingInputs[input.lot.id] = input.quantity_used
+          existingInputs[input.lot.id] = Math.round(input.quantity_used * 100) / 100
         })
         setSelectedLots(existingInputs)
       }
@@ -128,8 +130,10 @@ function AdjustBatch({ batch, onClose, onSuccess }: AdjustBatchProps) {
 
   const handleLotQuantityChange = (lotId: number, quantity: string) => {
     const qty = parseFloat(quantity) || 0
-    if (qty > 0) {
-      setSelectedLots({ ...selectedLots, [lotId]: qty })
+    // Round to 2 decimal places
+    const roundedQty = Math.round(qty * 100) / 100
+    if (roundedQty > 0) {
+      setSelectedLots({ ...selectedLots, [lotId]: roundedQty })
     } else {
       const newSelected = { ...selectedLots }
       delete newSelected[lotId]
@@ -159,18 +163,19 @@ function AdjustBatch({ batch, onClose, onSuccess }: AdjustBatchProps) {
     try {
       setSubmitting(true)
 
-      // Convert quantity if needed
+      // Convert quantity if needed and round to 2 decimal places
       let quantityToProduce = parseFloat(quantity)
       if (quantityUnit === 'kg' && batchDetails?.finished_good_item?.unit_of_measure === 'lbs') {
-        quantityToProduce = quantityToProduce * 2.2
+        quantityToProduce = quantityToProduce * 2.20462
       } else if (quantityUnit === 'lbs' && batchDetails?.finished_good_item?.unit_of_measure === 'kg') {
-        quantityToProduce = quantityToProduce / 2.2
+        quantityToProduce = quantityToProduce / 2.20462
       }
+      quantityToProduce = Math.round(quantityToProduce * 100) / 100
 
-      // Prepare inputs array
+      // Prepare inputs array - round all quantities to 2 decimal places
       const inputs: BatchInput[] = Object.entries(selectedLots).map(([lotId, qty]) => ({
         lot_id: parseInt(lotId),
-        quantity_used: qty
+        quantity_used: Math.round(qty * 100) / 100
       }))
 
       await updateProductionBatch(batch.id, {
@@ -272,7 +277,7 @@ function AdjustBatch({ batch, onClose, onSuccess }: AdjustBatchProps) {
               </select>
             </div>
             <small className="form-hint">
-              Original: {batch.quantity_produced.toLocaleString()} {batchDetails?.finished_good_item?.unit_of_measure || 'lbs'}
+              Original: {formatNumber(batch.quantity_produced)} {batchDetails?.finished_good_item?.unit_of_measure || 'lbs'}
             </small>
           </div>
 
@@ -290,11 +295,15 @@ function AdjustBatch({ batch, onClose, onSuccess }: AdjustBatchProps) {
                     <div key={lot.id} className={`lot-selection-card ${isSelected ? 'selected' : ''}`}>
                       <div className="lot-info">
                         <div className="lot-header">
-                          <span className="lot-number">{lot.lot_number}</span>
+                          <span className="lot-number">
+                            {lot.item.item_type === 'raw_material' && lot.vendor_lot_number 
+                              ? `Vendor Lot: ${lot.vendor_lot_number}` 
+                              : `Lot: ${lot.lot_number}`}
+                          </span>
                           <span className="item-name">{lot.item.name}</span>
                         </div>
                         <div className="lot-details">
-                          <span>Available: {lot.quantity_remaining.toLocaleString()} {lot.unit_of_measure}</span>
+                          <span>Available: {formatNumber(lot.quantity_remaining)} {lot.unit_of_measure}</span>
                         </div>
                       </div>
                       <div className="lot-input">
@@ -306,7 +315,7 @@ function AdjustBatch({ batch, onClose, onSuccess }: AdjustBatchProps) {
                           max={lot.quantity_remaining}
                           value={isSelected ? currentQty : ''}
                           onChange={(e) => handleLotQuantityChange(lot.id, e.target.value)}
-                          placeholder="0.00"
+                          placeholder=""
                         />
                         {isSelected && (
                           <button

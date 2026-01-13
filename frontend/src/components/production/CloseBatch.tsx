@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { updateProductionBatch } from '../../api/inventory'
+import { formatNumber } from '../../utils/formatNumber'
 import './CloseBatch.css'
 
 interface CloseBatchProps {
@@ -11,9 +12,9 @@ interface CloseBatchProps {
 function CloseBatch({ batch, onClose, onSuccess }: CloseBatchProps) {
   const [unitDisplay, setUnitDisplay] = useState<'lbs' | 'kg'>('lbs')
   const [formData, setFormData] = useState({
-    quantity_actual: batch.quantity_actual || batch.quantity_produced,
-    wastes: batch.wastes || 0,
-    spills: batch.spills || 0,
+    quantity_actual: batch.quantity_actual || batch.quantity_produced || '',
+    wastes: batch.wastes || '',
+    spills: batch.spills || '',
     qc_parameters: '',
     qc_actual: '',
     qc_initials: '',
@@ -62,9 +63,13 @@ function CloseBatch({ batch, onClose, onSuccess }: CloseBatchProps) {
       setSubmitting(true)
       
       // Convert input values back to original unit (lbs) for backend
-      const quantityActualInLbs = convertFromDisplay(parseFloat(formData.quantity_actual.toString()), finishedGoodUnit)
-      const wastesInLbs = convertFromDisplay(parseFloat(formData.wastes.toString()), finishedGoodUnit)
-      const spillsInLbs = convertFromDisplay(parseFloat(formData.spills.toString()), finishedGoodUnit)
+      const qtyActual = typeof formData.quantity_actual === 'string' ? (formData.quantity_actual === '' ? 0 : parseFloat(formData.quantity_actual)) : formData.quantity_actual
+      const wastesVal = typeof formData.wastes === 'string' ? (formData.wastes === '' ? 0 : parseFloat(formData.wastes)) : formData.wastes
+      const spillsVal = typeof formData.spills === 'string' ? (formData.spills === '' ? 0 : parseFloat(formData.spills)) : formData.spills
+      
+      const quantityActualInLbs = convertFromDisplay(qtyActual || 0, finishedGoodUnit)
+      const wastesInLbs = convertFromDisplay(wastesVal || 0, finishedGoodUnit)
+      const spillsInLbs = convertFromDisplay(spillsVal || 0, finishedGoodUnit)
       
       // Calculate variance (both should be in same unit)
       const variance = quantityActualInLbs - batch.quantity_produced
@@ -166,7 +171,7 @@ function CloseBatch({ batch, onClose, onSuccess }: CloseBatchProps) {
             </div>
             <div className="info-item">
               <label>Quantity to Produce:</label>
-              <span>{convertQuantity(batch.quantity_produced, finishedGoodUnit).toLocaleString()} {getDisplayUnit()}</span>
+              <span>{formatNumber(convertQuantity(batch.quantity_produced, finishedGoodUnit))} {getDisplayUnit()}</span>
             </div>
           </div>
 
@@ -179,11 +184,16 @@ function CloseBatch({ batch, onClose, onSuccess }: CloseBatchProps) {
                   type="number"
                   step="0.01"
                   min="0"
-                  value={convertQuantity(parseFloat(formData.quantity_actual.toString()) || 0, finishedGoodUnit)}
+                  value={formData.quantity_actual === '' ? '' : convertQuantity(typeof formData.quantity_actual === 'string' ? parseFloat(formData.quantity_actual) || 0 : formData.quantity_actual, finishedGoodUnit)}
                   onChange={(e) => {
-                    const displayValue = parseFloat(e.target.value) || 0
-                    const originalValue = convertFromDisplay(displayValue, finishedGoodUnit)
-                    setFormData({ ...formData, quantity_actual: originalValue.toString() })
+                    const val = e.target.value
+                    if (val === '') {
+                      setFormData({ ...formData, quantity_actual: '' })
+                    } else {
+                      const displayValue = parseFloat(val) || 0
+                      const originalValue = convertFromDisplay(displayValue, finishedGoodUnit)
+                      setFormData({ ...formData, quantity_actual: originalValue })
+                    }
                   }}
                   required
                 />
@@ -193,7 +203,7 @@ function CloseBatch({ batch, onClose, onSuccess }: CloseBatchProps) {
                 <label>Variance</label>
                 <input
                   type="number"
-                  value={varianceInDisplay.toFixed(2)}
+                  value={formatNumber(varianceInDisplay)}
                   disabled
                   className={varianceInDisplay >= 0 ? 'positive' : 'negative'}
                 />
@@ -205,11 +215,16 @@ function CloseBatch({ batch, onClose, onSuccess }: CloseBatchProps) {
                   type="number"
                   step="0.01"
                   min="0"
-                  value={convertQuantity(parseFloat(formData.wastes.toString()) || 0, finishedGoodUnit)}
+                  value={formData.wastes === '' ? '' : convertQuantity(typeof formData.wastes === 'string' ? parseFloat(formData.wastes) || 0 : formData.wastes, finishedGoodUnit)}
                   onChange={(e) => {
-                    const displayValue = parseFloat(e.target.value) || 0
-                    const originalValue = convertFromDisplay(displayValue, finishedGoodUnit)
-                    setFormData({ ...formData, wastes: originalValue.toString() })
+                    const val = e.target.value
+                    if (val === '') {
+                      setFormData({ ...formData, wastes: '' })
+                    } else {
+                      const displayValue = parseFloat(val) || 0
+                      const originalValue = convertFromDisplay(displayValue, finishedGoodUnit)
+                      setFormData({ ...formData, wastes: originalValue })
+                    }
                   }}
                 />
               </div>
@@ -220,11 +235,16 @@ function CloseBatch({ batch, onClose, onSuccess }: CloseBatchProps) {
                   type="number"
                   step="0.01"
                   min="0"
-                  value={convertQuantity(parseFloat(formData.spills.toString()) || 0, finishedGoodUnit)}
+                  value={formData.spills === '' ? '' : convertQuantity(typeof formData.spills === 'string' ? parseFloat(formData.spills) || 0 : formData.spills, finishedGoodUnit)}
                   onChange={(e) => {
-                    const displayValue = parseFloat(e.target.value) || 0
-                    const originalValue = convertFromDisplay(displayValue, finishedGoodUnit)
-                    setFormData({ ...formData, spills: originalValue.toString() })
+                    const val = e.target.value
+                    if (val === '') {
+                      setFormData({ ...formData, spills: '' })
+                    } else {
+                      const displayValue = parseFloat(val) || 0
+                      const originalValue = convertFromDisplay(displayValue, finishedGoodUnit)
+                      setFormData({ ...formData, spills: originalValue })
+                    }
                   }}
                 />
               </div>

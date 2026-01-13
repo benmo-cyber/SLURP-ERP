@@ -72,6 +72,17 @@
   font-family: inherit;
 }
 
+/* Remove spinner arrows from all number inputs */
+.form-group input[type="number"] {
+  -moz-appearance: textfield;
+}
+
+.form-group input[type="number"]::-webkit-outer-spin-button,
+.form-group input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
 .form-group select:focus,
 .form-group input:focus {
   outline: none;
@@ -342,6 +353,14 @@
   font-size: 1rem;
   font-weight: 500;
   transition: all 0.2s;
+  /* Remove spinner arrows */
+  -moz-appearance: textfield;
+}
+
+.quantity-input::-webkit-outer-spin-button,
+.quantity-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
 }
 
 .quantity-input:focus {

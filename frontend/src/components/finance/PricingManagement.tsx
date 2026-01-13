@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { getVendorPricing, getCustomerPricing, getItems } from '../../api/finance'
+import { formatCurrency } from '../../utils/formatNumber'
 import CreateVendorPricing from './CreateVendorPricing'
 import PricingHistory from './PricingHistory'
 import './PricingManagement.css'
@@ -103,7 +104,7 @@ function PricingManagement() {
                     <tr key={pricing.id}>
                       <td>{pricing.item?.name || '-'}</td>
                       <td>{pricing.vendor_name}</td>
-                      <td className="amount">${pricing.unit_price.toFixed(2)}</td>
+                      <td className="amount">{formatCurrency(pricing.unit_price)}</td>
                       <td>{pricing.unit_of_measure}</td>
                       <td>{new Date(pricing.effective_date).toLocaleDateString()}</td>
                       <td>{pricing.expiry_date ? new Date(pricing.expiry_date).toLocaleDateString() : '-'}</td>
@@ -153,7 +154,7 @@ function PricingManagement() {
                     <tr key={pricing.id}>
                       <td>{pricing.item?.name || '-'}</td>
                       <td>{pricing.customer_name}</td>
-                      <td className="amount">${pricing.unit_price.toFixed(2)}</td>
+                      <td className="amount">{formatCurrency(pricing.unit_price)}</td>
                       <td>{pricing.unit_of_measure}</td>
                       <td>{new Date(pricing.effective_date).toLocaleDateString()}</td>
                       <td>{pricing.expiry_date ? new Date(pricing.expiry_date).toLocaleDateString() : '-'}</td>

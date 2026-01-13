@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { getItems, getLots } from '../../api/inventory'
+import { formatNumber } from '../../utils/formatNumber'
 import './InventorySummary.css'
 
 interface Item {
@@ -98,7 +99,7 @@ function InventorySummary() {
                     </div>
                   </div>
                   <div className="item-total">
-                    <div className="total-quantity">{totalQty.toLocaleString()}</div>
+                    <div className="total-quantity">{formatNumber(totalQty, 0)}</div>
                     <div className="total-unit">{item.unit_of_measure}</div>
                   </div>
                 </div>
@@ -124,8 +125,8 @@ function InventorySummary() {
                         {itemLots.map((lot) => (
                           <tr key={lot.id}>
                             <td>{lot.lot_number}</td>
-                            <td>{lot.quantity.toLocaleString()}</td>
-                            <td>{lot.quantity_remaining.toLocaleString()}</td>
+                            <td>{formatNumber(lot.quantity, 0)}</td>
+                            <td>{formatNumber(lot.quantity_remaining, 0)}</td>
                             <td>{new Date(lot.received_date).toLocaleDateString()}</td>
                             <td>{lot.expiration_date ? new Date(lot.expiration_date).toLocaleDateString() : '-'}</td>
                           </tr>

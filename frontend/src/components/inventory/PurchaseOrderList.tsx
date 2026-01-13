@@ -9,6 +9,7 @@ import {
   deletePurchaseOrder,
   updateDeliveryFromTracking
 } from '../../api/purchaseOrders'
+import { formatCurrency, formatNumber } from '../../utils/formatNumber'
 import './PurchaseOrderList.css'
 
 interface PurchaseOrderItem {
@@ -337,7 +338,7 @@ function PurchaseOrderList() {
               {selectedPO.total && (
                 <div className="info-item">
                   <label>Total:</label>
-                  <span>${selectedPO.total.toFixed(2)}</span>
+                  <span>{formatCurrency(selectedPO.total)}</span>
                 </div>
               )}
             </div>
@@ -362,10 +363,10 @@ function PurchaseOrderList() {
                   <tr key={item.id}>
                     <td>{item.item?.name || 'N/A'}</td>
                     <td>{item.description || 'N/A'}</td>
-                    <td>${item.unit_cost?.toFixed(2) || '0.00'}</td>
+                    <td>{item.unit_cost ? formatCurrency(item.unit_cost) : '0.00'}</td>
                     <td>{item.quantity_ordered}</td>
                     <td>{item.quantity_received || 0}</td>
-                    <td>${((item.unit_cost || 0) * item.quantity_ordered).toFixed(2)}</td>
+                    <td>{formatCurrency((item.unit_cost || 0) * item.quantity_ordered)}</td>
                     <td>{item.notes || ''}</td>
                   </tr>
                 ))}
@@ -411,13 +412,13 @@ function PurchaseOrderList() {
 
   // Convert quantity based on unit display preference
   const convertQuantity = (quantity: number, itemUnit: string) => {
-    if (itemUnit === 'ea') return quantity.toFixed(0)
+    if (itemUnit === 'ea') return formatNumber(quantity, 0)
     if (unitDisplay === 'kg' && itemUnit === 'lbs') {
-      return (quantity * 0.453592).toFixed(2)
+      return formatNumber(quantity * 0.453592)
     } else if (unitDisplay === 'lbs' && itemUnit === 'kg') {
-      return (quantity * 2.20462).toFixed(2)
+      return formatNumber(quantity * 2.20462)
     }
-    return quantity.toFixed(2)
+    return formatNumber(quantity)
   }
 
   const getDisplayUnit = (itemUnit: string) => {
@@ -545,8 +546,8 @@ function PurchaseOrderList() {
                 <td className={isLate(po.expected_delivery_date, po.required_date) ? 'late-delivery' : ''}>
                   {formatDate(po.expected_delivery_date)}
                 </td>
-                <td>{parseFloat(totalQuantity.toFixed(2)).toLocaleString()} {displayUnit}</td>
-                <td>${po.total?.toFixed(2) || '0.00'}</td>
+                <td>{formatNumber(totalQuantity)} {displayUnit}</td>
+                <td>{po.total ? formatCurrency(po.total) : '0.00'}</td>
                 <td>
                   <span className={getStatusBadgeClass(po.status)}>{po.status}</span>
                 </td>

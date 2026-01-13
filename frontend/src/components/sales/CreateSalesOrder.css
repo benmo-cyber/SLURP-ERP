@@ -134,6 +134,7 @@
 .number-input {
   width: 100px;
   box-sizing: border-box;
+  /* Spinner arrows removed globally in index.css */
 }
 
 .so-items-table tfoot {

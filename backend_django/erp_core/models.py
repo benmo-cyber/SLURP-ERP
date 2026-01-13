@@ -352,9 +352,17 @@ class SalesOrder(models.Model):
     
     so_number = models.CharField(max_length=100, unique=True, db_index=True)
     customer = models.ForeignKey('Customer', on_delete=models.SET_NULL, blank=True, null=True, related_name='sales_orders', help_text='Customer from customer database')
+    ship_to_location = models.ForeignKey('ShipToLocation', on_delete=models.SET_NULL, blank=True, null=True, related_name='sales_orders', help_text='Ship-to location for this order')
     customer_name = models.CharField(max_length=255, help_text='Customer name (legacy field, use customer FK when possible)')
     customer_legacy_id = models.CharField(max_length=100, blank=True, null=True, help_text='Customer ID (legacy field, deprecated - use customer FK)')
     customer_reference_number = models.CharField(max_length=255, blank=True, null=True, help_text='Customer PO number or reference number')
+    # Legacy address fields - kept for backward compatibility
+    customer_address = models.TextField(blank=True, null=True, help_text='Legacy field - use ship_to_location when possible')
+    customer_city = models.CharField(max_length=100, blank=True, null=True, help_text='Legacy field - use ship_to_location when possible')
+    customer_state = models.CharField(max_length=50, blank=True, null=True, help_text='Legacy field - use ship_to_location when possible')
+    customer_zip = models.CharField(max_length=20, blank=True, null=True, help_text='Legacy field - use ship_to_location when possible')
+    customer_country = models.CharField(max_length=100, blank=True, null=True, help_text='Legacy field - use ship_to_location when possible')
+    customer_phone = models.CharField(max_length=50, blank=True, null=True, help_text='Legacy field - use ship_to_location when possible')
     order_date = models.DateTimeField(auto_now_add=True)
     expected_ship_date = models.DateTimeField(blank=True, null=True, help_text='Requested ship date')
     actual_ship_date = models.DateTimeField(blank=True, null=True, help_text='Actual ship date')

@@ -393,10 +393,36 @@ class ItemViewSet(viewsets.ModelViewSet):
         if 'price' in data and (data['price'] == '' or data['price'] is None):
             data.pop('price', None)
         
+        # Trim SKU and name if provided
+        if 'sku' in data and isinstance(data['sku'], str):
+            data['sku'] = data['sku'].strip()
+        if 'name' in data and isinstance(data['name'], str):
+            data['name'] = data['name'].strip()
+        
+        # Check for unique constraint violation before updating
+        if 'sku' in data or 'vendor' in data:
+            new_sku = data.get('sku', instance.sku)
+            new_vendor = data.get('vendor', instance.vendor) or None
+            # Check if another item with same SKU + vendor exists (excluding current instance)
+            existing_item = Item.objects.filter(sku=new_sku, vendor=new_vendor).exclude(id=instance.id).first()
+            if existing_item:
+                return Response(
+                    {'error': f'An item with SKU "{new_sku}" and vendor "{new_vendor or "None"}" already exists.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        
         # Update the item
         partial = kwargs.pop('partial', False)
         serializer = self.get_serializer(instance, data=data, partial=partial)
-        serializer.is_valid(raise_exception=True)
+        if not serializer.is_valid():
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f'Serializer validation failed: {serializer.errors}')
+            logger.error(f'Data being validated: {data}')
+            return Response(
+                serializer.errors,
+                status=status.HTTP_400_BAD_REQUEST
+            )
         item = serializer.save()
         
         # Sync to CostMaster if vendor exists
@@ -1202,6 +1228,28 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
         outputs_data = data.pop('outputs', [])
         batch_type = data.get('batch_type', 'production')
         
+        # Convert production_date from date string to datetime if needed
+        if 'production_date' in data and isinstance(data['production_date'], str):
+            from django.utils.dateparse import parse_date, parse_datetime
+            # Try parsing as datetime first
+            parsed = parse_datetime(data['production_date'])
+            if not parsed:
+                # Try parsing as date and convert to datetime
+                date_obj = parse_date(data['production_date'])
+                if date_obj:
+                    # Create datetime at noon in local timezone (CST) to avoid timezone conversion issues
+                    # This ensures the date stays the same regardless of timezone
+                    # We use noon instead of midnight to avoid edge cases with DST
+                    from datetime import time as dt_time
+                    local_tz = timezone.get_current_timezone()
+                    local_midday = local_tz.localize(datetime.combine(date_obj, dt_time(12, 0, 0)))
+                    parsed = local_midday
+            if parsed:
+                data['production_date'] = parsed
+            else:
+                # If parsing fails, use current time
+                data['production_date'] = timezone.now()
+        
         # Auto-generate batch number if not provided or if it already exists
         if 'batch_number' not in data or not data.get('batch_number'):
             data['batch_number'] = generate_batch_number(batch_type)
@@ -1211,6 +1259,15 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
             if existing_batch:
                 # Generate a new unique batch number
                 data['batch_number'] = generate_batch_number(batch_type)
+        
+        # Ensure finished_good_item_id is set (required for both production and repack)
+        if 'finished_good_item_id' not in data or not data.get('finished_good_item_id'):
+            if batch_type == 'production':
+                return Response(
+                    {'error': 'finished_good_item_id is required for production batches'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            # For repack, we'll set it from the input lots below
         
         # For repack batches, ensure we have the item and inputs
         if batch_type == 'repack':
@@ -1244,13 +1301,14 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
         
         # Validate inputs before creating batch
         from .models import ProductionBatchInput, ProductionBatchOutput, InventoryTransaction
-        quantity_produced = float(data.get('quantity_produced', 0))
+        quantity_produced = round(float(data.get('quantity_produced', 0)), 2)  # Round to 2 decimal places
+        data['quantity_produced'] = quantity_produced
         total_input_quantity_in_lbs = 0.0  # Track total in lbs for validation
         
         # First pass: validate all inputs and calculate total
         for input_data in inputs_data:
             lot_id = input_data.get('lot_id')
-            quantity_used = float(input_data.get('quantity_used', 0))
+            quantity_used = round(float(input_data.get('quantity_used', 0)), 2)  # Round to 2 decimal places
             
             if not lot_id or quantity_used <= 0:
                 return Response(
@@ -1282,8 +1340,8 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
                     status=status.HTTP_404_NOT_FOUND
                 )
         
-        # Validate that total input quantity equals quantity to produce (with tolerance for floating point)
-        tolerance = 0.01
+        # Validate that total input quantity equals quantity to produce (with tolerance for floating point precision)
+        tolerance = 0.1  # Increased tolerance to account for conversion rounding differences
         if abs(total_input_quantity_in_lbs - quantity_produced) > tolerance:
             return Response(
                 {
@@ -1294,13 +1352,21 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
         
         # Create the batch
         serializer = self.get_serializer(data=data)
-        serializer.is_valid(raise_exception=True)
+        if not serializer.is_valid():
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f'Serializer validation failed: {serializer.errors}')
+            logger.error(f'Data being validated: {data}')
+            return Response(
+                serializer.errors,
+                status=status.HTTP_400_BAD_REQUEST
+            )
         batch = serializer.save()
         
         # Create inputs (second pass: actually create them - validation already done above)
         for input_data in inputs_data:
             lot_id = input_data.get('lot_id')
-            quantity_used = float(input_data.get('quantity_used', 0))
+            quantity_used = round(float(input_data.get('quantity_used', 0)), 2)  # Round to 2 decimal places
             
             # Get lot (already validated in first pass)
             lot = Lot.objects.get(id=lot_id)
@@ -1311,17 +1377,18 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
                 quantity_used=quantity_used
             )
             
-            # Create inventory transaction for input (reduce quantity)
+            # Create inventory transaction for input (reduce quantity) - round to 2 decimal places
+            rounded_quantity = round(quantity_used, 2)
             InventoryTransaction.objects.create(
                 transaction_type='production_input',
                 lot=lot,
-                quantity=-quantity_used,
+                quantity=round(-rounded_quantity, 2),
                 notes=f'Batch {batch.batch_number} input',
                 reference_number=batch.batch_number
             )
             
-            # Update lot quantity_remaining
-            lot.quantity_remaining -= quantity_used
+            # Update lot quantity_remaining - round to 2 decimal places
+            lot.quantity_remaining = round(lot.quantity_remaining - rounded_quantity, 2)
             lot.save()
         
         # Validate that total input quantity equals quantity to produce (with tolerance for floating point)
@@ -1410,7 +1477,7 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
             # For production batches, use provided outputs (existing behavior)
             for output_data in outputs_data:
                 lot_id = output_data.get('lot_id')
-                quantity_produced = float(output_data.get('quantity_produced', 0))
+                quantity_produced = round(float(output_data.get('quantity_produced', 0)), 2)  # Round to 2 decimal places
                 
                 if lot_id and quantity_produced > 0:
                     try:
@@ -1424,7 +1491,7 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
                         InventoryTransaction.objects.create(
                             transaction_type='production_output',
                             lot=lot,
-                            quantity=quantity_produced,
+                            quantity=round(quantity_produced, 2),
                             notes=f'Batch {batch.batch_number} output',
                             reference_number=batch.batch_number
                         )
@@ -1437,11 +1504,67 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
     
     def update(self, request, *args, **kwargs):
         """Update batch and handle status changes"""
+        from .models import ProductionBatchInput, ProductionBatchOutput, InventoryTransaction
+        
         partial = kwargs.pop('partial', False)
         instance = self.get_object()
         old_status = instance.status
         data = request.data.copy()
         new_status = data.get('status', old_status)
+        
+        # Handle inputs update if provided
+        inputs_data = data.pop('inputs', None)
+        if inputs_data is not None:
+            # Round quantity_produced if provided
+            if 'quantity_produced' in data:
+                data['quantity_produced'] = round(float(data['quantity_produced']), 2)
+            
+            # Delete existing inputs and restore lot quantities
+            for existing_input in instance.inputs.all():
+                lot = existing_input.lot
+                # Restore the quantity that was used
+                lot.quantity_remaining = round(lot.quantity_remaining + existing_input.quantity_used, 2)
+                lot.save()
+                # Delete the old input
+                existing_input.delete()
+            
+            # Create new inputs with rounded quantities
+            for input_data in inputs_data:
+                lot_id = input_data.get('lot_id')
+                quantity_used = round(float(input_data.get('quantity_used', 0)), 2)
+                
+                if lot_id and quantity_used > 0:
+                    try:
+                        lot = Lot.objects.get(id=lot_id)
+                        if lot.quantity_remaining < quantity_used:
+                            return Response(
+                                {'error': f'Insufficient quantity in lot {lot.lot_number}. Available: {lot.quantity_remaining}, Requested: {quantity_used}'},
+                                status=status.HTTP_400_BAD_REQUEST
+                            )
+                        
+                        ProductionBatchInput.objects.create(
+                            batch=instance,
+                            lot=lot,
+                            quantity_used=quantity_used
+                        )
+                        
+                        # Create inventory transaction for input (reduce quantity)
+                        InventoryTransaction.objects.create(
+                            transaction_type='production_input',
+                            lot=lot,
+                            quantity=round(-quantity_used, 2),
+                            notes=f'Batch {instance.batch_number} input (adjusted)',
+                            reference_number=instance.batch_number
+                        )
+                        
+                        # Update lot quantity_remaining
+                        lot.quantity_remaining = round(lot.quantity_remaining - quantity_used, 2)
+                        lot.save()
+                    except Lot.DoesNotExist:
+                        return Response(
+                            {'error': f'Lot with id {lot_id} not found'},
+                            status=status.HTTP_404_NOT_FOUND
+                        )
         
         # Update the batch
         serializer = self.get_serializer(instance, data=data, partial=partial)
@@ -1454,8 +1577,8 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
             if not batch.outputs.exists():
                 # Create output lot for production batches
                 if batch.batch_type == 'production':
-                    # Use quantity_actual if available, otherwise quantity_produced
-                    output_quantity = batch.quantity_actual if batch.quantity_actual and batch.quantity_actual > 0 else batch.quantity_produced
+                    # Use quantity_actual if available, otherwise quantity_produced - round to 2 decimal places
+                    output_quantity = round(batch.quantity_actual if batch.quantity_actual and batch.quantity_actual > 0 else batch.quantity_produced, 2)
                     item = batch.finished_good_item
                     
                     # Generate new lot number
@@ -1482,7 +1605,7 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
                     InventoryTransaction.objects.create(
                         transaction_type='production_output',
                         lot=new_lot,
-                        quantity=output_quantity,
+                        quantity=round(output_quantity, 2),
                         notes=f'Production batch {batch.batch_number} output',
                         reference_number=batch.batch_number
                     )
@@ -1495,6 +1618,284 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
         # Return the updated batch
         serializer = self.get_serializer(batch)
         return Response(serializer.data)
+    
+    @action(detail=True, methods=['get'], url_path='pdf', url_name='pdf')
+    def generate_pdf(self, request, pk=None):
+        """Generate a PDF batch ticket for printing"""
+        from django.http import HttpResponse
+        from io import BytesIO
+        
+        batch = self.get_object()
+        
+        try:
+            # Try to import reportlab
+            from reportlab.lib.pagesizes import letter
+            from reportlab.lib import colors
+            from reportlab.lib.units import inch
+            from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+            from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+            from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
+        except ImportError:
+            from django.http import JsonResponse
+            return JsonResponse(
+                {'error': 'reportlab is not installed. Please install it with: pip install reportlab'},
+                status=500
+            )
+        
+        # Create a BytesIO buffer for the PDF
+        buffer = BytesIO()
+        
+        # Create filename with status prefix for document title
+        status_prefix = batch.status.replace('_', '-')  # Convert in_progress to in-progress
+        filename = f"{status_prefix}({batch.batch_number}).pdf"
+        doc_title = f"{status_prefix.upper()}({batch.batch_number})"
+        
+        doc = SimpleDocTemplate(
+            buffer, 
+            pagesize=letter, 
+            topMargin=0.5*inch, 
+            bottomMargin=0.5*inch,
+            title=doc_title,
+            author="WWI ERP System"
+        )
+        
+        # Container for the 'Flowable' objects
+        elements = []
+        
+        # Define styles
+        styles = getSampleStyleSheet()
+        title_style = ParagraphStyle(
+            'CustomTitle',
+            parent=styles['Heading1'],
+            fontSize=18,
+            textColor=colors.HexColor('#000000'),
+            spaceAfter=12,
+            alignment=TA_CENTER
+        )
+        heading_style = ParagraphStyle(
+            'CustomHeading',
+            parent=styles['Heading2'],
+            fontSize=12,
+            textColor=colors.HexColor('#000000'),
+            spaceAfter=6,
+            alignment=TA_LEFT
+        )
+        normal_style = styles['Normal']
+        
+        # Title
+        elements.append(Paragraph("BATCH TICKET", title_style))
+        elements.append(Spacer(1, 0.2*inch))
+        
+        # Determine the base unit from finished good item (default to lbs)
+        # This is the unit that was selected for "quantity to produce"
+        base_unit = batch.finished_good_item.unit_of_measure or 'lbs'
+        
+        # Helper function to convert quantity from lbs (stored in DB) to base unit
+        # quantity_produced, quantity_actual, variance, wastes, spills are all stored in lbs
+        def convert_from_lbs_to_base(quantity_in_lbs):
+            if base_unit == 'lbs' or base_unit == 'ea':
+                return quantity_in_lbs
+            elif base_unit == 'kg':
+                # Convert from lbs to kg
+                return quantity_in_lbs / 2.20462
+            return quantity_in_lbs
+        
+        # Convert quantity_produced to base unit for display
+        quantity_produced_display = convert_from_lbs_to_base(batch.quantity_produced)
+        
+        # Batch Information
+        batch_data = [
+            ['Batch Number:', batch.batch_number],
+            ['Type:', batch.get_batch_type_display()],
+            ['Finished Good:', f"{batch.finished_good_item.name} ({batch.finished_good_item.sku})"],
+            ['Quantity to Produce:', f"{quantity_produced_display:.2f} {base_unit}"],
+            ['Production Date:', batch.production_date.strftime('%m/%d/%Y') if batch.production_date else 'N/A'],
+            ['Status:', batch.get_status_display()],
+        ]
+        
+        # Add closed batch information if batch is closed (convert to base unit)
+        if batch.status == 'closed':
+            if batch.quantity_actual:
+                qty_actual = convert_from_lbs_to_base(batch.quantity_actual)
+                batch_data.append(['Quantity Actual:', f"{qty_actual:.2f} {base_unit}"])
+            if batch.variance is not None:
+                variance = convert_from_lbs_to_base(batch.variance)
+                variance_sign = '+' if variance >= 0 else ''
+                batch_data.append(['Variance:', f"{variance_sign}{variance:.2f} {base_unit}"])
+            if batch.wastes:
+                wastes = convert_from_lbs_to_base(batch.wastes)
+                batch_data.append(['Wastes:', f"{wastes:.2f} {base_unit}"])
+            if batch.spills:
+                spills = convert_from_lbs_to_base(batch.spills)
+                batch_data.append(['Spills:', f"{spills:.2f} {base_unit}"])
+            if batch.closed_date:
+                batch_data.append(['Closed Date:', batch.closed_date.strftime('%m/%d/%Y %I:%M %p') if batch.closed_date else 'N/A'])
+        
+        # Parse QC information from notes if present
+        qc_info = {}
+        if batch.notes:
+            import re
+            # Look for QC Parameters, QC Actual, and QC Initials in notes
+            # Handle both single line and multi-line formats
+            qc_params_match = re.search(r'QC Parameters:\s*(.+?)(?:\n|QC Actual:|$)', batch.notes, re.IGNORECASE | re.DOTALL)
+            qc_actual_match = re.search(r'QC Actual:\s*(.+?)(?:\n|QC Initials:|$)', batch.notes, re.IGNORECASE | re.DOTALL)
+            qc_initials_match = re.search(r'QC Initials:\s*(.+?)(?:\n|$)', batch.notes, re.IGNORECASE | re.DOTALL)
+            
+            if qc_params_match:
+                qc_info['parameters'] = qc_params_match.group(1).strip()
+            if qc_actual_match:
+                qc_info['actual'] = qc_actual_match.group(1).strip()
+            if qc_initials_match:
+                qc_info['initials'] = qc_initials_match.group(1).strip()
+            
+            # Only add notes if it's not just QC info (to avoid duplication)
+            # Check if notes contains other content besides QC info
+            notes_without_qc = batch.notes
+            if qc_info.get('parameters'):
+                notes_without_qc = re.sub(r'QC Parameters:.*?(?:\n|QC Actual:|$)', '', notes_without_qc, flags=re.IGNORECASE | re.DOTALL)
+            if qc_info.get('actual'):
+                notes_without_qc = re.sub(r'QC Actual:.*?(?:\n|QC Initials:|$)', '', notes_without_qc, flags=re.IGNORECASE | re.DOTALL)
+            if qc_info.get('initials'):
+                notes_without_qc = re.sub(r'QC Initials:.*?(?:\n|$)', '', notes_without_qc, flags=re.IGNORECASE | re.DOTALL)
+            
+            notes_without_qc = notes_without_qc.strip()
+            if notes_without_qc:
+                batch_data.append(['Notes:', notes_without_qc])
+        
+        batch_table = Table(batch_data, colWidths=[2*inch, 4.5*inch])
+        batch_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (0, -1), colors.HexColor('#f0f0f0')),
+            ('TEXTCOLOR', (0, 0), (-1, -1), colors.black),
+            ('ALIGN', (0, 0), (0, -1), 'LEFT'),
+            ('ALIGN', (1, 0), (1, -1), 'LEFT'),
+            ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
+            ('FONTNAME', (1, 0), (1, -1), 'Helvetica'),
+            ('FONTSIZE', (0, 0), (-1, -1), 10),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+            ('TOPPADDING', (0, 0), (-1, -1), 6),
+            ('GRID', (0, 0), (-1, -1), 1, colors.black),
+        ]))
+        elements.append(batch_table)
+        elements.append(Spacer(1, 0.3*inch))
+        
+        # Input Lots
+        elements.append(Paragraph("INPUT MATERIALS", heading_style))
+        if batch.inputs.exists():
+            input_data = [['Lot Number', 'Item', 'SKU', 'Vendor Lot', f'Quantity Used ({base_unit})']]
+            for batch_input in batch.inputs.select_related('lot__item').all():
+                lot = batch_input.lot
+                item = lot.item
+                vendor_lot = lot.vendor_lot_number or lot.lot_number
+                # Convert quantity to base unit
+                # quantity_used is stored in the item's native unit in the DB
+                # We need to convert it to lbs first, then to base unit
+                item_unit = item.unit_of_measure or 'lbs'
+                quantity_in_lbs = batch_input.quantity_used
+                if item_unit == 'kg':
+                    # Convert from kg to lbs
+                    quantity_in_lbs = batch_input.quantity_used * 2.20462
+                # Now convert from lbs to base unit
+                quantity_in_base = convert_from_lbs_to_base(quantity_in_lbs)
+                input_data.append([
+                    lot.lot_number,
+                    item.name,
+                    item.sku,
+                    vendor_lot,
+                    f"{quantity_in_base:.2f}"
+                ])
+            
+            input_table = Table(input_data, colWidths=[1*inch, 1.5*inch, 1*inch, 1*inch, 1.2*inch])
+            input_table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#333333')),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+                ('FONTSIZE', (0, 0), (-1, -1), 9),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+                ('TOPPADDING', (0, 0), (-1, -1), 6),
+                ('GRID', (0, 0), (-1, -1), 1, colors.black),
+                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f9f9f9')]),
+            ]))
+            elements.append(input_table)
+        else:
+            elements.append(Paragraph("No input materials", normal_style))
+        
+        elements.append(Spacer(1, 0.3*inch))
+        
+        # Output Lots (if any)
+        if batch.outputs.exists():
+            elements.append(Paragraph("OUTPUT LOTS", heading_style))
+            output_data = [['Lot Number', 'Item', 'SKU', f'Quantity Produced ({base_unit})']]
+            for batch_output in batch.outputs.select_related('lot__item').all():
+                lot = batch_output.lot
+                item = lot.item
+                # Convert quantity to base unit
+                # quantity_produced is stored in lbs in the DB
+                quantity_in_base = convert_from_lbs_to_base(batch_output.quantity_produced)
+                output_data.append([
+                    lot.lot_number,
+                    item.name,
+                    item.sku,
+                    f"{quantity_in_base:.2f}"
+                ])
+            
+            output_table = Table(output_data, colWidths=[1.5*inch, 2*inch, 1.5*inch, 1.5*inch])
+            output_table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#333333')),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+                ('FONTSIZE', (0, 0), (-1, -1), 9),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+                ('TOPPADDING', (0, 0), (-1, -1), 6),
+                ('GRID', (0, 0), (-1, -1), 1, colors.black),
+                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f9f9f9')]),
+            ]))
+            elements.append(output_table)
+        
+        # Add Quality Control section for closed batches
+        if batch.status == 'closed' and qc_info:
+            elements.append(Spacer(1, 0.3*inch))
+            elements.append(Paragraph("QUALITY CONTROL", heading_style))
+            qc_data = []
+            if qc_info.get('parameters'):
+                qc_data.append(['QC Parameters:', qc_info['parameters']])
+            if qc_info.get('actual'):
+                qc_data.append(['QC Actual:', qc_info['actual']])
+            if qc_info.get('initials'):
+                qc_data.append(['QC Initials:', qc_info['initials']])
+            
+            if qc_data:
+                qc_table = Table(qc_data, colWidths=[2*inch, 4.5*inch])
+                qc_table.setStyle(TableStyle([
+                    ('BACKGROUND', (0, 0), (0, -1), colors.HexColor('#f0f0f0')),
+                    ('TEXTCOLOR', (0, 0), (-1, -1), colors.black),
+                    ('ALIGN', (0, 0), (0, -1), 'LEFT'),
+                    ('ALIGN', (1, 0), (1, -1), 'LEFT'),
+                    ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
+                    ('FONTNAME', (1, 0), (1, -1), 'Helvetica'),
+                    ('FONTSIZE', (0, 0), (-1, -1), 10),
+                    ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+                    ('TOPPADDING', (0, 0), (-1, -1), 6),
+                    ('GRID', (0, 0), (-1, -1), 1, colors.black),
+                ]))
+                elements.append(qc_table)
+        
+        # Build PDF
+        doc.build(elements)
+        
+        # Get the value of the BytesIO buffer and write it to the response
+        pdf = buffer.getvalue()
+        buffer.close()
+        
+        # Create HTTP response with PDF
+        response = HttpResponse(pdf, content_type='application/pdf')
+        response['Content-Disposition'] = f'inline; filename="{filename}"'
+        # Set the title for browser tab display
+        response['X-Content-Type-Options'] = 'nosniff'
+        return response
     
     @action(detail=True, methods=['post'])
     def reverse(self, request, pk=None):
@@ -1925,10 +2326,11 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
         if not data.get('so_number'):
             data['so_number'] = generate_sales_order_number()
         
-        # Handle customer - if customer_id is provided, set customer FK
-        if data.get('customer_id'):
+        # Handle customer - if customer or customer_id is provided, set customer FK
+        customer_id = data.get('customer') or data.get('customer_id')
+        if customer_id:
             try:
-                customer = Customer.objects.get(id=data['customer_id'])
+                customer = Customer.objects.get(id=customer_id)
                 data['customer'] = customer.id
                 # Auto-populate customer_name if not provided
                 if not data.get('customer_name'):
@@ -1937,6 +2339,37 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
                     data['customer_reference_number'] = data.get('customer_id')
             except Customer.DoesNotExist:
                 pass
+        
+        # Handle ship_to_location - if ship_to_location is provided, validate it belongs to the customer
+        ship_to_location_id = data.get('ship_to_location')
+        if ship_to_location_id:
+            try:
+                from .models import ShipToLocation
+                ship_to_location = ShipToLocation.objects.get(id=ship_to_location_id)
+                # Validate that ship-to location belongs to the selected customer
+                if customer_id and ship_to_location.customer.id != customer_id:
+                    return Response(
+                        {'error': 'Ship-to location does not belong to the selected customer'},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                # Auto-populate address fields from ship-to location if not provided
+                if not data.get('customer_address'):
+                    data['customer_address'] = ship_to_location.address
+                if not data.get('customer_city'):
+                    data['customer_city'] = ship_to_location.city
+                if not data.get('customer_state'):
+                    data['customer_state'] = ship_to_location.state or ''
+                if not data.get('customer_zip'):
+                    data['customer_zip'] = ship_to_location.zip_code
+                if not data.get('customer_country'):
+                    data['customer_country'] = ship_to_location.country
+                if not data.get('customer_phone'):
+                    data['customer_phone'] = ship_to_location.phone or ''
+            except ShipToLocation.DoesNotExist:
+                return Response(
+                    {'error': 'Ship-to location not found'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
         
         # Create the sales order
         serializer = self.get_serializer(data=data)
@@ -2794,6 +3227,8 @@ class CustomerPricingViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         from django.db import connection
         from django.db.utils import OperationalError
+        from django.utils import timezone
+        from datetime import date
         
         try:
             with connection.cursor() as cursor:
@@ -2805,6 +3240,22 @@ class CustomerPricingViewSet(viewsets.ModelViewSet):
             customer_id = self.request.query_params.get('customer_id', None)
             if customer_id:
                 queryset = queryset.filter(customer_id=customer_id)
+            
+            # Filter by is_active if provided
+            is_active = self.request.query_params.get('is_active', None)
+            if is_active is not None:
+                queryset = queryset.filter(is_active=is_active.lower() == 'true')
+            
+            # Filter by effective_date and expiry_date to show only currently active pricing
+            today = date.today()
+            from django.db.models import Q
+            queryset = queryset.filter(
+                effective_date__lte=today,
+                is_active=True
+            ).filter(
+                Q(expiry_date__isnull=True) | Q(expiry_date__gte=today)
+            )
+            
             return queryset
         except Exception:
             return CustomerPricing.objects.none()

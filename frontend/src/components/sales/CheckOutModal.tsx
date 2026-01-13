@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { getAvailableSalesOrders, getSalesOrder, allocateSalesOrder, shipSalesOrder, cancelSalesOrder } from '../../api/salesOrders'
 import { getLotsBySkuVendor, getItems } from '../../api/inventory'
+import { formatNumber } from '../../utils/formatNumber'
 import './CheckOutModal.css'
 
 interface Lot {
@@ -427,10 +428,10 @@ function CheckOutModal({ onClose, onSuccess }: CheckOutModalProps) {
                       <div className="item-header">
                         <h4>{item.item.name} ({item.item.sku})</h4>
                         <div className="item-stats">
-                          <span>Ordered: {convertQuantity(item.quantity_ordered, item.item.unit_of_measure).toFixed(2)} {unitDisplay}</span>
-                          <span>Allocated: {convertQuantity(totalAllocated, item.item.unit_of_measure).toFixed(2)} {unitDisplay}</span>
+                          <span>Ordered: {formatNumber(convertQuantity(item.quantity_ordered, item.item.unit_of_measure))} {unitDisplay}</span>
+                          <span>Allocated: {formatNumber(convertQuantity(totalAllocated, item.item.unit_of_measure))} {unitDisplay}</span>
                           <span className={remaining > 0 ? 'warning' : 'success'}>
-                            Remaining: {convertQuantity(remaining, item.item.unit_of_measure).toFixed(2)} {unitDisplay}
+                            Remaining: {formatNumber(convertQuantity(remaining, item.item.unit_of_measure))} {unitDisplay}
                           </span>
                         </div>
                       </div>
@@ -449,7 +450,7 @@ function CheckOutModal({ onClose, onSuccess }: CheckOutModalProps) {
                                 <div key={lot.id} className="lot-row">
                                   <div className="lot-info">
                                     <span>{lot.lot_number}</span>
-                                    <span>Available: {convertQuantity(lot.quantity_remaining, lot.item.unit_of_measure).toFixed(2)} {unitDisplay}</span>
+                                    <span>Available: {formatNumber(convertQuantity(lot.quantity_remaining, lot.item.unit_of_measure))} {unitDisplay}</span>
                                     <span>Received: {new Date(lot.received_date).toLocaleDateString()}</span>
                                   </div>
                                   <input
@@ -484,7 +485,7 @@ function CheckOutModal({ onClose, onSuccess }: CheckOutModalProps) {
                                 <div key={lot.id} className="lot-row">
                                   <div className="lot-info">
                                     <span>{lot.lot_number}</span>
-                                    <span>Available: {convertQuantity(lot.quantity_remaining, lot.item.unit_of_measure).toFixed(2)} {unitDisplay}</span>
+                                    <span>Available: {formatNumber(convertQuantity(lot.quantity_remaining, lot.item.unit_of_measure))} {unitDisplay}</span>
                                     <span>Received: {new Date(lot.received_date).toLocaleDateString()}</span>
                                     {lot.expiration_date && (
                                       <span>Expires: {new Date(lot.expiration_date).toLocaleDateString()}</span>

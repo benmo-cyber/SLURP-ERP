@@ -3,6 +3,7 @@ import { createPurchaseOrder } from '../../api/purchaseOrders'
 import { getVendors } from '../../api/quality'
 import { getItems } from '../../api/inventory'
 import { getCostMasterByProductCode } from '../../api/costMaster'
+import { formatCurrency } from '../../utils/formatNumber'
 import './CreatePurchaseOrder.css'
 
 interface Vendor {
@@ -30,9 +31,9 @@ interface POItem {
   sku: string | null  // Selected SKU
   vendor: string | null  // Selected vendor for this SKU
   description: string
-  unit_cost: number
+  unit_cost: number | string
   unit_of_measure: string
-  quantity: number
+  quantity: number | string
   notes: string
   original_unit?: string // Store the item's original unit
   costMasterData?: any // Store cost master data for recalculation
@@ -74,7 +75,7 @@ function CreatePurchaseOrder({ onClose, onSuccess }: CreatePurchaseOrderProps) {
   })
 
   const [poItems, setPoItems] = useState<POItem[]>([
-    { item_id: null, sku: null, vendor: null, description: '', unit_cost: 0, unit_of_measure: '', quantity: 0, notes: '', original_unit: '', costMasterData: null }
+    { item_id: null, sku: null, vendor: null, description: '', unit_cost: '', unit_of_measure: '', quantity: '', notes: '', original_unit: '', costMasterData: null }
   ])
 
   useEffect(() => {
@@ -184,12 +185,12 @@ function CreatePurchaseOrder({ onClose, onSuccess }: CreatePurchaseOrderProps) {
         }))
         
         // Clear all PO items when vendor changes since items are vendor-specific
-        setPoItems([{ item_id: null, sku: null, vendor: null, description: '', unit_cost: 0, unit_of_measure: '', quantity: 0, notes: '', original_unit: '', costMasterData: null }])
+        setPoItems([{ item_id: null, sku: null, vendor: null, description: '', unit_cost: '', unit_of_measure: '', quantity: '', notes: '', original_unit: '', costMasterData: null }])
       } else {
         // Vendor not found, just update the ID
         setFormData(prev => ({ ...prev, vendor_id: vendorIdStr }))
         // Clear items when vendor changes
-        setPoItems([{ item_id: null, sku: null, vendor: null, description: '', unit_cost: 0, unit_of_measure: '', quantity: 0, notes: '', original_unit: '', costMasterData: null }])
+        setPoItems([{ item_id: null, sku: null, vendor: null, description: '', unit_cost: '', unit_of_measure: '', quantity: '', notes: '', original_unit: '', costMasterData: null }])
       }
     } else {
       // Clear vendor address when no vendor selected
@@ -203,7 +204,7 @@ function CreatePurchaseOrder({ onClose, onSuccess }: CreatePurchaseOrderProps) {
         vendor_country: ''
       }))
       // Clear items when vendor is cleared
-      setPoItems([{ item_id: null, sku: null, vendor: null, description: '', unit_cost: 0, unit_of_measure: '', quantity: 0, notes: '', original_unit: '', costMasterData: null }])
+      setPoItems([{ item_id: null, sku: null, vendor: null, description: '', unit_cost: '', unit_of_measure: '', quantity: '', notes: '', original_unit: '', costMasterData: null }])
     }
   }
 
@@ -220,7 +221,7 @@ function CreatePurchaseOrder({ onClose, onSuccess }: CreatePurchaseOrderProps) {
         vendor: vendorName || null, // Auto-set vendor from form selection
         item_id: null, // Reset item_id
         description: '',
-        unit_cost: 0,
+        unit_cost: '',
         unit_of_measure: '',
         costMasterData: null
       }
@@ -297,7 +298,7 @@ function CreatePurchaseOrder({ onClose, onSuccess }: CreatePurchaseOrderProps) {
           vendor: null,
           item_id: null,
           description: '',
-          unit_cost: 0,
+          unit_cost: '',
           unit_of_measure: '',
           costMasterData: null
         }
@@ -365,13 +366,25 @@ function CreatePurchaseOrder({ onClose, onSuccess }: CreatePurchaseOrderProps) {
     
     // For other fields, update immediately
     const updated = [...poItems]
-    updated[index] = { ...updated[index], [field]: value }
+    
+    // Handle quantity and unit_cost fields - allow empty string
+    if (field === 'quantity' || field === 'unit_cost') {
+      if (value === '' || value === null || value === undefined) {
+        updated[index] = { ...updated[index], [field]: '' }
+      } else {
+        const numValue = typeof value === 'string' ? parseFloat(value) : value
+        updated[index] = { ...updated[index], [field]: isNaN(numValue) ? '' : numValue }
+      }
+    } else {
+      updated[index] = { ...updated[index], [field]: value }
+    }
+    
     setPoItems(updated)
   }
 
   // Helper function to load item pricing
   const loadItemPricing = async (index: number, item: Item, vendorValue?: string) => {
-    let priceToSet = 0
+    let priceToSet: number | string = ''
     let priceSet = false
     let costMasterData = null
     
@@ -470,7 +483,7 @@ function CreatePurchaseOrder({ onClose, onSuccess }: CreatePurchaseOrderProps) {
   }
 
   const addItem = () => {
-    setPoItems([...poItems, { item_id: null, sku: null, vendor: null, description: '', unit_cost: 0, unit_of_measure: '', quantity: 0, notes: '', original_unit: '', costMasterData: null }])
+    setPoItems([...poItems, { item_id: null, sku: null, vendor: null, description: '', unit_cost: '', unit_of_measure: '', quantity: '', notes: '', original_unit: '', costMasterData: null }])
   }
 
   const removeItem = (index: number) => {
@@ -478,7 +491,11 @@ function CreatePurchaseOrder({ onClose, onSuccess }: CreatePurchaseOrderProps) {
   }
 
   const calculateSubtotal = () => {
-    return poItems.reduce((sum, item) => sum + (item.unit_cost * item.quantity), 0)
+    return poItems.reduce((sum, item) => {
+      const cost = typeof item.unit_cost === 'string' ? parseFloat(item.unit_cost) || 0 : item.unit_cost
+      const qty = typeof item.quantity === 'string' ? parseFloat(item.quantity) || 0 : item.quantity
+      return sum + (cost * qty)
+    }, 0)
   }
 
   const calculateTotal = () => {
@@ -497,14 +514,22 @@ function CreatePurchaseOrder({ onClose, onSuccess }: CreatePurchaseOrderProps) {
     }
 
     // Validate items
-    const invalidItems = poItems.filter(item => !item.item_id || item.quantity <= 0)
+    const invalidItems = poItems.filter(item => {
+      if (!item.item_id) return true
+      const qty = typeof item.quantity === 'string' ? parseFloat(item.quantity) : item.quantity
+      return !qty || qty <= 0
+    })
     if (poItems.length === 0 || invalidItems.length > 0) {
       alert('Please add at least one item with a selected SKU/Vendor and valid quantity greater than 0')
       return
     }
     
     // Filter out any items without item_id (shouldn't happen after validation, but just in case)
-    const validItems = poItems.filter(item => item.item_id && item.quantity > 0)
+    const validItems = poItems.filter(item => {
+      if (!item.item_id) return false
+      const qty = typeof item.quantity === 'string' ? parseFloat(item.quantity) : item.quantity
+      return qty > 0
+    })
     
     if (validItems.length === 0) {
       alert('No valid items to add to purchase order')
@@ -913,7 +938,7 @@ function CreatePurchaseOrder({ onClose, onSuccess }: CreatePurchaseOrderProps) {
                         type="number"
                         step="0.01"
                         min="0"
-                        value={item.unit_cost}
+                        value={item.unit_cost === '' ? '' : item.unit_cost}
                         readOnly
                         className="number-input read-only-input"
                       />
@@ -924,15 +949,18 @@ function CreatePurchaseOrder({ onClose, onSuccess }: CreatePurchaseOrderProps) {
                           type="number"
                           step="0.01"
                           min="0"
-                          value={item.quantity}
-                          onChange={(e) => handleItemChange(index, 'quantity', parseFloat(e.target.value) || 0)}
+                          value={item.quantity === '' ? '' : item.quantity}
+                          onChange={(e) => {
+                            const val = e.target.value
+                            handleItemChange(index, 'quantity', val === '' ? '' : (isNaN(parseFloat(val)) ? '' : parseFloat(val)))
+                          }}
                           className="number-input"
                           required
                           style={{ width: '100%' }}
                         />
                       </div>
                     </td>
-                    <td>${(item.unit_cost * item.quantity).toFixed(2)}</td>
+                    <td>{formatCurrency((typeof item.unit_cost === 'string' ? parseFloat(item.unit_cost) || 0 : item.unit_cost) * (typeof item.quantity === 'string' ? parseFloat(item.quantity) || 0 : item.quantity))}</td>
                   </tr>
                   )
                 })}
@@ -940,7 +968,7 @@ function CreatePurchaseOrder({ onClose, onSuccess }: CreatePurchaseOrderProps) {
               <tfoot>
                 <tr>
                   <td colSpan={5} className="text-right"><strong>SUBTOTAL</strong></td>
-                  <td><strong>${calculateSubtotal().toFixed(2)}</strong></td>
+                  <td><strong>{formatCurrency(calculateSubtotal())}</strong></td>
                   <td></td>
                 </tr>
                 <tr>
@@ -950,8 +978,8 @@ function CreatePurchaseOrder({ onClose, onSuccess }: CreatePurchaseOrderProps) {
                       type="number"
                       step="0.01"
                       min="0"
-                      value={formData.discount}
-                      onChange={(e) => setFormData({ ...formData, discount: parseFloat(e.target.value) || 0 })}
+                      value={formData.discount || ''}
+                      onChange={(e) => setFormData({ ...formData, discount: e.target.value === '' ? 0 : parseFloat(e.target.value) || 0 })}
                       className="number-input"
                       style={{ width: '100%', textAlign: 'right' }}
                     />
@@ -965,8 +993,8 @@ function CreatePurchaseOrder({ onClose, onSuccess }: CreatePurchaseOrderProps) {
                       type="number"
                       step="0.01"
                       min="0"
-                      value={formData.shipping_cost}
-                      onChange={(e) => setFormData({ ...formData, shipping_cost: parseFloat(e.target.value) || 0 })}
+                      value={formData.shipping_cost || ''}
+                      onChange={(e) => setFormData({ ...formData, shipping_cost: e.target.value === '' ? 0 : parseFloat(e.target.value) || 0 })}
                       className="number-input"
                       style={{ width: '100%', textAlign: 'right' }}
                     />
@@ -975,7 +1003,7 @@ function CreatePurchaseOrder({ onClose, onSuccess }: CreatePurchaseOrderProps) {
                 </tr>
                 <tr>
                   <td colSpan={5} className="text-right"><strong>TOTAL</strong></td>
-                  <td><strong>${calculateTotal().toFixed(2)}</strong></td>
+                  <td><strong>{formatCurrency(calculateTotal())}</strong></td>
                   <td></td>
                 </tr>
               </tfoot>

@@ -1,7 +1,10 @@
 import { useState, useEffect } from 'react'
 import { getProductionBatches } from '../../api/inventory'
 import BatchDetailView from './BatchDetailView'
+import { formatNumber } from '../../utils/formatNumber'
 import './ProductionBatchList.css'
+
+const API_BASE_URL = 'http://localhost:8000/api'
 
 interface ProductionBatch {
   id: number
@@ -33,6 +36,14 @@ function ProductionBatchList({ onCloseBatch, onUnfkBatch, onAdjustBatch }: Produ
   const [selectedBatchId, setSelectedBatchId] = useState<number | null>(null)
   const [unitDisplay, setUnitDisplay] = useState<'lbs' | 'kg'>('lbs')
 
+  // Format production date to avoid timezone conversion issues
+  const formatProductionDate = (dateString: string): string => {
+    // Extract just the date part (YYYY-MM-DD) to avoid timezone conversion
+    const datePart = dateString.split('T')[0]
+    const [year, month, day] = datePart.split('-')
+    return `${parseInt(month)}/${parseInt(day)}/${year}`
+  }
+
   useEffect(() => {
     loadBatches()
   }, [])
@@ -55,13 +66,13 @@ function ProductionBatchList({ onCloseBatch, onUnfkBatch, onAdjustBatch }: Produ
 
   // Convert quantity based on unit display preference
   const convertQuantity = (quantity: number, unit: string = 'lbs') => {
-    if (unit === 'ea') return quantity.toFixed(0)
+    if (unit === 'ea') return formatNumber(quantity, 0)
     if (unitDisplay === 'kg' && unit === 'lbs') {
-      return (quantity * 0.453592).toFixed(2)
+      return formatNumber(quantity * 0.453592)
     } else if (unitDisplay === 'lbs' && unit === 'kg') {
-      return (quantity * 2.20462).toFixed(2)
+      return formatNumber(quantity * 2.20462)
     }
-    return quantity.toFixed(2)
+    return formatNumber(quantity)
   }
 
   const getDisplayUnit = (unit: string = 'lbs') => {
@@ -118,10 +129,28 @@ function ProductionBatchList({ onCloseBatch, onUnfkBatch, onAdjustBatch }: Produ
             <tbody>
               {inProgressBatches.map((batch) => (
                 <tr key={batch.id}>
-                  <td className="batch-number">{batch.batch_number}</td>
+                  <td className="batch-number">
+                    {batch.status === 'in_progress' ? (
+                      <a
+                        href={`${API_BASE_URL}/production-batches/${batch.id}/pdf/`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{ color: '#0066cc', textDecoration: 'underline', cursor: 'pointer' }}
+                        onClick={(e) => {
+                          e.preventDefault()
+                          window.open(`${API_BASE_URL}/production-batches/${batch.id}/pdf/`, '_blank')
+                        }}
+                        title="Click to view/print batch ticket PDF"
+                      >
+                        {batch.batch_number}
+                      </a>
+                    ) : (
+                      batch.batch_number
+                    )}
+                  </td>
                   <td>{batch.finished_good_item.name}</td>
-                  <td>{parseFloat(convertQuantity(batch.quantity_produced)).toLocaleString()} {getDisplayUnit()}</td>
-                  <td>{new Date(batch.production_date).toLocaleDateString()}</td>
+                  <td>{convertQuantity(batch.quantity_produced)} {getDisplayUnit()}</td>
+                  <td>{formatProductionDate(batch.production_date)}</td>
                   <td>
                     <span className={`status-badge status-${batch.status}`}>
                       {batch.status}
@@ -187,16 +216,30 @@ function ProductionBatchList({ onCloseBatch, onUnfkBatch, onAdjustBatch }: Produ
             <tbody>
               {closedBatches.map((batch) => (
                 <tr key={batch.id}>
-                  <td className="batch-number">{batch.batch_number}</td>
-                  <td>{batch.finished_good_item.name}</td>
-                  <td>{parseFloat(convertQuantity(batch.quantity_produced)).toLocaleString()} {getDisplayUnit()}</td>
-                  <td>{parseFloat(convertQuantity(batch.quantity_actual)).toLocaleString()} {getDisplayUnit()}</td>
-                  <td className={batch.variance >= 0 ? 'positive' : 'negative'}>
-                    {batch.variance >= 0 ? '+' : ''}{parseFloat(convertQuantity(Math.abs(batch.variance))).toLocaleString()} {getDisplayUnit()}
+                  <td className="batch-number">
+                    <a
+                      href={`${API_BASE_URL}/production-batches/${batch.id}/pdf/`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{ color: '#0066cc', textDecoration: 'underline', cursor: 'pointer' }}
+                      onClick={(e) => {
+                        e.preventDefault()
+                        window.open(`${API_BASE_URL}/production-batches/${batch.id}/pdf/`, '_blank')
+                      }}
+                      title="Click to view/print batch ticket PDF"
+                    >
+                      {batch.batch_number}
+                    </a>
                   </td>
-                  <td>{parseFloat(convertQuantity(batch.wastes)).toLocaleString()} {getDisplayUnit()}</td>
-                  <td>{parseFloat(convertQuantity(batch.spills)).toLocaleString()} {getDisplayUnit()}</td>
-                  <td>{new Date(batch.production_date).toLocaleDateString()}</td>
+                  <td>{batch.finished_good_item.name}</td>
+                  <td>{convertQuantity(batch.quantity_produced)} {getDisplayUnit()}</td>
+                  <td>{convertQuantity(batch.quantity_actual)} {getDisplayUnit()}</td>
+                  <td className={batch.variance >= 0 ? 'positive' : 'negative'}>
+                    {batch.variance >= 0 ? '+' : ''}{convertQuantity(Math.abs(batch.variance))} {getDisplayUnit()}
+                  </td>
+                  <td>{convertQuantity(batch.wastes)} {getDisplayUnit()}</td>
+                  <td>{convertQuantity(batch.spills)} {getDisplayUnit()}</td>
+                  <td>{formatProductionDate(batch.production_date)}</td>
                   <td>{batch.closed_date ? new Date(batch.closed_date).toLocaleDateString() : '-'}</td>
                   <td>
                     {onUnfkBatch && (

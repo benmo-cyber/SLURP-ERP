@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { getItems, updateItem, deleteItem } from '../../api/inventory'
 import { getFormulas } from '../../api/inventory'
 import { getFinishedProductSpecification, getFpsPdfUrl } from '../../api/production'
+import { formatCurrency } from '../../utils/formatNumber'
 import ConfirmDialog from '../common/ConfirmDialog'
 import './ItemsList.css'
 
@@ -100,11 +101,14 @@ function ItemsList() {
   const handleEdit = (item: Item) => {
     setEditingId(item.id)
     setEditForm({
+      sku: item.sku,
+      name: item.name,
       price: item.price,
       pack_size: item.pack_size,
       vendor: item.vendor,
-      name: item.name,
       description: item.description,
+      item_type: item.item_type,
+      unit_of_measure: item.unit_of_measure,
     })
   }
 
@@ -115,14 +119,70 @@ function ItemsList() {
 
   const handleSave = async (id: number) => {
     try {
-      await updateItem(id, editForm)
+      // Validate required fields
+      if (!editForm.sku || editForm.sku.trim() === '') {
+        alert('SKU is required')
+        return
+      }
+      if (!editForm.name || editForm.name.trim() === '') {
+        alert('Name is required')
+        return
+      }
+      
+      // Clean up the data - remove empty strings and convert to proper types
+      const updateData: any = {}
+      if (editForm.sku !== undefined) updateData.sku = editForm.sku.trim()
+      if (editForm.name !== undefined) updateData.name = editForm.name.trim()
+      if (editForm.vendor !== undefined) updateData.vendor = editForm.vendor?.trim() || null
+      if (editForm.description !== undefined) updateData.description = editForm.description?.trim() || null
+      if (editForm.price !== undefined) updateData.price = editForm.price || null
+      if (editForm.pack_size !== undefined) updateData.pack_size = editForm.pack_size || null
+      // Include required fields to avoid validation errors
+      if (editForm.item_type !== undefined) updateData.item_type = editForm.item_type
+      if (editForm.unit_of_measure !== undefined) updateData.unit_of_measure = editForm.unit_of_measure
+      
+      console.log('Saving item with data:', updateData)
+      await updateItem(id, updateData)
       alert('Item updated successfully. CostMaster has been synced.')
       setEditingId(null)
       setEditForm({})
       loadItems()
     } catch (error: any) {
       console.error('Failed to update item:', error)
-      alert(error.response?.data?.detail || error.response?.data?.message || 'Failed to update item')
+      console.error('Error response:', error.response)
+      console.error('Error data:', error.response?.data)
+      
+      // Try to get detailed error message
+      let errorMessage = 'Failed to update item'
+      if (error.response?.data) {
+        if (error.response.data.detail) {
+          errorMessage = error.response.data.detail
+        } else if (error.response.data.error) {
+          errorMessage = error.response.data.error
+        } else if (typeof error.response.data === 'string') {
+          errorMessage = error.response.data
+        } else if (error.response.data.non_field_errors) {
+          errorMessage = error.response.data.non_field_errors.join(', ')
+        } else {
+          // Try to format validation errors
+          const errorParts: string[] = []
+          for (const [field, messages] of Object.entries(error.response.data)) {
+            if (Array.isArray(messages)) {
+              errorParts.push(`${field}: ${messages.join(', ')}`)
+            } else if (typeof messages === 'string') {
+              errorParts.push(`${field}: ${messages}`)
+            } else {
+              errorParts.push(`${field}: ${JSON.stringify(messages)}`)
+            }
+          }
+          if (errorParts.length > 0) {
+            errorMessage = errorParts.join('\n')
+          } else {
+            errorMessage = JSON.stringify(error.response.data)
+          }
+        }
+      }
+      alert(errorMessage)
     }
   }
 
@@ -168,6 +228,7 @@ function ItemsList() {
     if (filter === 'all') return true
     if (filter === 'raw_material') return item.item_type === 'raw_material'
     if (filter === 'finished_good') return item.item_type === 'finished_good'
+    if (filter === 'indirect_material') return item.item_type === 'indirect_material'
     return true
   })
 
@@ -213,6 +274,12 @@ function ItemsList() {
           >
             Finished Goods
           </button>
+          <button
+            className={`filter-btn ${filter === 'indirect_material' ? 'active' : ''}`}
+            onClick={() => setFilter('indirect_material')}
+          >
+            Indirect Materials
+          </button>
         </div>
       </div>
 
@@ -244,28 +311,46 @@ function ItemsList() {
                     className={index === 0 && skuItems.length > 1 ? 'sku-group-first' : ''}
                   >
                     <td>
-                      {index === 0 ? (
-                        <>
-                          {item.item_type === 'finished_good' && fpsLinks.has(item.id) ? (
-                            <a
-                              href={getFpsPdfUrl(fpsLinks.get(item.id)!)}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="fps-link"
-                              onClick={(e) => e.stopPropagation()}
-                            >
-                              <strong>{item.sku}</strong>
-                            </a>
-                          ) : (
-                            <strong>{item.sku}</strong>
-                          )}
-                        </>
+                      {editingId === item.id ? (
+                        <input
+                          type="text"
+                          value={editForm.sku || ''}
+                          onChange={(e) => handleChange('sku', e.target.value)}
+                          className="edit-input"
+                        />
                       ) : (
-                        <span style={{ color: '#999', fontStyle: 'italic' }}>↳</span>
+                        index === 0 ? (
+                          <>
+                            {item.item_type === 'finished_good' && fpsLinks.has(item.id) ? (
+                              <a
+                                href={getFpsPdfUrl(fpsLinks.get(item.id)!)}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="fps-link"
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                <strong>{item.sku}</strong>
+                              </a>
+                            ) : (
+                              <strong>{item.sku}</strong>
+                            )}
+                          </>
+                        ) : (
+                          <span style={{ color: '#999', fontStyle: 'italic' }}>↳</span>
+                        )
                       )}
                     </td>
                     <td>
-                      {index === 0 ? item.name : <span style={{ color: '#666' }}>{item.name}</span>}
+                      {editingId === item.id ? (
+                        <input
+                          type="text"
+                          value={editForm.name || ''}
+                          onChange={(e) => handleChange('name', e.target.value)}
+                          className="edit-input"
+                        />
+                      ) : (
+                        index === 0 ? item.name : <span style={{ color: '#666' }}>{item.name}</span>
+                      )}
                     </td>
                     <td>
                       {editingId === item.id ? (
@@ -303,7 +388,7 @@ function ItemsList() {
                           className="edit-input"
                         />
                       ) : (
-                        item.price ? `$${item.price.toFixed(2)}` : '-'
+                        item.price ? formatCurrency(item.price) : '-'
                       )}
                     </td>
                     <td>{item.item_type}</td>

@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { getLots, reverseCheckIn } from '../../api/inventory'
+import { formatNumber } from '../../utils/formatNumber'
 import ConfirmDialog from '../common/ConfirmDialog'
 import './ReverseCheckIn.css'
 
@@ -131,7 +132,7 @@ function ReverseCheckIn({ onClose, onSuccess }: ReverseCheckInProps) {
                 <option value="">-- Select a lot --</option>
                 {lots.map((lot) => (
                   <option key={lot.id} value={lot.id}>
-                    {lot.lot_number} - {lot.item.name} ({lot.item.sku}) - {lot.quantity.toLocaleString()} units
+                    {lot.lot_number} - {lot.item.name} ({lot.item.sku}) - {formatNumber(lot.quantity, 0)} units
                   </option>
                 ))}
               </select>

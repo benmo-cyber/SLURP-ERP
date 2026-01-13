@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { getCustomer, getCustomerPricing, getShipToLocations, getCustomerContacts, getSalesCalls, getCustomerForecasts, getCustomerUsage, deleteShipToLocation, deleteCustomerContact, deleteSalesCall, deleteCustomerForecast, deleteCustomerPricing } from '../../api/customers'
 import { getItems } from '../../api/inventory'
+import { formatNumber, formatCurrency } from '../../utils/formatNumber'
 import CreateShipToLocation from './CreateShipToLocation'
 import CreateContact from './CreateContact'
 import CreateSalesCall from './CreateSalesCall'
@@ -288,7 +289,7 @@ function CustomerProfile({ customerId, onClose }: CustomerProfileProps) {
                       <tr key={p.id}>
                         <td>{p.item?.sku || 'N/A'}</td>
                         <td>{p.item?.name || 'N/A'}</td>
-                        <td>${p.unit_price?.toFixed(2)}</td>
+                        <td>{formatCurrency(p.unit_price)}</td>
                         <td>{p.unit_of_measure}</td>
                         <td>{p.effective_date}</td>
                         <td>{p.expiry_date || 'N/A'}</td>
@@ -517,8 +518,8 @@ function CustomerProfile({ customerId, onClose }: CustomerProfileProps) {
                       <tr key={item.item_id}>
                         <td>{item.item_sku || 'N/A'}</td>
                         <td>{item.item_name || 'N/A'}</td>
-                        <td>{item.total_quantity?.toFixed(2) || '0.00'}</td>
-                        <td>{item.ytd_quantity?.toFixed(2) || '0.00'}</td>
+                        <td>{item.total_quantity ? formatNumber(item.total_quantity) : '0.00'}</td>
+                        <td>{item.ytd_quantity ? formatNumber(item.ytd_quantity) : '0.00'}</td>
                         <td>{item.order_count || 0}</td>
                         <td>{item.ytd_order_count || 0}</td>
                       </tr>
@@ -568,7 +569,7 @@ function CustomerProfile({ customerId, onClose }: CustomerProfileProps) {
                         <td>{forecast.forecast_period}</td>
                         <td>{forecast.item_sku || 'N/A'}</td>
                         <td>{forecast.item_name || 'N/A'}</td>
-                        <td>{forecast.forecast_quantity?.toFixed(2)}</td>
+                        <td>{forecast.forecast_quantity ? formatNumber(forecast.forecast_quantity) : ''}</td>
                         <td>{forecast.unit_of_measure}</td>
                         <td>{forecast.notes || 'N/A'}</td>
                         <td>
