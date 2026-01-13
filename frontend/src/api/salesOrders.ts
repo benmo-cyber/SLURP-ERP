@@ -34,5 +34,25 @@ export const deleteSalesOrder = async (id: number) => {
   return response.data
 }
 
+export const allocateSalesOrder = async (id: number, data: any) => {
+  const response = await api.post(`/sales-orders/${id}/allocate/`, data)
+  return response.data
+}
 
+export const shipSalesOrder = async (id: number, data: { ship_date: string; invoice_date?: string }) => {
+  const response = await api.post(`/sales-orders/${id}/ship/`, data)
+  return response.data
+}
+
+export const cancelSalesOrder = async (id: number) => {
+  const response = await api.post(`/sales-orders/${id}/cancel/`)
+  return response.data
+}
+
+export const getAvailableSalesOrders = async () => {
+  // Get all sales orders and filter client-side for draft or allocated
+  const response = await api.get('/sales-orders/')
+  const allOrders = response.data.results || response.data
+  return allOrders.filter((so: any) => so.status === 'draft' || so.status === 'allocated')
+}
 

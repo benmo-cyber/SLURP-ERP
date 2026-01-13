@@ -72,7 +72,14 @@ function ReverseCheckIn({ onClose, onSuccess }: ReverseCheckInProps) {
       onSuccess()
     } catch (error: any) {
       console.error('Failed to reverse check-in:', error)
-      alert(error.response?.data?.error || error.response?.data?.detail || 'Failed to reverse check-in')
+      console.error('Error response:', error.response?.data)
+      console.error('Error status:', error.response?.status)
+      const errorMessage = error.response?.data?.error || 
+                          error.response?.data?.detail || 
+                          error.response?.data?.message ||
+                          error.message || 
+                          'Failed to reverse check-in'
+      alert(`Failed to reverse check-in: ${errorMessage}`)
     } finally {
       setSubmitting(false)
     }

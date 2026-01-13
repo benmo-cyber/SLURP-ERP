@@ -57,6 +57,11 @@ function InventoryTable() {
     loadData()
   }, [])
 
+  // Reload data when component key changes (refresh trigger)
+  useEffect(() => {
+    loadData()
+  }, []) // This will reload when the component is remounted via key prop
+
   useEffect(() => {
     // Load FPS links for finished goods
     loadFpsLinks()
@@ -77,7 +82,14 @@ function InventoryTable() {
       console.error('Failed to load inventory:', error)
       console.error('Error response:', error.response?.data)
       console.error('Error status:', error.response?.status)
-      alert(`Failed to load inventory data: ${error.message || 'Unknown error'}. Make sure the backend server is running on http://localhost:8000`)
+      // For 500 errors, just set empty data (server will handle gracefully)
+      if (error.response?.status === 500) {
+        console.error('Server error loading inventory, returning empty data')
+        setInventoryDetails([])
+      } else {
+        // Only show alert for non-500 errors
+        alert(`Failed to load inventory data: ${error.message || 'Unknown error'}. Make sure the backend server is running on http://localhost:8000`)
+      }
     } finally {
       setLoading(false)
     }
@@ -463,7 +475,17 @@ function InventoryTable() {
                                                     lot.vendor_lot_number || '-'
                                                   )}
                                                 </td>
-                                                <td>{lot.lot_number}</td>
+                                                <td>
+                                                  {(() => {
+                                                    // For raw materials, vendor lot number is the lot number
+                                                    // For finished goods, show internal lot number
+                                                    const item = lot.item
+                                                    if (item && item.item_type === 'raw_material' && lot.vendor_lot_number) {
+                                                      return lot.vendor_lot_number
+                                                    }
+                                                    return lot.lot_number || '-'
+                                                  })()}
+                                                </td>
                                                 <td>{receivedDate}</td>
                                                 <td 
                                                   className="editable-cell"

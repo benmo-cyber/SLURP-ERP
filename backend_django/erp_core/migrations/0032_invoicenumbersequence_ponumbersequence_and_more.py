@@ -22,19 +22,18 @@ class Migration(migrations.Migration):
                 'ordering': ['-year_prefix', '-sequence_number'],
             },
         ),
-        migrations.AddField(
-            model_name='PONumberSequence',
-            name='year_prefix',
-            field=models.CharField(blank=True, max_length=2, null=True, unique=True),
-        ),
-        migrations.AlterField(
-            model_name='PONumberSequence',
-            name='date_prefix',
-            field=models.CharField(blank=True, max_length=6, null=True, unique=True),
-        ),
-        migrations.AlterModelOptions(
+        migrations.CreateModel(
             name='PONumberSequence',
-            options={'ordering': ['-year_prefix', '-sequence_number']},
+            fields=[
+                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
+                ('date_prefix', models.CharField(blank=True, max_length=6, null=True, unique=True)),
+                ('year_prefix', models.CharField(blank=True, max_length=2, null=True, unique=True)),
+                ('sequence_number', models.IntegerField(default=0)),
+                ('last_updated', models.DateTimeField(auto_now=True)),
+            ],
+            options={
+                'ordering': ['-year_prefix', '-sequence_number'],
+            },
         ),
         migrations.CreateModel(
             name='SalesOrderNumberSequence',

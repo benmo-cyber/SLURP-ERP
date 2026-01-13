@@ -58,6 +58,7 @@ export const createLot = async (data: any) => {
   if (data.expiration_date) payload.expiration_date = data.expiration_date
   if (data.freight_actual) payload.freight_actual = parseFloat(data.freight_actual) || null
   if (data.po_number) payload.po_number = data.po_number
+  if (data.vendor_lot_number) payload.vendor_lot_number = data.vendor_lot_number
   if (data.short_reason && data.short_reason.trim()) payload.short_reason = data.short_reason.trim()
   
   console.log('API payload:', payload)
@@ -88,7 +89,7 @@ export const getProductionBatch = async (id: number) => {
 }
 
 export const updateProductionBatch = async (id: number, data: any) => {
-  const response = await api.put(`/production-batches/${id}/`, data)
+  const response = await api.patch(`/production-batches/${id}/`, data)
   return response.data
 }
 
@@ -109,8 +110,18 @@ export const getFormulas = async () => {
   return response.data.results || response.data
 }
 
+export const getFormula = async (id: number) => {
+  const response = await api.get(`/formulas/${id}/`)
+  return response.data
+}
+
 export const createFormula = async (data: any) => {
   const response = await api.post('/formulas/', data)
+  return response.data
+}
+
+export const updateFormula = async (id: number, data: any) => {
+  const response = await api.put(`/formulas/${id}/`, data)
   return response.data
 }
 

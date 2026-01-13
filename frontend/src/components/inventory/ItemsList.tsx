@@ -331,14 +331,12 @@ function ItemsList() {
                           >
                             Edit
                           </button>
-                          {item.item_type === 'finished_good' && (
-                            <button
-                              onClick={() => handleUnfk(item)}
-                              className="btn btn-sm btn-danger"
-                            >
-                              UNFK
-                            </button>
-                          )}
+                          <button
+                            onClick={() => handleUnfk(item)}
+                            className="btn btn-sm btn-danger"
+                          >
+                            UNFK
+                          </button>
                         </div>
                       )}
                     </td>

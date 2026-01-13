@@ -120,10 +120,29 @@ function CreatePurchaseOrder({ onClose, onSuccess }: CreatePurchaseOrderProps) {
     }
   }
 
-  // Get unique SKUs from items
+  // Get items filtered by selected vendor
+  const getFilteredItems = () => {
+    if (!formData.vendor_id) {
+      return items
+    }
+    
+    const selectedVendor = vendors.find(v => String(v.id) === formData.vendor_id)
+    if (!selectedVendor) {
+      return items
+    }
+    
+    // Filter items to only show items where the item's vendor matches the selected vendor
+    return items.filter(item => {
+      const itemVendor = (item as any).vendor || ''
+      return itemVendor === selectedVendor.name
+    })
+  }
+
+  // Get unique SKUs from items (filtered by selected vendor)
   const getUniqueSkus = () => {
+    const filteredItems = getFilteredItems()
     const skuSet = new Set<string>()
-    items.forEach(item => {
+    filteredItems.forEach(item => {
       if (item.sku) {
         skuSet.add(item.sku)
       }
@@ -131,9 +150,10 @@ function CreatePurchaseOrder({ onClose, onSuccess }: CreatePurchaseOrderProps) {
     return Array.from(skuSet).sort()
   }
 
-  // Get vendors for a specific SKU
+  // Get vendors for a specific SKU (should only be the selected vendor)
   const getVendorsForSku = (sku: string) => {
-    return items
+    const filteredItems = getFilteredItems()
+    return filteredItems
       .filter(item => item.sku === sku)
       .map(item => ({
         id: item.id,
@@ -162,9 +182,14 @@ function CreatePurchaseOrder({ onClose, onSuccess }: CreatePurchaseOrderProps) {
           vendor_id: vendorIdStr,
           vendor_address: vendor.address || prev.vendor_address || ''
         }))
+        
+        // Clear all PO items when vendor changes since items are vendor-specific
+        setPoItems([{ item_id: null, sku: null, vendor: null, description: '', unit_cost: 0, unit_of_measure: '', quantity: 0, notes: '', original_unit: '', costMasterData: null }])
       } else {
         // Vendor not found, just update the ID
         setFormData(prev => ({ ...prev, vendor_id: vendorIdStr }))
+        // Clear items when vendor changes
+        setPoItems([{ item_id: null, sku: null, vendor: null, description: '', unit_cost: 0, unit_of_measure: '', quantity: 0, notes: '', original_unit: '', costMasterData: null }])
       }
     } else {
       // Clear vendor address when no vendor selected
@@ -177,6 +202,8 @@ function CreatePurchaseOrder({ onClose, onSuccess }: CreatePurchaseOrderProps) {
         vendor_zip: '',
         vendor_country: ''
       }))
+      // Clear items when vendor is cleared
+      setPoItems([{ item_id: null, sku: null, vendor: null, description: '', unit_cost: 0, unit_of_measure: '', quantity: 0, notes: '', original_unit: '', costMasterData: null }])
     }
   }
 
@@ -184,10 +211,13 @@ function CreatePurchaseOrder({ onClose, onSuccess }: CreatePurchaseOrderProps) {
     // Handle SKU selection
     if (field === 'sku') {
       const updated = [...poItems]
+      const selectedVendor = vendors.find(v => String(v.id) === formData.vendor_id)
+      const vendorName = selectedVendor?.name || ''
+      
       updated[index] = { 
         ...updated[index], 
         sku: value || null,
-        vendor: null, // Reset vendor when SKU changes
+        vendor: vendorName || null, // Auto-set vendor from form selection
         item_id: null, // Reset item_id
         description: '',
         unit_cost: 0,
@@ -195,24 +225,50 @@ function CreatePurchaseOrder({ onClose, onSuccess }: CreatePurchaseOrderProps) {
         costMasterData: null
       }
       setPoItems(updated)
-      return
-    }
-    
-    // Handle vendor selection for a SKU
-    if (field === 'vendor') {
-      const updated = [...poItems]
-      const currentItem = updated[index]
       
-      if (currentItem.sku && value) {
-        // Find the item matching SKU + vendor
-        const matchingItem = items.find(i => 
-          i.sku === currentItem.sku && 
-          ((i as any).vendor === value || (!(i as any).vendor && value === 'Unknown'))
+      // If SKU and vendor are set, try to find and load the item
+      if (value && vendorName) {
+        const filteredItems = getFilteredItems()
+        const matchingItem = filteredItems.find(i => 
+          i.sku === value && 
+          ((i as any).vendor === vendorName || (!(i as any).vendor && vendorName === 'Unknown'))
         )
         
         if (matchingItem) {
-          // Update with the matching item - preserve vendor value
-          const vendorValue = String(value || '').trim()
+          updated[index] = {
+            ...updated[index],
+            item_id: matchingItem.id,
+            description: matchingItem.name,
+            unit_of_measure: matchingItem.unit_of_measure,
+            original_unit: matchingItem.unit_of_measure
+          }
+          setPoItems(updated)
+          await loadItemPricing(index, matchingItem, vendorName)
+        }
+      }
+      return
+    }
+    
+    // Handle vendor selection for a SKU (auto-set from form vendor, not user-selectable)
+    if (field === 'vendor') {
+      // Vendor is automatically set from the form vendor selection, so this shouldn't be called
+      // But if it is, use the selected vendor from the form
+      const updated = [...poItems]
+      const currentItem = updated[index]
+      const selectedVendor = vendors.find(v => String(v.id) === formData.vendor_id)
+      const vendorName = selectedVendor?.name || value || ''
+      
+      if (currentItem.sku && vendorName) {
+        // Find the item matching SKU + vendor (must match the selected vendor)
+        const filteredItems = getFilteredItems()
+        const matchingItem = filteredItems.find(i => 
+          i.sku === currentItem.sku && 
+          ((i as any).vendor === vendorName || (!(i as any).vendor && vendorName === 'Unknown'))
+        )
+        
+        if (matchingItem) {
+          // Update with the matching item - use the selected vendor name
+          const vendorValue = String(vendorName).trim()
           updated[index] = { 
             ...updated[index], 
             vendor: vendorValue,
@@ -226,15 +282,15 @@ function CreatePurchaseOrder({ onClose, onSuccess }: CreatePurchaseOrderProps) {
           // Load pricing asynchronously - use functional update to preserve vendor
           await loadItemPricing(index, matchingItem, vendorValue)
         } else {
-          // Vendor not found, but still set it
-          const vendorValue = String(value || '').trim()
+          // Item not found for this vendor/SKU combination
+          const vendorValue = String(vendorName).trim()
           updated[index] = { 
             ...updated[index], 
             vendor: vendorValue
           }
           setPoItems(updated)
         }
-      } else if (!value) {
+      } else if (!vendorName) {
         // Clear vendor selection
         updated[index] = { 
           ...updated[index], 
@@ -762,15 +818,29 @@ function CreatePurchaseOrder({ onClose, onSuccess }: CreatePurchaseOrderProps) {
                           handleItemChange(index, 'sku', e.target.value || null)
                         }}
                         required
+                        disabled={!formData.vendor_id}
                         className="item-select"
                       >
-                        <option value="">Select SKU</option>
+                        <option value="">
+                          {!formData.vendor_id ? 'Select vendor first' : 'Select SKU'}
+                        </option>
                         {uniqueSkus.map(sku => (
                           <option key={sku} value={sku}>{sku}</option>
                         ))}
+                        {formData.vendor_id && uniqueSkus.length === 0 && (
+                          <option value="" disabled>No items available for this vendor</option>
+                        )}
                       </select>
                     </td>
                     <td>
+                      <input
+                        type="text"
+                        value={formData.vendor_id ? vendors.find(v => String(v.id) === formData.vendor_id)?.name || '' : ''}
+                        readOnly
+                        className="read-only-input"
+                        style={{ backgroundColor: '#f5f5f5', cursor: 'not-allowed' }}
+                      />
+                      {/* Hidden select to maintain the vendor value in the item */}
                       <select
                         value={item.vendor || ''}
                         onChange={(e) => {
@@ -778,8 +848,9 @@ function CreatePurchaseOrder({ onClose, onSuccess }: CreatePurchaseOrderProps) {
                           handleItemChange(index, 'vendor', selectedValue || null)
                         }}
                         required
-                        disabled={!item.sku}
+                        disabled={!item.sku || !formData.vendor_id}
                         className="item-select"
+                        style={{ display: 'none' }}
                       >
                         <option value="">{item.sku ? 'Select Vendor' : 'Select SKU first'}</option>
                         {vendorsForSku.map(v => {

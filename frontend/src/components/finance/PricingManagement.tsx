@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react'
 import { getVendorPricing, getCustomerPricing, getItems } from '../../api/finance'
 import CreateVendorPricing from './CreateVendorPricing'
-import CreateCustomerPricing from './CreateCustomerPricing'
 import PricingHistory from './PricingHistory'
 import './PricingManagement.css'
 
@@ -11,7 +10,6 @@ function PricingManagement() {
   const [customerPricing, setCustomerPricing] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [showVendorForm, setShowVendorForm] = useState(false)
-  const [showCustomerForm, setShowCustomerForm] = useState(false)
   const [refreshKey, setRefreshKey] = useState(0)
 
   useEffect(() => {
@@ -40,10 +38,6 @@ function PricingManagement() {
     setRefreshKey(prev => prev + 1)
   }
 
-  const handleCustomerSuccess = () => {
-    setShowCustomerForm(false)
-    setRefreshKey(prev => prev + 1)
-  }
 
   if (loading) {
     return <div className="loading">Loading pricing data...</div>
@@ -130,9 +124,9 @@ function PricingManagement() {
           <div className="customer-pricing">
             <div className="section-header">
               <h3>Customer Pricing</h3>
-              <button onClick={() => setShowCustomerForm(true)} className="btn btn-primary">
-                + Add Customer Pricing
-              </button>
+              <div className="info-message">
+                <small>Customer pricing is managed from the CRM tab in Sales. Go to Sales → CRM → Select Customer → Pricing tab.</small>
+              </div>
             </div>
 
             <table className="pricing-table">
@@ -151,7 +145,7 @@ function PricingManagement() {
                 {customerPricing.length === 0 ? (
                   <tr>
                     <td colSpan={7} className="empty-state">
-                      No customer pricing found. Click "Add Customer Pricing" to add pricing.
+                      No customer pricing found. Manage customer pricing from the CRM tab in Sales.
                     </td>
                   </tr>
                 ) : (
@@ -188,12 +182,6 @@ function PricingManagement() {
         />
       )}
 
-      {showCustomerForm && (
-        <CreateCustomerPricing
-          onClose={() => setShowCustomerForm(false)}
-          onSuccess={handleCustomerSuccess}
-        />
-      )}
     </div>
   )
 }

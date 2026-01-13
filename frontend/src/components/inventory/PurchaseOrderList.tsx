@@ -496,18 +496,6 @@ function PurchaseOrderList() {
           Received
         </button>
         <button
-          className={`filter-btn ${filter === 'completed' ? 'active' : ''}`}
-          onClick={() => setFilter('completed')}
-        >
-          Completed
-        </button>
-        <button
-          className={`filter-btn ${filter === 'superseded' ? 'active' : ''}`}
-          onClick={() => setFilter('superseded')}
-        >
-          Superseded
-        </button>
-        <button
           className={`filter-btn ${filter === 'cancelled' ? 'active' : ''}`}
           onClick={() => setFilter('cancelled')}
         >

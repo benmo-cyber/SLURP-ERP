@@ -48,6 +48,18 @@
   padding: 1.5rem;
 }
 
+.info-message {
+  padding: 0.75rem 1rem;
+  background: #e8f4f8;
+  border: 1px solid #3498db;
+  border-radius: 4px;
+  color: #2c3e50;
+}
+
+.info-message small {
+  font-size: 0.875rem;
+}
+
 .section-header {
   display: flex;
   justify-content: space-between;

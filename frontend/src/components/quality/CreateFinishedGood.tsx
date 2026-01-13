@@ -170,9 +170,12 @@ function CreateFinishedGood({ onClose = () => {}, onSuccess = () => {} }: Create
 
   return (
     <div className="create-finished-good">
-      <div className="page-header">
-        <h2>Create Finished Good</h2>
-        <p>Create a new finished good item with its formula, mixing instructions, and equipment requirements</p>
+      <div className="modal-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+        <div>
+          <h2>Create Finished Good</h2>
+          <p style={{ margin: '5px 0 0 0', color: '#666' }}>Create a new finished good item with its formula, mixing instructions, and equipment requirements</p>
+        </div>
+        <button onClick={onClose} className="close-btn" style={{ background: 'none', border: 'none', fontSize: '24px', cursor: 'pointer', padding: '0 10px' }}>×</button>
       </div>
 
       <form onSubmit={handleSubmit} className="finished-good-form">

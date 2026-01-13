@@ -9,6 +9,9 @@ interface Item {
   sku: string
   name: string
   unit_of_measure: string
+  item_type?: string
+  vendor?: string
+  on_order?: number
 }
 
 interface PurchaseOrder {
@@ -69,6 +72,8 @@ function CheckInForm({ onClose, onSuccess }: CheckInFormProps) {
   const [vendors, setVendors] = useState<Vendor[]>([])
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
+  // Store PO items for each row to filter available products
+  const [poItemsByRow, setPoItemsByRow] = useState<Map<number, PurchaseOrderItem[]>>(new Map())
   const [rows, setRows] = useState<CheckInRow[]>([
     {
       date: new Date().toISOString().split('T')[0],
@@ -106,7 +111,35 @@ function CheckInForm({ onClose, onSuccess }: CheckInFormProps) {
         getPurchaseOrders({ status: 'issued' }),
         getVendors()
       ])
-      setItems(itemsData)
+      
+      // Filter to only show items that are currently on order
+      // Also filter out finished goods (items with formulas) - these shouldn't be checked in
+      // Also deduplicate by SKU - show only one item per SKU (prefer items with vendors)
+      const filteredItems = itemsData
+        .filter((item: Item) => {
+          // Only show items that are on order (on_order > 0)
+          const onOrder = item.on_order || 0
+          return onOrder > 0 && item.item_type !== 'finished_good'
+        })
+        .reduce((acc: Item[], item: Item) => {
+          // Check if we already have an item with this SKU
+          const existingIndex = acc.findIndex(i => i.sku === item.sku)
+          if (existingIndex === -1) {
+            // First occurrence of this SKU, add it
+            acc.push(item)
+          } else {
+            // We already have this SKU, prefer the one with a vendor
+            const existing = acc[existingIndex]
+            if (!existing.vendor && item.vendor) {
+              // Replace with the one that has a vendor
+              acc[existingIndex] = item
+            }
+            // Otherwise keep the existing one
+          }
+          return acc
+        }, [])
+      
+      setItems(filteredItems)
       setPurchaseOrders(posData)
       setVendors(vendorsData)
     } catch (error) {
@@ -120,12 +153,20 @@ function CheckInForm({ onClose, onSuccess }: CheckInFormProps) {
   const handlePOChange = async (index: number, poNumber: string) => {
     const po = purchaseOrders.find(p => p.po_number === poNumber)
     const updatedRows = [...rows]
+    const updatedPoItems = new Map(poItemsByRow)
     
     if (po) {
       // Load full PO details to get items
       try {
         const { getPurchaseOrder } = await import('../../api/purchaseOrders')
         const fullPO = await getPurchaseOrder(po.id)
+        
+        // Store PO items for this row to filter available products
+        if (fullPO.items) {
+          updatedPoItems.set(index, fullPO.items)
+        } else {
+          updatedPoItems.delete(index)
+        }
         
         updatedRows[index] = {
           ...updatedRows[index],
@@ -136,7 +177,7 @@ function CheckInForm({ onClose, onSuccess }: CheckInFormProps) {
           po_quantity_received: 0,
         }
         
-        // If product is already selected, find matching PO item
+        // If product is already selected, check if it's on this PO
         if (updatedRows[index].product_id && fullPO.items) {
           const poItem = fullPO.items.find((item: PurchaseOrderItem) => 
             item.item.id === updatedRows[index].product_id
@@ -151,11 +192,16 @@ function CheckInForm({ onClose, onSuccess }: CheckInFormProps) {
               'product_id': updatedRows[index].product_id
             })
           } else {
-            console.log('PO Item not found for product_id:', updatedRows[index].product_id, 'PO items:', fullPO.items?.map((i: any) => ({ item_id: i.item?.id, quantity_ordered: i.quantity_ordered })))
+            // Product is not on this PO, clear it
+            updatedRows[index].product = ''
+            updatedRows[index].product_id = null
+            updatedRows[index].product_unit = ''
+            console.log('Product not on selected PO, cleared selection')
           }
         }
       } catch (error) {
         console.error('Failed to load PO details:', error)
+        updatedPoItems.delete(index)
         updatedRows[index] = {
           ...updatedRows[index],
           po_number: poNumber,
@@ -164,6 +210,8 @@ function CheckInForm({ onClose, onSuccess }: CheckInFormProps) {
         }
       }
     } else {
+      // No PO selected, clear PO items for this row
+      updatedPoItems.delete(index)
       updatedRows[index] = {
         ...updatedRows[index],
         po_number: poNumber,
@@ -174,6 +222,7 @@ function CheckInForm({ onClose, onSuccess }: CheckInFormProps) {
       }
     }
     
+    setPoItemsByRow(updatedPoItems)
     setRows(updatedRows)
   }
 
@@ -414,6 +463,10 @@ function CheckInForm({ onClose, onSuccess }: CheckInFormProps) {
   }
 
   const addRow = () => {
+    // Clear PO items for the new row (it will be set when PO is selected)
+    const updatedPoItems = new Map(poItemsByRow)
+    updatedPoItems.delete(rows.length) // New row will be at this index
+    setPoItemsByRow(updatedPoItems)
     setRows([...rows, {
       date: new Date().toISOString().split('T')[0],
       po_number: '',
@@ -440,6 +493,19 @@ function CheckInForm({ onClose, onSuccess }: CheckInFormProps) {
 
   const removeRow = (index: number) => {
     if (rows.length > 1) {
+      // Remove PO items for this row and reindex remaining rows
+      const updatedPoItems = new Map<number, PurchaseOrderItem[]>()
+      poItemsByRow.forEach((items, rowIndex) => {
+        if (rowIndex < index) {
+          // Keep rows before the removed one
+          updatedPoItems.set(rowIndex, items)
+        } else if (rowIndex > index) {
+          // Shift rows after the removed one down by 1
+          updatedPoItems.set(rowIndex - 1, items)
+        }
+        // Skip the removed row (rowIndex === index)
+      })
+      setPoItemsByRow(updatedPoItems)
       setRows(rows.filter((_, i) => i !== index))
     }
   }
@@ -455,6 +521,15 @@ function CheckInForm({ onClose, onSuccess }: CheckInFormProps) {
           !row.shipment_accepted || !row.initials) {
         alert(`Please fill in all required fields in row ${i + 1}`)
         return
+      }
+      
+      // Check if item is a raw material - vendor lot number is required
+      const item = items.find(i => i.id === row.product_id)
+      if (item && item.item_type === 'raw_material') {
+        if (!row.vendor_lot_number || !row.vendor_lot_number.trim()) {
+          alert(`Row ${i + 1}: Vendor lot number is required for raw materials`)
+          return
+        }
       }
     }
 
@@ -560,7 +635,7 @@ function CheckInForm({ onClose, onSuccess }: CheckInFormProps) {
                   <th>Vendor</th>
                   <th>Carrier</th>
                   <th>Product</th>
-                  <th>Lot #</th>
+                  <th>Vendor Lot #</th>
                   <th>Quantity</th>
                   <th>Status</th>
                   <th>Short Reason</th>
@@ -626,22 +701,45 @@ function CheckInForm({ onClose, onSuccess }: CheckInFormProps) {
                         className="table-input"
                       >
                         <option value="">Select Product...</option>
-                        {items.map((item) => (
-                          <option key={item.id} value={item.id}>
-                            {item.sku} - {item.name}
-                          </option>
-                        ))}
+                        {(() => {
+                          // Filter items based on selected PO
+                          const poItems = poItemsByRow.get(index)
+                          let availableItems = items
+                          
+                          if (row.po_number && poItems && poItems.length > 0) {
+                            // Only show items that are on the selected PO
+                            const poItemIds = poItems.map(poItem => poItem.item.id)
+                            availableItems = items.filter(item => poItemIds.includes(item.id))
+                          } else if (row.po_number) {
+                            // PO is selected but items haven't loaded yet, show empty
+                            availableItems = []
+                          }
+                          
+                          return availableItems.map((item) => (
+                            <option key={item.id} value={item.id}>
+                              {item.sku} - {item.name}{item.vendor ? ` (${item.vendor})` : ''}
+                            </option>
+                          ))
+                        })()}
                       </select>
                     </td>
                     <td>
-                      <input
-                        type="text"
-                        value={row.vendor_lot_number}
-                        onChange={(e) => handleRowChange(index, 'vendor_lot_number', e.target.value)}
-                        placeholder="Vendor Lot #"
-                        className="table-input"
-                        title="Enter vendor lot number from the material"
-                      />
+                      {(() => {
+                        const item = items.find(i => i.id === row.product_id)
+                        const isRawMaterial = item && item.item_type === 'raw_material'
+                        return (
+                          <input
+                            type="text"
+                            value={row.vendor_lot_number}
+                            onChange={(e) => handleRowChange(index, 'vendor_lot_number', e.target.value)}
+                            placeholder={isRawMaterial ? "Vendor Lot # (Required)" : "Vendor Lot #"}
+                            className="table-input"
+                            title={isRawMaterial ? "Vendor lot number is required for raw materials" : "Enter vendor lot number from the material"}
+                            required={isRawMaterial}
+                            style={isRawMaterial ? { borderColor: '#dc3545' } : {}}
+                          />
+                        )
+                      })()}
                     </td>
                     <td>
                       <div className="quantity-input-group">

@@ -2,15 +2,18 @@ import { useState } from 'react'
 import InventoryTable from '../components/inventory/InventoryTable'
 import CheckInForm from '../components/inventory/CheckInForm'
 import CreateItemForm from '../components/inventory/CreateItemForm'
-import UnlinkItem from '../components/inventory/UnlinkItem'
+import ReverseCheckIn from '../components/inventory/ReverseCheckIn'
 import ItemsList from '../components/inventory/ItemsList'
+import PurchaseOrderList from '../components/inventory/PurchaseOrderList'
+import CreatePurchaseOrder from '../components/inventory/CreatePurchaseOrder'
 import './Inventory.css'
 
 function Inventory() {
-  const [activeTab, setActiveTab] = useState<'inventory' | 'items'>('inventory')
+  const [activeTab, setActiveTab] = useState<'inventory' | 'items' | 'purchase-orders'>('inventory')
   const [showCheckIn, setShowCheckIn] = useState(false)
   const [showCreateItem, setShowCreateItem] = useState(false)
-  const [showUnlinkModal, setShowUnlinkModal] = useState(false)
+  const [showReverseCheckIn, setShowReverseCheckIn] = useState(false)
+  const [showCreatePO, setShowCreatePO] = useState(false)
   const [refreshKey, setRefreshKey] = useState(0)
 
   const handleCheckInSuccess = () => {
@@ -20,6 +23,11 @@ function Inventory() {
 
   const handleCreateItemSuccess = () => {
     setShowCreateItem(false)
+    setRefreshKey(prev => prev + 1)
+  }
+
+  const handleCreatePOSuccess = () => {
+    setShowCreatePO(false)
     setRefreshKey(prev => prev + 1)
   }
 
@@ -41,6 +49,12 @@ function Inventory() {
         >
           Items Management
         </button>
+        <button
+          className={`tab-button ${activeTab === 'purchase-orders' ? 'active' : ''}`}
+          onClick={() => setActiveTab('purchase-orders')}
+        >
+          Purchase Orders
+        </button>
       </div>
       <div className="inventory-actions">
         {activeTab === 'inventory' && (
@@ -51,16 +65,22 @@ function Inventory() {
             <button onClick={() => setShowCreateItem(true)} className="btn btn-primary">
               Create New Item
             </button>
-            <button onClick={() => setShowUnlinkModal(true)} className="btn btn-danger">
+            <button onClick={() => setShowReverseCheckIn(true)} className="btn btn-danger">
               UNFK
             </button>
           </>
+        )}
+        {activeTab === 'purchase-orders' && (
+          <button onClick={() => setShowCreatePO(true)} className="btn btn-primary">
+            Create Purchase Order
+          </button>
         )}
       </div>
 
       <div className="inventory-content">
         {activeTab === 'inventory' && <InventoryTable key={refreshKey} />}
         {activeTab === 'items' && <ItemsList />}
+        {activeTab === 'purchase-orders' && <PurchaseOrderList key={refreshKey} />}
       </div>
 
       {showCheckIn && (
@@ -76,13 +96,19 @@ function Inventory() {
           onSuccess={handleCreateItemSuccess}
         />
       )}
-      {showUnlinkModal && (
-        <UnlinkItem
-          onClose={() => setShowUnlinkModal(false)}
+      {showReverseCheckIn && (
+        <ReverseCheckIn
+          onClose={() => setShowReverseCheckIn(false)}
           onSuccess={() => {
-            setShowUnlinkModal(false)
+            setShowReverseCheckIn(false)
             setRefreshKey(prev => prev + 1)
           }}
+        />
+      )}
+      {showCreatePO && (
+        <CreatePurchaseOrder
+          onClose={() => setShowCreatePO(false)}
+          onSuccess={handleCreatePOSuccess}
         />
       )}
     </div>

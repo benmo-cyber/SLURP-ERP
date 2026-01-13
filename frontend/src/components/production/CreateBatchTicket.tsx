@@ -26,6 +26,7 @@ interface FormulaItem {
 interface Lot {
   id: number
   lot_number: string
+  vendor_lot_number?: string | null
   item: Item
   quantity_remaining: number
   status: string
@@ -37,15 +38,20 @@ interface CreateBatchTicketProps {
 }
 
 function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
+  const [batchType, setBatchType] = useState<'production' | 'repack'>('production')
   const [finishedGoods, setFinishedGoods] = useState<Item[]>([])
+  const [repackItems, setRepackItems] = useState<Item[]>([])
   const [formulas, setFormulas] = useState<Formula[]>([])
   const [allLots, setAllLots] = useState<Lot[]>([])
   const [availableLots, setAvailableLots] = useState<Lot[]>([])
   const [selectedFinishedGood, setSelectedFinishedGood] = useState<Item | null>(null)
+  const [selectedRepackItem, setSelectedRepackItem] = useState<Item | null>(null)
   const [selectedFormula, setSelectedFormula] = useState<Formula | null>(null)
   const [quantity, setQuantity] = useState('')
   const [quantityUnit, setQuantityUnit] = useState<'lbs' | 'kg'>('lbs')
   const [selectedLots, setSelectedLots] = useState<{ [key: number]: number }>({})
+  const [lotInputValues, setLotInputValues] = useState<{ [key: number]: string }>({})
+  const [productionDate, setProductionDate] = useState<string>(new Date().toISOString().split('T')[0])
   const [submitting, setSubmitting] = useState(false)
   const [loading, setLoading] = useState(true)
 
@@ -54,22 +60,59 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
   }, [])
 
   useEffect(() => {
-    if (selectedFinishedGood) {
+    if (batchType === 'production' && selectedFinishedGood) {
+      console.log('Finding formula for finished good:', selectedFinishedGood)
+      console.log('Available formulas:', formulas.map(f => ({ id: f.id, finishedGoodId: f.finished_good?.id, finishedGoodSku: f.finished_good?.sku })))
       const formula = formulas.find(f => f.finished_good.id === selectedFinishedGood.id)
+      console.log('Found formula:', formula)
+      if (formula) {
+        console.log('Formula ingredients:', formula.ingredients)
+        console.log('Formula ingredients count:', formula.ingredients?.length || 0)
+        if (!formula.ingredients || formula.ingredients.length === 0) {
+          alert(`Warning: Formula for ${selectedFinishedGood.sku} has no ingredients. Please add ingredients to the formula.`)
+        } else {
+          console.log('Ingredient SKUs:', formula.ingredients.map(ing => ing.item?.sku))
+        }
+      } else {
+        alert(`No formula found for ${selectedFinishedGood.sku}. Please create a formula first.`)
+      }
       setSelectedFormula(formula || null)
     } else {
       setSelectedFormula(null)
-      setSelectedLots({})
     }
-  }, [selectedFinishedGood, formulas])
+    
+    if (batchType === 'repack') {
+      setSelectedLots({})
+      setLotInputValues({})
+      if (selectedRepackItem) {
+        // Filter lots for the selected repack item
+        const itemLots = allLots.filter((lot: Lot) => lot.item.id === selectedRepackItem.id)
+        setAvailableLots(itemLots)
+      } else {
+        setAvailableLots([])
+      }
+    }
+  }, [batchType, selectedFinishedGood, selectedRepackItem, formulas, allLots])
 
   useEffect(() => {
-    if (selectedFormula && allLots.length > 0) {
+    console.log('useEffect triggered for loadAvailableLots:', {
+      batchType,
+      hasSelectedFormula: !!selectedFormula,
+      allLotsCount: allLots.length,
+      selectedFormula: selectedFormula
+    })
+    if (batchType === 'production' && selectedFormula && allLots.length > 0) {
+      console.log('Calling loadAvailableLots with formula:', selectedFormula)
       loadAvailableLots(selectedFormula)
-    } else {
+    } else if (batchType === 'production' && selectedFormula && allLots.length === 0) {
+      console.warn('Selected formula but no lots available')
+      setAvailableLots([])
+    } else if (batchType === 'production' && !selectedFormula) {
+      console.warn('Production mode but no formula selected')
       setAvailableLots([])
     }
-  }, [selectedFormula, allLots])
+  }, [batchType, selectedFormula, allLots])
+
 
   const loadData = async () => {
     try {
@@ -84,7 +127,22 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
       console.log('Total lots received:', lotsData.length)
       
       const finishedGoods = itemsData.filter((item: Item) => item.item_type === 'finished_good')
+      const repackItems = itemsData.filter((item: Item) => 
+        item.item_type === 'distributed_item' || item.item_type === 'raw_material'
+      )
       setFinishedGoods(finishedGoods)
+      setRepackItems(repackItems)
+      
+      // Debug formulas
+      console.log('Loaded formulas:', formulasData)
+      formulasData.forEach((formula: Formula) => {
+        console.log(`Formula ${formula.id} for ${formula.finished_good?.sku}:`, {
+          finishedGood: formula.finished_good,
+          ingredients: formula.ingredients,
+          ingredientCount: formula.ingredients?.length || 0
+        })
+      })
+      
       setFormulas(formulasData)
       
       // Filter to only show accepted lots with remaining quantity
@@ -120,24 +178,69 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
   }
 
   const loadAvailableLots = (formula: Formula | null) => {
+    console.log('=== loadAvailableLots called ===', formula)
     if (!formula) {
+      console.warn('loadAvailableLots: No formula provided')
       setAvailableLots([])
+      return
+    }
+
+    // Check if formula has ingredients
+    if (!formula.ingredients || formula.ingredients.length === 0) {
+      console.warn('Formula has no ingredients:', formula)
+      // If no ingredients, show all available lots as a fallback
+      console.log('No ingredients found - showing all available lots as fallback')
+      const fallbackLots = allLots.filter((lot: Lot) => {
+        const isAccepted = !lot.status || lot.status === 'accepted'
+        const hasQuantity = lot.quantity_remaining && lot.quantity_remaining > 0
+        return isAccepted && hasQuantity
+      })
+      console.log('Fallback lots:', fallbackLots.length)
+      setAvailableLots(fallbackLots)
       return
     }
 
     // Filter lots to only show those that match formula ingredients by SKU (not vendor-specific item.id)
     // This allows interchangeability of materials from different vendors
-    const ingredientSkus = formula.ingredients.map(ing => ing.item.sku)
+    const ingredientSkus = formula.ingredients
+      .map(ing => ing.item?.sku)
+      .filter(Boolean)
+      .map(sku => sku?.trim().toUpperCase())
+    
+    if (ingredientSkus.length === 0) {
+      console.warn('Formula ingredients have no SKUs:', formula.ingredients)
+      setAvailableLots([])
+      return
+    }
     
     console.log('Filtering lots for formula:', {
       formulaId: formula.id,
+      finishedGood: formula.finished_good?.sku,
+      ingredientCount: formula.ingredients.length,
       ingredientSkus,
+      ingredientDetails: formula.ingredients.map(ing => ({
+        id: ing.id,
+        itemId: ing.item?.id,
+        itemSku: ing.item?.sku,
+        itemName: ing.item?.name,
+        percentage: ing.percentage
+      })),
       totalLots: allLots.length,
-      allLotSkus: allLots.map(l => l.item?.sku).filter(Boolean)
+      allLotSkus: allLots.map(l => l.item?.sku).filter(Boolean),
+      allLotDetails: allLots.map(l => ({
+        lotId: l.id,
+        lotNumber: l.lot_number,
+        itemId: l.item?.id,
+        itemSku: l.item?.sku,
+        itemName: l.item?.name,
+        status: l.status,
+        quantityRemaining: l.quantity_remaining
+      }))
     })
     
     const filteredLots = allLots.filter((lot: Lot) => {
-      const matchesSku = lot.item && lot.item.sku && ingredientSkus.includes(lot.item.sku)
+      const lotSku = lot.item?.sku?.trim().toUpperCase()
+      const matchesSku = lotSku && ingredientSkus.includes(lotSku)
       // Status might be undefined/null for older lots, so treat as accepted if not set
       const isAccepted = !lot.status || lot.status === 'accepted'
       const hasQuantity = lot.quantity_remaining && lot.quantity_remaining > 0
@@ -147,6 +250,9 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
       }
       if (matchesSku && !hasQuantity) {
         console.log('Lot matches SKU but no quantity:', lot.lot_number, lot.item.sku, 'remaining:', lot.quantity_remaining)
+      }
+      if (!matchesSku && lot.item?.sku) {
+        console.log('Lot SKU does not match ingredients:', lot.lot_number, 'lot SKU:', lot.item.sku, 'ingredient SKUs:', ingredientSkus)
       }
       
       return matchesSku && isAccepted && hasQuantity
@@ -169,41 +275,114 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
     return value
   }
 
-  const handleLotQuantityChange = (lotId: number, quantity: string) => {
+  const handleLotQuantityChange = (lotId: number, quantity: string, lotUnitOfMeasure: string) => {
+    // Update the input value state
+    const newInputValues = { ...lotInputValues }
+    if (quantity === '') {
+      delete newInputValues[lotId]
+    } else {
+      newInputValues[lotId] = quantity
+    }
+    setLotInputValues(newInputValues)
+    
+    // Convert and store in lot's native unit
     const newSelectedLots = { ...selectedLots }
-    if (quantity === '' || parseFloat(quantity) <= 0) {
+    if (quantity === '' || parseFloat(quantity) <= 0 || isNaN(parseFloat(quantity))) {
       delete newSelectedLots[lotId]
     } else {
-      newSelectedLots[lotId] = parseFloat(quantity)
+      // User enters quantity in quantityUnit (display unit)
+      // Convert to lot's native unit for storage
+      let quantityInLotUnit = parseFloat(quantity)
+      
+      if (quantityUnit !== lotUnitOfMeasure) {
+        // Need to convert from display unit (quantityUnit) to lot's native unit
+        quantityInLotUnit = convertWeight(parseFloat(quantity), quantityUnit, lotUnitOfMeasure as 'lbs' | 'kg')
+      }
+      
+      newSelectedLots[lotId] = quantityInLotUnit
     }
     setSelectedLots(newSelectedLots)
+  }
+  
+  const handleQuantityUnitChange = (newUnit: 'lbs' | 'kg') => {
+    // When main unit changes, convert all lot input values and stored values
+    const convertedInputValues: { [key: number]: string } = {}
+    const convertedStoredValues: { [key: number]: number } = {}
+    
+    Object.keys(lotInputValues).forEach(lotIdStr => {
+      const lotId = parseInt(lotIdStr)
+      const lot = [...availableLots, ...allLots].find(l => l.id === lotId)
+      if (lot && lotInputValues[lotId]) {
+        const currentValue = parseFloat(lotInputValues[lotId])
+        if (!isNaN(currentValue)) {
+          // Convert input value from old unit to new unit
+          const convertedInput = convertWeight(currentValue, quantityUnit, newUnit)
+          convertedInputValues[lotId] = convertedInput.toFixed(2)
+          
+          // Convert stored value: from old display unit to lot's native unit
+          // First convert from old display unit to new display unit, then to lot's native unit
+          let quantityInNewDisplayUnit = convertWeight(currentValue, quantityUnit, newUnit)
+          let quantityInLotUnit = quantityInNewDisplayUnit
+          if (newUnit !== lot.item.unit_of_measure) {
+            quantityInLotUnit = convertWeight(quantityInNewDisplayUnit, newUnit, lot.item.unit_of_measure as 'lbs' | 'kg')
+          }
+          convertedStoredValues[lotId] = quantityInLotUnit
+        }
+      }
+    })
+    
+    setLotInputValues(convertedInputValues)
+    setSelectedLots(convertedStoredValues)
+    setQuantityUnit(newUnit)
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
 
-    if (!selectedFinishedGood || !selectedFormula || !quantity) {
-      alert('Please fill in all required fields')
-      return
-    }
+    if (batchType === 'production') {
+      if (!selectedFinishedGood || !selectedFormula || !quantity) {
+        alert('Please fill in all required fields')
+        return
+      }
 
-    if (Object.keys(selectedLots).length === 0) {
-      alert('Please select at least one lot')
-      return
-    }
+      if (Object.keys(selectedLots).length === 0) {
+        alert('Please select at least one lot')
+        return
+      }
 
-    // Validate that selected lots match formula ingredients by SKU (not vendor-specific item.id)
-    // This allows interchangeability of materials from different vendors
-    const ingredientSkus = selectedFormula.ingredients.map(ing => ing.item.sku)
-    const selectedLotSkus = Object.keys(selectedLots).map(lotId => {
-      const lot = availableLots.find(l => l.id === parseInt(lotId))
-      return lot?.item.sku
-    })
+      // Validate that selected lots match formula ingredients by SKU
+      const ingredientSkus = selectedFormula.ingredients.map(ing => ing.item.sku)
+      const selectedLotSkus = Object.keys(selectedLots).map(lotId => {
+        const lot = availableLots.find(l => l.id === parseInt(lotId))
+        return lot?.item.sku
+      })
 
-    const allMatch = selectedLotSkus.every(sku => ingredientSkus.includes(sku!))
-    if (!allMatch) {
-      alert('Selected lots must match formula ingredients')
-      return
+      const allMatch = selectedLotSkus.every(sku => ingredientSkus.includes(sku!))
+      if (!allMatch) {
+        alert('Selected lots must match formula ingredients')
+        return
+      }
+    } else {
+      // Repack batch
+      if (!selectedRepackItem || !quantity) {
+        alert('Please select an item and enter quantity')
+        return
+      }
+
+      if (Object.keys(selectedLots).length === 0) {
+        alert('Please select at least one input lot')
+        return
+      }
+
+      // Validate that all selected lots are for the same item
+      const selectedLotIds = Object.keys(selectedLots).map(id => parseInt(id))
+      const lots = availableLots.filter(l => selectedLotIds.includes(l.id))
+      const allSameItem = lots.every(lot => lot.item.id === selectedRepackItem.id)
+      
+      if (!allSameItem) {
+        alert('All selected lots must be for the same item')
+        return
+      }
     }
 
     try {
@@ -213,22 +392,97 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
         ? convertWeight(parseFloat(quantity), 'kg', 'lbs')
         : parseFloat(quantity)
 
-      await createProductionBatch({
-        finished_good_item_id: selectedFinishedGood.id,
+      // Calculate total quantity used (convert all to lbs for comparison)
+      let totalQuantityUsedInLbs = 0
+      Object.keys(selectedLots).forEach(lotId => {
+        const lot = availableLots.find(l => l.id === parseInt(lotId)) || allLots.find(l => l.id === parseInt(lotId))
+        if (lot) {
+          const quantityUsed = selectedLots[parseInt(lotId)]
+          // Convert from lot's native unit to lbs
+          if (lot.item.unit_of_measure === 'lbs') {
+            totalQuantityUsedInLbs += quantityUsed
+          } else if (lot.item.unit_of_measure === 'kg') {
+            totalQuantityUsedInLbs += convertWeight(quantityUsed, 'kg', 'lbs')
+          }
+        }
+      })
+
+      // Validate that total quantity used equals quantity to produce (with small tolerance for floating point)
+      const tolerance = 0.01
+      if (Math.abs(totalQuantityUsedInLbs - quantityInLbs) > tolerance) {
+        alert(`Quantity mismatch: Total quantity used (${totalQuantityUsedInLbs.toFixed(2)} lbs) must equal quantity to produce (${quantityInLbs.toFixed(2)} lbs)`)
+        setSubmitting(false)
+        return
+      }
+
+      // Check if production date is in the future
+      const selectedDate = new Date(productionDate)
+      const today = new Date()
+      today.setHours(0, 0, 0, 0)
+      selectedDate.setHours(0, 0, 0, 0)
+      const isFuture = selectedDate > today
+
+      // Batch number will be auto-generated by the backend
+      const batchData: any = {
+        batch_type: batchType,
         quantity_produced: quantityInLbs,
-        production_date: new Date().toISOString().split('T')[0],
-        status: 'in_progress',
+        production_date: productionDate,
+        status: isFuture ? 'scheduled' : 'in_progress',
         inputs: Object.keys(selectedLots).map(lotId => ({
           lot_id: parseInt(lotId),
           quantity_used: selectedLots[parseInt(lotId)]
         }))
-      })
+      }
+
+      if (batchType === 'production') {
+        batchData.finished_good_item_id = selectedFinishedGood!.id
+      } else {
+        batchData.finished_good_item_id = selectedRepackItem!.id
+      }
+
+      console.log('Submitting batch data:', JSON.stringify(batchData, null, 2))
+      await createProductionBatch(batchData)
       
-      alert('Batch ticket created successfully!')
+      alert(`Batch ticket created successfully!`)
       onSuccess()
     } catch (error: any) {
       console.error('Failed to create batch ticket:', error)
-      alert(error.response?.data?.detail || error.message || 'Failed to create batch ticket')
+      console.error('Error response:', error.response)
+      console.error('Error data:', error.response?.data)
+      console.error('Error status:', error.response?.status)
+      
+      // Try to get detailed error message
+      let errorMessage = 'Failed to create batch ticket'
+      if (error.response?.data) {
+        if (error.response.data.detail) {
+          errorMessage = error.response.data.detail
+        } else if (error.response.data.error) {
+          errorMessage = error.response.data.error
+        } else if (typeof error.response.data === 'string') {
+          errorMessage = error.response.data
+        } else if (error.response.data.non_field_errors) {
+          errorMessage = error.response.data.non_field_errors.join(', ')
+        } else {
+          // Try to format validation errors
+          const errorParts: string[] = []
+          for (const [field, messages] of Object.entries(error.response.data)) {
+            if (Array.isArray(messages)) {
+              errorParts.push(`${field}: ${messages.join(', ')}`)
+            } else if (typeof messages === 'string') {
+              errorParts.push(`${field}: ${messages}`)
+            } else {
+              errorParts.push(`${field}: ${JSON.stringify(messages)}`)
+            }
+          }
+          if (errorParts.length > 0) {
+            errorMessage = errorParts.join('\n')
+          }
+        }
+      } else if (error.message) {
+        errorMessage = error.message
+      }
+      
+      alert(errorMessage)
     } finally {
       setSubmitting(false)
     }
@@ -254,25 +508,80 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
 
         <form onSubmit={handleSubmit} className="batch-form">
           <div className="form-group">
-            <label>Finished Good *</label>
-            <select
-              value={selectedFinishedGood?.id || ''}
-              onChange={(e) => {
-                const item = finishedGoods.find(i => i.id === parseInt(e.target.value))
-                setSelectedFinishedGood(item || null)
-              }}
-              required
-            >
-              <option value="">Select Finished Good</option>
-              {finishedGoods.map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.sku} - {item.name}
-                </option>
-              ))}
-            </select>
+            <label>Batch Type *</label>
+            <div style={{ display: 'flex', gap: '10px', marginBottom: '15px' }}>
+              <button
+                type="button"
+                className={`toggle-btn ${batchType === 'production' ? 'active' : ''}`}
+                onClick={() => {
+                  setBatchType('production')
+                  setSelectedFinishedGood(null)
+                  setSelectedRepackItem(null)
+                  setSelectedLots({})
+                  setLotInputValues({})
+                }}
+                style={{ padding: '8px 16px', borderRadius: '4px', border: '1px solid #ccc', cursor: 'pointer' }}
+              >
+                Production
+              </button>
+              <button
+                type="button"
+                className={`toggle-btn ${batchType === 'repack' ? 'active' : ''}`}
+                onClick={() => {
+                  setBatchType('repack')
+                  setSelectedFinishedGood(null)
+                  setSelectedRepackItem(null)
+                  setSelectedLots({})
+                  setLotInputValues({})
+                }}
+                style={{ padding: '8px 16px', borderRadius: '4px', border: '1px solid #ccc', cursor: 'pointer' }}
+              >
+                Repack
+              </button>
+            </div>
           </div>
 
-          {selectedFormula && (
+          {batchType === 'production' ? (
+            <div className="form-group">
+              <label>Finished Good *</label>
+              <select
+                value={selectedFinishedGood?.id || ''}
+                onChange={(e) => {
+                  const item = finishedGoods.find(i => i.id === parseInt(e.target.value))
+                  setSelectedFinishedGood(item || null)
+                }}
+                required
+              >
+                <option value="">Select Finished Good</option>
+                {finishedGoods.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.sku} - {item.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          ) : (
+            <div className="form-group">
+              <label>Item to Repack *</label>
+              <select
+                value={selectedRepackItem?.id || ''}
+                onChange={(e) => {
+                  const item = repackItems.find(i => i.id === parseInt(e.target.value))
+                  setSelectedRepackItem(item || null)
+                }}
+                required
+              >
+                <option value="">Select Item</option>
+                {repackItems.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.sku} - {item.name} ({item.item_type === 'distributed_item' ? 'Distribution' : 'Raw Material'})
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          {batchType === 'production' && selectedFormula && (
             <>
               <div className="formula-section">
                 <label className="section-label">Formula (Auto-populated, Read-only)</label>
@@ -290,45 +599,71 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
                   </div>
                 </div>
               </div>
+            </>
+          )}
 
-              <div className="form-row">
-                <div className="form-group">
-                  <label>Total Quantity to Produce *</label>
-                  <div className="input-with-unit">
-                    <input
-                      type="number"
-                      step="0.01"
-                      min="0"
-                      value={quantity}
-                      onChange={(e) => setQuantity(e.target.value)}
-                      required
-                      placeholder="0.00"
-                    />
-                    <div className="unit-toggle">
-                      <button
-                        type="button"
-                        className={`toggle-btn ${quantityUnit === 'lbs' ? 'active' : ''}`}
-                        onClick={() => setQuantityUnit('lbs')}
-                      >
-                        lbs
-                      </button>
-                      <button
-                        type="button"
-                        className={`toggle-btn ${quantityUnit === 'kg' ? 'active' : ''}`}
-                        onClick={() => setQuantityUnit('kg')}
-                      >
-                        kg
-                      </button>
-                    </div>
-                  </div>
+          <div className="form-row">
+            <div className="form-group">
+              <label>{batchType === 'production' ? 'Total Quantity to Produce *' : 'Quantity to Repack *'}</label>
+              <div className="input-with-unit">
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={quantity}
+                  onChange={(e) => setQuantity(e.target.value)}
+                  required
+                  placeholder="0.00"
+                />
+                <div className="unit-toggle">
+                  <button
+                    type="button"
+                    className={`toggle-btn ${quantityUnit === 'lbs' ? 'active' : ''}`}
+                    onClick={() => handleQuantityUnitChange('lbs')}
+                  >
+                    lbs
+                  </button>
+                  <button
+                    type="button"
+                    className={`toggle-btn ${quantityUnit === 'kg' ? 'active' : ''}`}
+                    onClick={() => handleQuantityUnitChange('kg')}
+                  >
+                    kg
+                  </button>
                 </div>
               </div>
+            </div>
+          </div>
 
+          <div className="form-group">
+            <label htmlFor="production-date">Production Date *</label>
+            <input
+              type="date"
+              id="production-date"
+              value={productionDate}
+              onChange={(e) => setProductionDate(e.target.value)}
+              className="form-input"
+              min={new Date().toISOString().split('T')[0]}
+            />
+            <small className="form-hint">
+              {new Date(productionDate) > new Date() 
+                ? 'Future date selected - batch will be created as "Scheduled"'
+                : 'Select today or a future date'}
+            </small>
+          </div>
+
+          {batchType === 'production' && selectedFormula && (
               <div className="lots-section">
                 <label className="section-label">Select Lots (Available from Inventory) *</label>
-                <p className="section-hint">Select specific lots and enter quantities to use for each ingredient</p>
+                {selectedFormula && (!selectedFormula.ingredients || selectedFormula.ingredients.length === 0) ? (
+                  <div className="warning-message" style={{ padding: '10px', background: '#fff3cd', border: '1px solid #ffc107', borderRadius: '4px', marginBottom: '15px' }}>
+                    ⚠️ This formula has no ingredients defined. Please add ingredients to the formula, or select lots from the available inventory below.
+                  </div>
+                ) : (
+                  <p className="section-hint">Select specific lots and enter quantities to use for each ingredient</p>
+                )}
                 
-                {availableLots.length === 0 && allLots.length > 0 && (
+                {availableLots.length === 0 && allLots.length > 0 && selectedFormula && selectedFormula.ingredients && selectedFormula.ingredients.length > 0 && (
                   <div className="warning-message" style={{ padding: '10px', background: '#fff3cd', border: '1px solid #ffc107', borderRadius: '4px', marginBottom: '15px' }}>
                     ⚠️ No lots match the formula ingredients. Available lots: {allLots.length}. 
                     Check console for details.
@@ -349,12 +684,22 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
                       const lot = availableLots.find(l => l.id === parseInt(lotId))
                       return lot?.item.sku === ingredient.item.sku
                     })
-                    .reduce((sum, lotId) => sum + (selectedLots[parseInt(lotId)] || 0), 0)
+                    .reduce((sum, lotId) => {
+                      const lot = availableLots.find(l => l.id === parseInt(lotId))
+                      if (!lot) return sum
+                      const storedQty = selectedLots[parseInt(lotId)] || 0
+                      // Convert from lot's native unit to display unit (quantityUnit)
+                      if (quantityUnit !== lot.item.unit_of_measure) {
+                        return sum + convertWeight(storedQty, lot.item.unit_of_measure as 'lbs' | 'kg', quantityUnit)
+                      }
+                      return sum + storedQty
+                    }, 0)
                   
-                  const requiredQty = quantity ? (parseFloat(quantity) * (ingredient.percentage / 100)) : 0
-                  const requiredQtyDisplay = quantityUnit === 'kg' 
-                    ? convertWeight(requiredQty, 'lbs', 'kg').toFixed(2)
-                    : requiredQty.toFixed(2)
+                  // Calculate required quantity based on the finished good's unit
+                  // The quantity entered is in quantityUnit, and percentages are based on that
+                  const baseQuantity = quantity ? parseFloat(quantity) : 0
+                  const requiredQty = baseQuantity * (ingredient.percentage / 100)
+                  const requiredQtyDisplay = requiredQty.toFixed(2)
 
                   return (
                     <div key={ingredient.id} className="ingredient-group">
@@ -368,7 +713,7 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
                             Required: {requiredQtyDisplay} {quantityUnit === 'kg' ? 'kg' : 'lbs'}
                           </span>
                           <span className={`selected-qty ${totalSelected > 0 ? 'has-selection' : ''}`}>
-                            Selected: {totalSelected.toLocaleString()} {ingredientLots[0]?.item.unit_of_measure || 'lbs'}
+                            Selected: {totalSelected.toFixed(2)} {quantityUnit}
                           </span>
                         </div>
                       </div>
@@ -382,7 +727,11 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
                           {ingredientLots.map((lot) => (
                             <div key={lot.id} className={`lot-card ${selectedLots[lot.id] ? 'selected' : ''}`}>
                               <div className="lot-card-header">
-                                <span className="lot-number-badge">{lot.lot_number}</span>
+                                <span className="lot-number-badge">
+                                  {lot.item.item_type === 'raw_material' && lot.vendor_lot_number 
+                                    ? `Vendor Lot: ${lot.vendor_lot_number}` 
+                                    : lot.lot_number}
+                                </span>
                                 <span className="lot-available-badge">
                                   {lot.quantity_remaining.toLocaleString()} {lot.item.unit_of_measure} available
                                 </span>
@@ -394,18 +743,22 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
                                     type="number"
                                     step="0.01"
                                     min="0"
-                                    max={lot.quantity_remaining}
-                                    value={selectedLots[lot.id] || ''}
-                                    onChange={(e) => handleLotQuantityChange(lot.id, e.target.value)}
+                                    max={quantityUnit === lot.item.unit_of_measure 
+                                      ? lot.quantity_remaining 
+                                      : (lot.item.unit_of_measure === 'lbs' 
+                                          ? convertWeight(lot.quantity_remaining, 'lbs', 'kg')
+                                          : convertWeight(lot.quantity_remaining, 'kg', 'lbs'))}
+                                    value={lotInputValues[lot.id] || ''}
+                                    onChange={(e) => handleLotQuantityChange(lot.id, e.target.value, lot.item.unit_of_measure)}
                                     placeholder="0.00"
                                     className="quantity-input"
                                   />
-                                  <span className="unit-label">{lot.item.unit_of_measure}</span>
+                                  <span className="unit-label">{quantityUnit}</span>
                                 </div>
                                 {selectedLots[lot.id] && (
                                   <button
                                     type="button"
-                                    onClick={() => handleLotQuantityChange(lot.id, '')}
+                                    onClick={() => handleLotQuantityChange(lot.id, '', lot.item.unit_of_measure)}
                                     className="btn-clear-lot"
                                   >
                                     Clear
@@ -420,15 +773,83 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
                   )
                 })}
               </div>
-            </>
+          )}
+
+          {batchType === 'repack' && selectedRepackItem && (
+            <div className="lots-section">
+              <label className="section-label">Select Input Lots (Available from Inventory) *</label>
+              <p className="section-hint">Select lots to repack. A new lot will be created with a new lot number.</p>
+              
+              {availableLots.length === 0 && (
+                <div className="warning-message" style={{ padding: '10px', background: '#f8d7da', border: '1px solid #dc3545', borderRadius: '4px', marginBottom: '15px' }}>
+                  ⚠️ No available lots found for {selectedRepackItem.name}. Please check in some materials first.
+                </div>
+              )}
+              
+              {availableLots.length > 0 && (
+                <div className="lots-grid">
+                  {availableLots.map((lot) => (
+                    <div key={lot.id} className={`lot-card ${selectedLots[lot.id] ? 'selected' : ''}`}>
+                      <div className="lot-card-header">
+                        <span className="lot-number-badge">
+                          {lot.item.item_type === 'raw_material' && lot.vendor_lot_number 
+                            ? `Vendor Lot: ${lot.vendor_lot_number}` 
+                            : lot.lot_number}
+                        </span>
+                        <span className="lot-available-badge">
+                          {lot.quantity_remaining.toLocaleString()} {lot.item.unit_of_measure} available
+                        </span>
+                      </div>
+                      <div className="lot-quantity-section">
+                        <label>Quantity to Use</label>
+                        <div className="quantity-input-group">
+                          <input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            max={quantityUnit === lot.item.unit_of_measure 
+                              ? lot.quantity_remaining 
+                              : (lot.item.unit_of_measure === 'lbs' 
+                                  ? convertWeight(lot.quantity_remaining, 'lbs', 'kg')
+                                  : convertWeight(lot.quantity_remaining, 'kg', 'lbs'))}
+                            value={lotInputValues[lot.id] || ''}
+                            onChange={(e) => handleLotQuantityChange(lot.id, e.target.value, lot.item.unit_of_measure)}
+                            placeholder="0.00"
+                            className="quantity-input"
+                          />
+                          <span className="unit-label">{quantityUnit}</span>
+                        </div>
+                        {selectedLots[lot.id] && (
+                          <button
+                            type="button"
+                            onClick={() => handleLotQuantityChange(lot.id, '', lot.item.unit_of_measure)}
+                            className="btn-clear-lot"
+                          >
+                            Clear
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           )}
 
           <div className="form-actions">
             <button type="button" onClick={onClose} className="btn btn-secondary">
               Cancel
             </button>
-            <button type="submit" className="btn btn-primary" disabled={submitting || !selectedFormula}>
-              {submitting ? 'Creating...' : 'Create Batch Ticket'}
+            <button 
+              type="submit" 
+              className="btn btn-primary" 
+              disabled={
+                submitting || 
+                (batchType === 'production' && !selectedFormula) ||
+                (batchType === 'repack' && !selectedRepackItem)
+              }
+            >
+              {submitting ? 'Creating...' : `Create ${batchType === 'repack' ? 'Repack' : 'Batch'} Ticket`}
             </button>
           </div>
         </form>

@@ -4,30 +4,16 @@ import Invoices from '../components/finance/Invoices'
 import JournalEntries from '../components/finance/JournalEntries'
 import PricingManagement from '../components/finance/PricingManagement'
 import FinancialReports from '../components/finance/FinancialReports'
-import CreatePurchaseOrder from '../components/finance/CreatePurchaseOrder'
-import PurchaseOrderList from '../components/finance/PurchaseOrderList'
 import CostMasterList from '../components/finance/CostMasterList'
 import './Finance.css'
 
 function Finance() {
-  const [activeTab, setActiveTab] = useState<'ledger' | 'invoices' | 'journal' | 'pricing' | 'reports' | 'purchase-orders' | 'cost-master'>('ledger')
-  const [showCreatePO, setShowCreatePO] = useState(false)
-  const [refreshKey, setRefreshKey] = useState(0)
-
-  const handleCreatePOSuccess = () => {
-    setShowCreatePO(false)
-    setRefreshKey(prev => prev + 1)
-  }
+  const [activeTab, setActiveTab] = useState<'ledger' | 'invoices' | 'journal' | 'pricing' | 'reports' | 'cost-master'>('ledger')
 
   return (
     <div className="finance-page">
       <div className="page-header">
         <h1>Finance</h1>
-        {activeTab === 'purchase-orders' && (
-          <button onClick={() => setShowCreatePO(true)} className="btn btn-primary">
-            Create Purchase Order
-          </button>
-        )}
       </div>
 
       <div className="finance-tabs">
@@ -62,12 +48,6 @@ function Finance() {
           Financial Reports
         </button>
         <button
-          className={`tab-button ${activeTab === 'purchase-orders' ? 'active' : ''}`}
-          onClick={() => setActiveTab('purchase-orders')}
-        >
-          Purchase Orders
-        </button>
-        <button
           className={`tab-button ${activeTab === 'cost-master' ? 'active' : ''}`}
           onClick={() => setActiveTab('cost-master')}
         >
@@ -81,16 +61,8 @@ function Finance() {
         {activeTab === 'journal' && <JournalEntries />}
         {activeTab === 'pricing' && <PricingManagement />}
         {activeTab === 'reports' && <FinancialReports />}
-        {activeTab === 'purchase-orders' && <PurchaseOrderList key={refreshKey} />}
         {activeTab === 'cost-master' && <CostMasterList />}
       </div>
-
-      {showCreatePO && (
-        <CreatePurchaseOrder
-          onClose={() => setShowCreatePO(false)}
-          onSuccess={handleCreatePOSuccess}
-        />
-      )}
     </div>
   )
 }

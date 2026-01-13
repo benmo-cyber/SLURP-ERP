@@ -39,7 +39,14 @@ function InventorySummary() {
       setLots(lotsData)
     } catch (error) {
       console.error('Failed to load inventory:', error)
-      alert('Failed to load inventory data. Make sure the backend server is running.')
+      // Don't show alert for 500 errors - server handles gracefully
+      if (error.response?.status !== 500) {
+        alert('Failed to load inventory data. Make sure the backend server is running.')
+      }
+      // Set empty data for 500 errors
+      if (error.response?.status === 500) {
+        setSummary({ totalItems: 0, totalQuantity: 0, totalValue: 0 })
+      }
     } finally {
       setLoading(false)
     }

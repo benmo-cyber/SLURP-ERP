@@ -59,7 +59,10 @@ function Production() {
       setRefreshKey(prev => prev + 1)
     } catch (error: any) {
       console.error('Failed to reverse batch:', error)
-      alert(error.response?.data?.detail || 'Failed to reverse batch ticket')
+      console.error('Error response:', error.response)
+      console.error('Error data:', error.response?.data)
+      const errorMsg = error.response?.data?.error || error.response?.data?.detail || error.message || 'Failed to reverse batch ticket'
+      alert(errorMsg)
     } finally {
       setBatchToUnfk(null)
     }

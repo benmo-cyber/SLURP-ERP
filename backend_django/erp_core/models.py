@@ -117,6 +117,23 @@ class InvoiceNumberSequence(models.Model):
     class Meta:
         ordering = ['-year_prefix', '-sequence_number']
 
+class CustomerNumberSequence(models.Model):
+    """Sequence tracking for customer IDs (format: 001, 002, etc.)"""
+    sequence_number = models.IntegerField(default=0)
+    last_updated = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        ordering = ['-sequence_number']
+
+class BatchNumberSequence(models.Model):
+    """Sequence tracking for batch numbers (format: BATCH-YYYYMMDD-001)"""
+    date_prefix = models.CharField(max_length=8, unique=True, db_index=True)  # YYYYMMDD
+    sequence_number = models.IntegerField(default=0)
+    last_updated = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        ordering = ['-date_prefix', '-sequence_number']
+
 
 class Lot(models.Model):
     STATUS_CHOICES = [
@@ -166,13 +183,25 @@ class InventoryTransaction(models.Model):
 
 
 class ProductionBatch(models.Model):
+    BATCH_TYPE_CHOICES = [
+        ('production', 'Production'),
+        ('repack', 'Repack'),
+    ]
+    
     batch_number = models.CharField(max_length=100, unique=True, db_index=True)
+    batch_type = models.CharField(max_length=20, choices=BATCH_TYPE_CHOICES, default='production')
     finished_good_item = models.ForeignKey(Item, on_delete=models.CASCADE, related_name='production_batches')
     quantity_produced = models.FloatField()
     quantity_actual = models.FloatField(default=0.0)
     production_date = models.DateTimeField(default=timezone.now)
     closed_date = models.DateTimeField(blank=True, null=True)
-    status = models.CharField(max_length=20, default='open')
+    STATUS_CHOICES = [
+        ('draft', 'Draft'),
+        ('scheduled', 'Scheduled'),
+        ('in_progress', 'In Progress'),
+        ('closed', 'Closed'),
+    ]
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='in_progress')
     variance = models.FloatField(default=0.0)
     wastes = models.FloatField(default=0.0)
     spills = models.FloatField(default=0.0)
@@ -313,18 +342,22 @@ class PurchaseOrderItem(models.Model):
 class SalesOrder(models.Model):
     STATUS_CHOICES = [
         ('draft', 'Draft'),
+        ('allocated', 'Allocated'),
         ('issued', 'Issued'),
+        ('shipped', 'Shipped'),
         ('received', 'Received'),
         ('completed', 'Completed'),
         ('cancelled', 'Cancelled'),
     ]
     
     so_number = models.CharField(max_length=100, unique=True, db_index=True)
-    customer_name = models.CharField(max_length=255)
-    customer_id = models.CharField(max_length=100, blank=True, null=True)
+    customer = models.ForeignKey('Customer', on_delete=models.SET_NULL, blank=True, null=True, related_name='sales_orders', help_text='Customer from customer database')
+    customer_name = models.CharField(max_length=255, help_text='Customer name (legacy field, use customer FK when possible)')
+    customer_legacy_id = models.CharField(max_length=100, blank=True, null=True, help_text='Customer ID (legacy field, deprecated - use customer FK)')
     customer_reference_number = models.CharField(max_length=255, blank=True, null=True, help_text='Customer PO number or reference number')
     order_date = models.DateTimeField(auto_now_add=True)
-    expected_ship_date = models.DateTimeField(blank=True, null=True)
+    expected_ship_date = models.DateTimeField(blank=True, null=True, help_text='Requested ship date')
+    actual_ship_date = models.DateTimeField(blank=True, null=True, help_text='Actual ship date')
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='draft')
     notes = models.TextField(blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -642,4 +675,250 @@ class TemporaryException(models.Model):
     
     def __str__(self):
         return f"{self.vendor.name} - {self.material_commodity}"
+
+
+class Customer(models.Model):
+    """Customer information for sales orders"""
+    customer_id = models.CharField(max_length=100, unique=True, db_index=True, help_text='Unique customer identifier')
+    name = models.CharField(max_length=255)
+    contact_name = models.CharField(max_length=255, blank=True, null=True)
+    email = models.EmailField(blank=True, null=True)
+    phone = models.CharField(max_length=50, blank=True, null=True)
+    address = models.TextField(blank=True, null=True)
+    city = models.CharField(max_length=100, blank=True, null=True)
+    state = models.CharField(max_length=50, blank=True, null=True)
+    zip_code = models.CharField(max_length=20, blank=True, null=True)
+    country = models.CharField(max_length=100, blank=True, null=True, default='USA')
+    payment_terms = models.CharField(max_length=50, blank=True, null=True, help_text='Payment terms (e.g., "Net 30", "Net 15", "Due on Receipt")')
+    notes = models.TextField(blank=True, null=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        ordering = ['name']
+    
+    def __str__(self):
+        return f"{self.customer_id} - {self.name}"
+
+
+class ShipToLocation(models.Model):
+    """Ship-to locations for customers"""
+    customer = models.ForeignKey(Customer, on_delete=models.CASCADE, related_name='ship_to_locations')
+    location_name = models.CharField(max_length=255, help_text='Name/identifier for this location (e.g., "Main Warehouse", "West Coast Facility")')
+    contact_name = models.CharField(max_length=255, blank=True, null=True)
+    email = models.EmailField(blank=True, null=True)
+    phone = models.CharField(max_length=50, blank=True, null=True)
+    address = models.TextField()
+    city = models.CharField(max_length=100)
+    state = models.CharField(max_length=50, blank=True, null=True)
+    zip_code = models.CharField(max_length=20)
+    country = models.CharField(max_length=100, default='USA')
+    is_default = models.BooleanField(default=False, help_text='Default ship-to location for this customer')
+    is_active = models.BooleanField(default=True)
+    notes = models.TextField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        ordering = ['-is_default', 'location_name']
+        verbose_name_plural = 'Ship-to Locations'
+    
+    def __str__(self):
+        return f"{self.customer.name} - {self.location_name}"
+
+
+class CustomerContact(models.Model):
+    """Contacts associated with customers"""
+    customer = models.ForeignKey(Customer, on_delete=models.CASCADE, related_name='contacts')
+    first_name = models.CharField(max_length=100)
+    last_name = models.CharField(max_length=100)
+    title = models.CharField(max_length=100, blank=True, null=True, help_text='Job title/position')
+    email = models.EmailField(blank=True, null=True)
+    phone = models.CharField(max_length=50, blank=True, null=True)
+    mobile = models.CharField(max_length=50, blank=True, null=True)
+    is_primary = models.BooleanField(default=False, help_text='Primary contact for this customer')
+    is_active = models.BooleanField(default=True)
+    notes = models.TextField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        ordering = ['-is_primary', 'last_name', 'first_name']
+    
+    @property
+    def full_name(self):
+        return f"{self.first_name} {self.last_name}"
+    
+    def __str__(self):
+        return f"{self.customer.name} - {self.full_name}"
+
+
+class SalesCall(models.Model):
+    """Sales call history/log"""
+    CALL_TYPE_CHOICES = [
+        ('phone', 'Phone Call'),
+        ('email', 'Email'),
+        ('meeting', 'In-Person Meeting'),
+        ('video', 'Video Call'),
+        ('other', 'Other'),
+    ]
+    
+    customer = models.ForeignKey(Customer, on_delete=models.CASCADE, related_name='sales_calls')
+    contact = models.ForeignKey(CustomerContact, on_delete=models.SET_NULL, blank=True, null=True, related_name='sales_calls')
+    call_date = models.DateTimeField(default=timezone.now)
+    call_type = models.CharField(max_length=20, choices=CALL_TYPE_CHOICES, default='phone')
+    subject = models.CharField(max_length=255, blank=True, null=True)
+    notes = models.TextField(help_text='Call notes, discussion points, outcomes')
+    follow_up_required = models.BooleanField(default=False)
+    follow_up_date = models.DateTimeField(blank=True, null=True)
+    created_by = models.CharField(max_length=255, blank=True, null=True, help_text='User who logged the call')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        ordering = ['-call_date']
+    
+    def __str__(self):
+        return f"{self.customer.name} - {self.call_date.strftime('%Y-%m-%d %H:%M')}"
+
+
+class CustomerForecast(models.Model):
+    """Customer forecasting data"""
+    customer = models.ForeignKey(Customer, on_delete=models.CASCADE, related_name='forecasts')
+    item = models.ForeignKey(Item, on_delete=models.CASCADE, related_name='customer_forecasts')
+    forecast_period = models.CharField(max_length=20, help_text='Period identifier (e.g., "2025-Q1", "2025-01")')
+    forecast_quantity = models.FloatField(help_text='Forecasted quantity')
+    unit_of_measure = models.CharField(max_length=10, choices=Item.UNIT_CHOICES, default='lbs')
+    notes = models.TextField(blank=True, null=True)
+    created_by = models.CharField(max_length=255, blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        ordering = ['-forecast_period', 'item__sku']
+        unique_together = [['customer', 'item', 'forecast_period']]
+    
+    def __str__(self):
+        return f"{self.customer.name} - {self.item.sku} - {self.forecast_period}"
+
+
+class CustomerPricing(models.Model):
+    """Customer-specific pricing for items"""
+    customer = models.ForeignKey(Customer, on_delete=models.CASCADE, related_name='pricing')
+    item = models.ForeignKey(Item, on_delete=models.CASCADE, related_name='customer_pricing')
+    unit_price = models.FloatField()
+    unit_of_measure = models.CharField(max_length=10, choices=Item.UNIT_CHOICES, default='lbs')
+    effective_date = models.DateField()
+    expiry_date = models.DateField(blank=True, null=True)
+    is_active = models.BooleanField(default=True)
+    notes = models.TextField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        ordering = ['customer', 'item', '-effective_date']
+        unique_together = [['customer', 'item', 'effective_date']]
+        indexes = [
+            models.Index(fields=['customer', 'item', 'is_active']),
+        ]
+    
+    def __str__(self):
+        return f"{self.customer.name} - {self.item.sku} - ${self.unit_price}/{self.unit_of_measure}"
+
+
+class VendorPricing(models.Model):
+    """Vendor-specific pricing for items"""
+    vendor_name = models.CharField(max_length=255, db_index=True)
+    vendor_item_number = models.CharField(max_length=255, blank=True, null=True)
+    item = models.ForeignKey(Item, on_delete=models.CASCADE, related_name='vendor_pricing')
+    unit_price = models.FloatField()
+    unit_of_measure = models.CharField(max_length=10, choices=Item.UNIT_CHOICES, default='lbs')
+    effective_date = models.DateField()
+    expiry_date = models.DateField(blank=True, null=True)
+    is_active = models.BooleanField(default=True)
+    notes = models.TextField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        ordering = ['vendor_name', 'item', '-effective_date']
+        unique_together = [['vendor_name', 'item', 'effective_date']]
+        indexes = [
+            models.Index(fields=['vendor_name', 'item', 'is_active']),
+        ]
+    
+    def __str__(self):
+        return f"{self.vendor_name} - {self.item.sku} - ${self.unit_price}/{self.unit_of_measure}"
+
+
+class SalesOrderLot(models.Model):
+    """Link lots to sales order items for allocation"""
+    sales_order_item = models.ForeignKey(SalesOrderItem, on_delete=models.CASCADE, related_name='allocated_lots')
+    lot = models.ForeignKey(Lot, on_delete=models.CASCADE, related_name='sales_order_allocations')
+    quantity_allocated = models.FloatField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        ordering = ['sales_order_item', 'lot']
+        unique_together = [['sales_order_item', 'lot']]
+    
+    def __str__(self):
+        return f"{self.sales_order_item.sales_order.so_number} - {self.lot.lot_number} - {self.quantity_allocated}"
+
+
+class Invoice(models.Model):
+    """Invoice for sales orders"""
+    STATUS_CHOICES = [
+        ('draft', 'Draft'),
+        ('sent', 'Sent'),
+        ('paid', 'Paid'),
+        ('overdue', 'Overdue'),
+        ('cancelled', 'Cancelled'),
+    ]
+    
+    invoice_number = models.CharField(max_length=100, unique=True, db_index=True)
+    sales_order = models.ForeignKey(SalesOrder, on_delete=models.CASCADE, related_name='invoices')
+    invoice_date = models.DateField()
+    due_date = models.DateField(help_text='Calculated from invoice_date + payment_terms')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='draft')
+    subtotal = models.FloatField(default=0.0)
+    freight = models.FloatField(default=0.0)
+    tax = models.FloatField(default=0.0)
+    discount = models.FloatField(default=0.0)
+    grand_total = models.FloatField(default=0.0)
+    notes = models.TextField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        ordering = ['-invoice_date', '-created_at']
+    
+    def __str__(self):
+        return f"{self.invoice_number} - {self.sales_order.so_number}"
+    
+    @property
+    def days_aging(self):
+        """Calculate days aging (overdue) from due date"""
+        from django.utils import timezone
+        if self.status == 'paid':
+            return 0
+        today = timezone.now().date()
+        return (today - self.due_date).days
+
+
+class InvoiceItem(models.Model):
+    """Line items for invoices"""
+    invoice = models.ForeignKey(Invoice, on_delete=models.CASCADE, related_name='items')
+    sales_order_item = models.ForeignKey(SalesOrderItem, on_delete=models.CASCADE, related_name='invoice_items')
+    description = models.CharField(max_length=255)
+    quantity = models.FloatField()
+    unit_price = models.FloatField()
+    total = models.FloatField()
+    
+    class Meta:
+        ordering = ['id']
+    
+    def __str__(self):
+        return f"{self.invoice.invoice_number} - {self.description}"
 
