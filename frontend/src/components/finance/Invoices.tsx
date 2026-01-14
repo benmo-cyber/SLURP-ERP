@@ -11,6 +11,7 @@ interface Invoice {
     id: number
     so_number: string
     customer_name: string
+    tracking_number?: string
     customer?: {
       payment_terms?: string
     }
@@ -55,7 +56,13 @@ function Invoices() {
         params.status = statusFilter
       }
       const data = await getInvoices(params)
-      setInvoices(data)
+      // Sort invoices: draft first, then by date descending
+      const sorted = [...data].sort((a: Invoice, b: Invoice) => {
+        if (a.status === 'draft' && b.status !== 'draft') return -1
+        if (a.status !== 'draft' && b.status === 'draft') return 1
+        return new Date(b.invoice_date).getTime() - new Date(a.invoice_date).getTime()
+      })
+      setInvoices(sorted)
     } catch (error) {
       console.error('Failed to load invoices:', error)
       alert('Failed to load invoices')
@@ -121,9 +128,18 @@ function Invoices() {
           >
             {showAgingReport ? 'Hide' : 'Show'} Aging Report
           </button>
-          <button onClick={() => setShowCreate(true)} className="btn btn-primary">
+          <button 
+            onClick={() => setShowCreate(true)} 
+            className="btn btn-primary"
+            title="Create new invoice or review draft invoices from shipped orders"
+          >
             + Create Invoice
           </button>
+          {invoices.filter((inv: Invoice) => inv.status === 'draft').length > 0 && (
+            <span className="draft-count-badge">
+              {invoices.filter((inv: Invoice) => inv.status === 'draft').length} Draft{invoices.filter((inv: Invoice) => inv.status === 'draft').length !== 1 ? 's' : ''}
+            </span>
+          )}
         </div>
       </div>
 
@@ -189,6 +205,7 @@ function Invoices() {
               <th>Invoice Number</th>
               <th>Sales Order</th>
               <th>Customer</th>
+              <th>Tracking Number</th>
               <th>Invoice Date</th>
               <th>Due Date</th>
               <th>Payment Terms</th>
@@ -200,16 +217,20 @@ function Invoices() {
           <tbody>
             {invoices.length === 0 ? (
               <tr>
-                <td colSpan={9} className="empty-state">
+                <td colSpan={10} className="empty-state">
                   No invoices found.
                 </td>
               </tr>
             ) : (
               invoices.map((invoice) => (
-                <tr key={invoice.id}>
+                <tr 
+                  key={invoice.id}
+                  className={invoice.status === 'draft' ? 'draft-invoice' : ''}
+                >
                   <td className="invoice-number">{invoice.invoice_number}</td>
                   <td>{invoice.sales_order?.so_number || '-'}</td>
                   <td>{invoice.sales_order?.customer_name || '-'}</td>
+                  <td>{invoice.sales_order?.tracking_number || '-'}</td>
                   <td>{new Date(invoice.invoice_date).toLocaleDateString()}</td>
                   <td>{new Date(invoice.due_date).toLocaleDateString()}</td>
                   <td>{invoice.sales_order?.customer?.payment_terms || '-'}</td>
@@ -242,18 +263,20 @@ function Invoices() {
                         className="status-select"
                       >
                         <option value="draft">Draft</option>
+                        <option value="issued">Issued</option>
                         <option value="sent">Sent</option>
                         <option value="paid">Paid</option>
                         <option value="overdue">Overdue</option>
                         <option value="cancelled">Cancelled</option>
                       </select>
                     ) : (
-                      <span
+                      <span 
                         className={`status-badge status-${invoice.status} clickable`}
                         onClick={() => {
                           setEditingStatus(invoice.id)
                           setNewStatus(invoice.status)
                         }}
+                        title={invoice.status === 'draft' ? 'Click to change status (e.g., to Issued)' : 'Click to change status'}
                       >
                         {invoice.status}
                       </span>

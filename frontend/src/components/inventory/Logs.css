@@ -1,0 +1,281 @@
+.logs-container {
+  padding: 20px;
+  max-width: 1600px;
+  margin: 0 auto;
+}
+
+.logs-header {
+  margin-bottom: 24px;
+}
+
+.logs-header h2 {
+  margin: 0 0 8px 0;
+  color: #333;
+  font-size: 24px;
+}
+
+.logs-header .subtitle {
+  margin: 0;
+  color: #666;
+  font-size: 14px;
+}
+
+.log-type-tabs {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 24px;
+  border-bottom: 2px solid #e0e0e0;
+}
+
+.log-type-tab {
+  padding: 12px 24px;
+  border: none;
+  background: transparent;
+  font-size: 16px;
+  font-weight: 600;
+  color: #666;
+  cursor: pointer;
+  border-bottom: 3px solid transparent;
+  transition: all 0.2s;
+}
+
+.log-type-tab:hover {
+  color: #4a90e2;
+  background: #f5f5f5;
+}
+
+.log-type-tab.active {
+  color: #4a90e2;
+  border-bottom-color: #4a90e2;
+}
+
+.filters-section {
+  background: #f9f9f9;
+  padding: 20px;
+  border-radius: 8px;
+  margin-bottom: 24px;
+}
+
+.filters-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.filter-group {
+  display: flex;
+  flex-direction: column;
+}
+
+.filter-group label {
+  font-weight: 600;
+  margin-bottom: 6px;
+  color: #333;
+  font-size: 13px;
+}
+
+.filter-group input,
+.filter-group select {
+  padding: 8px 12px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 14px;
+}
+
+.filter-group input:focus,
+.filter-group select:focus {
+  outline: none;
+  border-color: #4a90e2;
+  box-shadow: 0 0 0 2px rgba(74, 144, 226, 0.1);
+}
+
+.filter-actions {
+  display: flex;
+  gap: 12px;
+}
+
+.btn-apply,
+.btn-clear {
+  padding: 10px 20px;
+  border: none;
+  border-radius: 4px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btn-apply {
+  background: #4a90e2;
+  color: white;
+}
+
+.btn-apply:hover {
+  background: #357abd;
+}
+
+.btn-clear {
+  background: #e0e0e0;
+  color: #333;
+}
+
+.btn-clear:hover {
+  background: #d0d0d0;
+}
+
+.logs-table-wrapper {
+  overflow-x: auto;
+  background: white;
+  border-radius: 8px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.logs-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.logs-table thead {
+  background: #f5f5f5;
+  position: sticky;
+  top: 0;
+}
+
+.logs-table th {
+  padding: 12px;
+  text-align: left;
+  font-weight: 600;
+  color: #333;
+  border-bottom: 2px solid #ddd;
+  white-space: nowrap;
+}
+
+.logs-table td {
+  padding: 12px;
+  border-bottom: 1px solid #eee;
+  color: #555;
+}
+
+.logs-table tbody tr:hover {
+  background: #f9f9f9;
+}
+
+.logs-table .no-data {
+  text-align: center;
+  padding: 40px;
+  color: #999;
+  font-style: italic;
+}
+
+.quantity-used {
+  color: #d32f2f;
+  font-weight: 600;
+}
+
+.negative {
+  color: #d32f2f;
+  font-weight: 600;
+}
+
+.zero {
+  color: #f57c00;
+  font-weight: 600;
+}
+
+.method-badge {
+  display: inline-block;
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.badge-production {
+  background: #e3f2fd;
+  color: #1976d2;
+}
+
+.badge-sales {
+  background: #f3e5f5;
+  color: #7b1fa2;
+}
+
+.badge-adjustment {
+  background: #fff3e0;
+  color: #e65100;
+}
+
+.badge-manual {
+  background: #fce4ec;
+  color: #c2185b;
+}
+
+.badge-reversal {
+  background: #e8f5e9;
+  color: #388e3c;
+}
+
+.badge-created {
+  background: #e8f5e9;
+  color: #388e3c;
+}
+
+.badge-updated {
+  background: #e3f2fd;
+  color: #1976d2;
+}
+
+.badge-check-in {
+  background: #fff3e0;
+  color: #e65100;
+}
+
+.badge-partial {
+  background: #fff9c4;
+  color: #f57f17;
+}
+
+.badge-cancelled {
+  background: #ffebee;
+  color: #c62828;
+}
+
+.badge-completed {
+  background: #e8f5e9;
+  color: #388e3c;
+}
+
+.badge-default {
+  background: #f5f5f5;
+  color: #666;
+}
+
+.notes-cell {
+  max-width: 300px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.logs-summary {
+  margin-top: 20px;
+  padding: 12px;
+  background: #f9f9f9;
+  border-radius: 4px;
+  text-align: right;
+  color: #666;
+}
+
+.logs-summary strong {
+  color: #333;
+}
+
+.loading {
+  text-align: center;
+  padding: 40px;
+  color: #666;
+  font-size: 16px;
+}

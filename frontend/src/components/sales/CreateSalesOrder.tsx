@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { createSalesOrder } from '../../api/salesOrders'
+import { createSalesOrder, updateSalesOrder, getSalesOrder } from '../../api/salesOrders'
 import { getItems } from '../../api/inventory'
 import { getCustomers, getShipToLocations, getCustomerPricing } from '../../api/customers'
 import { formatNumber, formatCurrency } from '../../utils/formatNumber'
@@ -59,9 +59,10 @@ interface SOItem {
 interface CreateSalesOrderProps {
   onClose: () => void
   onSuccess: () => void
+  salesOrder?: any // Optional: if provided, component works in edit mode
 }
 
-function CreateSalesOrder({ onClose, onSuccess }: CreateSalesOrderProps) {
+function CreateSalesOrder({ onClose, onSuccess, salesOrder }: CreateSalesOrderProps) {
   const [items, setItems] = useState<Item[]>([])
   const [customers, setCustomers] = useState<Customer[]>([])
   const [shipToLocations, setShipToLocations] = useState<ShipToLocation[]>([])
@@ -97,7 +98,10 @@ function CreateSalesOrder({ onClose, onSuccess }: CreateSalesOrderProps) {
   useEffect(() => {
     loadItems()
     loadCustomers()
-  }, [])
+    if (salesOrder) {
+      loadSalesOrderData()
+    }
+  }, [salesOrder])
 
   useEffect(() => {
     if (selectedCustomerId) {
@@ -146,6 +150,65 @@ function CreateSalesOrder({ onClose, onSuccess }: CreateSalesOrderProps) {
       setCustomers(data)
     } catch (error) {
       console.error('Failed to load customers:', error)
+    }
+  }
+
+  const loadSalesOrderData = async () => {
+    if (!salesOrder) return
+    
+    try {
+      setLoading(true)
+      const orderData = await getSalesOrder(salesOrder.id)
+      
+      // Set customer
+      if (orderData.customer) {
+        setSelectedCustomerId(orderData.customer.id)
+      }
+      
+      // Set ship-to location
+      if (orderData.ship_to_location) {
+        setSelectedShipToId(orderData.ship_to_location.id)
+      }
+      
+      // Set form data
+      setFormData({
+        customer_reference_number: orderData.customer_reference_number || '',
+        customer_name: orderData.customer_name || '',
+        customer_id: orderData.customer_id || '',
+        customer_address: orderData.customer_address || '',
+        customer_city: orderData.customer_city || '',
+        customer_state: orderData.customer_state || '',
+        customer_zip: orderData.customer_zip || '',
+        customer_country: orderData.customer_country || '',
+        customer_phone: orderData.customer_phone || '',
+        requested_ship_date: orderData.expected_ship_date ? orderData.expected_ship_date.split('T')[0] : '',
+        subtotal: orderData.subtotal || 0,
+        freight: orderData.freight || 0,
+        misc: orderData.misc || 0,
+        prepaid: orderData.prepaid || 0,
+        discount: orderData.discount || 0,
+        grand_total: orderData.grand_total || 0,
+        notes: orderData.notes || '',
+      })
+      
+      // Set items
+      if (orderData.items && orderData.items.length > 0) {
+        const formattedItems = orderData.items.map((item: any) => ({
+          item_id: item.item?.id || null,
+          vendor_part_number: item.item?.sku || '',
+          description: item.item?.name || '',
+          quantity_ordered: item.quantity_ordered || '',
+          unit: item.item?.unit_of_measure || '',
+          unit_price: item.unit_price || '',
+          notes: item.notes || '',
+        }))
+        setSoItems(formattedItems)
+      }
+    } catch (error) {
+      console.error('Failed to load sales order data:', error)
+      alert('Failed to load sales order data')
+    } finally {
+      setLoading(false)
     }
   }
 
@@ -382,12 +445,20 @@ function CreateSalesOrder({ onClose, onSuccess }: CreateSalesOrderProps) {
         status: 'draft',
       }
 
-      await createSalesOrder(payload)
+      if (salesOrder) {
+        // Update existing sales order
+        const response = await updateSalesOrder(salesOrder.id, payload)
+        console.log('Sales order updated successfully:', response)
+      } else {
+        // Create new sales order
+        const response = await createSalesOrder(payload)
+        console.log('Sales order created successfully:', response)
+      }
       onSuccess()
       onClose()
     } catch (error: any) {
-      console.error('Failed to create sales order:', error)
-      alert(error.response?.data?.detail || error.response?.data?.message || 'Failed to create sales order')
+      console.error(`Failed to ${salesOrder ? 'update' : 'create'} sales order:`, error)
+      alert(error.response?.data?.detail || error.response?.data?.message || `Failed to ${salesOrder ? 'update' : 'create'} sales order`)
     } finally {
       setLoading(false)
     }
@@ -397,7 +468,7 @@ function CreateSalesOrder({ onClose, onSuccess }: CreateSalesOrderProps) {
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal-content create-so-modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
-          <h2>Create Sales Order from Customer PO</h2>
+          <h2>{salesOrder ? 'Edit Sales Order' : 'Create Sales Order from Customer PO'}</h2>
           <button className="close-button" onClick={onClose}>×</button>
         </div>
 
@@ -710,7 +781,7 @@ function CreateSalesOrder({ onClose, onSuccess }: CreateSalesOrderProps) {
               Cancel
             </button>
             <button type="submit" className="btn btn-primary" disabled={loading}>
-              {loading ? 'Creating...' : 'Create Sales Order'}
+              {loading ? (salesOrder ? 'Updating...' : 'Creating...') : (salesOrder ? 'Update Sales Order' : 'Create Sales Order')}
             </button>
           </div>
         </form>

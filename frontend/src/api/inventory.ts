@@ -164,3 +164,139 @@ export const getLotsBySkuVendor = async (sku: string, vendor?: string) => {
   const response = await api.get(`/lots/lots_by_sku_vendor/?${params}`)
   return response.data
 }
+
+// Lot Depletion Logs API
+export interface LotDepletionLog {
+  id: number
+  lot: number
+  lot_number: string
+  item_sku: string
+  item_name: string
+  vendor?: string
+  initial_quantity: number
+  quantity_before: number
+  quantity_used: number
+  final_quantity: number
+  depletion_method: 'production' | 'sales' | 'adjustment' | 'manual' | 'reversal'
+  depletion_method_display: string
+  reference_number?: string
+  reference_type?: string
+  transaction_id?: number
+  batch_id?: number
+  sales_order_id?: number
+  notes?: string
+  depleted_at: string
+}
+
+export const getLotDepletionLogs = async (filters?: {
+  lot_number?: string
+  sku?: string
+  method?: string
+  date_from?: string
+  date_to?: string
+}) => {
+  const params = new URLSearchParams()
+  if (filters?.lot_number) params.append('lot_number', filters.lot_number)
+  if (filters?.sku) params.append('sku', filters.sku)
+  if (filters?.method) params.append('method', filters.method)
+  if (filters?.date_from) params.append('date_from', filters.date_from)
+  if (filters?.date_to) params.append('date_to', filters.date_to)
+  
+  const url = `/lot-depletion-logs/${params.toString() ? `?${params}` : ''}`
+  const response = await api.get(url)
+  return response.data.results || response.data
+}
+
+// Purchase Order Logs API
+export interface PurchaseOrderLog {
+  id: number
+  purchase_order: number
+  po_number: string
+  action: 'created' | 'updated' | 'check_in' | 'partial_check_in' | 'cancelled' | 'completed'
+  action_display: string
+  vendor_name?: string
+  vendor_customer_name?: string
+  po_date?: string
+  required_date?: string
+  status?: string
+  carrier?: string
+  lot_number?: string
+  item_sku?: string
+  item_name?: string
+  quantity_received?: number
+  received_date?: string
+  po_received_date?: string
+  total_items: number
+  total_quantity_ordered: number
+  total_quantity_received: number
+  notes?: string
+  logged_at: string
+  logged_by?: string
+}
+
+export const getPurchaseOrderLogs = async (filters?: {
+  po_number?: string
+  vendor?: string
+  action?: string
+  lot_number?: string
+  date_from?: string
+  date_to?: string
+}) => {
+  const params = new URLSearchParams()
+  if (filters?.po_number) params.append('po_number', filters.po_number)
+  if (filters?.vendor) params.append('vendor', filters.vendor)
+  if (filters?.action) params.append('action', filters.action)
+  if (filters?.lot_number) params.append('lot_number', filters.lot_number)
+  if (filters?.date_from) params.append('date_from', filters.date_from)
+  if (filters?.date_to) params.append('date_to', filters.date_to)
+  
+  const url = `/purchase-order-logs/${params.toString() ? `?${params}` : ''}`
+  const response = await api.get(url)
+  return response.data.results || response.data
+}
+
+// Production Logs API
+export interface ProductionLog {
+  id: number
+  batch: number
+  batch_number: string
+  batch_type: 'production' | 'repack'
+  finished_good_sku: string
+  finished_good_name: string
+  quantity_produced: number
+  quantity_actual: number
+  variance: number
+  wastes: number
+  spills: number
+  production_date: string
+  closed_date: string
+  input_materials?: string
+  input_lots?: string
+  output_lot_number?: string
+  output_quantity?: number
+  qc_parameters?: string
+  qc_actual?: string
+  qc_initials?: string
+  notes?: string
+  closed_by?: string
+  logged_at: string
+}
+
+export const getProductionLogs = async (filters?: {
+  batch_number?: string
+  sku?: string
+  batch_type?: string
+  date_from?: string
+  date_to?: string
+}) => {
+  const params = new URLSearchParams()
+  if (filters?.batch_number) params.append('batch_number', filters.batch_number)
+  if (filters?.sku) params.append('sku', filters.sku)
+  if (filters?.batch_type) params.append('batch_type', filters.batch_type)
+  if (filters?.date_from) params.append('date_from', filters.date_from)
+  if (filters?.date_to) params.append('date_to', filters.date_to)
+  
+  const url = `/production-logs/${params.toString() ? `?${params}` : ''}`
+  const response = await api.get(url)
+  return response.data.results || response.data
+}

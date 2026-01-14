@@ -77,10 +77,12 @@ function CheckOutModal({ onClose, onSuccess }: CheckOutModalProps) {
   const [rawMaterialLots, setRawMaterialLots] = useState<Map<number, Lot[]>>(new Map())
   const [allocations, setAllocations] = useState<Map<number, ItemAllocation>>(new Map())
   const [shipDate, setShipDate] = useState<string>('')
+  const [trackingNumber, setTrackingNumber] = useState<string>('')
   const [unitDisplay, setUnitDisplay] = useState<'lbs' | 'kg'>('lbs')
   const [saving, setSaving] = useState(false)
   const [shipping, setShipping] = useState(false)
   const [cancelling, setCancelling] = useState(false)
+  const [showBOL, setShowBOL] = useState(false)
 
   useEffect(() => {
     loadSalesOrders()
@@ -307,16 +309,27 @@ function CheckOutModal({ onClose, onSuccess }: CheckOutModalProps) {
       return
     }
 
-    // Validate all items are allocated
-    for (const item of salesOrder.items) {
-      const totalAllocated = getTotalAllocated(item.id)
-      if (totalAllocated < item.quantity_ordered) {
-        alert(`Item ${item.item.name} is not fully allocated. Allocated: ${totalAllocated}, Ordered: ${item.quantity_ordered}`)
-        return
-      }
+    if (!trackingNumber || trackingNumber.trim() === '') {
+      alert('Please enter a tracking number')
+      return
     }
 
-    if (!confirm('Are you sure you want to ship this order? This will create an invoice.')) {
+    // Validate at least some items are allocated (partial shipments allowed)
+    let hasAllocations = false
+    for (const item of salesOrder.items) {
+      const totalAllocated = getTotalAllocated(item.id)
+      if (totalAllocated > 0) {
+        hasAllocations = true
+        break
+      }
+    }
+    
+    if (!hasAllocations) {
+      alert('No items are allocated. Please allocate material before shipping.')
+      return
+    }
+
+    if (!confirm('Are you sure you want to ship this order? This will create an invoice and mark the order as shipped.')) {
       return
     }
 
@@ -324,7 +337,8 @@ function CheckOutModal({ onClose, onSuccess }: CheckOutModalProps) {
       setShipping(true)
       await shipSalesOrder(salesOrder.id, {
         ship_date: shipDate,
-        invoice_date: shipDate
+        invoice_date: shipDate,
+        tracking_number: trackingNumber.trim()
       })
       alert('Order shipped successfully! Invoice created.')
       onSuccess()
@@ -334,6 +348,38 @@ function CheckOutModal({ onClose, onSuccess }: CheckOutModalProps) {
       alert(`Failed to ship order: ${error.response?.data?.error || error.message}`)
     } finally {
       setShipping(false)
+    }
+  }
+
+  const handlePrintBOL = async () => {
+    if (!salesOrder) return
+    
+    try {
+      // Generate packing list from backend
+      const response = await fetch(`http://localhost:8000/api/sales-orders/${salesOrder.id}/packing-list/`, {
+        method: 'GET',
+        headers: {
+          'Accept': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        },
+      })
+      
+      if (!response.ok) {
+        throw new Error('Failed to generate packing list')
+      }
+      
+      // Download the file
+      const blob = await response.blob()
+      const url = window.URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `Packing_List_${salesOrder.so_number}.docx`
+      document.body.appendChild(a)
+      a.click()
+      window.URL.revokeObjectURL(url)
+      document.body.removeChild(a)
+    } catch (error: any) {
+      console.error('Failed to generate packing list:', error)
+      alert(`Failed to generate packing list: ${error.message}`)
     }
   }
 
@@ -518,16 +564,45 @@ function CheckOutModal({ onClose, onSuccess }: CheckOutModalProps) {
                 })}
               </div>
 
-              {/* Step 3: Ship Date */}
+              {/* Step 3: Ship Date and Tracking */}
               <div className="checkout-step">
-                <h3>Step 3: Ship Date</h3>
-                <input
-                  type="date"
-                  value={shipDate}
-                  onChange={(e) => setShipDate(e.target.value)}
-                  className="form-input"
-                />
+                <h3>Step 3: Ship Date and Tracking</h3>
+                <div className="form-group">
+                  <label>Ship Date *</label>
+                  <input
+                    type="date"
+                    value={shipDate}
+                    onChange={(e) => setShipDate(e.target.value)}
+                    className="form-input"
+                    required
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Tracking Number *</label>
+                  <input
+                    type="text"
+                    value={trackingNumber}
+                    onChange={(e) => setTrackingNumber(e.target.value)}
+                    className="form-input"
+                    placeholder="Enter tracking number"
+                    required
+                  />
+                </div>
               </div>
+
+              {/* Step 4: Packing List */}
+              {salesOrder.status === 'ready_for_shipment' && (
+                <div className="checkout-step">
+                  <h3>Step 4: Packing List</h3>
+                  <button
+                    type="button"
+                    onClick={handlePrintBOL}
+                    className="btn btn-secondary"
+                  >
+                    Generate & Print Packing List
+                  </button>
+                </div>
+              )}
 
               {/* Actions */}
               <div className="checkout-actions">
@@ -540,10 +615,10 @@ function CheckOutModal({ onClose, onSuccess }: CheckOutModalProps) {
                 </button>
                 <button
                   onClick={handleShipOrder}
-                  disabled={shipping || !shipDate}
+                  disabled={shipping || !shipDate || !trackingNumber}
                   className="btn btn-primary"
                 >
-                  {shipping ? 'Shipping...' : 'Ship Order'}
+                  {shipping ? 'Shipping...' : 'Ship Order & Create Invoice'}
                 </button>
                 <button
                   onClick={handleCancelOrder}

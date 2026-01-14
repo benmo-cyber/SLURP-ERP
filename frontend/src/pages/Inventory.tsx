@@ -6,10 +6,11 @@ import ReverseCheckIn from '../components/inventory/ReverseCheckIn'
 import ItemsList from '../components/inventory/ItemsList'
 import PurchaseOrderList from '../components/inventory/PurchaseOrderList'
 import CreatePurchaseOrder from '../components/inventory/CreatePurchaseOrder'
+import Logs from '../components/inventory/Logs'
 import './Inventory.css'
 
 function Inventory() {
-  const [activeTab, setActiveTab] = useState<'inventory' | 'items' | 'purchase-orders'>('inventory')
+  const [activeTab, setActiveTab] = useState<'inventory' | 'items' | 'purchase-orders' | 'logs'>('inventory')
   const [showCheckIn, setShowCheckIn] = useState(false)
   const [showCreateItem, setShowCreateItem] = useState(false)
   const [showReverseCheckIn, setShowReverseCheckIn] = useState(false)
@@ -55,6 +56,12 @@ function Inventory() {
         >
           Purchase Orders
         </button>
+        <button
+          className={`tab-button ${activeTab === 'logs' ? 'active' : ''}`}
+          onClick={() => setActiveTab('logs')}
+        >
+          Logs
+        </button>
       </div>
       <div className="inventory-actions">
         {activeTab === 'inventory' && (
@@ -81,6 +88,7 @@ function Inventory() {
         {activeTab === 'inventory' && <InventoryTable key={refreshKey} />}
         {activeTab === 'items' && <ItemsList />}
         {activeTab === 'purchase-orders' && <PurchaseOrderList key={refreshKey} />}
+        {activeTab === 'logs' && <Logs />}
       </div>
 
       {showCheckIn && (

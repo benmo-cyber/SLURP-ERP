@@ -8,7 +8,7 @@ from django.db import migrations
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('erp_core', '0037_batchnumbersequence'),
+        ('erp_core', '0034_add_checkout_workflow_fields'),
     ]
 
     operations = [

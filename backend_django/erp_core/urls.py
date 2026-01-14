@@ -8,7 +8,8 @@ from .views import (
     CostMasterViewSet, AccountViewSet, FinishedProductSpecificationViewSet,
     InvoiceViewSet, CalendarEventsViewSet, CustomerViewSet, CustomerPricingViewSet, VendorPricingViewSet,
     ShipToLocationViewSet, CustomerContactViewSet, SalesCallViewSet,
-    CustomerForecastViewSet, CustomerUsageViewSet
+    CustomerForecastViewSet, CustomerUsageViewSet, LotDepletionLogViewSet,
+    PurchaseOrderLogViewSet, ProductionLogViewSet
 )
 
 router = DefaultRouter()
@@ -36,6 +37,9 @@ router.register(r'customer-contacts', CustomerContactViewSet)
 router.register(r'sales-calls', SalesCallViewSet)
 router.register(r'customer-forecasts', CustomerForecastViewSet)
 router.register(r'customer-usage', CustomerUsageViewSet, basename='customer-usage')
+router.register(r'lot-depletion-logs', LotDepletionLogViewSet, basename='lot-depletion-logs')
+router.register(r'purchase-order-logs', PurchaseOrderLogViewSet, basename='purchase-order-logs')
+router.register(r'production-logs', ProductionLogViewSet, basename='production-logs')
 
 urlpatterns = [
     path('', include(router.urls)),

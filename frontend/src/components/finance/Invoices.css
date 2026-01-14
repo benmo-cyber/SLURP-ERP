@@ -92,6 +92,11 @@
   color: white;
 }
 
+.status-issued {
+  background-color: #17a2b8;
+  color: white;
+}
+
 .status-sent {
   background-color: #3498db;
   color: white;
@@ -269,6 +274,25 @@
   font-size: 0.85rem;
   background: white;
   cursor: pointer;
+}
+
+.draft-invoice {
+  background-color: #fff3cd !important;
+  border-left: 4px solid #ffc107;
+}
+
+.draft-invoice:hover {
+  background-color: #ffe69c !important;
+}
+
+.draft-count-badge {
+  display: inline-block;
+  padding: 0.5rem 1rem;
+  background-color: #ffc107;
+  color: #000;
+  border-radius: 4px;
+  font-weight: 600;
+  margin-left: 10px;
 }
 
 

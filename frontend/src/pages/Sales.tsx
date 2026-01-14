@@ -2,6 +2,7 @@ import { useState } from 'react'
 import CreateSalesOrder from '../components/sales/CreateSalesOrder'
 import CustomerManagement from '../components/sales/CustomerManagement'
 import CheckOutModal from '../components/sales/CheckOutModal'
+import SalesOrdersList from '../components/sales/SalesOrdersList'
 import Calendar from '../components/calendar/Calendar'
 import CRMDashboard from '../components/sales/CRMDashboard'
 import './Sales.css'
@@ -9,11 +10,25 @@ import './Sales.css'
 function Sales() {
   const [activeTab, setActiveTab] = useState<'orders' | 'calendar' | 'crm'>('crm')
   const [showCreateSO, setShowCreateSO] = useState(false)
+  const [editingSalesOrder, setEditingSalesOrder] = useState<any>(null)
   const [showCustomerManagement, setShowCustomerManagement] = useState(false)
   const [showCheckOut, setShowCheckOut] = useState(false)
+  const [refreshKey, setRefreshKey] = useState(0)
 
   const handleCreateSOSuccess = () => {
     setShowCreateSO(false)
+    setEditingSalesOrder(null)
+    setRefreshKey(prev => prev + 1)
+  }
+
+  const handleEditSalesOrder = (order: any) => {
+    setEditingSalesOrder(order)
+    setShowCreateSO(true)
+  }
+
+  const handleCheckOutSuccess = () => {
+    setShowCheckOut(false)
+    setRefreshKey(prev => prev + 1)
   }
 
   return (
@@ -62,17 +77,22 @@ function Sales() {
         {activeTab === 'crm' && <CRMDashboard />}
         {activeTab === 'calendar' && <Calendar />}
         {activeTab === 'orders' && (
-          <div>
-            {/* Sales orders content will go here */}
-          </div>
+          <SalesOrdersList 
+            refreshKey={refreshKey} 
+            onEditOrder={handleEditSalesOrder}
+          />
         )}
       </div>
 
       {/* Modals - shown regardless of active tab */}
       {showCreateSO && (
         <CreateSalesOrder
-          onClose={() => setShowCreateSO(false)}
+          onClose={() => {
+            setShowCreateSO(false)
+            setEditingSalesOrder(null)
+          }}
           onSuccess={handleCreateSOSuccess}
+          salesOrder={editingSalesOrder}
         />
       )}
       {showCustomerManagement && (
@@ -83,9 +103,7 @@ function Sales() {
       {showCheckOut && (
         <CheckOutModal
           onClose={() => setShowCheckOut(false)}
-          onSuccess={() => {
-            setShowCheckOut(false)
-          }}
+          onSuccess={handleCheckOutSuccess}
         />
       )}
     </div>

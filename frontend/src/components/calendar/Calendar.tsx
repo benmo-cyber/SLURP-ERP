@@ -28,6 +28,7 @@ function Calendar() {
   const [viewMode, setViewMode] = useState<'month' | 'week' | 'day'>('month')
   const [selectedEventTypes, setSelectedEventTypes] = useState<string[]>(['shipments', 'raw_materials', 'production'])
   const [selectedEvent, setSelectedEvent] = useState<CalendarEvent | null>(null)
+  const [selectedDate, setSelectedDate] = useState<Date | null>(null)
 
   useEffect(() => {
     loadEvents()
@@ -114,6 +115,24 @@ function Calendar() {
     }
   }
 
+  const getEventsForSelectedDate = (): CalendarEvent[] => {
+    if (!selectedDate) return []
+    const dateStr = selectedDate.toISOString().split('T')[0]
+    const dayEvents = events.filter(event => event.date === dateStr)
+    
+    // Sort by event type: shipment, raw_material, production
+    const typeOrder = { 'shipment': 0, 'raw_material': 1, 'production': 2 }
+    return dayEvents.sort((a, b) => {
+      const orderA = typeOrder[a.type as keyof typeof typeOrder] ?? 999
+      const orderB = typeOrder[b.type as keyof typeof typeOrder] ?? 999
+      return orderA - orderB
+    })
+  }
+
+  const handleDateClick = (date: Date) => {
+    setSelectedDate(date)
+  }
+
   const navigateDate = (direction: 'prev' | 'next') => {
     const newDate = new Date(currentDate)
     if (viewMode === 'month') {
@@ -173,10 +192,11 @@ function Calendar() {
               return (
                 <div
                   key={dayIndex}
-                  className={`calendar-day ${!isCurrentMonth ? 'other-month' : ''} ${isToday ? 'today' : ''}`}
+                  className={`calendar-day ${!isCurrentMonth ? 'other-month' : ''} ${isToday ? 'today' : ''} ${dayEvents.length > 0 ? 'has-events' : ''}`}
+                  onClick={() => handleDateClick(day)}
                 >
                   <div className="day-number">{day.getDate()}</div>
-                  <div className="day-events">
+                  <div className="day-events" onClick={(e) => e.stopPropagation()}>
                     {dayEvents.slice(0, 3).map(event => (
                       <div
                         key={event.id}
@@ -219,14 +239,18 @@ function Calendar() {
             const isToday = day.toDateString() === new Date().toDateString()
 
             return (
-              <div key={index} className={`week-day-column ${isToday ? 'today' : ''}`}>
+              <div 
+                key={index} 
+                className={`week-day-column ${isToday ? 'today' : ''} ${dayEvents.length > 0 ? 'has-events' : ''}`}
+                onClick={() => handleDateClick(day)}
+              >
                 <div className="week-day-header">
                   <div className="week-day-name">
                     {day.toLocaleDateString('en-US', { weekday: 'short' })}
                   </div>
                   <div className="week-day-number">{day.getDate()}</div>
                 </div>
-                <div className="week-day-events">
+                <div className="week-day-events" onClick={(e) => e.stopPropagation()}>
                   {dayEvents.map(event => (
                     <div
                       key={event.id}
@@ -366,6 +390,80 @@ function Calendar() {
           {viewMode === 'month' && renderMonthView()}
           {viewMode === 'week' && renderWeekView()}
           {viewMode === 'day' && renderDayView()}
+        </div>
+      )}
+
+      {selectedDate && (
+        <div className="modal-overlay" onClick={() => setSelectedDate(null)}>
+          <div className="date-events-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Events for {selectedDate.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</h3>
+              <button className="close-button" onClick={() => setSelectedDate(null)}>×</button>
+            </div>
+            <div className="date-events-content">
+              {getEventsForSelectedDate().length === 0 ? (
+                <div className="no-events">No events scheduled for this day</div>
+              ) : (
+                <div className="events-by-type">
+                  {['shipment', 'raw_material', 'production'].map(type => {
+                    const typeEvents = getEventsForSelectedDate().filter(e => e.type === type)
+                    if (typeEvents.length === 0) return null
+                    
+                    return (
+                      <div key={type} className="event-type-group">
+                        <div className="event-type-header" style={{ backgroundColor: getEventTypeColor(type) }}>
+                          <h4>{getEventTypeLabel(type)} ({typeEvents.length})</h4>
+                        </div>
+                        <div className="event-type-list">
+                          {typeEvents.map(event => (
+                            <div
+                              key={event.id}
+                              className="date-event-item"
+                              onClick={() => {
+                                setSelectedDate(null)
+                                setSelectedEvent(event)
+                              }}
+                            >
+                              <div className="event-item-title">{event.title}</div>
+                              <div className="event-item-details">
+                                {event.sales_order_number && (
+                                  <span>SO: {event.sales_order_number}</span>
+                                )}
+                                {event.customer_name && (
+                                  <span>Customer: {event.customer_name}</span>
+                                )}
+                                {event.lot_number && (
+                                  <span>Lot: {event.lot_number}</span>
+                                )}
+                                {event.item_name && (
+                                  <span>Item: {event.item_name}</span>
+                                )}
+                                {event.po_number && (
+                                  <span>PO: {event.po_number}</span>
+                                )}
+                                {event.batch_number && (
+                                  <span>Batch: {event.batch_number}</span>
+                                )}
+                                {event.status && (
+                                  <span className="status-badge">{event.status}</span>
+                                )}
+                                {event.is_scheduled && (
+                                  <span className="scheduled-badge">Scheduled</span>
+                                )}
+                                {event.is_actual && (
+                                  <span className="actual-badge">Actual</span>
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       )}
 

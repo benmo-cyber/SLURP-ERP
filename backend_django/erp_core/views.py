@@ -11,7 +11,8 @@ from .models import (
     InventoryTransaction, LotNumberSequence, Vendor, VendorHistory,
     SupplierSurvey, SupplierDocument, TemporaryException, CostMaster, CostMasterHistory, Account,
     FinishedProductSpecification, Customer, CustomerPricing, VendorPricing, SalesOrderLot, Invoice, InvoiceItem,
-    ShipToLocation, CustomerContact, SalesCall, CustomerForecast, BatchNumberSequence
+    ShipToLocation, CustomerContact, SalesCall, CustomerForecast, BatchNumberSequence, LotDepletionLog,
+    PurchaseOrderLog, ProductionLog, Shipment, ShipmentItem
 )
 from .serializers import (
     ItemSerializer, LotSerializer, ProductionBatchSerializer,
@@ -23,8 +24,164 @@ from .serializers import (
     CostMasterSerializer, CostMasterHistorySerializer, AccountSerializer,
     FinishedProductSpecificationSerializer, CustomerSerializer, CustomerPricingSerializer, VendorPricingSerializer,
     InvoiceSerializer, InvoiceItemSerializer, ShipToLocationSerializer,
-    CustomerContactSerializer, SalesCallSerializer, CustomerForecastSerializer
+    CustomerContactSerializer, SalesCallSerializer, CustomerForecastSerializer, LotDepletionLogSerializer,
+    PurchaseOrderLogSerializer, ProductionLogSerializer
 )
+
+
+def log_lot_depletion(lot, quantity_before, quantity_used, depletion_method, reference_number=None, 
+                      reference_type=None, transaction_id=None, batch_id=None, sales_order_id=None, notes=None):
+    """
+    Log when a lot is depleted to zero or below.
+    
+    Args:
+        lot: The Lot instance
+        quantity_before: Quantity remaining before this transaction
+        quantity_used: Quantity used in this transaction (positive number)
+        depletion_method: One of 'production', 'sales', 'adjustment', 'manual', 'reversal'
+        reference_number: Batch number, SO number, etc.
+        reference_type: Type of reference ('batch_number', 'so_number', etc.)
+        transaction_id: Related InventoryTransaction ID if applicable
+        batch_id: Related ProductionBatch ID if applicable
+        sales_order_id: Related SalesOrder ID if applicable
+        notes: Additional context
+    """
+    final_quantity = quantity_before - quantity_used
+    
+    # Only log if the lot is depleted (reaches zero or goes negative)
+    if final_quantity <= 0:
+        try:
+            LotDepletionLog.objects.create(
+                lot=lot,
+                lot_number=lot.lot_number,
+                item_sku=lot.item.sku,
+                item_name=lot.item.name,
+                vendor=lot.item.vendor or '',
+                initial_quantity=lot.quantity,
+                quantity_before=quantity_before,
+                quantity_used=quantity_used,
+                final_quantity=final_quantity,
+                depletion_method=depletion_method,
+                reference_number=reference_number,
+                reference_type=reference_type,
+                transaction_id=transaction_id,
+                batch_id=batch_id,
+                sales_order_id=sales_order_id,
+                notes=notes or f'Lot depleted from {quantity_before} to {final_quantity} via {depletion_method}'
+            )
+        except Exception as e:
+            # Log error but don't fail the transaction
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f'Failed to log lot depletion for lot {lot.lot_number}: {str(e)}')
+
+
+def log_purchase_order_action(po, action, lot=None, notes=None):
+    """
+    Log purchase order actions (created, updated, check-in, etc.)
+    
+    Args:
+        po: The PurchaseOrder instance
+        action: One of 'created', 'updated', 'check_in', 'partial_check_in', 'cancelled', 'completed'
+        lot: The Lot instance if this is a check-in
+        notes: Additional context
+    """
+    try:
+        # Calculate totals
+        total_items = po.items.count()
+        total_quantity_ordered = sum(item.quantity_ordered for item in po.items.all())
+        total_quantity_received = sum(item.quantity_received for item in po.items.all())
+        
+        log_data = {
+            'purchase_order': po,
+            'po_number': po.po_number,
+            'action': action,
+            'vendor_name': po.vendor_customer_name,
+            'vendor_customer_name': po.vendor_customer_name,
+            'po_date': po.order_date,
+            'required_date': po.required_date,
+            'status': po.status,
+            'carrier': po.carrier or '',
+            'po_received_date': po.received_date,  # PO's received_date
+            'total_items': total_items,
+            'total_quantity_ordered': total_quantity_ordered,
+            'total_quantity_received': total_quantity_received,
+            'notes': notes
+        }
+        
+        # If this is a check-in, add lot information
+        if lot and action in ['check_in', 'partial_check_in']:
+            log_data.update({
+                'lot_number': lot.lot_number,
+                'item_sku': lot.item.sku,
+                'item_name': lot.item.name,
+                'quantity_received': lot.quantity,
+                'received_date': lot.received_date
+            })
+        
+        PurchaseOrderLog.objects.create(**log_data)
+    except Exception as e:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f'Failed to log purchase order action for PO {po.po_number}: {str(e)}')
+
+
+def log_production_batch_closure(batch, notes=None):
+    """
+    Log when a production batch is closed.
+    
+    Args:
+        batch: The ProductionBatch instance
+        notes: Additional context
+    """
+    try:
+        import json
+        
+        # Get input materials information
+        input_materials = []
+        input_lots = []
+        for input_item in batch.inputs.all():
+            input_materials.append({
+                'item_sku': input_item.lot.item.sku,
+                'item_name': input_item.lot.item.name,
+                'quantity_used': input_item.quantity_used
+            })
+            input_lots.append(input_item.lot.lot_number)
+        
+        # Get output lot information
+        output_lot_number = None
+        output_quantity = None
+        output = batch.outputs.first()
+        if output:
+            output_lot_number = output.lot.lot_number
+            output_quantity = output.quantity_produced
+        
+        # Get QC information if available (would need to be passed or retrieved)
+        # For now, we'll leave these as None and they can be added later if needed
+        
+        ProductionLog.objects.create(
+            batch=batch,
+            batch_number=batch.batch_number,
+            batch_type=batch.batch_type,
+            finished_good_sku=batch.finished_good_item.sku,
+            finished_good_name=batch.finished_good_item.name,
+            quantity_produced=batch.quantity_produced,
+            quantity_actual=batch.quantity_actual,
+            variance=batch.variance,
+            wastes=batch.wastes,
+            spills=batch.spills,
+            production_date=batch.production_date,
+            closed_date=batch.closed_date or timezone.now(),
+            input_materials=json.dumps(input_materials),
+            input_lots=json.dumps(input_lots),
+            output_lot_number=output_lot_number,
+            output_quantity=output_quantity,
+            notes=notes or f'Batch {batch.batch_number} closed'
+        )
+    except Exception as e:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f'Failed to log production batch closure for batch {batch.batch_number}: {str(e)}')
 
 
 def generate_lot_number():
@@ -575,9 +732,12 @@ class LotViewSet(viewsets.ModelViewSet):
                 for item_id in items.values_list('id', flat=True):
                     try:
                         # Sum allocations from SalesOrderLot for this item
+                        # Include all statuses where material is allocated to sales orders
                         total_allocated = SalesOrderLot.objects.filter(
                             sales_order_item__item_id=item_id,
-                            sales_order_item__sales_order__status__in=['draft', 'allocated', 'shipped']
+                            sales_order_item__sales_order__status__in=[
+                                'draft', 'allocated', 'issued', 'ready_for_shipment', 'shipped'
+                            ]
                         ).aggregate(
                             total=Sum('quantity_allocated')
                         )['total'] or 0.0
@@ -724,16 +884,56 @@ class LotViewSet(viewsets.ModelViewSet):
                 
                 # Aggregate quantities from lots
                 total_quantity = sum(lot.quantity for lot in vendor_lots)
-                quantity_remaining = sum(lot.quantity_remaining for lot in vendor_lots)
+                
+                # Calculate quantity_remaining for each lot, excluding sales allocations
+                # Pre-calculate lot-level sales allocations
+                lot_sales_allocations = {}
+                try:
+                    with connection.cursor() as cursor:
+                        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='erp_core_salesorderlot'")
+                        if cursor.fetchone():
+                            for lot in vendor_lots:
+                                allocated = SalesOrderLot.objects.filter(
+                                    lot=lot,
+                                    sales_order_item__sales_order__status__in=[
+                                        'draft', 'allocated', 'issued', 'ready_for_shipment', 'shipped'
+                                    ]
+                                ).aggregate(
+                                    total=Sum('quantity_allocated')
+                                )['total'] or 0.0
+                                lot_sales_allocations[lot.id] = allocated
+                except Exception:
+                    pass
+                
+                # Calculate quantity_remaining for each lot, subtracting sales allocations
+                quantity_remaining = sum(
+                    max(0.0, lot.quantity_remaining - lot_sales_allocations.get(lot.id, 0.0))
+                    for lot in vendor_lots
+                )
                 
                 # Get on_order from the vendor-specific item
                 on_order = vendor_item.on_order if vendor_item else 0.0
                 
-                # Include on_order in total_quantity
-                total_quantity = total_quantity + on_order
+                # Calculate raw materials used in closed production batches (these should be deducted from TQ)
+                consumed_in_production = 0.0
+                try:
+                    with connection.cursor() as cursor:
+                        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='erp_core_productionbatchinput'")
+                        if cursor.fetchone():
+                            consumed_in_production = ProductionBatchInput.objects.filter(
+                                lot__in=vendor_lots,
+                                batch__status='closed'  # Only count closed batches (materials already consumed)
+                            ).aggregate(
+                                total=Sum('quantity_used')
+                            )['total'] or 0.0
+                except Exception:
+                    pass
+                
+                # TQ = lot quantities + on_order - materials consumed in closed batches
+                total_quantity = total_quantity + on_order - consumed_in_production
                 
                 # Calculate allocated to production (sum across all vendor lots)
-                # Allocate materials when batch status is 'in_progress'
+                # Allocate materials when batch status is 'in_progress' or 'open' (not yet consumed)
                 allocated_to_production = 0.0
                 try:
                     with connection.cursor() as cursor:
@@ -754,9 +954,6 @@ class LotViewSet(viewsets.ModelViewSet):
                     if lot.status == 'on_hold' or lot.on_hold
                 )
                 
-                # Available = quantity_remaining - production allocation - on_hold
-                available = max(0.0, quantity_remaining - allocated_to_production - on_hold)
-                
                 # Get sales allocation - sum across all items with this SKU for this vendor
                 allocated_to_sales = 0.0
                 if vendor_item:
@@ -765,6 +962,9 @@ class LotViewSet(viewsets.ModelViewSet):
                     # Sum across all items with this SKU
                     for sku_item in sku_items:
                         allocated_to_sales += item_sales_allocations.get(sku_item.id, 0.0)
+                
+                # Available = quantity_remaining - production allocation - sales allocation - on_hold
+                available = max(0.0, quantity_remaining - allocated_to_production - allocated_to_sales - on_hold)
                 
                 # Create vendor-level inventory entry (nested under SKU)
                 vendor_entry = {
@@ -1005,6 +1205,10 @@ class LotViewSet(viewsets.ModelViewSet):
                     if all_received and po.status == 'issued':
                         po.status = 'received'
                         po.save()
+                        log_purchase_order_action(po, 'completed', lot=lot, notes='All items fully received')
+                    else:
+                        # Partial check-in
+                        log_purchase_order_action(po, 'partial_check_in', lot=lot, notes=f'Partial check-in: {lot.quantity} received')
                 except PurchaseOrder.DoesNotExist:
                     pass
         
@@ -1388,8 +1592,21 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
             )
             
             # Update lot quantity_remaining - round to 2 decimal places
+            quantity_before = lot.quantity_remaining
             lot.quantity_remaining = round(lot.quantity_remaining - rounded_quantity, 2)
             lot.save()
+            
+            # Log depletion if lot reaches zero or below
+            log_lot_depletion(
+                lot=lot,
+                quantity_before=quantity_before,
+                quantity_used=rounded_quantity,
+                depletion_method='production',
+                reference_number=batch.batch_number,
+                reference_type='batch_number',
+                batch_id=batch.id,
+                notes=f'Used in production batch {batch.batch_number}'
+            )
         
         # Validate that total input quantity equals quantity to produce (with tolerance for floating point)
         tolerance = 0.01
@@ -1558,8 +1775,21 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
                         )
                         
                         # Update lot quantity_remaining
+                        quantity_before = lot.quantity_remaining
                         lot.quantity_remaining = round(lot.quantity_remaining - quantity_used, 2)
                         lot.save()
+                        
+                        # Log depletion if lot reaches zero or below
+                        log_lot_depletion(
+                            lot=lot,
+                            quantity_before=quantity_before,
+                            quantity_used=quantity_used,
+                            depletion_method='production',
+                            reference_number=instance.batch_number,
+                            reference_type='batch_number',
+                            batch_id=instance.id,
+                            notes=f'Adjusted in production batch {instance.batch_number}'
+                        )
                     except Lot.DoesNotExist:
                         return Response(
                             {'error': f'Lot with id {lot_id} not found'},
@@ -1571,8 +1801,16 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
         batch = serializer.save()
         
-        # If status changed to 'closed', create output lots if they don't exist
+        # If status changed to 'closed', create output lots if they don't exist and log the closure
         if old_status != 'closed' and new_status == 'closed':
+            # Set closed_date if not already set
+            if not batch.closed_date:
+                batch.closed_date = timezone.now()
+                batch.save()
+            
+            # Log production batch closure
+            log_production_batch_closure(batch, notes=f'Batch {batch.batch_number} closed')
+            
             # Check if batch has outputs
             if not batch.outputs.exists():
                 # Create output lot for production batches
@@ -2173,6 +2411,9 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
             purchase_order.calculate_totals()
             purchase_order.save()
         
+        # Log purchase order creation
+        log_purchase_order_action(purchase_order, 'created', notes='Purchase order created')
+        
         # Return the created purchase order with items
         response_serializer = self.get_serializer(purchase_order)
         headers = self.get_success_headers(response_serializer.data)
@@ -2192,6 +2433,9 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
         # Update status to issued
         purchase_order.status = 'issued'
         purchase_order.save()
+        
+        # Log status change
+        log_purchase_order_action(purchase_order, 'updated', notes='Purchase order issued')
         
         # Increment on_order for each item
         for po_item in purchase_order.items.all():
@@ -2218,6 +2462,9 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
         purchase_order.status = 'received'
         purchase_order.received_date = timezone.now()
         purchase_order.save()
+        
+        # Log status change
+        log_purchase_order_action(purchase_order, 'updated', notes='Purchase order marked as received')
         
         serializer = self.get_serializer(purchase_order)
         return Response(serializer.data, status=status.HTTP_200_OK)
@@ -2309,6 +2556,9 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
         purchase_order.status = 'cancelled'
         purchase_order.save()
         
+        # Log cancellation
+        log_purchase_order_action(purchase_order, 'cancelled', notes='Purchase order cancelled')
+        
         serializer = self.get_serializer(purchase_order)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
@@ -2371,34 +2621,176 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
                     status=status.HTTP_404_NOT_FOUND
                 )
         
-        # Create the sales order
+        # Set default values for required numeric fields that exist in DB but not in model
+        # These fields have NOT NULL constraints in the database
+        numeric_defaults = {
+            'subtotal': float(data.get('subtotal', 0.0)),
+            'freight': float(data.get('freight', 0.0)),
+            'misc': float(data.get('misc', 0.0)),
+            'prepaid': float(data.get('prepaid', 0.0)),
+            'discount': float(data.get('discount', 0.0)),
+            'grand_total': float(data.get('grand_total', 0.0)),
+        }
+        
+        # Validate the data first (but don't save yet)
         serializer = self.get_serializer(data=data)
         serializer.is_valid(raise_exception=True)
-        sales_order = serializer.save()
+        validated_data = serializer.validated_data
+        
+        # Extract values safely
+        customer_obj = validated_data.get('customer')
+        customer_id = customer_obj.id if customer_obj else None
+        
+        ship_to_obj = validated_data.get('ship_to_location')
+        ship_to_id = ship_to_obj.id if ship_to_obj else None
+        
+        # Create the sales order using raw SQL to include fields not in the model
+        from django.db import connection
+        from django.utils import timezone
+        
+        now = timezone.now()
+        
+        # Prepare all values in correct order
+        values = [
+            validated_data.get('so_number'),
+            customer_id,
+            ship_to_id,
+            validated_data.get('customer_name', ''),
+            validated_data.get('customer_legacy_id'),
+            validated_data.get('customer_reference_number'),
+            validated_data.get('customer_address'),
+            validated_data.get('customer_city'),
+            validated_data.get('customer_state'),
+            validated_data.get('customer_zip'),
+            validated_data.get('customer_country'),
+            validated_data.get('customer_phone'),
+            now,
+            validated_data.get('expected_ship_date'),
+            validated_data.get('actual_ship_date'),
+            validated_data.get('status', 'draft'),
+            validated_data.get('notes'),
+            now,
+            now,
+            numeric_defaults['subtotal'],
+            numeric_defaults['freight'],
+            numeric_defaults['misc'],
+            numeric_defaults['prepaid'],
+            numeric_defaults['discount'],
+            numeric_defaults['grand_total'],
+        ]
+        
+        try:
+            with connection.cursor() as cursor:
+                # Build the INSERT statement with all required fields
+                # Django's cursor.execute() uses %s for parameterized queries (converts to ? for SQLite)
+                cursor.execute("""
+                    INSERT INTO erp_core_salesorder (
+                        so_number, customer_id, ship_to_location_id, customer_name,
+                        customer_legacy_id, customer_reference_number,
+                        customer_address, customer_city, customer_state, customer_zip,
+                        customer_country, customer_phone,
+                        order_date, expected_ship_date, actual_ship_date,
+                        status, notes, created_at, updated_at,
+                        subtotal, freight, misc, prepaid, discount, grand_total
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """, values)
+                sales_order_id = cursor.lastrowid
+            
+            # Get the created sales order object
+            sales_order = SalesOrder.objects.get(id=sales_order_id)
+        except Exception as e:
+            import logging
+            import traceback
+            logger = logging.getLogger(__name__)
+            error_msg = str(e)
+            error_trace = traceback.format_exc()
+            logger.error(f'Failed to create sales order: {error_msg}')
+            logger.error(f'Traceback: {error_trace}')
+            logger.error(f'Values count: {len(values)}, Values: {values}')
+            # Return a helpful error response
+            return Response(
+                {
+                    'error': 'Failed to create sales order',
+                    'detail': error_msg,
+                    'debug_info': {
+                        'values_count': len(values),
+                        'so_number': validated_data.get('so_number'),
+                        'customer_id': customer_id,
+                        'ship_to_id': ship_to_id,
+                    }
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
         
         # Create sales order items with lot allocations
         for item_data in items_data:
             allocated_lots_data = item_data.pop('allocated_lots', [])
+            
+            # Extract and map fields correctly
+            # SalesOrderItem only has: sales_order, item, quantity_ordered, quantity_allocated, quantity_shipped, unit_price, notes
+            item_id = item_data.get('item_id') or item_data.get('item')
+            if not item_id:
+                return Response(
+                    {'error': 'item_id is required for each sales order item'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Create the sales order item with only valid fields
             so_item = SalesOrderItem.objects.create(
                 sales_order=sales_order,
-                **item_data
+                item_id=item_id,
+                quantity_ordered=item_data.get('quantity_ordered', 0),
+                unit_price=item_data.get('unit_price'),
+                notes=item_data.get('notes')
             )
             
-            # Create lot allocations
-            for lot_data in allocated_lots_data:
-                SalesOrderLot.objects.create(
-                    sales_order_item=so_item,
-                    lot_id=lot_data.get('lot_id'),
-                    quantity_allocated=lot_data.get('quantity_allocated', 0)
-                )
-                
-                # Update quantity_allocated on the SO item
-                so_item.quantity_allocated += lot_data.get('quantity_allocated', 0)
-                so_item.save()
+            # Create lot allocations (if table exists and allocations provided)
+            if allocated_lots_data:
+                try:
+                    # Check if SalesOrderLot table exists
+                    with connection.cursor() as cursor:
+                        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='erp_core_salesorderlot'")
+                        if cursor.fetchone():
+                            for lot_data in allocated_lots_data:
+                                SalesOrderLot.objects.create(
+                                    sales_order_item=so_item,
+                                    lot_id=lot_data.get('lot_id'),
+                                    quantity_allocated=lot_data.get('quantity_allocated', 0)
+                                )
+                                
+                                # Update quantity_allocated on the SO item
+                                so_item.quantity_allocated += lot_data.get('quantity_allocated', 0)
+                            so_item.save()
+                except Exception as e:
+                    # If SalesOrderLot table doesn't exist, just skip lot allocations
+                    import logging
+                    logger = logging.getLogger(__name__)
+                    logger.warning(f'SalesOrderLot table does not exist, skipping lot allocations: {str(e)}')
         
-        # Return the created sales order with items
-        serializer = self.get_serializer(sales_order)
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
+        # Refresh the sales order from database to get all related items
+        try:
+            sales_order.refresh_from_db()
+            
+            # Return the created sales order with items
+            serializer = self.get_serializer(sales_order)
+            response_data = serializer.data
+            return Response(response_data, status=status.HTTP_201_CREATED)
+        except Exception as e:
+            import logging
+            import traceback
+            logger = logging.getLogger(__name__)
+            logger.error(f'Failed to serialize sales order response: {str(e)}')
+            logger.error(f'Traceback: {traceback.format_exc()}')
+            # Return basic response even if serialization fails
+            return Response(
+                {
+                    'id': sales_order.id,
+                    'so_number': sales_order.so_number,
+                    'status': sales_order.status,
+                    'message': 'Sales order created successfully'
+                },
+                status=status.HTTP_201_CREATED
+            )
     
     @action(detail=True, methods=['post'])
     def allocate(self, request, pk=None):
@@ -2466,15 +2858,29 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
                     
                     # Reduce raw material lot quantities and create transactions
                     for raw_lot, qty in raw_material_lots:
+                        quantity_before = raw_lot.quantity_remaining
                         raw_lot.quantity_remaining -= qty
                         raw_lot.save()
                         
-                        InventoryTransaction.objects.create(
+                        transaction = InventoryTransaction.objects.create(
                             transaction_type='production',
                             lot=raw_lot,
                             quantity=-qty,
                             reference_number=sales_order.so_number,
                             notes=f'Allocated to distributed item lot {new_lot_number}'
+                        )
+                        
+                        # Log depletion if lot reaches zero or below
+                        log_lot_depletion(
+                            lot=raw_lot,
+                            quantity_before=quantity_before,
+                            quantity_used=qty,
+                            depletion_method='production',
+                            reference_number=sales_order.so_number,
+                            reference_type='so_number',
+                            sales_order_id=sales_order.id,
+                            transaction_id=transaction.id,
+                            notes=f'Used for distributed item lot {new_lot_number} in sales order {sales_order.so_number}'
                         )
                     
                     # Create transaction for new lot
@@ -2522,29 +2928,77 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
                 
                 so_item.save()
             
-            # Update sales order status to 'allocated' if any allocations exist
-            total_allocated = sum(item.quantity_allocated for item in sales_order.items.all())
-            if total_allocated > 0:
-                sales_order.status = 'allocated'
-                sales_order.save()
+            # Refresh sales order to get updated items
+            sales_order.refresh_from_db()
+            
+            # Check if all items are fully allocated
+            all_fully_allocated = all(
+                item.quantity_allocated >= item.quantity_ordered 
+                for item in sales_order.items.all()
+            )
+            
+            # Update sales order status based on allocation state
+            if all_fully_allocated:
+                sales_order.status = 'ready_for_shipment'
+            else:
+                # If any allocations exist, set to 'allocated'
+                # But preserve 'issued' status if the order was issued and is partially allocated
+                total_allocated = sum(item.quantity_allocated for item in sales_order.items.all())
+                if total_allocated > 0:
+                    # If order was 'issued' and now has partial allocations, keep it as 'issued'
+                    # Otherwise set to 'allocated'
+                    if sales_order.status == 'issued':
+                        # Keep as 'issued' for partial allocation, user can continue allocating
+                        pass
+                    else:
+                        sales_order.status = 'allocated'
+                else:
+                    # No allocations - only set to 'draft' if it wasn't 'issued'
+                    if sales_order.status != 'issued':
+                        sales_order.status = 'draft'
+            sales_order.save()
         
         serializer = self.get_serializer(sales_order)
         return Response(serializer.data, status=status.HTTP_200_OK)
     
     @action(detail=True, methods=['post'])
     def ship(self, request, pk=None):
-        """Ship the sales order and create invoice."""
+        """Ship the sales order (supports partial shipments), update tracking, and create invoice."""
         from django.db import transaction
         from datetime import datetime, timedelta
         import re
+        from .models import Shipment, ShipmentItem
         
         sales_order = self.get_object()
         ship_date_str = request.data.get('ship_date')
         invoice_date_str = request.data.get('invoice_date', ship_date_str)
+        tracking_number = request.data.get('tracking_number', '').strip()
+        items_to_ship = request.data.get('items', [])  # List of {item_id, quantity} for partial shipments
+        
+        # Validate order is issued and has allocations
+        if sales_order.status != 'issued':
+            return Response(
+                {'error': f'Sales order must be issued to checkout. Current status: {sales_order.status}'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Check if order has any allocations
+        total_allocated = sum(item.quantity_allocated for item in sales_order.items.all())
+        if total_allocated == 0:
+            return Response(
+                {'error': 'Sales order must have material allocated before checkout'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
         
         if not ship_date_str:
             return Response(
                 {'error': 'ship_date is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        if not tracking_number:
+            return Response(
+                {'error': 'tracking_number is required'},
                 status=status.HTTP_400_BAD_REQUEST
             )
         
@@ -2557,47 +3011,136 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        # Validate all items are fully allocated
-        for item in sales_order.items.all():
-            if item.quantity_allocated < item.quantity_ordered:
-                return Response(
-                    {'error': f'Item {item.item.name} is not fully allocated. Allocated: {item.quantity_allocated}, Ordered: {item.quantity_ordered}'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
+        # If items_to_ship is provided, use it for partial shipment
+        # Otherwise, ship all allocated quantities
+        use_partial = bool(items_to_ship)
         
         with transaction.atomic():
+            # Create shipment record
+            shipment = Shipment.objects.create(
+                sales_order=sales_order,
+                ship_date=timezone.make_aware(datetime.combine(ship_date, datetime.min.time())),
+                tracking_number=tracking_number,
+                notes=request.data.get('notes', '')
+            )
+            
+            # Process items to ship
+            items_shipped_map = {}
+            if use_partial:
+                # Partial shipment - use provided quantities
+                for item_data in items_to_ship:
+                    item_id = item_data.get('item_id') or item_data.get('sales_order_item_id')
+                    quantity_to_ship = float(item_data.get('quantity', 0))
+                    if item_id and quantity_to_ship > 0:
+                        items_shipped_map[item_id] = quantity_to_ship
+            else:
+                # Ship all allocated quantities
+                for so_item in sales_order.items.all():
+                    if so_item.quantity_allocated > 0:
+                        items_shipped_map[so_item.id] = so_item.quantity_allocated
+            
             # Reduce lot quantities and create inventory transactions
             for so_item in sales_order.items.all():
-                for allocation in SalesOrderLot.objects.filter(sales_order_item=so_item):
-                    lot = allocation.lot
-                    quantity = allocation.quantity_allocated
+                quantity_to_ship = items_shipped_map.get(so_item.id, 0)
+                if quantity_to_ship <= 0:
+                    continue
+                
+                # Validate quantity doesn't exceed allocated
+                if quantity_to_ship > so_item.quantity_allocated:
+                    return Response(
+                        {'error': f'Cannot ship {quantity_to_ship} of {so_item.item.name}. Only {so_item.quantity_allocated} is allocated.'},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                
+                # Ship from allocated lots proportionally or FIFO
+                remaining_to_ship = quantity_to_ship
+                allocations = SalesOrderLot.objects.filter(sales_order_item=so_item).order_by('created_at')
+                
+                for allocation in allocations:
+                    if remaining_to_ship <= 0:
+                        break
                     
-                    if lot.quantity_remaining < quantity:
+                    lot = allocation.lot
+                    # Ship from this allocation (up to the allocated amount)
+                    quantity_from_allocation = min(remaining_to_ship, allocation.quantity_allocated)
+                    
+                    if lot.quantity_remaining < quantity_from_allocation:
                         return Response(
-                            {'error': f'Insufficient quantity in lot {lot.lot_number}. Available: {lot.quantity_remaining}, Required: {quantity}'},
+                            {'error': f'Insufficient quantity in lot {lot.lot_number}. Available: {lot.quantity_remaining}, Required: {quantity_from_allocation}'},
                             status=status.HTTP_400_BAD_REQUEST
                         )
                     
-                    lot.quantity_remaining -= quantity
+                    quantity_before = lot.quantity_remaining
+                    lot.quantity_remaining -= quantity_from_allocation
                     lot.save()
                     
-                    InventoryTransaction.objects.create(
+                    # Reduce the allocation by the shipped quantity
+                    allocation.quantity_allocated -= quantity_from_allocation
+                    if allocation.quantity_allocated <= 0:
+                        allocation.delete()
+                    else:
+                        allocation.save()
+                    
+                    transaction = InventoryTransaction.objects.create(
                         transaction_type='adjustment',
                         lot=lot,
-                        quantity=-quantity,
+                        quantity=-quantity_from_allocation,
                         reference_number=sales_order.so_number,
-                        notes=f'Shipped for sales order {sales_order.so_number}'
+                        notes=f'Shipped for sales order {sales_order.so_number} - Shipment {shipment.id}'
                     )
                     
-                    so_item.quantity_shipped += quantity
-                    so_item.save()
+                    # Log depletion if lot reaches zero or below
+                    log_lot_depletion(
+                        lot=lot,
+                        quantity_before=quantity_before,
+                        quantity_used=quantity_from_allocation,
+                        depletion_method='sales',
+                        reference_number=sales_order.so_number,
+                        reference_type='so_number',
+                        sales_order_id=sales_order.id,
+                        transaction_id=transaction.id,
+                        notes=f'Shipped for sales order {sales_order.so_number} - Shipment {shipment.id}'
+                    )
+                    
+                    remaining_to_ship -= quantity_from_allocation
+                
+                # Update quantity_shipped on sales order item
+                so_item.quantity_shipped += quantity_to_ship
+                so_item.quantity_allocated -= quantity_to_ship  # Reduce allocated by shipped amount
+                so_item.save()
+                
+                # Create shipment item record
+                ShipmentItem.objects.create(
+                    shipment=shipment,
+                    sales_order_item=so_item,
+                    quantity_shipped=quantity_to_ship
+                )
             
-            # Update sales order
+            # Update sales order status and tracking
             sales_order.actual_ship_date = timezone.make_aware(datetime.combine(ship_date, datetime.min.time()))
-            sales_order.status = 'shipped'
+            if not sales_order.tracking_number:
+                sales_order.tracking_number = tracking_number
+            
+            # Check if order is fully shipped
+            all_fully_shipped = all(
+                item.quantity_shipped >= item.quantity_ordered 
+                for item in sales_order.items.all()
+            )
+            
+            if all_fully_shipped:
+                sales_order.status = 'completed'
+            else:
+                # Still has outstanding balance - keep as issued or ready_for_shipment
+                # Check if there are still allocations
+                total_remaining_allocated = sum(item.quantity_allocated for item in sales_order.items.all())
+                if total_remaining_allocated > 0:
+                    sales_order.status = 'ready_for_shipment'
+                else:
+                    sales_order.status = 'issued'  # Can allocate more if needed
+            
             sales_order.save()
             
-            # Create invoice
+            # Create invoice for this shipment
             invoice_number = generate_invoice_number()
             
             # Calculate due date from payment terms
@@ -2610,8 +3153,12 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
                     days = int(match.group(1))
                     due_date = invoice_date + timedelta(days=days)
             
-            # Calculate totals from sales order
-            subtotal = sum(item.unit_price * item.quantity_ordered for item in sales_order.items.all() if item.unit_price)
+            # Calculate totals from shipped quantities in this shipment
+            subtotal = sum(
+                item.sales_order_item.unit_price * item.quantity_shipped 
+                for item in shipment.items.all() 
+                if item.sales_order_item.unit_price
+            )
             # Get freight, discount, tax from sales order if available, otherwise 0
             freight = getattr(sales_order, 'freight', 0.0) or 0.0
             discount = getattr(sales_order, 'discount', 0.0) or 0.0
@@ -2629,27 +3176,52 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
                 tax=tax,
                 discount=discount,
                 grand_total=grand_total,
-                notes=f'Created from sales order {sales_order.so_number}'
+                notes=f'Auto-generated from sales order {sales_order.so_number} - Shipment {shipment.id}'
             )
             
-            # Create invoice items
-            for so_item in sales_order.items.all():
-                InvoiceItem.objects.create(
-                    invoice=invoice,
-                    sales_order_item=so_item,
-                    description=so_item.item.name,
-                    quantity=so_item.quantity_shipped,
-                    unit_price=so_item.unit_price or 0.0,
-                    total=(so_item.unit_price or 0.0) * so_item.quantity_shipped
-                )
+            # Create invoice items from shipped quantities in this shipment
+            for shipment_item in shipment.items.all():
+                if shipment_item.quantity_shipped > 0:
+                    InvoiceItem.objects.create(
+                        invoice=invoice,
+                        sales_order_item=shipment_item.sales_order_item,
+                        description=shipment_item.sales_order_item.item.name,
+                        quantity=shipment_item.quantity_shipped,
+                        unit_price=shipment_item.sales_order_item.unit_price or 0.0,
+                        total=(shipment_item.sales_order_item.unit_price or 0.0) * shipment_item.quantity_shipped
+                    )
         
         invoice_serializer = InvoiceSerializer(invoice)
-        serializer = self.get_serializer(sales_order)
         
+        serializer = self.get_serializer(sales_order)
         return Response({
             'sales_order': serializer.data,
-            'invoice': invoice_serializer.data
+            'invoice': invoice_serializer.data,
+            'shipment': {
+                'id': shipment.id,
+                'ship_date': shipment.ship_date.isoformat(),
+                'tracking_number': shipment.tracking_number
+            }
         }, status=status.HTTP_200_OK)
+    
+    @action(detail=True, methods=['post'])
+    def issue(self, request, pk=None):
+        """Issue a sales order - changes status from 'draft' to 'issued'"""
+        sales_order = self.get_object()
+        
+        if sales_order.status != 'draft':
+            return Response(
+                {'error': f'Sales order must be in draft status to issue. Current status: {sales_order.status}'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Update status to issued
+        sales_order.status = 'issued'
+        sales_order.save()
+        
+        # Return updated sales order
+        serializer = self.get_serializer(sales_order)
+        return Response(serializer.data, status=status.HTTP_200_OK)
     
     @action(detail=True, methods=['post'])
     def cancel(self, request, pk=None):
@@ -2716,6 +3288,275 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
         
         serializer = self.get_serializer(sales_order)
         return Response(serializer.data, status=status.HTTP_200_OK)
+    
+    def destroy(self, request, *args, **kwargs):
+        """Delete sales order and clean up all related data"""
+        from django.db import transaction, connection
+        
+        sales_order = self.get_object()
+        
+        # Prevent deletion of shipped or cancelled orders
+        if sales_order.status in ['shipped', 'cancelled']:
+            return Response(
+                {'error': f'Cannot delete a {sales_order.status} sales order'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            with transaction.atomic():
+                # Clean up allocations and reverse inventory if needed
+                for so_item in sales_order.items.all():
+                    allocations = SalesOrderLot.objects.filter(sales_order_item=so_item)
+                    
+                    for allocation in allocations:
+                        lot = allocation.lot
+                        
+                        # Check if this is a distributed item lot (created for this sales order)
+                        is_distributed_lot = InventoryTransaction.objects.filter(
+                            lot=lot,
+                            reference_number=sales_order.so_number,
+                            notes__icontains='distributed'
+                        ).exists()
+                        
+                        if is_distributed_lot:
+                            # This is a distributed item lot - delete it and reverse raw materials
+                            raw_material_transactions = InventoryTransaction.objects.filter(
+                                reference_number=sales_order.so_number,
+                                quantity__lt=0,  # Negative quantities are raw materials
+                                notes__icontains=lot.lot_number
+                            )
+                            
+                            # Reverse raw material quantities
+                            for trans in raw_material_transactions:
+                                raw_lot = trans.lot
+                                raw_lot.quantity_remaining += abs(trans.quantity)
+                                raw_lot.save()
+                                
+                                # Create reverse transaction
+                                InventoryTransaction.objects.create(
+                                    transaction_type='adjustment',
+                                    lot=raw_lot,
+                                    quantity=abs(trans.quantity),
+                                    reference_number=sales_order.so_number,
+                                    notes=f'Reversed allocation from deleted order {sales_order.so_number}'
+                                )
+                            
+                            # Delete the distributed lot
+                            lot.delete()
+                    
+                    # Delete all allocations
+                    allocations.delete()
+                
+                # Get sales order item IDs before any deletion
+                so_item_ids = list(sales_order.items.values_list('id', flat=True))
+                so_id = sales_order.id
+                
+                # Delete InvoiceItems first (they reference SalesOrderItems) using raw SQL
+                try:
+                    with connection.cursor() as cursor:
+                        # Check if invoiceitem table exists and has sales_order_item_id column
+                        cursor.execute("""
+                            SELECT name FROM sqlite_master 
+                            WHERE type='table' AND name='erp_core_invoiceitem'
+                        """)
+                        if cursor.fetchone() and so_item_ids:
+                            cursor.execute("PRAGMA table_info(erp_core_invoiceitem)")
+                            columns = [row[1] for row in cursor.fetchall()]
+                            if 'sales_order_item_id' in columns:
+                                # Delete invoice items that reference these sales order items
+                                placeholders = ','.join(['%s'] * len(so_item_ids))
+                                cursor.execute(f"""
+                                    DELETE FROM erp_core_invoiceitem 
+                                    WHERE sales_order_item_id IN ({placeholders})
+                                """, so_item_ids)
+                except Exception as e:
+                    import logging
+                    logger = logging.getLogger(__name__)
+                    logger.warning(f'Could not delete invoice items: {str(e)}')
+                
+                # Delete any invoices using raw SQL to avoid schema issues
+                try:
+                    with connection.cursor() as cursor:
+                        # Check if invoice table exists and has sales_order_id column
+                        cursor.execute("""
+                            SELECT name FROM sqlite_master 
+                            WHERE type='table' AND name='erp_core_invoice'
+                        """)
+                        if cursor.fetchone():
+                            cursor.execute("PRAGMA table_info(erp_core_invoice)")
+                            columns = [row[1] for row in cursor.fetchall()]
+                            if 'sales_order_id' in columns:
+                                # Delete invoices for this sales order
+                                cursor.execute("""
+                                    DELETE FROM erp_core_invoice 
+                                    WHERE sales_order_id = %s
+                                """, [so_id])
+                except Exception as e:
+                    import logging
+                    logger = logging.getLogger(__name__)
+                    logger.warning(f'Could not delete invoices: {str(e)}')
+                
+                # Delete SalesOrderItems using raw SQL to avoid ORM checking for related InvoiceItems
+                if so_item_ids:
+                    with connection.cursor() as cursor:
+                        placeholders = ','.join(['%s'] * len(so_item_ids))
+                        cursor.execute(f"""
+                            DELETE FROM erp_core_salesorderitem 
+                            WHERE id IN ({placeholders})
+                        """, so_item_ids)
+                
+                # Finally, delete the sales order itself using raw SQL
+                with connection.cursor() as cursor:
+                    cursor.execute("DELETE FROM erp_core_salesorder WHERE id = %s", [so_id])
+            
+            return Response(status=status.HTTP_204_NO_CONTENT)
+            
+        except Exception as e:
+            import logging
+            import traceback
+            logger = logging.getLogger(__name__)
+            logger.error(f'Failed to delete sales order {sales_order.so_number}: {str(e)}')
+            logger.error(f'Traceback: {traceback.format_exc()}')
+            return Response(
+                {'error': f'Failed to delete sales order: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+    
+    @action(detail=True, methods=['get'], url_path='packing-list', url_name='packing-list')
+    def packing_list(self, request, pk=None):
+        """Generate packing list document from template"""
+        from django.http import HttpResponse
+        from pathlib import Path
+        import os
+        import tempfile
+        
+        sales_order = self.get_object()
+        
+        # Check if order is ready for shipment
+        if sales_order.status not in ['ready_for_shipment', 'allocated']:
+            return Response(
+                {'error': 'Sales order must be allocated or ready for shipment to generate packing list'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            from docx import Document
+            
+            # Get template path (in project root)
+            PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+            template_path = PROJECT_ROOT / 'Packing list template.docx'
+            
+            if not template_path.exists():
+                return Response(
+                    {'error': 'Packing list template not found'},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
+            
+            # Load template
+            doc = Document(str(template_path))
+            
+            # Replace placeholders in the document
+            replacements = {
+                '{so_number}': sales_order.so_number,
+                '{SO_NUMBER}': sales_order.so_number,
+                '{customer_name}': sales_order.customer_name or '',
+                '{CUSTOMER_NAME}': sales_order.customer_name or '',
+                '{customer_address}': sales_order.customer_address or '',
+                '{CUSTOMER_ADDRESS}': sales_order.customer_address or '',
+                '{customer_city}': sales_order.customer_city or '',
+                '{CUSTOMER_CITY}': sales_order.customer_city or '',
+                '{customer_state}': sales_order.customer_state or '',
+                '{CUSTOMER_STATE}': sales_order.customer_state or '',
+                '{customer_zip}': sales_order.customer_zip or '',
+                '{CUSTOMER_ZIP}': sales_order.customer_zip or '',
+                '{customer_country}': sales_order.customer_country or '',
+                '{CUSTOMER_COUNTRY}': sales_order.customer_country or '',
+                '{customer_phone}': sales_order.customer_phone or '',
+                '{CUSTOMER_PHONE}': sales_order.customer_phone or '',
+                '{ship_date}': sales_order.expected_ship_date.strftime('%Y-%m-%d') if sales_order.expected_ship_date else '',
+                '{SHIP_DATE}': sales_order.expected_ship_date.strftime('%Y-%m-%d') if sales_order.expected_ship_date else '',
+                '{order_date}': sales_order.order_date.strftime('%Y-%m-%d') if sales_order.order_date else '',
+                '{ORDER_DATE}': sales_order.order_date.strftime('%Y-%m-%d') if sales_order.order_date else '',
+            }
+            
+            # Replace text in paragraphs
+            for paragraph in doc.paragraphs:
+                for key, value in replacements.items():
+                    if key in paragraph.text:
+                        paragraph.text = paragraph.text.replace(key, value)
+            
+            # Replace text in tables
+            for table in doc.tables:
+                for row in table.rows:
+                    for cell in row.cells:
+                        for key, value in replacements.items():
+                            if key in cell.text:
+                                cell.text = cell.text.replace(key, value)
+            
+            # Add items to packing list (if there's a table for items)
+            items_added = False
+            for table in doc.tables:
+                for i, row in enumerate(table.rows):
+                    row_text = ' '.join([cell.text for cell in row.cells]).lower()
+                    if any(keyword in row_text for keyword in ['item', 'sku', 'description', 'quantity', 'qty']):
+                        start_row = i + 1
+                        while len(table.rows) > start_row:
+                            table._element.remove(table.rows[start_row]._element)
+                        
+                        # Add items
+                        for item in sales_order.items.all():
+                            new_row = table.add_row()
+                            cells = new_row.cells
+                            if len(cells) >= 1:
+                                cells[0].text = item.item.sku if item.item else ''
+                            if len(cells) >= 2:
+                                cells[1].text = item.item.name if item.item else ''
+                            if len(cells) >= 3:
+                                cells[2].text = str(item.quantity_ordered)
+                            if len(cells) >= 4:
+                                cells[3].text = item.item.unit_of_measure if item.item else ''
+                            if len(cells) >= 5:
+                                lot_numbers = []
+                                for allocation in SalesOrderLot.objects.filter(sales_order_item=item):
+                                    lot_numbers.append(allocation.lot.lot_number)
+                                cells[4].text = ', '.join(lot_numbers) if lot_numbers else ''
+                        items_added = True
+                        break
+                if items_added:
+                    break
+            
+            # Save to temporary file
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.docx') as tmp_file:
+                doc.save(tmp_file.name)
+                tmp_path = tmp_file.name
+            
+            # Read the file content
+            with open(tmp_path, 'rb') as f:
+                file_content = f.read()
+            
+            # Clean up temp file
+            os.unlink(tmp_path)
+            
+            # Return as HTTP response
+            response = HttpResponse(file_content, content_type='application/vnd.openxmlformats-officedocument.wordprocessingml.document')
+            response['Content-Disposition'] = f'attachment; filename="Packing_List_{sales_order.so_number}.docx"'
+            return response
+            
+        except ImportError:
+            return Response(
+                {'error': 'python-docx is not installed. Please install it with: pip install python-docx'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+        except Exception as e:
+            import logging
+            import traceback
+            logger = logging.getLogger(__name__)
+            logger.error(f'Failed to generate packing list: {str(e)}')
+            logger.error(f'Traceback: {traceback.format_exc()}')
+            return Response(
+                {'error': f'Failed to generate packing list: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
 
 class InvoiceViewSet(viewsets.ModelViewSet):
@@ -2814,11 +3655,12 @@ class CalendarEventsViewSet(viewsets.ViewSet):
         
         events = []
         
-        # Shipment events
+        # Shipment events - include all statuses that need attention
         if 'shipments' in event_types:
+            # Get orders that need to be shipped (have expected_ship_date)
             shipments = SalesOrder.objects.filter(
-                status__in=['allocated', 'shipped', 'completed']
-            ).exclude(status='cancelled')
+                status__in=['draft', 'allocated', 'ready_for_shipment', 'shipped', 'completed']
+            ).exclude(status='cancelled').exclude(expected_ship_date__isnull=True)
             
             if start_date:
                 shipments = shipments.filter(
@@ -2832,18 +3674,35 @@ class CalendarEventsViewSet(viewsets.ViewSet):
                 )
             
             for so in shipments:
-                # Use actual_ship_date if available, otherwise expected_ship_date
-                ship_date = so.actual_ship_date.date() if so.actual_ship_date else (so.expected_ship_date.date() if so.expected_ship_date else None)
+                # Use expected_ship_date for planning, actual_ship_date for completed
+                ship_date = so.expected_ship_date.date() if so.expected_ship_date else (so.actual_ship_date.date() if so.actual_ship_date else None)
                 if ship_date:
+                    # Determine if this is an actual shipment or planned
+                    is_actual = so.status in ['shipped', 'completed'] and so.actual_ship_date is not None
+                    needs_checkout = so.status in ['ready_for_shipment']
+                    needs_allocation = so.status in ['draft', 'allocated']
+                    
+                    if needs_checkout:
+                        title = f'Check Out & Ship: {so.so_number}'
+                    elif needs_allocation:
+                        title = f'Allocate & Ship: {so.so_number}'
+                    elif is_actual:
+                        title = f'Ship: {so.so_number}'
+                    else:
+                        title = f'Ship (Expected): {so.so_number}'
+                    
                     events.append({
                         'id': f'shipment_{so.id}',
                         'type': 'shipment',
-                        'title': f'Ship {so.so_number}',
+                        'title': title,
                         'date': ship_date.isoformat(),
                         'sales_order_id': so.id,
                         'sales_order_number': so.so_number,
                         'customer_name': so.customer_name,
-                        'is_actual': so.actual_ship_date is not None,
+                        'status': so.status,
+                        'is_actual': is_actual,
+                        'needs_checkout': needs_checkout,
+                        'needs_allocation': needs_allocation,
                     })
         
         # Raw material receipt events
@@ -2881,9 +3740,11 @@ class CalendarEventsViewSet(viewsets.ViewSet):
                     'po_number': lot.po_number,
                 })
         
-        # Production events
+        # Production events - include scheduled and in-progress batches
         if 'production' in event_types:
-            batches = ProductionBatch.objects.all()
+            batches = ProductionBatch.objects.filter(
+                status__in=['scheduled', 'in_progress', 'closed']
+            )
             
             if start_date:
                 batches = batches.filter(production_date__gte=timezone.make_aware(datetime.combine(start_date, datetime.min.time())))
@@ -2891,10 +3752,17 @@ class CalendarEventsViewSet(viewsets.ViewSet):
                 batches = batches.filter(production_date__lte=timezone.make_aware(datetime.combine(end_date, datetime.max.time())))
             
             for batch in batches:
+                if batch.status == 'scheduled':
+                    title = f'Make Batch: {batch.batch_number}'
+                elif batch.status == 'in_progress':
+                    title = f'In Progress: {batch.batch_number}'
+                else:
+                    title = f'Batch: {batch.batch_number}'
+                
                 events.append({
                     'id': f'production_{batch.id}',
                     'type': 'production',
-                    'title': f'Batch {batch.batch_number}',
+                    'title': title,
                     'date': batch.production_date.date().isoformat(),
                     'batch_id': batch.id,
                     'batch_number': batch.batch_number,
@@ -4336,4 +5204,129 @@ class FinishedProductSpecificationViewSet(viewsets.ModelViewSet):
         response = HttpResponse(pdf_content, content_type='application/pdf')
         response['Content-Disposition'] = f'inline; filename="FPS_{item.sku}.pdf"'
         return response
+
+
+class LotDepletionLogViewSet(viewsets.ReadOnlyModelViewSet):
+    """ViewSet for viewing lot depletion logs"""
+    queryset = LotDepletionLog.objects.all()
+    serializer_class = LotDepletionLogSerializer
+    
+    def get_queryset(self):
+        queryset = LotDepletionLog.objects.select_related('lot', 'lot__item').all()
+        
+        # Filter by lot number if provided
+        lot_number = self.request.query_params.get('lot_number', None)
+        if lot_number:
+            queryset = queryset.filter(lot_number=lot_number)
+        
+        # Filter by SKU if provided
+        sku = self.request.query_params.get('sku', None)
+        if sku:
+            queryset = queryset.filter(item_sku=sku)
+        
+        # Filter by depletion method if provided
+        method = self.request.query_params.get('method', None)
+        if method:
+            queryset = queryset.filter(depletion_method=method)
+        
+        # Filter by date range if provided
+        date_from = self.request.query_params.get('date_from', None)
+        date_to = self.request.query_params.get('date_to', None)
+        if date_from:
+            from django.utils.dateparse import parse_datetime
+            date_from_dt = parse_datetime(date_from)
+            if date_from_dt:
+                queryset = queryset.filter(depleted_at__gte=date_from_dt)
+        if date_to:
+            from django.utils.dateparse import parse_datetime
+            date_to_dt = parse_datetime(date_to)
+            if date_to_dt:
+                queryset = queryset.filter(depleted_at__lte=date_to_dt)
+        
+        return queryset.order_by('-depleted_at')
+
+
+class PurchaseOrderLogViewSet(viewsets.ReadOnlyModelViewSet):
+    """ViewSet for viewing purchase order logs"""
+    queryset = PurchaseOrderLog.objects.all()
+    serializer_class = PurchaseOrderLogSerializer
+    
+    def get_queryset(self):
+        queryset = PurchaseOrderLog.objects.select_related('purchase_order').all()
+        
+        # Filter by PO number if provided
+        po_number = self.request.query_params.get('po_number', None)
+        if po_number:
+            queryset = queryset.filter(po_number=po_number)
+        
+        # Filter by vendor if provided
+        vendor = self.request.query_params.get('vendor', None)
+        if vendor:
+            queryset = queryset.filter(vendor_name=vendor)
+        
+        # Filter by action if provided
+        action = self.request.query_params.get('action', None)
+        if action:
+            queryset = queryset.filter(action=action)
+        
+        # Filter by lot number if provided
+        lot_number = self.request.query_params.get('lot_number', None)
+        if lot_number:
+            queryset = queryset.filter(lot_number=lot_number)
+        
+        # Filter by date range if provided
+        date_from = self.request.query_params.get('date_from', None)
+        date_to = self.request.query_params.get('date_to', None)
+        if date_from:
+            from django.utils.dateparse import parse_datetime
+            date_from_dt = parse_datetime(date_from)
+            if date_from_dt:
+                queryset = queryset.filter(logged_at__gte=date_from_dt)
+        if date_to:
+            from django.utils.dateparse import parse_datetime
+            date_to_dt = parse_datetime(date_to)
+            if date_to_dt:
+                queryset = queryset.filter(logged_at__lte=date_to_dt)
+        
+        return queryset.order_by('-logged_at')
+
+
+class ProductionLogViewSet(viewsets.ReadOnlyModelViewSet):
+    """ViewSet for viewing production logs"""
+    queryset = ProductionLog.objects.all()
+    serializer_class = ProductionLogSerializer
+    
+    def get_queryset(self):
+        queryset = ProductionLog.objects.select_related('batch', 'batch__finished_good_item').all()
+        
+        # Filter by batch number if provided
+        batch_number = self.request.query_params.get('batch_number', None)
+        if batch_number:
+            queryset = queryset.filter(batch_number=batch_number)
+        
+        # Filter by SKU if provided
+        sku = self.request.query_params.get('sku', None)
+        if sku:
+            queryset = queryset.filter(finished_good_sku=sku)
+        
+        # Filter by batch type if provided
+        batch_type = self.request.query_params.get('batch_type', None)
+        if batch_type:
+            queryset = queryset.filter(batch_type=batch_type)
+        
+        # Filter by date range if provided
+        date_from = self.request.query_params.get('date_from', None)
+        date_to = self.request.query_params.get('date_to', None)
+        if date_from:
+            from django.utils.dateparse import parse_datetime
+            date_from_dt = parse_datetime(date_from)
+            if date_from_dt:
+                queryset = queryset.filter(closed_date__gte=date_from_dt)
+        if date_to:
+            from django.utils.dateparse import parse_datetime
+            date_to_dt = parse_datetime(date_to)
+            if date_to_dt:
+                queryset = queryset.filter(closed_date__lte=date_to_dt)
+        
+        return queryset.order_by('-logged_at')
 

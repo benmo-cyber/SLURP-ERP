@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { getItems, createInvoice } from '../../api/finance'
+import { getSalesOrder } from '../../api/salesOrders'
 import './CreateInvoice.css'
 
 interface Item {
@@ -21,9 +22,10 @@ interface InvoiceItem {
 interface CreateInvoiceProps {
   onClose: () => void
   onSuccess: () => void
+  salesOrderId?: number // Optional: if provided, auto-populate from sales order
 }
 
-function CreateInvoice({ onClose, onSuccess }: CreateInvoiceProps) {
+function CreateInvoice({ onClose, onSuccess, salesOrderId }: CreateInvoiceProps) {
   const [items, setItems] = useState<Item[]>([])
   const [formData, setFormData] = useState({
     invoice_type: 'customer',
@@ -37,10 +39,14 @@ function CreateInvoice({ onClose, onSuccess }: CreateInvoiceProps) {
     { item_id: '', description: '', quantity: '', unit_price: '', line_total: '' }
   ])
   const [submitting, setSubmitting] = useState(false)
+  const [loading, setLoading] = useState(false)
 
   useEffect(() => {
     loadItems()
-  }, [])
+    if (salesOrderId) {
+      loadSalesOrderData()
+    }
+  }, [salesOrderId])
 
   const loadItems = async () => {
     try {
@@ -55,6 +61,42 @@ function CreateInvoice({ onClose, onSuccess }: CreateInvoiceProps) {
       }
     } catch (error) {
       console.error('Failed to load items:', error)
+    }
+  }
+
+  const loadSalesOrderData = async () => {
+    if (!salesOrderId) return
+    
+    try {
+      setLoading(true)
+      const salesOrder = await getSalesOrder(salesOrderId)
+      
+      // Auto-populate form data from sales order
+      setFormData(prev => ({
+        ...prev,
+        customer_vendor_name: salesOrder.customer_name || '',
+        customer_vendor_id: salesOrder.customer_reference_number || '',
+        invoice_date: salesOrder.actual_ship_date 
+          ? new Date(salesOrder.actual_ship_date).toISOString().split('T')[0]
+          : new Date().toISOString().split('T')[0],
+      }))
+      
+      // Auto-populate invoice items from sales order items
+      if (salesOrder.items && salesOrder.items.length > 0) {
+        const populatedItems = salesOrder.items.map((item: any) => ({
+          item_id: item.item?.id?.toString() || '',
+          description: item.item?.name || '',
+          quantity: item.quantity_shipped?.toString() || item.quantity_ordered?.toString() || '',
+          unit_price: item.unit_price?.toString() || '',
+          line_total: ((item.quantity_shipped || item.quantity_ordered || 0) * (item.unit_price || 0)).toFixed(2),
+        }))
+        setInvoiceItems(populatedItems)
+      }
+    } catch (error) {
+      console.error('Failed to load sales order data:', error)
+      alert('Failed to load sales order data')
+    } finally {
+      setLoading(false)
     }
   }
 
@@ -112,7 +154,7 @@ function CreateInvoice({ onClose, onSuccess }: CreateInvoiceProps) {
       
       const { subtotal, tax, total } = calculateTotals()
       
-      await createInvoice({
+      const invoiceData: any = {
         invoice_type: formData.invoice_type,
         customer_vendor_name: formData.customer_vendor_name,
         customer_vendor_id: formData.customer_vendor_id || null,
@@ -126,9 +168,16 @@ function CreateInvoice({ onClose, onSuccess }: CreateInvoiceProps) {
           unit_price: parseFloat(item.unit_price),
           line_total: parseFloat(item.line_total),
         }))
-      })
+      }
       
-      alert('Invoice created successfully!')
+      // If salesOrderId is provided, link the invoice to the sales order
+      if (salesOrderId) {
+        invoiceData.sales_order_id = salesOrderId
+      }
+      
+      await createInvoice(invoiceData)
+      
+      alert(salesOrderId ? 'Invoice updated successfully!' : 'Invoice created successfully!')
       onSuccess()
     } catch (error: any) {
       console.error('Failed to create invoice:', error)
@@ -144,9 +193,13 @@ function CreateInvoice({ onClose, onSuccess }: CreateInvoiceProps) {
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal-content invoice-modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
-          <h2>Create Invoice</h2>
+          <h2>{salesOrderId ? 'Review & Issue Invoice' : 'Create Invoice'}</h2>
           <button onClick={onClose} className="close-btn">×</button>
         </div>
+
+        {loading && (
+          <div className="loading-message">Loading sales order data...</div>
+        )}
 
         <form onSubmit={handleSubmit} className="invoice-form">
           <div className="form-row">

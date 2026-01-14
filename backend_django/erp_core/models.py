@@ -182,6 +182,109 @@ class InventoryTransaction(models.Model):
         ordering = ['-transaction_date']
 
 
+class LotDepletionLog(models.Model):
+    """Logs when a lot is depleted to zero or below"""
+    DEPLETION_METHOD_CHOICES = [
+        ('production', 'Production Batch'),
+        ('sales', 'Sales Order'),
+        ('adjustment', 'Inventory Adjustment'),
+        ('manual', 'Manual Depletion'),
+        ('reversal', 'Reversal/Cancellation'),
+    ]
+    
+    lot = models.ForeignKey(Lot, on_delete=models.CASCADE, related_name='depletion_logs')
+    lot_number = models.CharField(max_length=20, db_index=True, help_text='Snapshot of lot number at time of depletion')
+    item_sku = models.CharField(max_length=255, db_index=True, help_text='Item SKU at time of depletion')
+    item_name = models.CharField(max_length=255, help_text='Item name at time of depletion')
+    vendor = models.CharField(max_length=255, blank=True, null=True, help_text='Vendor at time of depletion')
+    
+    initial_quantity = models.FloatField(help_text='Original quantity when lot was created')
+    quantity_before = models.FloatField(help_text='Quantity remaining before this transaction')
+    quantity_used = models.FloatField(help_text='Quantity used in this transaction')
+    final_quantity = models.FloatField(help_text='Quantity remaining after this transaction (should be 0 or negative)')
+    
+    depletion_method = models.CharField(max_length=20, choices=DEPLETION_METHOD_CHOICES, help_text='How the lot was depleted')
+    reference_number = models.CharField(max_length=100, blank=True, null=True, help_text='Batch number, SO number, etc.')
+    reference_type = models.CharField(max_length=50, blank=True, null=True, help_text='Type of reference (batch_number, so_number, etc.)')
+    
+    transaction_id = models.IntegerField(blank=True, null=True, help_text='Related InventoryTransaction ID if applicable')
+    batch_id = models.IntegerField(blank=True, null=True, help_text='Related ProductionBatch ID if applicable')
+    sales_order_id = models.IntegerField(blank=True, null=True, help_text='Related SalesOrder ID if applicable')
+    
+    notes = models.TextField(blank=True, null=True, help_text='Additional context about the depletion')
+    depleted_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    
+    class Meta:
+        ordering = ['-depleted_at']
+        verbose_name = 'Lot Depletion Log'
+        verbose_name_plural = 'Lot Depletion Logs'
+        indexes = [
+            models.Index(fields=['-depleted_at', 'lot_number']),
+            models.Index(fields=['item_sku', '-depleted_at']),
+            models.Index(fields=['depletion_method', '-depleted_at']),
+        ]
+    
+    def __str__(self):
+        return f"Lot {self.lot_number} depleted via {self.get_depletion_method_display()} on {self.depleted_at.strftime('%Y-%m-%d %H:%M')}"
+
+
+class PurchaseOrderLog(models.Model):
+    """Logs all purchase order activities including creation, updates, and check-ins"""
+    ACTION_CHOICES = [
+        ('created', 'Created'),
+        ('updated', 'Updated'),
+        ('check_in', 'Check-In'),
+        ('partial_check_in', 'Partial Check-In'),
+        ('cancelled', 'Cancelled'),
+        ('completed', 'Completed'),
+    ]
+    
+    purchase_order = models.ForeignKey('PurchaseOrder', on_delete=models.CASCADE, related_name='logs')
+    po_number = models.CharField(max_length=100, db_index=True, help_text='PO number at time of log')
+    action = models.CharField(max_length=20, choices=ACTION_CHOICES)
+    
+    # Vendor information (snapshot at time of log)
+    vendor_name = models.CharField(max_length=255, blank=True, null=True)
+    vendor_customer_name = models.CharField(max_length=255, blank=True, null=True)
+    
+    # PO details (snapshot)
+    po_date = models.DateTimeField(blank=True, null=True)
+    required_date = models.DateTimeField(blank=True, null=True)
+    status = models.CharField(max_length=50, blank=True, null=True)
+    carrier = models.CharField(max_length=255, blank=True, null=True)
+    po_received_date = models.DateTimeField(blank=True, null=True, help_text='PO received date at time of log')
+    
+    # Check-in information (if applicable)
+    lot_number = models.CharField(max_length=20, blank=True, null=True, help_text='Lot number if this is a check-in')
+    item_sku = models.CharField(max_length=255, blank=True, null=True, help_text='Item SKU if this is a check-in')
+    item_name = models.CharField(max_length=255, blank=True, null=True, help_text='Item name if this is a check-in')
+    quantity_received = models.FloatField(blank=True, null=True, help_text='Quantity received in this check-in')
+    received_date = models.DateTimeField(blank=True, null=True, help_text='Date lot was received')
+    
+    # PO item totals (snapshot)
+    total_items = models.IntegerField(default=0, help_text='Total number of items in PO')
+    total_quantity_ordered = models.FloatField(default=0.0, help_text='Total quantity ordered')
+    total_quantity_received = models.FloatField(default=0.0, help_text='Total quantity received at time of log')
+    
+    notes = models.TextField(blank=True, null=True, help_text='Additional context')
+    logged_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    logged_by = models.CharField(max_length=255, blank=True, null=True, help_text='User who performed the action')
+    
+    class Meta:
+        ordering = ['-logged_at']
+        verbose_name = 'Purchase Order Log'
+        verbose_name_plural = 'Purchase Order Logs'
+        indexes = [
+            models.Index(fields=['-logged_at', 'po_number']),
+            models.Index(fields=['vendor_name', '-logged_at']),
+            models.Index(fields=['action', '-logged_at']),
+            models.Index(fields=['lot_number', '-logged_at']),
+        ]
+    
+    def __str__(self):
+        return f"PO {self.po_number} - {self.get_action_display()} on {self.logged_at.strftime('%Y-%m-%d %H:%M')}"
+
+
 class ProductionBatch(models.Model):
     BATCH_TYPE_CHOICES = [
         ('production', 'Production'),
@@ -233,6 +336,58 @@ class ProductionBatchOutput(models.Model):
     
     class Meta:
         ordering = ['id']
+
+
+class ProductionLog(models.Model):
+    """Logs all closed production batches with complete information"""
+    batch = models.ForeignKey(ProductionBatch, on_delete=models.CASCADE, related_name='logs')
+    batch_number = models.CharField(max_length=100, db_index=True, help_text='Batch number at time of closure')
+    batch_type = models.CharField(max_length=20, help_text='production or repack')
+    
+    # Finished good information
+    finished_good_sku = models.CharField(max_length=255, db_index=True)
+    finished_good_name = models.CharField(max_length=255)
+    
+    # Quantities
+    quantity_produced = models.FloatField(help_text='Planned quantity')
+    quantity_actual = models.FloatField(help_text='Actual quantity produced')
+    variance = models.FloatField(default=0.0)
+    wastes = models.FloatField(default=0.0)
+    spills = models.FloatField(default=0.0)
+    
+    # Dates
+    production_date = models.DateTimeField(help_text='When batch was produced')
+    closed_date = models.DateTimeField(help_text='When batch was closed')
+    
+    # Input materials (stored as JSON-like text for simplicity)
+    input_materials = models.TextField(blank=True, null=True, help_text='JSON string of input materials used')
+    input_lots = models.TextField(blank=True, null=True, help_text='JSON string of input lot numbers')
+    
+    # Output lot information
+    output_lot_number = models.CharField(max_length=20, blank=True, null=True)
+    output_quantity = models.FloatField(blank=True, null=True)
+    
+    # Quality control
+    qc_parameters = models.TextField(blank=True, null=True)
+    qc_actual = models.TextField(blank=True, null=True)
+    qc_initials = models.CharField(max_length=255, blank=True, null=True)
+    
+    notes = models.TextField(blank=True, null=True)
+    closed_by = models.CharField(max_length=255, blank=True, null=True, help_text='User who closed the batch')
+    logged_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    
+    class Meta:
+        ordering = ['-logged_at']
+        verbose_name = 'Production Log'
+        verbose_name_plural = 'Production Logs'
+        indexes = [
+            models.Index(fields=['-logged_at', 'batch_number']),
+            models.Index(fields=['finished_good_sku', '-logged_at']),
+            models.Index(fields=['closed_date', '-logged_at']),
+        ]
+    
+    def __str__(self):
+        return f"Batch {self.batch_number} closed on {self.closed_date.strftime('%Y-%m-%d %H:%M')}"
 
 
 class Formula(models.Model):
@@ -343,6 +498,7 @@ class SalesOrder(models.Model):
     STATUS_CHOICES = [
         ('draft', 'Draft'),
         ('allocated', 'Allocated'),
+        ('ready_for_shipment', 'Ready for Shipment'),
         ('issued', 'Issued'),
         ('shipped', 'Shipped'),
         ('received', 'Received'),
@@ -366,6 +522,7 @@ class SalesOrder(models.Model):
     order_date = models.DateTimeField(auto_now_add=True)
     expected_ship_date = models.DateTimeField(blank=True, null=True, help_text='Requested ship date')
     actual_ship_date = models.DateTimeField(blank=True, null=True, help_text='Actual ship date')
+    tracking_number = models.CharField(max_length=255, blank=True, null=True, help_text='Shipping tracking number')
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='draft')
     notes = models.TextField(blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -875,10 +1032,39 @@ class SalesOrderLot(models.Model):
         return f"{self.sales_order_item.sales_order.so_number} - {self.lot.lot_number} - {self.quantity_allocated}"
 
 
+class Shipment(models.Model):
+    """Track individual shipments for sales orders (supports multiple shipments per order)"""
+    sales_order = models.ForeignKey(SalesOrder, on_delete=models.CASCADE, related_name='shipments')
+    ship_date = models.DateTimeField(help_text='Date the shipment was shipped')
+    tracking_number = models.CharField(max_length=255, help_text='Tracking number for this shipment')
+    notes = models.TextField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        ordering = ['-ship_date', '-created_at']
+    
+    def __str__(self):
+        return f"{self.sales_order.so_number} - {self.ship_date.strftime('%Y-%m-%d')} - {self.tracking_number}"
+
+
+class ShipmentItem(models.Model):
+    """Items shipped in a specific shipment"""
+    shipment = models.ForeignKey(Shipment, on_delete=models.CASCADE, related_name='items')
+    sales_order_item = models.ForeignKey(SalesOrderItem, on_delete=models.CASCADE, related_name='shipment_items')
+    quantity_shipped = models.FloatField(help_text='Quantity shipped in this specific shipment')
+    
+    class Meta:
+        ordering = ['shipment', 'sales_order_item']
+    
+    def __str__(self):
+        return f"{self.shipment.sales_order.so_number} - {self.sales_order_item.item.name} - {self.quantity_shipped}"
+
+
 class Invoice(models.Model):
     """Invoice for sales orders"""
     STATUS_CHOICES = [
         ('draft', 'Draft'),
+        ('issued', 'Issued'),
         ('sent', 'Sent'),
         ('paid', 'Paid'),
         ('overdue', 'Overdue'),

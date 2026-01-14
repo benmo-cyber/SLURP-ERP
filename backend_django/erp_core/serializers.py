@@ -5,7 +5,8 @@ from .models import (
     InventoryTransaction, Vendor, VendorHistory, SupplierSurvey,
     SupplierDocument, TemporaryException, CostMaster, CostMasterHistory, Account,
     FinishedProductSpecification, Customer, CustomerPricing, VendorPricing, SalesOrderLot, Invoice, InvoiceItem,
-    ShipToLocation, CustomerContact, SalesCall, CustomerForecast
+    ShipToLocation, CustomerContact, SalesCall, CustomerForecast, LotDepletionLog, PurchaseOrderLog, ProductionLog,
+    Shipment, ShipmentItem
 )
 
 
@@ -19,7 +20,7 @@ class LotSerializer(serializers.ModelSerializer):
     item = ItemSerializer(read_only=True)
     item_id = serializers.IntegerField(write_only=True)
     received_date = serializers.DateTimeField(required=False, allow_null=True)
-    quantity_remaining = serializers.FloatField(required=False, allow_null=True)
+    quantity_remaining = serializers.SerializerMethodField()
     lot_number = serializers.CharField(required=False, read_only=True)
     
     class Meta:
@@ -28,6 +29,33 @@ class LotSerializer(serializers.ModelSerializer):
         extra_kwargs = {
             'quantity_remaining': {'required': False},
         }
+    
+    def get_quantity_remaining(self, obj):
+        """Calculate quantity_remaining excluding sales allocations"""
+        from django.db.models import Sum
+        from .models import SalesOrderLot
+        
+        # Start with the lot's quantity_remaining
+        remaining = obj.quantity_remaining
+        
+        # Subtract any allocations to sales orders
+        try:
+            allocated_to_sales = SalesOrderLot.objects.filter(
+                lot=obj,
+                sales_order_item__sales_order__status__in=[
+                    'draft', 'allocated', 'issued', 'ready_for_shipment', 'shipped'
+                ]
+            ).aggregate(
+                total=Sum('quantity_allocated')
+            )['total'] or 0.0
+            
+            # Subtract allocated quantity from remaining
+            remaining = max(0.0, remaining - allocated_to_sales)
+        except Exception:
+            # If SalesOrderLot table doesn't exist or there's an error, just return the original
+            pass
+        
+        return remaining
     
     def create(self, validated_data):
         item_id = validated_data.pop('item_id')
@@ -179,9 +207,24 @@ class SalesOrderItemSerializer(serializers.ModelSerializer):
         fields = '__all__'
 
 
+class ShipmentItemSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ShipmentItem
+        fields = '__all__'
+
+
+class ShipmentSerializer(serializers.ModelSerializer):
+    items = ShipmentItemSerializer(many=True, read_only=True)
+    
+    class Meta:
+        model = Shipment
+        fields = '__all__'
+
+
 class SalesOrderSerializer(serializers.ModelSerializer):
     items = SalesOrderItemSerializer(many=True, read_only=True)
     customer_detail = serializers.SerializerMethodField()
+    shipments = ShipmentSerializer(many=True, read_only=True)
     
     class Meta:
         model = SalesOrder
@@ -495,4 +538,36 @@ class InvoiceSerializer(serializers.ModelSerializer):
     class Meta:
         model = Invoice
         fields = '__all__'
+
+
+class LotDepletionLogSerializer(serializers.ModelSerializer):
+    lot_number_display = serializers.CharField(source='lot_number', read_only=True)
+    item_sku_display = serializers.CharField(source='item_sku', read_only=True)
+    item_name_display = serializers.CharField(source='item_name', read_only=True)
+    depletion_method_display = serializers.CharField(source='get_depletion_method_display', read_only=True)
+    
+    class Meta:
+        model = LotDepletionLog
+        fields = '__all__'
+        read_only_fields = ['depleted_at']
+
+
+class PurchaseOrderLogSerializer(serializers.ModelSerializer):
+    action_display = serializers.CharField(source='get_action_display', read_only=True)
+    po_number_display = serializers.CharField(source='po_number', read_only=True)
+    
+    class Meta:
+        model = PurchaseOrderLog
+        fields = '__all__'
+        read_only_fields = ['logged_at']
+
+
+class ProductionLogSerializer(serializers.ModelSerializer):
+    batch_number_display = serializers.CharField(source='batch_number', read_only=True)
+    finished_good_sku_display = serializers.CharField(source='finished_good_sku', read_only=True)
+    
+    class Meta:
+        model = ProductionLog
+        fields = '__all__'
+        read_only_fields = ['logged_at']
 

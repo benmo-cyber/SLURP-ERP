@@ -1,0 +1,397 @@
+.sales-orders-list {
+  padding: 20px;
+  background: white;
+  border-radius: 8px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.orders-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+  padding-bottom: 15px;
+  border-bottom: 2px solid #e0e0e0;
+}
+
+.orders-header h2 {
+  margin: 0;
+  color: #333;
+  font-size: 24px;
+}
+
+.orders-stats {
+  color: #666;
+  font-size: 14px;
+}
+
+.orders-table-container {
+  overflow-x: auto;
+}
+
+.orders-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.orders-table thead {
+  background-color: #f5f5f5;
+  border-bottom: 2px solid #ddd;
+}
+
+.orders-table th {
+  padding: 12px;
+  text-align: left;
+  font-weight: 600;
+  color: #333;
+  border-bottom: 2px solid #ddd;
+}
+
+.orders-table td {
+  padding: 12px;
+  border-bottom: 1px solid #eee;
+}
+
+.orders-table tbody tr:hover {
+  background-color: #f9f9f9;
+}
+
+.orders-table tbody tr.clickable-row {
+  cursor: pointer;
+}
+
+.orders-table tbody tr.clickable-row:hover {
+  background-color: #e8f4f8;
+}
+
+.empty-state {
+  text-align: center;
+  padding: 40px;
+  color: #999;
+  font-style: italic;
+}
+
+.loading {
+  text-align: center;
+  padding: 40px;
+  color: #666;
+}
+
+.error-message {
+  color: #d32f2f;
+  padding: 20px;
+  background-color: #ffebee;
+  border-radius: 4px;
+  margin-bottom: 10px;
+}
+
+.so-number {
+  font-weight: 600;
+  color: #1976d2;
+}
+
+.so-number-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.so-number-main {
+  font-weight: 600;
+  color: #1976d2;
+  font-size: 14px;
+}
+
+.customer-po-number {
+  font-size: 11px;
+  color: #666;
+  font-weight: normal;
+  font-style: italic;
+}
+
+.customer-info {
+  display: flex;
+  flex-direction: column;
+}
+
+.customer-name {
+  font-weight: 500;
+  color: #333;
+}
+
+.customer-location {
+  font-size: 12px;
+  color: #666;
+  margin-top: 2px;
+}
+
+.badge {
+  display: inline-block;
+  padding: 4px 12px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 500;
+  text-transform: capitalize;
+}
+
+.badge-draft {
+  background-color: #fff3cd;
+  color: #856404;
+}
+
+.badge-allocated {
+  background-color: #cfe2ff;
+  color: #084298;
+}
+
+.badge-shipped {
+  background-color: #d1e7dd;
+  color: #0f5132;
+}
+
+.badge-cancelled {
+  background-color: #f8d7da;
+  color: #842029;
+}
+
+.badge-default {
+  background-color: #e9ecef;
+  color: #495057;
+}
+
+.items-summary {
+  position: relative;
+}
+
+.items-detail {
+  display: none;
+  position: absolute;
+  left: 0;
+  top: 100%;
+  background: white;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  padding: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  z-index: 10;
+  min-width: 200px;
+  margin-top: 4px;
+}
+
+.items-summary:hover .items-detail {
+  display: block;
+}
+
+.item-line {
+  padding: 4px 0;
+  font-size: 12px;
+  border-bottom: 1px solid #eee;
+}
+
+.item-line:last-child {
+  border-bottom: none;
+}
+
+.allocated {
+  color: #1976d2;
+  font-weight: 500;
+}
+
+.total-column {
+  font-weight: 600;
+  color: #333;
+  text-align: right;
+}
+
+.editable-ship-date {
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+  transition: background-color 0.2s;
+}
+
+.editable-ship-date:hover {
+  background-color: #e3f2fd;
+}
+
+.ship-date-edit {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.date-input {
+  padding: 4px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 14px;
+}
+
+.btn-save-small,
+.btn-cancel-small {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 16px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  transition: background-color 0.2s;
+}
+
+.btn-save-small:hover {
+  background-color: #d1e7dd;
+}
+
+.btn-cancel-small:hover {
+  background-color: #f8d7da;
+}
+
+.btn-issue {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 16px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  transition: background-color 0.2s;
+}
+
+.btn-issue:hover {
+  background-color: #d1e7dd;
+}
+
+.items-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.item-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.item-sku {
+  font-weight: 500;
+  color: #1976d2;
+}
+
+.item-quantity {
+  color: #333;
+}
+
+.allocated-badge {
+  font-size: 11px;
+  color: #1976d2;
+  font-weight: 500;
+}
+
+.totals-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+}
+
+.total-line {
+  color: #666;
+}
+
+.grand-total {
+  font-weight: 600;
+  color: #333;
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid #ddd;
+}
+
+.actions-column {
+  text-align: center;
+  width: 100px;
+}
+
+.action-buttons {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+}
+
+.btn-icon {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 18px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  transition: background-color 0.2s;
+}
+
+.btn-icon:hover:not(:disabled) {
+  background-color: #f0f0f0;
+}
+
+.btn-icon:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-edit:hover:not(:disabled) {
+  background-color: #e3f2fd;
+}
+
+.btn-delete:hover:not(:disabled) {
+  background-color: #ffebee;
+}
+
+.btn-issue:hover:not(:disabled) {
+  background-color: #d1e7dd;
+}
+
+.btn-action {
+  padding: 6px 12px;
+  border: 1px solid #ddd;
+  background: white;
+  cursor: pointer;
+  border-radius: 4px;
+  font-size: 0.85rem;
+  font-weight: 500;
+  transition: all 0.2s;
+  margin-right: 5px;
+}
+
+.btn-allocate {
+  background: #007bff;
+  color: white;
+  border-color: #007bff;
+}
+
+.btn-allocate:hover {
+  background: #0056b3;
+  border-color: #0056b3;
+}
+
+.completed-orders-section {
+  margin-top: 40px;
+  padding-top: 40px;
+  border-top: 2px solid #e0e0e0;
+}
+
+.ship-dates-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ship-date-item {
+  font-size: 0.9rem;
+  color: #333;
+}
+
+.tracking-number {
+  font-size: 0.85rem;
+  color: #666;
+  font-style: italic;
+}
