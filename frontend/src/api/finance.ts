@@ -78,8 +78,8 @@ export const updateAccount = async (id: number, data: any) => {
 }
 
 // Journal Entries API
-export const getJournalEntries = async () => {
-  const response = await api.get('/journal-entries/')
+export const getJournalEntries = async (params?: { status?: string, start_date?: string, end_date?: string }) => {
+  const response = await api.get('/journal-entries/', { params })
   return response.data.results || response.data
 }
 
@@ -98,18 +98,110 @@ export const updateJournalEntry = async (id: number, data: any) => {
   return response.data
 }
 
+export const postJournalEntry = async (id: number) => {
+  const response = await api.post(`/journal-entries/${id}/post/`)
+  return response.data
+}
+
 // Financial Reports API
-export const getTrialBalance = async () => {
-  const response = await api.get('/trial-balance/')
+export const getTrialBalance = async (params?: { as_of_date?: string, fiscal_period_id?: number }) => {
+  const response = await api.get('/financial-reports/trial-balance/', { params })
   return response.data
 }
 
-export const getBalanceSheet = async () => {
-  const response = await api.get('/balance-sheet/')
+export const getBalanceSheet = async (params?: { as_of_date?: string, fiscal_period_id?: number }) => {
+  const response = await api.get('/financial-reports/balance-sheet/', { params })
   return response.data
 }
 
-export const getIncomeStatement = async () => {
-  const response = await api.get('/income-statement/')
+export const getIncomeStatement = async (params?: { start_date?: string, end_date?: string, fiscal_period_id?: number }) => {
+  const response = await api.get('/financial-reports/income-statement/', { params })
+  return response.data
+}
+
+export const getCashFlowStatement = async (params?: { start_date?: string, end_date?: string, fiscal_period_id?: number }) => {
+  const response = await api.get('/financial-reports/cash-flow/', { params })
+  return response.data
+}
+
+// Fiscal Periods API
+export const getFiscalPeriods = async () => {
+  const response = await api.get('/fiscal-periods/')
+  return response.data.results || response.data
+}
+
+// General Ledger API
+export const getGeneralLedger = async (params?: { account_id?: number, start_date?: string, end_date?: string, fiscal_period_id?: number }) => {
+  const response = await api.get('/general-ledger/', { params })
+  return response.data.results || response.data
+}
+
+export const getAccountBalance = async (accountId: number, asOfDate: string) => {
+  const response = await api.get('/general-ledger/account-balance/', { 
+    params: { account_id: accountId, as_of_date: asOfDate }
+  })
+  return response.data
+}
+
+// Accounts Payable API
+export const getAccountsPayable = async (params?: { status?: string, vendor_name?: string, due_date_from?: string, due_date_to?: string }) => {
+  const response = await api.get('/accounts-payable/', { params })
+  return response.data.results || response.data
+}
+
+export const getAccountsPayableAging = async () => {
+  const response = await api.get('/accounts-payable/aging/')
+  return response.data
+}
+
+export const getAccountsPayableEntry = async (id: number) => {
+  const response = await api.get(`/accounts-payable/${id}/`)
+  return response.data
+}
+
+export const updateAccountsPayableEntry = async (id: number, data: any) => {
+  const response = await api.put(`/accounts-payable/${id}/`, data)
+  return response.data
+}
+
+// Accounts Receivable API
+export const getAccountsReceivable = async (params?: { status?: string, customer_name?: string, due_date_from?: string, due_date_to?: string }) => {
+  const response = await api.get('/accounts-receivable/', { params })
+  return response.data.results || response.data
+}
+
+export const getAccountsReceivableAging = async () => {
+  const response = await api.get('/accounts-receivable/aging/')
+  return response.data
+}
+
+export const getAccountsReceivableEntry = async (id: number) => {
+  const response = await api.get(`/accounts-receivable/${id}/`)
+  return response.data
+}
+
+export const updateAccountsReceivableEntry = async (id: number, data: any) => {
+  const response = await api.put(`/accounts-receivable/${id}/`, data)
+  return response.data
+}
+
+// Payments API
+export const getPayments = async (params?: { payment_type?: string, date_from?: string, date_to?: string }) => {
+  const response = await api.get('/payments/', { params })
+  return response.data.results || response.data
+}
+
+export const getPayment = async (id: number) => {
+  const response = await api.get(`/payments/${id}/`)
+  return response.data
+}
+
+export const createPayment = async (data: any) => {
+  const response = await api.post('/payments/', data)
+  return response.data
+}
+
+export const updatePayment = async (id: number, data: any) => {
+  const response = await api.put(`/payments/${id}/`, data)
   return response.data
 }

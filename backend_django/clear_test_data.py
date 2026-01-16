@@ -51,7 +51,8 @@ def clear_all_data():
         ("Vendors", Vendor),
         ("Cost Master History", CostMasterHistory),
         ("Cost Master", CostMaster),
-        ("Accounts", Account),
+        # NOTE: Accounts are NOT cleared - they are part of the Chart of Accounts
+        # ("Accounts", Account),  # PROTECTED - Chart of Accounts should not be cleared
         ("Lots", Lot),  # Must be before Items
         ("Items", Item),  # Base inventory model
     ]

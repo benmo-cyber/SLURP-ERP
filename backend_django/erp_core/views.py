@@ -12,10 +12,13 @@ from .models import (
     SupplierSurvey, SupplierDocument, TemporaryException, CostMaster, CostMasterHistory, Account,
     FinishedProductSpecification, Customer, CustomerPricing, VendorPricing, SalesOrderLot, Invoice, InvoiceItem,
     ShipToLocation, CustomerContact, SalesCall, CustomerForecast, BatchNumberSequence, LotDepletionLog,
-    PurchaseOrderLog, ProductionLog, Shipment, ShipmentItem
+    PurchaseOrderLog, ProductionLog, Shipment, ShipmentItem, LotTransactionLog, ItemPackSize,
+    FiscalPeriod, JournalEntry, JournalEntryLine, GeneralLedgerEntry, AccountBalance,
+    AccountsPayable, AccountsReceivable, Payment
 )
 from .serializers import (
     ItemSerializer, LotSerializer, ProductionBatchSerializer,
+    AccountsPayableSerializer, AccountsReceivableSerializer, PaymentSerializer,
     FormulaSerializer, FormulaItemSerializer,
     PurchaseOrderSerializer, PurchaseOrderItemSerializer,
     SalesOrderSerializer, SalesOrderItemSerializer,
@@ -25,8 +28,71 @@ from .serializers import (
     FinishedProductSpecificationSerializer, CustomerSerializer, CustomerPricingSerializer, VendorPricingSerializer,
     InvoiceSerializer, InvoiceItemSerializer, ShipToLocationSerializer,
     CustomerContactSerializer, SalesCallSerializer, CustomerForecastSerializer, LotDepletionLogSerializer,
-    PurchaseOrderLogSerializer, ProductionLogSerializer
+    LotTransactionLogSerializer, PurchaseOrderLogSerializer, ProductionLogSerializer, ItemPackSizeSerializer,
+    FiscalPeriodSerializer, JournalEntrySerializer, JournalEntryLineSerializer, GeneralLedgerEntrySerializer, AccountBalanceSerializer
 )
+
+
+def log_lot_transaction(lot, quantity_before, quantity_change, transaction_type, reference_number=None, 
+                       reference_type=None, transaction_id=None, batch_id=None, sales_order_id=None, 
+                       purchase_order_id=None, notes=None):
+    """
+    Log ALL lot quantity transactions, not just depletions.
+    
+    Args:
+        lot: The Lot instance
+        quantity_before: Quantity remaining before this transaction
+        quantity_change: Quantity change (positive for additions, negative for reductions)
+        transaction_type: One of 'receipt', 'production_input', 'production_output', 'sale', 'adjustment', 'allocation', 'deallocation', 'manual', 'reversal'
+        reference_number: Batch number, SO number, PO number, etc.
+        reference_type: Type of reference ('batch_number', 'so_number', 'po_number', etc.)
+        transaction_id: Related InventoryTransaction ID if applicable
+        batch_id: Related ProductionBatch ID if applicable
+        sales_order_id: Related SalesOrder ID if applicable
+        purchase_order_id: Related PurchaseOrder ID if applicable
+        notes: Additional context
+    """
+    quantity_after = quantity_before + quantity_change
+    
+    try:
+        # Check if the table exists before trying to create a log entry
+        from django.db import connection
+        table_exists = False
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='erp_core_lottransactionlog'")
+                table_exists = cursor.fetchone() is not None
+        except Exception:
+            # If we can't check, assume table doesn't exist
+            table_exists = False
+        
+        if not table_exists:
+            # Table doesn't exist, skip logging silently
+            return
+        
+        LotTransactionLog.objects.create(
+            lot=lot,
+            lot_number=lot.lot_number,
+            item_sku=lot.item.sku,
+            item_name=lot.item.name,
+            vendor=lot.item.vendor or '',
+            transaction_type=transaction_type,
+            quantity_before=quantity_before,
+            quantity_change=quantity_change,
+            quantity_after=quantity_after,
+            reference_number=reference_number,
+            reference_type=reference_type,
+            transaction_id=transaction_id,
+            batch_id=batch_id,
+            sales_order_id=sales_order_id,
+            purchase_order_id=purchase_order_id,
+            notes=notes or f'Lot {lot.lot_number} transaction: {transaction_type}'
+        )
+    except Exception as e:
+        # Log error but don't fail the transaction
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.warning(f'Failed to log lot transaction for lot {lot.lot_number}: {str(e)}')
 
 
 def log_lot_depletion(lot, quantity_before, quantity_used, depletion_method, reference_number=None, 
@@ -48,9 +114,38 @@ def log_lot_depletion(lot, quantity_before, quantity_used, depletion_method, ref
     """
     final_quantity = quantity_before - quantity_used
     
-    # Only log if the lot is depleted (reaches zero or goes negative)
+    # Also log as a regular transaction
+    log_lot_transaction(
+        lot=lot,
+        quantity_before=quantity_before,
+        quantity_change=-quantity_used,
+        transaction_type=depletion_method if depletion_method in ['production', 'sales', 'adjustment', 'manual', 'reversal'] else 'adjustment',
+        reference_number=reference_number,
+        reference_type=reference_type,
+        transaction_id=transaction_id,
+        batch_id=batch_id,
+        sales_order_id=sales_order_id,
+        notes=notes
+    )
+    
+    # Only log depletion if the lot is depleted (reaches zero or goes negative)
     if final_quantity <= 0:
         try:
+            # Check if the table exists before trying to create a log entry
+            from django.db import connection
+            table_exists = False
+            try:
+                with connection.cursor() as cursor:
+                    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='erp_core_lotdepletionlog'")
+                    table_exists = cursor.fetchone() is not None
+            except Exception:
+                # If we can't check, assume table doesn't exist
+                table_exists = False
+            
+            if not table_exists:
+                # Table doesn't exist, skip logging silently
+                return
+            
             LotDepletionLog.objects.create(
                 lot=lot,
                 lot_number=lot.lot_number,
@@ -71,9 +166,10 @@ def log_lot_depletion(lot, quantity_before, quantity_used, depletion_method, ref
             )
         except Exception as e:
             # Log error but don't fail the transaction
+            # Silently ignore if table doesn't exist
             import logging
             logger = logging.getLogger(__name__)
-            logger.error(f'Failed to log lot depletion for lot {lot.lot_number}: {str(e)}')
+            logger.warning(f'Failed to log lot depletion for lot {lot.lot_number}: {str(e)}')
 
 
 def log_purchase_order_action(po, action, lot=None, notes=None):
@@ -124,6 +220,743 @@ def log_purchase_order_action(po, action, lot=None, notes=None):
         import logging
         logger = logging.getLogger(__name__)
         logger.error(f'Failed to log purchase order action for PO {po.po_number}: {str(e)}')
+
+
+def create_ap_entry_from_po(purchase_order, invoice_number=None, invoice_date=None, due_date=None):
+    """
+    Create an Accounts Payable entry when a purchase order is received.
+    
+    Args:
+        purchase_order: PurchaseOrder instance
+        invoice_number: Vendor invoice number (optional)
+        invoice_date: Date of vendor invoice (defaults to today)
+        due_date: Payment due date (defaults to invoice_date + 30 days)
+    """
+    from django.utils import timezone
+    from datetime import timedelta
+    
+    try:
+        # Check if AP entry already exists for this PO
+        if AccountsPayable.objects.filter(purchase_order=purchase_order).exists():
+            return AccountsPayable.objects.get(purchase_order=purchase_order)
+        
+        # Get vendor information
+        vendor_name = purchase_order.vendor_customer_name or 'Unknown Vendor'
+        vendor_id = purchase_order.vendor_customer_id
+        
+        # Calculate totals
+        total_amount = purchase_order.total or 0.0
+        if total_amount <= 0:
+            # Calculate from items if total is not set
+            total_amount = sum(
+                item.quantity_ordered * (item.unit_price or 0) 
+                for item in purchase_order.items.all()
+            )
+        
+        # Set dates
+        if not invoice_date:
+            invoice_date = timezone.now().date()
+        if not due_date:
+            # Default to 30 days from invoice date
+            due_date = invoice_date + timedelta(days=30)
+        
+        # Get or create AP account (typically account number 2000)
+        ap_account = None
+        try:
+            ap_account = Account.objects.filter(account_type='liability', account_number__startswith='2000').first()
+            if not ap_account:
+                # Create a default AP account if none exists
+                ap_account = Account.objects.create(
+                    account_number='2000',
+                    name='Accounts Payable',
+                    account_type='liability',
+                    description='Accounts Payable'
+                )
+        except Exception:
+            pass
+        
+        # Create AP entry
+        ap_entry = AccountsPayable.objects.create(
+            vendor_name=vendor_name,
+            vendor_id=vendor_id,
+            purchase_order=purchase_order,
+            invoice_number=invoice_number or purchase_order.po_number,
+            invoice_date=invoice_date,
+            due_date=due_date,
+            original_amount=total_amount,
+            amount_paid=0.0,
+            balance=total_amount,
+            status='open',
+            account=ap_account,
+            notes=f'Created from PO {purchase_order.po_number}'
+        )
+        
+        # Auto-create journal entry for AP
+        try:
+            journal_entry = create_ap_journal_entry(ap_entry)
+            if journal_entry:
+                ap_entry.journal_entry = journal_entry
+                ap_entry.save()
+        except Exception as je_error:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(f'Failed to create journal entry for AP entry {ap_entry.id}: {str(je_error)}')
+        
+        return ap_entry
+    except Exception as e:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.warning(f'Failed to create AP entry for PO {purchase_order.po_number}: {str(e)}')
+        return None
+
+
+def create_ap_journal_entry(ap_entry):
+    """
+    Create a journal entry when an AP entry is created.
+    Debits: Expense/Asset accounts (based on PO items)
+    Credits: Accounts Payable
+    """
+    from django.utils import timezone
+    
+    try:
+        # Get or create fiscal period
+        today = timezone.now().date()
+        fiscal_period = FiscalPeriod.objects.filter(
+            start_date__lte=today,
+            end_date__gte=today
+        ).first()
+        
+        if not fiscal_period:
+            # Create a default fiscal period if none exists
+            from datetime import date
+            year = today.year
+            fiscal_period, _ = FiscalPeriod.objects.get_or_create(
+                name=f"{year}-01",
+                defaults={
+                    'start_date': date(year, 1, 1),
+                    'end_date': date(year, 12, 31),
+                    'period_type': 'year'
+                }
+            )
+        
+        # Generate journal entry number
+        last_entry = JournalEntry.objects.filter(entry_date=today).order_by('-entry_number').first()
+        if last_entry:
+            try:
+                last_number = int(last_entry.entry_number.split('-')[-1])
+                new_number = last_number + 1
+            except (ValueError, IndexError):
+                new_number = 1
+        else:
+            new_number = 1
+        entry_number = f"JE-{today.strftime('%Y%m%d')}-{new_number:03d}"
+        
+        # Create journal entry
+        journal_entry = JournalEntry.objects.create(
+            entry_number=entry_number,
+            entry_date=ap_entry.invoice_date,
+            description=f'AP Entry: {ap_entry.vendor_name} - {ap_entry.invoice_number}',
+            reference_number=ap_entry.invoice_number,
+            status='draft',
+            fiscal_period=fiscal_period,
+            created_by='system'
+        )
+        
+        # Get AP account (liability)
+        ap_account = ap_entry.account
+        if not ap_account:
+            ap_account = Account.objects.filter(account_type='liability', account_number__startswith='2000').first()
+            if not ap_account:
+                ap_account = Account.objects.create(
+                    account_number='2000',
+                    name='Accounts Payable',
+                    account_type='liability',
+                    description='Accounts Payable'
+                )
+        
+        # Use Raw Materials Used account (5000) for purchases
+        # In a full implementation, this would be determined by the PO items
+        expense_account = Account.objects.filter(account_number='5000').first()
+        if not expense_account:
+            expense_account = Account.objects.filter(account_type='expense').first()
+            if not expense_account:
+                expense_account = Account.objects.create(
+                    account_number='5000',
+                    name='Raw Materials Used',
+                    account_type='expense',
+                    description='Monthly consumption'
+                )
+        
+        # Create journal entry lines
+        # Debit: Expense/Asset account
+        JournalEntryLine.objects.create(
+            journal_entry=journal_entry,
+            account=expense_account,
+            debit_credit='debit',
+            amount=ap_entry.original_amount,
+            description=f'Purchase from {ap_entry.vendor_name}'
+        )
+        
+        # Credit: Accounts Payable
+        JournalEntryLine.objects.create(
+            journal_entry=journal_entry,
+            account=ap_account,
+            debit_credit='credit',
+            amount=ap_entry.original_amount,
+            description=f'AP Entry: {ap_entry.invoice_number}'
+        )
+        
+        # Auto-post the journal entry
+        try:
+            # Validate debits and credits balance
+            total_debits = sum(line.amount for line in journal_entry.lines.filter(debit_credit='debit'))
+            total_credits = sum(line.amount for line in journal_entry.lines.filter(debit_credit='credit'))
+            
+            if abs(total_debits - total_credits) <= 0.01:  # Allow for floating point precision
+                # Create GeneralLedgerEntry for each line
+                for line in journal_entry.lines.all():
+                    GeneralLedgerEntry.objects.create(
+                        journal_entry=journal_entry,
+                        journal_entry_line=line,
+                        account=line.account,
+                        fiscal_period=journal_entry.fiscal_period,
+                        entry_date=journal_entry.entry_date,
+                        description=line.description or journal_entry.description,
+                        debit_credit=line.debit_credit,
+                        amount=line.amount,
+                        reference_number=journal_entry.reference_number,
+                        reference_type='ap_entry'
+                    )
+                
+                journal_entry.status = 'posted'
+                journal_entry.save()
+                
+                # Update AccountBalances
+                _update_account_balances(journal_entry)
+        except Exception as post_error:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(f'Failed to auto-post journal entry {journal_entry.entry_number}: {str(post_error)}')
+        
+        return journal_entry
+    except Exception as e:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.warning(f'Failed to create journal entry for AP entry {ap_entry.id}: {str(e)}')
+        return None
+
+
+def create_ar_journal_entry(ar_entry):
+    """
+    Create a journal entry when an AR entry is created.
+    Debits: Accounts Receivable
+    Credits: Revenue account
+    """
+    from django.utils import timezone
+    
+    try:
+        # Get or create fiscal period
+        today = timezone.now().date()
+        fiscal_period = FiscalPeriod.objects.filter(
+            start_date__lte=today,
+            end_date__gte=today
+        ).first()
+        
+        if not fiscal_period:
+            # Create a default fiscal period if none exists
+            from datetime import date
+            year = today.year
+            fiscal_period, _ = FiscalPeriod.objects.get_or_create(
+                name=f"{year}-01",
+                defaults={
+                    'start_date': date(year, 1, 1),
+                    'end_date': date(year, 12, 31),
+                    'period_type': 'year'
+                }
+            )
+        
+        # Generate journal entry number
+        last_entry = JournalEntry.objects.filter(entry_date=today).order_by('-entry_number').first()
+        if last_entry:
+            try:
+                last_number = int(last_entry.entry_number.split('-')[-1])
+                new_number = last_number + 1
+            except (ValueError, IndexError):
+                new_number = 1
+        else:
+            new_number = 1
+        entry_number = f"JE-{today.strftime('%Y%m%d')}-{new_number:03d}"
+        
+        # Create journal entry
+        journal_entry = JournalEntry.objects.create(
+            entry_number=entry_number,
+            entry_date=ar_entry.invoice_date,
+            description=f'AR Entry: {ar_entry.customer_name} - Invoice {ar_entry.invoice.invoice_number if ar_entry.invoice else "N/A"}',
+            reference_number=ar_entry.invoice.invoice_number if ar_entry.invoice else None,
+            status='draft',
+            fiscal_period=fiscal_period,
+            created_by='system'
+        )
+        
+        # Get AR account (asset) - use Accounts Receivable (1100)
+        ar_account = ar_entry.account
+        if not ar_account:
+            ar_account = Account.objects.filter(account_number='1100').first()  # Accounts Receivable
+            if not ar_account:
+                ar_account = Account.objects.filter(account_type='asset', account_number__startswith='11').first()
+                if not ar_account:
+                    ar_account = Account.objects.create(
+                        account_number='1100',
+                        name='Accounts Receivable',
+                        account_type='asset',
+                        description=''
+                    )
+        
+        # Get revenue account - use Sales - Finished Goods (4000)
+        revenue_account = Account.objects.filter(account_number='4000').first()
+        if not revenue_account:
+            revenue_account = Account.objects.filter(account_type='revenue').first()
+            if not revenue_account:
+                revenue_account = Account.objects.create(
+                    account_number='4000',
+                    name='Sales - Finished Goods',
+                    account_type='revenue',
+                    description='Parent income account'
+                )
+        
+        # Create journal entry lines
+        # Debit: Accounts Receivable
+        JournalEntryLine.objects.create(
+            journal_entry=journal_entry,
+            account=ar_account,
+            debit_credit='debit',
+            amount=ar_entry.original_amount,
+            description=f'AR Entry: Invoice {ar_entry.invoice.invoice_number if ar_entry.invoice else "N/A"}'
+        )
+        
+        # Credit: Revenue
+        JournalEntryLine.objects.create(
+            journal_entry=journal_entry,
+            account=revenue_account,
+            debit_credit='credit',
+            amount=ar_entry.original_amount,
+            description=f'Sale to {ar_entry.customer_name}'
+        )
+        
+        # Auto-post the journal entry
+        try:
+            # Validate debits and credits balance
+            total_debits = sum(line.amount for line in journal_entry.lines.filter(debit_credit='debit'))
+            total_credits = sum(line.amount for line in journal_entry.lines.filter(debit_credit='credit'))
+            
+            if abs(total_debits - total_credits) <= 0.01:  # Allow for floating point precision
+                # Create GeneralLedgerEntry for each line
+                for line in journal_entry.lines.all():
+                    GeneralLedgerEntry.objects.create(
+                        journal_entry=journal_entry,
+                        journal_entry_line=line,
+                        account=line.account,
+                        fiscal_period=journal_entry.fiscal_period,
+                        entry_date=journal_entry.entry_date,
+                        description=line.description or journal_entry.description,
+                        debit_credit=line.debit_credit,
+                        amount=line.amount,
+                        reference_number=journal_entry.reference_number,
+                        reference_type='ar_entry'
+                    )
+                
+                journal_entry.status = 'posted'
+                journal_entry.save()
+                
+                # Update AccountBalances
+                _update_account_balances(journal_entry)
+        except Exception as post_error:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(f'Failed to auto-post journal entry {journal_entry.entry_number}: {str(post_error)}')
+        
+        return journal_entry
+    except Exception as e:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.warning(f'Failed to create journal entry for AR entry {ar_entry.id}: {str(e)}')
+        return None
+
+
+def create_ap_payment_journal_entry(payment, ap_entry):
+    """
+    Create a journal entry when an AP payment is made.
+    Debits: Accounts Payable
+    Credits: Cash/Bank account
+    """
+    from django.utils import timezone
+    
+    try:
+        # Get or create fiscal period
+        today = timezone.now().date()
+        fiscal_period = FiscalPeriod.objects.filter(
+            start_date__lte=today,
+            end_date__gte=today
+        ).first()
+        
+        if not fiscal_period:
+            from datetime import date
+            year = today.year
+            fiscal_period, _ = FiscalPeriod.objects.get_or_create(
+                name=f"{year}-01",
+                defaults={
+                    'start_date': date(year, 1, 1),
+                    'end_date': date(year, 12, 31),
+                    'period_type': 'year'
+                }
+            )
+        
+        # Generate journal entry number
+        last_entry = JournalEntry.objects.filter(entry_date=today).order_by('-entry_number').first()
+        if last_entry:
+            try:
+                last_number = int(last_entry.entry_number.split('-')[-1])
+                new_number = last_number + 1
+            except (ValueError, IndexError):
+                new_number = 1
+        else:
+            new_number = 1
+        entry_number = f"JE-{today.strftime('%Y%m%d')}-{new_number:03d}"
+        
+        # Get AP account
+        ap_account = ap_entry.account
+        if not ap_account:
+            ap_account = Account.objects.filter(account_type='liability', account_number__startswith='2000').first()
+        
+        # Get cash/bank account from payment - prefer Checking Account (1000) or Savings (1010)
+        cash_account = payment.account
+        if not cash_account:
+            cash_account = Account.objects.filter(account_number='1000').first()  # Checking Account
+            if not cash_account:
+                cash_account = Account.objects.filter(account_number='1010').first()  # Savings Account
+            if not cash_account:
+                cash_account = Account.objects.filter(account_type='asset', account_number__startswith='10').first()
+                if not cash_account:
+                    cash_account = Account.objects.create(
+                        account_number='1000',
+                        name='Checking Account',
+                        account_type='asset',
+                        description='Main operating bank account'
+                    )
+        
+        # Create journal entry
+        journal_entry = JournalEntry.objects.create(
+            entry_number=entry_number,
+            entry_date=payment.payment_date,
+            description=f'AP Payment: {ap_entry.vendor_name} - {payment.reference_number or payment.payment_method}',
+            reference_number=payment.reference_number or f"Payment-{payment.id}",
+            status='draft',
+            fiscal_period=fiscal_period,
+            created_by='system'
+        )
+        
+        # Create journal entry lines
+        # Debit: Accounts Payable
+        JournalEntryLine.objects.create(
+            journal_entry=journal_entry,
+            account=ap_account,
+            debit_credit='debit',
+            amount=payment.amount,
+            description=f'Payment to {ap_entry.vendor_name}'
+        )
+        
+        # Credit: Cash/Bank
+        JournalEntryLine.objects.create(
+            journal_entry=journal_entry,
+            account=cash_account,
+            debit_credit='credit',
+            amount=payment.amount,
+            description=f'Payment: {payment.reference_number or payment.payment_method}'
+        )
+        
+        # Auto-post the journal entry
+        total_debits = sum(line.amount for line in journal_entry.lines.filter(debit_credit='debit'))
+        total_credits = sum(line.amount for line in journal_entry.lines.filter(debit_credit='credit'))
+        
+        if abs(total_debits - total_credits) <= 0.01:
+            for line in journal_entry.lines.all():
+                GeneralLedgerEntry.objects.create(
+                    journal_entry=journal_entry,
+                    account=line.account,
+                    fiscal_period=journal_entry.fiscal_period,
+                    entry_date=journal_entry.entry_date,
+                    description=line.description or journal_entry.description,
+                    debit=line.amount if line.debit_credit == 'debit' else 0.0,
+                    credit=line.amount if line.debit_credit == 'credit' else 0.0
+                )
+            
+            journal_entry.status = 'posted'
+            journal_entry.save()
+            _update_account_balances(journal_entry)
+            
+            # Link payment to journal entry
+            payment.journal_entry = journal_entry
+            payment.save()
+        
+        return journal_entry
+    except Exception as e:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.warning(f'Failed to create journal entry for AP payment {payment.id}: {str(e)}')
+        return None
+
+
+def create_ar_payment_journal_entry(payment, ar_entry):
+    """
+    Create a journal entry when an AR payment is received.
+    Debits: Cash/Bank account
+    Credits: Accounts Receivable
+    """
+    from django.utils import timezone
+    
+    try:
+        # Get or create fiscal period
+        today = timezone.now().date()
+        fiscal_period = FiscalPeriod.objects.filter(
+            start_date__lte=today,
+            end_date__gte=today
+        ).first()
+        
+        if not fiscal_period:
+            from datetime import date
+            year = today.year
+            fiscal_period, _ = FiscalPeriod.objects.get_or_create(
+                name=f"{year}-01",
+                defaults={
+                    'start_date': date(year, 1, 1),
+                    'end_date': date(year, 12, 31),
+                    'period_type': 'year'
+                }
+            )
+        
+        # Generate journal entry number
+        last_entry = JournalEntry.objects.filter(entry_date=today).order_by('-entry_number').first()
+        if last_entry:
+            try:
+                last_number = int(last_entry.entry_number.split('-')[-1])
+                new_number = last_number + 1
+            except (ValueError, IndexError):
+                new_number = 1
+        else:
+            new_number = 1
+        entry_number = f"JE-{today.strftime('%Y%m%d')}-{new_number:03d}"
+        
+        # Get AR account - use Accounts Receivable (1100)
+        ar_account = ar_entry.account
+        if not ar_account:
+            ar_account = Account.objects.filter(account_number='1100').first()  # Accounts Receivable
+            if not ar_account:
+                ar_account = Account.objects.filter(account_type='asset', account_number__startswith='11').first()
+        
+        # Get cash/bank account from payment - prefer Checking Account (1000) or Savings (1010)
+        cash_account = payment.account
+        if not cash_account:
+            cash_account = Account.objects.filter(account_number='1000').first()  # Checking Account
+            if not cash_account:
+                cash_account = Account.objects.filter(account_number='1010').first()  # Savings Account
+            if not cash_account:
+                cash_account = Account.objects.filter(account_type='asset', account_number__startswith='10').first()
+                if not cash_account:
+                    cash_account = Account.objects.create(
+                        account_number='1000',
+                        name='Checking Account',
+                        account_type='asset',
+                        description='Main operating bank account'
+                    )
+        
+        # Create journal entry
+        journal_entry = JournalEntry.objects.create(
+            entry_number=entry_number,
+            entry_date=payment.payment_date,
+            description=f'AR Payment: {ar_entry.customer_name} - {payment.reference_number or payment.payment_method}',
+            reference_number=payment.reference_number or f"Payment-{payment.id}",
+            status='draft',
+            fiscal_period=fiscal_period,
+            created_by='system'
+        )
+        
+        # Create journal entry lines
+        # Debit: Cash/Bank
+        JournalEntryLine.objects.create(
+            journal_entry=journal_entry,
+            account=cash_account,
+            debit_credit='debit',
+            amount=payment.amount,
+            description=f'Payment from {ar_entry.customer_name}'
+        )
+        
+        # Credit: Accounts Receivable
+        JournalEntryLine.objects.create(
+            journal_entry=journal_entry,
+            account=ar_account,
+            debit_credit='credit',
+            amount=payment.amount,
+            description=f'Payment: {payment.reference_number or payment.payment_method}'
+        )
+        
+        # Auto-post the journal entry
+        total_debits = sum(line.amount for line in journal_entry.lines.filter(debit_credit='debit'))
+        total_credits = sum(line.amount for line in journal_entry.lines.filter(debit_credit='credit'))
+        
+        if abs(total_debits - total_credits) <= 0.01:
+            for line in journal_entry.lines.all():
+                GeneralLedgerEntry.objects.create(
+                    journal_entry=journal_entry,
+                    journal_entry_line=line,
+                    account=line.account,
+                    fiscal_period=journal_entry.fiscal_period,
+                    entry_date=journal_entry.entry_date,
+                    description=line.description or journal_entry.description,
+                    debit_credit=line.debit_credit,
+                    amount=line.amount,
+                    reference_number=journal_entry.reference_number,
+                    reference_type='ar_payment'
+                )
+            
+            journal_entry.status = 'posted'
+            journal_entry.save()
+            _update_account_balances(journal_entry)
+            
+            # Link payment to journal entry
+            payment.journal_entry = journal_entry
+            payment.save()
+        
+        return journal_entry
+    except Exception as e:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.warning(f'Failed to create journal entry for AR payment {payment.id}: {str(e)}')
+        return None
+
+
+def _update_account_balances(journal_entry):
+    """Helper to update account balances after posting a journal entry."""
+    if not journal_entry.fiscal_period:
+        return
+    
+    for line in journal_entry.lines.all():
+        account_balance, created = AccountBalance.objects.get_or_create(
+            account=line.account,
+            fiscal_period=journal_entry.fiscal_period,
+            defaults={'opening_balance': 0.0, 'closing_balance': 0.0, 'period_debits': 0.0, 'period_credits': 0.0}
+        )
+        
+        if line.debit_credit == 'debit':
+            account_balance.period_debits += line.amount
+        else:
+            account_balance.period_credits += line.amount
+        
+        # Calculate closing balance based on account type
+        if line.account.account_type in ['asset', 'expense']:
+            account_balance.closing_balance = account_balance.opening_balance + account_balance.period_debits - account_balance.period_credits
+        elif line.account.account_type in ['liability', 'equity', 'revenue']:
+            account_balance.closing_balance = account_balance.opening_balance + account_balance.period_credits - account_balance.period_debits
+        
+        account_balance.save()
+
+
+def create_ar_entry_from_invoice(invoice):
+    """
+    Create an Accounts Receivable entry when an invoice is created.
+    
+    Args:
+        invoice: Invoice instance
+    """
+    from django.utils import timezone
+    
+    try:
+        # Check if AR entry already exists for this invoice
+        if AccountsReceivable.objects.filter(invoice=invoice).exists():
+            return AccountsReceivable.objects.get(invoice=invoice)
+        
+        # Get customer information
+        customer_name = None
+        customer_id = None
+        sales_order = None
+        
+        # Try to get customer from sales_order
+        if hasattr(invoice, 'sales_order') and invoice.sales_order:
+            sales_order = invoice.sales_order
+            if sales_order.customer:
+                customer_name = sales_order.customer.name
+                customer_id = str(sales_order.customer.id)
+            else:
+                customer_name = sales_order.customer_name
+                customer_id = sales_order.customer_legacy_id
+        
+        # Fallback to invoice customer fields
+        if not customer_name:
+            customer_name = getattr(invoice, 'customer_vendor_name', None) or 'Unknown Customer'
+            customer_id = getattr(invoice, 'customer_vendor_id', None)
+        
+        # Calculate totals
+        total_amount = getattr(invoice, 'grand_total', None) or getattr(invoice, 'total_amount', None) or 0.0
+        if total_amount <= 0:
+            # Calculate from items if total is not set
+            total_amount = getattr(invoice, 'subtotal', 0.0) or 0.0
+            total_amount += getattr(invoice, 'freight', 0.0) or 0.0
+            total_amount += getattr(invoice, 'tax', 0.0) or getattr(invoice, 'tax_amount', 0.0) or 0.0
+            total_amount -= getattr(invoice, 'discount', 0.0) or 0.0
+        
+        # Get dates
+        invoice_date = getattr(invoice, 'invoice_date', None) or timezone.now().date()
+        due_date = getattr(invoice, 'due_date', None) or invoice_date
+        
+        # Get or create AR account - use Accounts Receivable (1100)
+        ar_account = None
+        try:
+            ar_account = Account.objects.filter(account_number='1100').first()  # Accounts Receivable
+            if not ar_account:
+                ar_account = Account.objects.filter(account_type='asset', account_number__startswith='11').first()
+            if not ar_account:
+                # Create a default AR account if none exists
+                ar_account = Account.objects.create(
+                    account_number='1100',
+                    name='Accounts Receivable',
+                    account_type='asset',
+                    description=''
+                )
+        except Exception:
+            pass
+        
+        # Create AR entry
+        ar_entry = AccountsReceivable.objects.create(
+            customer_name=customer_name,
+            customer_id=customer_id,
+            invoice=invoice,
+            sales_order=sales_order,
+            invoice_date=invoice_date,
+            due_date=due_date,
+            original_amount=total_amount,
+            amount_paid=0.0,
+            balance=total_amount,
+            status='open',
+            account=ar_account,
+            notes=f'Created from invoice {invoice.invoice_number}'
+        )
+        
+        # Auto-create journal entry for AR
+        try:
+            journal_entry = create_ar_journal_entry(ar_entry)
+            if journal_entry:
+                ar_entry.journal_entry = journal_entry
+                ar_entry.save()
+        except Exception as je_error:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(f'Failed to create journal entry for AR entry {ar_entry.id}: {str(je_error)}')
+        
+        return ar_entry
+    except Exception as e:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.warning(f'Failed to create AR entry for invoice {invoice.invoice_number}: {str(e)}')
+        return None
 
 
 def log_production_batch_closure(batch, notes=None):
@@ -685,6 +1518,59 @@ class LotViewSet(viewsets.ModelViewSet):
         return Response(serializer.data)
     
     @action(detail=False, methods=['get'])
+    def debug_lot(self, request):
+        """Debug endpoint to check a specific lot number"""
+        lot_number = request.query_params.get('lot_number', None)
+        
+        if not lot_number:
+            return Response({'error': 'lot_number parameter is required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            lot = Lot.objects.select_related('item').get(lot_number=lot_number)
+            from django.db.models import Sum
+            from .models import SalesOrderLot
+            
+            # Get allocations
+            allocations = SalesOrderLot.objects.filter(lot=lot).select_related(
+                'sales_order_item__sales_order'
+            )
+            
+            allocation_details = []
+            total_allocated = 0.0
+            for alloc in allocations:
+                allocation_details.append({
+                    'sales_order': alloc.sales_order_item.sales_order.so_number,
+                    'sales_order_status': alloc.sales_order_item.sales_order.status,
+                    'quantity_allocated': alloc.quantity_allocated,
+                    'sales_order_item_id': alloc.sales_order_item.id
+                })
+                total_allocated += alloc.quantity_allocated
+            
+            return Response({
+                'lot_number': lot.lot_number,
+                'item_sku': lot.item.sku,
+                'item_name': lot.item.name,
+                'item_id': lot.item.id,
+                'vendor': lot.item.vendor,
+                'status': lot.status,
+                'quantity': lot.quantity,
+                'quantity_remaining': lot.quantity_remaining,
+                'allocations': allocation_details,
+                'total_allocated': total_allocated,
+                'calculated_remaining': max(0.0, lot.quantity_remaining - total_allocated),
+                'received_date': lot.received_date,
+                'expiration_date': lot.expiration_date
+            })
+        except Lot.DoesNotExist:
+            return Response({'error': f'Lot {lot_number} not found'}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            import traceback
+            return Response({
+                'error': str(e),
+                'traceback': traceback.format_exc()
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    
+    @action(detail=False, methods=['get'])
     def inventory_details(self, request):
         """Get inventory details grouped hierarchically: SKU -> Vendor -> Lots"""
         from django.db.models import Sum, Q
@@ -933,7 +1819,9 @@ class LotViewSet(viewsets.ModelViewSet):
                 total_quantity = total_quantity + on_order - consumed_in_production
                 
                 # Calculate allocated to production (sum across all vendor lots)
-                # Allocate materials when batch status is 'in_progress' or 'open' (not yet consumed)
+                # Only allocate materials when batch status is 'in_progress' (not 'scheduled' or 'closed')
+                # 'scheduled' batches haven't started yet, so material isn't actually allocated
+                # 'closed' batches have already consumed the material (quantity_remaining already reduced)
                 allocated_to_production = 0.0
                 try:
                     with connection.cursor() as cursor:
@@ -941,7 +1829,7 @@ class LotViewSet(viewsets.ModelViewSet):
                         if cursor.fetchone():
                             allocated_to_production = ProductionBatchInput.objects.filter(
                                 lot__in=vendor_lots,
-                                batch__status__in=['in_progress', 'open']  # Support both old and new status values
+                                batch__status='in_progress'  # Only count in_progress batches (material actively allocated)
                             ).aggregate(
                                 total=Sum('quantity_used')
                             )['total'] or 0.0
@@ -973,8 +1861,9 @@ class LotViewSet(viewsets.ModelViewSet):
                     'item_sku': sku,
                     'description': display_item.name,
                     'vendor': vendor_name,
-                    'pack_size': display_item.pack_size,
-                    'pack_size_unit': display_item.unit_of_measure,
+                    'pack_size': display_item.pack_size,  # Legacy field
+                    'pack_size_unit': display_item.unit_of_measure,  # Legacy field
+                    'pack_sizes': [ItemPackSizeSerializer(ps).data for ps in display_item.pack_sizes.filter(is_active=True)],
                     'total_quantity': total_quantity,
                     'allocated_to_sales': allocated_to_sales,
                     'allocated_to_production': allocated_to_production,
@@ -1131,6 +2020,26 @@ class LotViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
         lot = serializer.save()
         
+        # Handle pack_size_id if provided
+        pack_size_id = request.data.get('pack_size_id')
+        if pack_size_id:
+            try:
+                pack_size = ItemPackSize.objects.get(id=pack_size_id, item=lot.item, is_active=True)
+                lot.pack_size = pack_size
+                lot.save()
+            except ItemPackSize.DoesNotExist:
+                # If pack_size_id doesn't exist or doesn't match item, try to find default
+                default_pack_size = ItemPackSize.objects.filter(item=lot.item, is_default=True, is_active=True).first()
+                if default_pack_size:
+                    lot.pack_size = default_pack_size
+                    lot.save()
+        else:
+            # If no pack_size_id provided, try to set default
+            default_pack_size = ItemPackSize.objects.filter(item=lot.item, is_default=True, is_active=True).first()
+            if default_pack_size:
+                lot.pack_size = default_pack_size
+                lot.save()
+        
         # For raw materials, ensure vendor_lot_number is saved
         if item and item.item_type == 'raw_material':
             vendor_lot_number = request.data.get('vendor_lot_number')
@@ -1162,17 +2071,37 @@ class LotViewSet(viewsets.ModelViewSet):
         
         # Only create inventory transaction for accepted lots
         if lot_status == 'accepted':
-            InventoryTransaction.objects.create(
+            transaction = InventoryTransaction.objects.create(
                 transaction_type='receipt',
                 lot=lot,
                 quantity=lot.quantity,
             )
             
-            # Update on_order and PO item if PO number is provided
+            # Get PO if exists for logging
+            po = None
             if lot.po_number:
                 try:
                     from .models import PurchaseOrder, PurchaseOrderItem
                     po = PurchaseOrder.objects.get(po_number=lot.po_number)
+                except PurchaseOrder.DoesNotExist:
+                    pass
+            
+            # Log the transaction
+            log_lot_transaction(
+                lot=lot,
+                quantity_before=0.0,  # New lot, no previous quantity
+                quantity_change=lot.quantity,
+                transaction_type='receipt',
+                reference_number=lot.po_number,
+                reference_type='po_number',
+                transaction_id=transaction.id,
+                purchase_order_id=po.id if po else None,
+                notes=f'Lot received - PO: {lot.po_number}' if lot.po_number else 'Lot received'
+            )
+            
+            # Update on_order and PO item if PO number is provided
+            if lot.po_number and po:
+                try:
                     for po_item in po.items.all():
                         if po_item.item == lot.item:
                             # Update quantity received
@@ -1419,6 +2348,28 @@ class LotViewSet(viewsets.ModelViewSet):
         }, status=status.HTTP_200_OK)
 
 
+class ItemPackSizeViewSet(viewsets.ModelViewSet):
+    """ViewSet for managing item pack sizes"""
+    queryset = ItemPackSize.objects.select_related('item').all()
+    serializer_class = ItemPackSizeSerializer
+    
+    def get_queryset(self):
+        queryset = ItemPackSize.objects.select_related('item').all()
+        
+        # Filter by item_id if provided
+        item_id = self.request.query_params.get('item_id', None)
+        if item_id:
+            queryset = queryset.filter(item_id=item_id)
+        
+        # Filter by is_active if provided
+        is_active = self.request.query_params.get('is_active', None)
+        if is_active is not None:
+            is_active_bool = is_active.lower() == 'true'
+            queryset = queryset.filter(is_active=is_active_bool)
+        
+        return queryset.order_by('item', 'pack_size', 'pack_size_unit')
+
+
 class ProductionBatchViewSet(viewsets.ModelViewSet):
     queryset = ProductionBatch.objects.select_related('finished_good_item').prefetch_related(
         'inputs__lot__item', 'outputs__lot__item'
@@ -1583,7 +2534,9 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
             
             # Create inventory transaction for input (reduce quantity) - round to 2 decimal places
             rounded_quantity = round(quantity_used, 2)
-            InventoryTransaction.objects.create(
+            quantity_before = lot.quantity_remaining
+            
+            transaction = InventoryTransaction.objects.create(
                 transaction_type='production_input',
                 lot=lot,
                 quantity=round(-rounded_quantity, 2),
@@ -1591,8 +2544,20 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
                 reference_number=batch.batch_number
             )
             
+            # Log the transaction
+            log_lot_transaction(
+                lot=lot,
+                quantity_before=quantity_before,
+                quantity_change=-rounded_quantity,
+                transaction_type='production_input',
+                reference_number=batch.batch_number,
+                reference_type='batch_number',
+                transaction_id=transaction.id,
+                batch_id=batch.id,
+                notes=f'Used in production batch {batch.batch_number}'
+            )
+            
             # Update lot quantity_remaining - round to 2 decimal places
-            quantity_before = lot.quantity_remaining
             lot.quantity_remaining = round(lot.quantity_remaining - rounded_quantity, 2)
             lot.save()
             
@@ -1623,6 +2588,19 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
         if batch_type == 'repack':
             # For repack, create a new lot with the same item
             if not outputs_data:
+                # Get pack_size_id from request data if provided (for repack to different pack size)
+                pack_size_id = request.data.get('output_pack_size_id')
+                pack_size = None
+                if pack_size_id:
+                    try:
+                        pack_size = ItemPackSize.objects.get(id=pack_size_id, item=batch.finished_good_item, is_active=True)
+                    except ItemPackSize.DoesNotExist:
+                        pass
+                
+                # If no pack_size specified, use default for the item
+                if not pack_size:
+                    pack_size = ItemPackSize.objects.filter(item=batch.finished_good_item, is_default=True, is_active=True).first()
+                
                 # Auto-create output lot if not provided
                 output_quantity = batch.quantity_produced if batch.quantity_produced > 0 else total_input_quantity
                 item = batch.finished_good_item
@@ -1634,6 +2612,7 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
                 new_lot = Lot.objects.create(
                     lot_number=lot_number,
                     item=item,
+                    pack_size=pack_size,
                     quantity=output_quantity,
                     quantity_remaining=output_quantity,
                     received_date=timezone.now(),
@@ -1648,12 +2627,25 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
                 )
                 
                 # Create inventory transaction for output (add quantity)
-                InventoryTransaction.objects.create(
+                transaction = InventoryTransaction.objects.create(
                     transaction_type='production_output',
                     lot=new_lot,
                     quantity=output_quantity,
                     notes=f'Repack batch {batch.batch_number} output',
                     reference_number=batch.batch_number
+                )
+                
+                # Log the transaction
+                log_lot_transaction(
+                    lot=new_lot,
+                    quantity_before=0.0,  # New lot
+                    quantity_change=output_quantity,
+                    transaction_type='production_output',
+                    reference_number=batch.batch_number,
+                    reference_type='batch_number',
+                    transaction_id=transaction.id,
+                    batch_id=batch.id,
+                    notes=f'Repack batch {batch.batch_number} output'
                 )
             else:
                 # Use provided outputs
@@ -1766,7 +2758,9 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
                         )
                         
                         # Create inventory transaction for input (reduce quantity)
-                        InventoryTransaction.objects.create(
+                        quantity_before = lot.quantity_remaining
+                        
+                        transaction = InventoryTransaction.objects.create(
                             transaction_type='production_input',
                             lot=lot,
                             quantity=round(-quantity_used, 2),
@@ -1774,8 +2768,20 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
                             reference_number=instance.batch_number
                         )
                         
+                        # Log the transaction
+                        log_lot_transaction(
+                            lot=lot,
+                            quantity_before=quantity_before,
+                            quantity_change=-quantity_used,
+                            transaction_type='production_input',
+                            reference_number=instance.batch_number,
+                            reference_type='batch_number',
+                            transaction_id=transaction.id,
+                            batch_id=instance.id,
+                            notes=f'Adjusted in production batch {instance.batch_number}'
+                        )
+                        
                         # Update lot quantity_remaining
-                        quantity_before = lot.quantity_remaining
                         lot.quantity_remaining = round(lot.quantity_remaining - quantity_used, 2)
                         lot.save()
                         
@@ -2143,6 +3149,67 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
             # Store batch number for error messages
             batch_number = batch.batch_number
             
+            # BEFORE reversing, create a log entry for the unclose action
+            # This preserves the audit trail - the original closure log stays, and we add a new entry
+            try:
+                import json
+                from django.utils import timezone
+                
+                # Get input materials information
+                input_materials = []
+                input_lots = []
+                for input_item in batch.inputs.all():
+                    try:
+                        input_materials.append({
+                            'item_sku': input_item.lot.item.sku,
+                            'item_name': input_item.lot.item.name,
+                            'quantity_used': input_item.quantity_used
+                        })
+                        input_lots.append(input_item.lot.lot_number)
+                    except Exception:
+                        pass
+                
+                # Get output lot information
+                output_lot_number = None
+                output_quantity = None
+                output = batch.outputs.first()
+                if output:
+                    try:
+                        output_lot_number = output.lot.lot_number
+                        output_quantity = output.quantity_produced
+                    except Exception:
+                        pass
+                
+                # Create log entry for unclose action BEFORE batch is deleted
+                # Since ProductionLog.batch now allows NULL (SET_NULL on delete),
+                # the log entry will be preserved even after batch deletion
+                ProductionLog.objects.create(
+                    batch=batch,  # Will be set to NULL when batch is deleted (SET_NULL)
+                    batch_number=batch.batch_number,
+                    batch_type=batch.batch_type,
+                    finished_good_sku=batch.finished_good_item.sku,
+                    finished_good_name=batch.finished_good_item.name,
+                    quantity_produced=batch.quantity_produced,
+                    quantity_actual=batch.quantity_actual,
+                    variance=batch.variance,
+                    wastes=batch.wastes,
+                    spills=batch.spills,
+                    production_date=batch.production_date,
+                    closed_date=batch.closed_date or timezone.now(),  # Keep original closed_date
+                    input_materials=json.dumps(input_materials),
+                    input_lots=json.dumps(input_lots),
+                    output_lot_number=output_lot_number,
+                    output_quantity=output_quantity,
+                    notes=f"BATCH UNCLOSED/REVERSED - {batch.notes or ''}",
+                    closed_by=None,  # Clear closed_by since it's being unclosed
+                    logged_at=timezone.now()
+                )
+            except Exception as log_error:
+                # Log error but don't fail the reversal
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.warning(f'Failed to create unclose log entry for batch {batch_number}: {str(log_error)}')
+            
             # CRITICAL: Get all lot IDs BEFORE doing anything else
             # Get output lot IDs and lot objects before deleting anything
             output_lot_ids = []
@@ -2466,6 +3533,9 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
         # Log status change
         log_purchase_order_action(purchase_order, 'updated', notes='Purchase order marked as received')
         
+        # Create AP entry when PO is received
+        create_ap_entry_from_po(purchase_order)
+        
         serializer = self.get_serializer(purchase_order)
         return Response(serializer.data, status=status.HTTP_200_OK)
     
@@ -2533,6 +3603,42 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
         
         serializer = self.get_serializer(new_po)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
+    
+    def update(self, request, *args, **kwargs):
+        """Update purchase order and log the change"""
+        partial = kwargs.pop('partial', False)
+        instance = self.get_object()
+        old_status = instance.status
+        
+        # Call parent update method
+        response = super().update(request, *args, partial=partial, **kwargs)
+        
+        # Reload instance to get updated values
+        instance.refresh_from_db()
+        
+        # Log the update
+        notes = []
+        if old_status != instance.status:
+            notes.append(f'Status changed from {old_status} to {instance.status}')
+        
+        # Check if items were modified
+        if 'items' in request.data:
+            notes.append('Items updated')
+        
+        # Check if other fields were modified
+        modified_fields = []
+        for field in ['vendor_customer_name', 'order_date', 'expected_delivery_date', 'required_date', 
+                     'carrier', 'tracking_number', 'shipping_cost', 'total', 'notes']:
+            if field in request.data:
+                modified_fields.append(field)
+        
+        if modified_fields:
+            notes.append(f'Fields updated: {", ".join(modified_fields)}')
+        
+        log_notes = '; '.join(notes) if notes else 'Purchase order updated'
+        log_purchase_order_action(instance, 'updated', notes=log_notes)
+        
+        return response
     
     @action(detail=True, methods=['post'])
     def cancel(self, request, pk=None):
@@ -2870,6 +3976,19 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
                             notes=f'Allocated to distributed item lot {new_lot_number}'
                         )
                         
+                        # Log the transaction
+                        log_lot_transaction(
+                            lot=raw_lot,
+                            quantity_before=quantity_before,
+                            quantity_change=-qty,
+                            transaction_type='production_input',
+                            reference_number=sales_order.so_number,
+                            reference_type='so_number',
+                            transaction_id=transaction.id,
+                            sales_order_id=sales_order.id,
+                            notes=f'Used for distributed item lot {new_lot_number} in sales order {sales_order.so_number}'
+                        )
+                        
                         # Log depletion if lot reaches zero or below
                         log_lot_depletion(
                             lot=raw_lot,
@@ -2884,11 +4003,24 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
                         )
                     
                     # Create transaction for new lot
-                    InventoryTransaction.objects.create(
+                    transaction = InventoryTransaction.objects.create(
                         transaction_type='production',
                         lot=new_lot,
                         quantity=total_quantity,
                         reference_number=sales_order.so_number,
+                        notes=f'Created from raw materials for sales order {sales_order.so_number}'
+                    )
+                    
+                    # Log the transaction
+                    log_lot_transaction(
+                        lot=new_lot,
+                        quantity_before=0.0,  # New lot
+                        quantity_change=total_quantity,
+                        transaction_type='production_output',
+                        reference_number=sales_order.so_number,
+                        reference_type='so_number',
+                        transaction_id=transaction.id,
+                        sales_order_id=sales_order.id,
                         notes=f'Created from raw materials for sales order {sales_order.so_number}'
                     )
                     
@@ -2996,11 +4128,12 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        if not tracking_number:
-            return Response(
-                {'error': 'tracking_number is required'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+        # Tracking number is optional - can be added later in Finance
+        # if not tracking_number:
+        #     return Response(
+        #         {'error': 'tracking_number is required'},
+        #         status=status.HTTP_400_BAD_REQUEST
+        #     )
         
         try:
             ship_date = datetime.strptime(ship_date_str, '%Y-%m-%d').date()
@@ -3016,11 +4149,11 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
         use_partial = bool(items_to_ship)
         
         with transaction.atomic():
-            # Create shipment record
+            # Create shipment record (tracking number can be added later)
             shipment = Shipment.objects.create(
                 sales_order=sales_order,
                 ship_date=timezone.make_aware(datetime.combine(ship_date, datetime.min.time())),
-                tracking_number=tracking_number,
+                tracking_number=tracking_number or '',
                 notes=request.data.get('notes', '')
             )
             
@@ -3071,6 +4204,28 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
                         )
                     
                     quantity_before = lot.quantity_remaining
+                    
+                    transaction = InventoryTransaction.objects.create(
+                        transaction_type='adjustment',
+                        lot=lot,
+                        quantity=-quantity_from_allocation,
+                        reference_number=sales_order.so_number,
+                        notes=f'Shipped for sales order {sales_order.so_number} - Shipment {shipment.id}'
+                    )
+                    
+                    # Log the transaction
+                    log_lot_transaction(
+                        lot=lot,
+                        quantity_before=quantity_before,
+                        quantity_change=-quantity_from_allocation,
+                        transaction_type='sale',
+                        reference_number=sales_order.so_number,
+                        reference_type='so_number',
+                        transaction_id=transaction.id,
+                        sales_order_id=sales_order.id,
+                        notes=f'Shipped for sales order {sales_order.so_number} - Shipment {shipment.id}'
+                    )
+                    
                     lot.quantity_remaining -= quantity_from_allocation
                     lot.save()
                     
@@ -3080,14 +4235,6 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
                         allocation.delete()
                     else:
                         allocation.save()
-                    
-                    transaction = InventoryTransaction.objects.create(
-                        transaction_type='adjustment',
-                        lot=lot,
-                        quantity=-quantity_from_allocation,
-                        reference_number=sales_order.so_number,
-                        notes=f'Shipped for sales order {sales_order.so_number} - Shipment {shipment.id}'
-                    )
                     
                     # Log depletion if lot reaches zero or below
                     log_lot_depletion(
@@ -3165,19 +4312,265 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
             tax = 0.0  # Calculate tax if needed
             grand_total = subtotal + freight + tax - discount
             
-            invoice = Invoice.objects.create(
-                invoice_number=invoice_number,
-                sales_order=sales_order,
-                invoice_date=invoice_date,
-                due_date=due_date,
-                status='draft',
-                subtotal=subtotal,
-                freight=freight,
-                tax=tax,
-                discount=discount,
-                grand_total=grand_total,
-                notes=f'Auto-generated from sales order {sales_order.so_number} - Shipment {shipment.id}'
-            )
+            # Check what columns actually exist in Invoice table and which are NOT NULL
+            from django.db import connection
+            available_columns = set()
+            not_null_columns = set()
+            try:
+                with connection.cursor() as cursor:
+                    cursor.execute("PRAGMA table_info(erp_core_invoice)")
+                    for row in cursor.fetchall():
+                        col_name = row[1]
+                        is_not_null = row[3]  # 1 if NOT NULL, 0 if nullable
+                        available_columns.add(col_name)
+                        if is_not_null and col_name != 'id':  # id is auto-generated
+                            not_null_columns.add(col_name)
+            except Exception:
+                # If we can't check, use minimal set
+                available_columns = {'id', 'invoice_number', 'invoice_date', 'created_at', 'updated_at'}
+                not_null_columns = {'invoice_number', 'invoice_date'}
+            
+            # If sales_order_id column doesn't exist, use raw SQL to avoid Django ORM trying to set it
+            if 'sales_order_id' not in available_columns:
+                # Use raw SQL to insert invoice without sales_order_id
+                # Build column list and values dynamically based on what exists
+                now = timezone.now()
+                columns = ['invoice_number']
+                values = [invoice_number]
+                placeholders = ['?']
+                
+                # Required fields that must be included if they exist
+                # invoice_type is required (NOT NULL) - always include if column exists
+                if 'invoice_type' in available_columns:
+                    columns.append('invoice_type')
+                    values.append('customer')  # Default to customer invoice
+                    placeholders.append('?')
+                # customer_vendor_name is required (NOT NULL) - always include if column exists
+                if 'customer_vendor_name' in available_columns:
+                    columns.append('customer_vendor_name')
+                    customer_name = sales_order.customer_name
+                    if not customer_name and sales_order.customer:
+                        customer_name = sales_order.customer.name
+                    if not customer_name:
+                        customer_name = 'Unknown Customer'
+                    values.append(customer_name)
+                    placeholders.append('?')
+                # customer_vendor_id is optional
+                if 'customer_vendor_id' in available_columns:
+                    columns.append('customer_vendor_id')
+                    customer_id = sales_order.customer_legacy_id
+                    if not customer_id and sales_order.customer:
+                        customer_id = str(sales_order.customer.id)
+                    values.append(customer_id)
+                    placeholders.append('?')
+                
+                # Optional fields
+                if 'invoice_date' in available_columns:
+                    columns.append('invoice_date')
+                    values.append(invoice_date)
+                    placeholders.append('?')
+                if 'due_date' in available_columns:
+                    columns.append('due_date')
+                    values.append(due_date)
+                    placeholders.append('?')
+                if 'status' in available_columns:
+                    columns.append('status')
+                    values.append('draft')
+                    placeholders.append('?')
+                if 'subtotal' in available_columns:
+                    columns.append('subtotal')
+                    values.append(subtotal)
+                    placeholders.append('?')
+                if 'freight' in available_columns:
+                    columns.append('freight')
+                    values.append(freight)
+                    placeholders.append('?')
+                if 'tax' in available_columns:
+                    columns.append('tax')
+                    values.append(tax)
+                    placeholders.append('?')
+                if 'tax_amount' in available_columns:
+                    columns.append('tax_amount')
+                    values.append(tax)
+                    placeholders.append('?')
+                if 'discount' in available_columns:
+                    columns.append('discount')
+                    values.append(discount)
+                    placeholders.append('?')
+                if 'grand_total' in available_columns:
+                    columns.append('grand_total')
+                    values.append(grand_total)
+                    placeholders.append('?')
+                if 'total_amount' in available_columns:
+                    columns.append('total_amount')
+                    values.append(grand_total)
+                    placeholders.append('?')
+                if 'paid_amount' in available_columns:
+                    columns.append('paid_amount')
+                    values.append(0.0)
+                    placeholders.append('?')
+                if 'notes' in available_columns:
+                    columns.append('notes')
+                    # Escape % characters to avoid issues with Django's query logging
+                    notes_text = f'Auto-generated from sales order {sales_order.so_number} - Shipment {shipment.id}'
+                    # Replace % with %% to escape it (SQLite doesn't need this, but Django's logging does)
+                    notes_text = notes_text.replace('%', '%%')
+                    values.append(notes_text)
+                    placeholders.append('?')
+                if 'created_at' in available_columns:
+                    columns.append('created_at')
+                    values.append(now)
+                    placeholders.append('?')
+                if 'updated_at' in available_columns:
+                    columns.append('updated_at')
+                    values.append(now)
+                    placeholders.append('?')
+                
+                # Ensure all NOT NULL columns are included
+                for col in not_null_columns:
+                    if col not in columns and col != 'id':  # Skip id (auto-generated)
+                        # Add default values for required columns we haven't handled
+                        if col == 'invoice_type' and 'invoice_type' in available_columns:
+                            columns.append('invoice_type')
+                            values.append('customer')
+                            placeholders.append('?')
+                        elif col == 'customer_vendor_name' and 'customer_vendor_name' in available_columns:
+                            columns.append('customer_vendor_name')
+                            customer_name = sales_order.customer_name or (sales_order.customer.name if sales_order.customer else 'Unknown Customer')
+                            values.append(customer_name)
+                            placeholders.append('?')
+                        elif col == 'invoice_date' and 'invoice_date' in available_columns:
+                            columns.append('invoice_date')
+                            values.append(invoice_date)
+                            placeholders.append('?')
+                        elif col == 'status' and 'status' in available_columns:
+                            columns.append('status')
+                            values.append('draft')
+                            placeholders.append('?')
+                        elif col == 'subtotal' and 'subtotal' in available_columns:
+                            columns.append('subtotal')
+                            values.append(subtotal)
+                            placeholders.append('?')
+                        elif col == 'tax_amount' and 'tax_amount' in available_columns:
+                            columns.append('tax_amount')
+                            values.append(tax)
+                            placeholders.append('?')
+                        elif col == 'total_amount' and 'total_amount' in available_columns:
+                            columns.append('total_amount')
+                            values.append(grand_total)
+                            placeholders.append('?')
+                        elif col == 'paid_amount' and 'paid_amount' in available_columns:
+                            columns.append('paid_amount')
+                            values.append(0.0)
+                            placeholders.append('?')
+                
+                # Ensure we have the same number of placeholders as values
+                if len(placeholders) != len(values):
+                    raise ValueError(f"Placeholder count ({len(placeholders)}) doesn't match value count ({len(values)}). Columns: {columns}")
+                
+                # Build SQL with proper parameterization
+                # Use string concatenation to build SQL to avoid f-string % formatting issues
+                columns_str = ', '.join(columns)
+                placeholders_str = ', '.join(placeholders)
+                sql = "INSERT INTO erp_core_invoice (" + columns_str + ") VALUES (" + placeholders_str + ")"
+                
+                # Execute using Django's cursor with proper parameterization
+                # The issue is Django's debug SQL formatter tries to do sql % params for logging
+                # This fails when the SQL string itself contains % characters in the notes field
+                # Solution: Disable query logging temporarily and use execute with proper parameterization
+                from django.conf import settings
+                import logging
+                logger = logging.getLogger(__name__)
+                
+                invoice_id = None
+                
+                # Temporarily disable Django's query logging to avoid % formatting issues
+                # Use raw sqlite3 to avoid Django's query logging issues
+                import sqlite3
+                from django.conf import settings
+                db_path = settings.DATABASES['default']['NAME']
+                raw_conn = sqlite3.connect(db_path)
+                raw_cursor = raw_conn.cursor()
+                try:
+                    # Execute the SQL with proper parameterization
+                    raw_cursor.execute(sql, tuple(values))
+                    invoice_id = raw_cursor.lastrowid
+                    raw_conn.commit()
+                except Exception as e:
+                    # Log error with details (but truncate SQL to avoid % issues in logging)
+                    logger.error(f"Error executing invoice insert: {str(e)}")
+                    logger.error(f"SQL length: {len(sql)}")
+                    logger.error(f"Values count: {len(values)}")
+                    logger.error(f"Columns count: {len(columns)}")
+                    # Log column names but not values (values might have % chars)
+                    logger.error(f"Column names: {columns[:10]}...")  # First 10 columns
+                    import traceback
+                    logger.error(traceback.format_exc())
+                    raise
+                finally:
+                    raw_conn.close()
+                
+                if not invoice_id:
+                    raise ValueError("Failed to create invoice - no ID returned")
+                
+                # After creating with raw SQL, update sales_order_id if column exists
+                with connection.cursor() as check_cursor:
+                    check_cursor.execute("PRAGMA table_info(erp_core_invoice)")
+                    columns = [row[1] for row in check_cursor.fetchall()]
+                    if 'sales_order_id' in columns:
+                        # Update the invoice with sales_order_id
+                        check_cursor.execute(
+                            "UPDATE erp_core_invoice SET sales_order_id = ? WHERE id = ?",
+                            [sales_order.id, invoice_id]
+                        )
+                
+                invoice = Invoice.objects.get(id=invoice_id)
+                
+                # Create AR entry when invoice is created
+                create_ar_entry_from_invoice(invoice)
+            else:
+                # Use ORM if sales_order_id column exists
+                # But handle field name mismatches (tax_amount vs tax, total_amount vs grand_total)
+                invoice_data = {
+                    'invoice_number': invoice_number,
+                    'sales_order': sales_order,
+                }
+                
+                if 'invoice_date' in available_columns:
+                    invoice_data['invoice_date'] = invoice_date
+                if 'due_date' in available_columns:
+                    invoice_data['due_date'] = due_date
+                if 'status' in available_columns:
+                    invoice_data['status'] = 'draft'
+                if 'subtotal' in available_columns:
+                    invoice_data['subtotal'] = subtotal
+                
+                # Handle field name mismatches
+                if 'freight' in available_columns:
+                    invoice_data['freight'] = freight
+                if 'tax' in available_columns:
+                    invoice_data['tax'] = tax
+                elif 'tax_amount' in available_columns:
+                    invoice_data['tax_amount'] = tax
+                if 'discount' in available_columns:
+                    invoice_data['discount'] = discount
+                if 'grand_total' in available_columns:
+                    invoice_data['grand_total'] = grand_total
+                elif 'total_amount' in available_columns:
+                    invoice_data['total_amount'] = grand_total
+                if 'paid_amount' in available_columns:
+                    invoice_data['paid_amount'] = 0.0
+                if 'notes' in available_columns:
+                    invoice_data['notes'] = f'Auto-generated from sales order {sales_order.so_number} - Shipment {shipment.id}'
+                
+                try:
+                    invoice = Invoice.objects.create(**invoice_data)
+                except Exception as e:
+                    import logging
+                    logger = logging.getLogger(__name__)
+                    logger.error(f"Error creating invoice with ORM: {e}")
+                    logger.error(f"Invoice data keys: {list(invoice_data.keys())}")
+                    raise
             
             # Create invoice items from shipped quantities in this shipment
             for shipment_item in shipment.items.all():
@@ -3432,19 +4825,12 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
         
         sales_order = self.get_object()
         
-        # Check if order is ready for shipment
-        if sales_order.status not in ['ready_for_shipment', 'allocated']:
-            return Response(
-                {'error': 'Sales order must be allocated or ready for shipment to generate packing list'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
         try:
             from docx import Document
             
-            # Get template path (in project root)
+            # Get template path from Sensitive folder
             PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-            template_path = PROJECT_ROOT / 'Packing list template.docx'
+            template_path = PROJECT_ROOT / 'Sensitive' / 'Packing list template.docx'
             
             if not template_path.exists():
                 return Response(
@@ -3526,21 +4912,105 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
                     break
             
             # Save to temporary file
-            with tempfile.NamedTemporaryFile(delete=False, suffix='.docx') as tmp_file:
-                doc.save(tmp_file.name)
-                tmp_path = tmp_file.name
+            import time
+            tmp_path = None
+            pdf_content = None
+            is_pdf = False
             
-            # Read the file content
-            with open(tmp_path, 'rb') as f:
-                file_content = f.read()
+            try:
+                # Create temp file with unique name
+                tmp_fd, tmp_path = tempfile.mkstemp(suffix='.docx')
+                os.close(tmp_fd)  # Close the file descriptor so doc.save can use it
+                
+                # Save document
+                doc.save(tmp_path)
+                
+                # Try to convert to PDF
+                try:
+                    from docx2pdf import convert
+                    pdf_path = tmp_path.replace('.docx', '.pdf')
+                    convert(tmp_path, pdf_path)
+                    
+                    # Wait a moment to ensure file is fully written and closed
+                    time.sleep(0.1)
+                    
+                    # Read PDF content
+                    with open(pdf_path, 'rb') as pdf_file:
+                        pdf_content = pdf_file.read()
+                    is_pdf = pdf_content.startswith(b'%PDF')
+                    
+                    # Clean up temp PDF file
+                    try:
+                        if os.path.exists(pdf_path):
+                            os.unlink(pdf_path)
+                    except Exception as e:
+                        import logging
+                        logger = logging.getLogger(__name__)
+                        logger.warning(f"Could not delete temp PDF file {pdf_path}: {e}")
+                        
+                except Exception as e:
+                    # If PDF conversion fails, use DOCX file
+                    import logging
+                    logger = logging.getLogger(__name__)
+                    logger.warning(f"PDF conversion failed: {e}. Using DOCX file instead.")
+                    with open(tmp_path, 'rb') as docx_file:
+                        pdf_content = docx_file.read()
+                    is_pdf = False
+                
+                # Clean up temp DOCX file
+                try:
+                    if tmp_path and os.path.exists(tmp_path):
+                        # Wait a moment to ensure file is closed
+                        time.sleep(0.1)
+                        os.unlink(tmp_path)
+                except Exception as e:
+                    import logging
+                    logger = logging.getLogger(__name__)
+                    logger.warning(f"Could not delete temp DOCX file {tmp_path}: {e}")
+                    # Try again after a longer delay
+                    try:
+                        time.sleep(0.5)
+                        if os.path.exists(tmp_path):
+                            os.unlink(tmp_path)
+                    except:
+                        pass  # If it still fails, just continue - temp files will be cleaned up by OS
+            except Exception as e:
+                # If file operations fail, log and return error
+                import logging
+                import traceback
+                logger = logging.getLogger(__name__)
+                logger.error(f'Failed to save/convert packing list document: {str(e)}')
+                logger.error(f'Traceback: {traceback.format_exc()}')
+                return Response(
+                    {'error': f'Failed to generate packing list document: {str(e)}'},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
             
-            # Clean up temp file
-            os.unlink(tmp_path)
+            # Ensure we have content before returning
+            if pdf_content is None or len(pdf_content) == 0:
+                return Response(
+                    {'error': 'Failed to generate packing list document - no content'},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
             
             # Return as HTTP response
-            response = HttpResponse(file_content, content_type='application/vnd.openxmlformats-officedocument.wordprocessingml.document')
-            response['Content-Disposition'] = f'attachment; filename="Packing_List_{sales_order.so_number}.docx"'
-            return response
+            filename = f"Packing_List_{sales_order.so_number}.pdf" if is_pdf else f"Packing_List_{sales_order.so_number}.docx"
+            content_type = 'application/pdf' if is_pdf else 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+            
+            try:
+                response = HttpResponse(pdf_content, content_type=content_type)
+                response['Content-Disposition'] = f'inline; filename="{filename}"'
+                response['X-Content-Type-Options'] = 'nosniff'
+                response['Content-Length'] = str(len(pdf_content))
+                return response
+            except Exception as e:
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.error(f'Failed to create HTTP response: {str(e)}')
+                return Response(
+                    {'error': f'Failed to create HTTP response: {str(e)}'},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
             
         except ImportError:
             return Response(
@@ -3560,11 +5030,38 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
 
 
 class InvoiceViewSet(viewsets.ModelViewSet):
-    queryset = Invoice.objects.select_related('sales_order', 'sales_order__customer').prefetch_related('items').all()
     serializer_class = InvoiceSerializer
+    queryset = Invoice.objects.none()  # Will be set in get_queryset
     
     def get_queryset(self):
-        queryset = Invoice.objects.select_related('sales_order', 'sales_order__customer').prefetch_related('items').all()
+        from django.db import connection
+        
+        # Check if sales_order_id column exists
+        has_sales_order_column = False
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute("PRAGMA table_info(erp_core_invoice)")
+                columns = [row[1] for row in cursor.fetchall()]
+                has_sales_order_column = 'sales_order_id' in columns
+        except Exception:
+            pass
+        
+        # Build queryset - use raw SQL if column doesn't exist to avoid ORM errors
+        if has_sales_order_column:
+            queryset = Invoice.objects.select_related('sales_order', 'sales_order__customer').prefetch_related('items').all()
+        else:
+            # No sales_order_id column - use raw SQL to avoid ORM trying to access it
+            # We'll manually construct the queryset using raw SQL
+            from django.db import models
+            queryset = Invoice.objects.raw("SELECT * FROM erp_core_invoice")
+            # Convert to a list and then back to a queryset-like object
+            # Actually, we need to use a different approach - use only() to exclude the field
+            # But Django doesn't support excluding ForeignKey fields easily
+            # So we'll use raw SQL in the list method instead
+            queryset = Invoice.objects.all()
+            # Override the queryset to not access sales_order
+            # We'll handle this in list() method
+        
         status_filter = self.request.query_params.get('status', None)
         customer_id = self.request.query_params.get('customer_id', None)
         start_date = self.request.query_params.get('start_date', None)
@@ -3572,7 +5069,7 @@ class InvoiceViewSet(viewsets.ModelViewSet):
         
         if status_filter:
             queryset = queryset.filter(status=status_filter)
-        if customer_id:
+        if customer_id and has_sales_order_column:
             queryset = queryset.filter(sales_order__customer_id=customer_id)
         if start_date:
             queryset = queryset.filter(invoice_date__gte=start_date)
@@ -3580,6 +5077,483 @@ class InvoiceViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(invoice_date__lte=end_date)
         
         return queryset
+    
+    def list(self, request, *args, **kwargs):
+        """Override list to handle schema mismatches"""
+        from django.db import connection
+        from rest_framework.response import Response
+        from rest_framework import status as http_status
+        from django.utils import timezone
+        from datetime import date
+        
+        try:
+            # First, automatically update sent invoices to overdue if past due date
+            today = timezone.now().date()
+            try:
+                # Update invoices that are 'sent' and past due date to 'overdue'
+                # Use raw sqlite3 to avoid Django's query logging issues
+                import sqlite3
+                from django.conf import settings
+                db_path = settings.DATABASES['default']['NAME']
+                raw_conn = sqlite3.connect(db_path)
+                raw_cursor = raw_conn.cursor()
+                try:
+                    raw_cursor.execute(
+                        "UPDATE erp_core_invoice SET status = 'overdue' WHERE status = 'sent' AND due_date < ?",
+                        [today]
+                    )
+                    raw_conn.commit()
+                finally:
+                    raw_conn.close()
+            except Exception as update_error:
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.warning(f"Error auto-updating overdue invoices: {update_error}")
+            
+            # Check what columns exist and query invoices in the same cursor context
+            with connection.cursor() as cursor:
+                cursor.execute("PRAGMA table_info(erp_core_invoice)")
+                column_info = cursor.fetchall()
+                columns = {col[1]: col for col in column_info}
+                has_sales_order_column = 'sales_order_id' in columns
+                has_freight = 'freight' in columns
+                has_tax = 'tax' in columns
+                has_grand_total = 'grand_total' in columns
+                has_discount = 'discount' in columns
+                
+                # If model fields don't match DB, use raw SQL directly (ORM will fail)
+                if not has_freight or not has_tax or not has_grand_total or not has_discount:
+                    # Use raw SQL approach directly - ORM will fail because model fields don't match DB
+                    # Use raw SQL to query invoices
+                    query = "SELECT * FROM erp_core_invoice WHERE 1=1"
+                    params = []
+                    
+                    # Get query params - handle both DRF Request and WSGIRequest
+                    if hasattr(self.request, 'query_params'):
+                        query_params = self.request.query_params
+                    else:
+                        query_params = self.request.GET
+                    
+                    status_filter = query_params.get('status', None)
+                    if status_filter:
+                        query += " AND status = ?"
+                        params.append(status_filter)
+                    
+                    start_date = query_params.get('start_date', None)
+                    if start_date:
+                        query += " AND invoice_date >= ?"
+                        params.append(start_date)
+                    
+                    end_date = query_params.get('end_date', None)
+                    if end_date:
+                        query += " AND invoice_date <= ?"
+                        params.append(end_date)
+                    
+                    query += " ORDER BY invoice_date DESC, created_at DESC"
+                    
+                    # Execute query using the cursor we already have
+                    # Since we're using parameterized queries with ? placeholders, 
+                    # Django's query logging shouldn't have % formatting issues
+                    cursor.execute(query, params)
+                    rows = cursor.fetchall()
+                    
+                    # Get column names
+                    column_names = [col[1] for col in column_info]
+                    
+                    # Convert rows to dicts and serialize
+                    invoice_data_list = []
+                    for row in rows:
+                        invoice_dict = dict(zip(column_names, row))
+                        # Map database field names to model field names
+                        mapped_dict = {}
+                        for key, value in invoice_dict.items():
+                            # Map tax_amount -> tax, total_amount -> grand_total
+                            if key == 'tax_amount':
+                                mapped_dict['tax'] = value
+                            elif key == 'total_amount':
+                                mapped_dict['grand_total'] = value
+                            else:
+                                mapped_dict[key] = value
+                        # Set defaults for missing fields
+                        if 'freight' not in mapped_dict:
+                            mapped_dict['freight'] = 0.0
+                        if 'tax' not in mapped_dict:
+                            mapped_dict['tax'] = mapped_dict.get('tax_amount', 0.0)
+                        if 'discount' not in mapped_dict:
+                            mapped_dict['discount'] = 0.0
+                        if 'grand_total' not in mapped_dict:
+                            mapped_dict['grand_total'] = mapped_dict.get('total_amount', 0.0)
+                        invoice_data_list.append(mapped_dict)
+                    
+                    # Create Invoice objects from the mapped data
+                    # We need to map database fields to model fields
+                    invoices = []
+                    for data in invoice_data_list:
+                        invoice = Invoice()
+                        # Set basic fields that exist in both DB and model
+                        if 'id' in data:
+                            invoice.id = data['id']
+                        if 'invoice_number' in data:
+                            invoice.invoice_number = data['invoice_number']
+                        if 'invoice_date' in data:
+                            invoice.invoice_date = data['invoice_date']
+                        if 'due_date' in data:
+                            invoice.due_date = data['due_date']
+                        if 'status' in data:
+                            invoice.status = data['status']
+                        if 'subtotal' in data:
+                            invoice.subtotal = data['subtotal']
+                        if 'notes' in data:
+                            invoice.notes = data['notes']
+                        if 'created_at' in data:
+                            invoice.created_at = data['created_at']
+                        if 'updated_at' in data:
+                            invoice.updated_at = data['updated_at']
+                        
+                        # Map database fields to model fields
+                        # DB has tax_amount, model has tax
+                        if 'tax' in data:
+                            invoice.tax = data['tax']
+                        elif 'tax_amount' in data:
+                            invoice.tax = data.get('tax_amount', 0.0)
+                        
+                        # DB has total_amount, model has grand_total
+                        if 'grand_total' in data:
+                            invoice.grand_total = data['grand_total']
+                        elif 'total_amount' in data:
+                            invoice.grand_total = data.get('total_amount', 0.0)
+                        
+                        # Set defaults for missing fields
+                        invoice.freight = data.get('freight', 0.0)
+                        invoice.discount = data.get('discount', 0.0)
+                        
+                        # Store customer_vendor_name and customer_vendor_id if they exist (for serializer)
+                        # These are database columns but not model fields
+                        if 'customer_vendor_name' in data:
+                            setattr(invoice, 'customer_vendor_name', data['customer_vendor_name'])
+                        if 'customer_vendor_id' in data:
+                            setattr(invoice, 'customer_vendor_id', data['customer_vendor_id'])
+                        
+                        # Handle sales_order if sales_order_id exists
+                        # Set sales_order_id directly on the model (Django will handle the FK)
+                        if 'sales_order_id' in data and data['sales_order_id']:
+                            # Set the foreign key ID directly
+                            invoice.sales_order_id = data['sales_order_id']
+                            # Also store in temp attribute for serializer fallback
+                            invoice._sales_order_id = data['sales_order_id']
+                        else:
+                            invoice.sales_order_id = None
+                            invoice._sales_order_id = None
+                        
+                        invoice._state.adding = False
+                        invoice._state.db = connection
+                        invoices.append(invoice)
+                    
+                    # Prefetch items and sales orders for each invoice to avoid N+1 queries
+                    from .models import InvoiceItem, SalesOrder
+                    # Collect all sales_order_ids first for batch loading
+                    sales_order_ids = []
+                    for invoice in invoices:
+                        if hasattr(invoice, 'sales_order_id') and invoice.sales_order_id:
+                            sales_order_ids.append(invoice.sales_order_id)
+                        elif hasattr(invoice, '_sales_order_id') and invoice._sales_order_id:
+                            sales_order_ids.append(invoice._sales_order_id)
+                    
+                    # Batch load all sales orders with customers
+                    sales_orders_dict = {}
+                    if sales_order_ids:
+                        for so in SalesOrder.objects.select_related('customer').filter(id__in=sales_order_ids):
+                            sales_orders_dict[so.id] = so
+                    
+                    # Attach sales orders to invoices
+                    for invoice in invoices:
+                        try:
+                            # Prefetch items for this invoice
+                            invoice._prefetched_objects_cache = {
+                                'items': list(InvoiceItem.objects.filter(invoice_id=invoice.id))
+                            }
+                            
+                            # Get sales_order_id from any source
+                            sales_order_id = None
+                            if hasattr(invoice, 'sales_order_id') and invoice.sales_order_id:
+                                sales_order_id = invoice.sales_order_id
+                            elif hasattr(invoice, '_sales_order_id') and invoice._sales_order_id:
+                                sales_order_id = invoice._sales_order_id
+                            
+                            # Attach sales order if we have it
+                            if sales_order_id and sales_order_id in sales_orders_dict:
+                                invoice.sales_order = sales_orders_dict[sales_order_id]
+                                invoice.sales_order_id = sales_order_id
+                                invoice._sales_order_id = sales_order_id
+                            elif sales_order_id:
+                                # Try to load it individually (fallback)
+                                try:
+                                    so = SalesOrder.objects.select_related('customer').get(id=sales_order_id)
+                                    invoice.sales_order = so
+                                    invoice.sales_order_id = sales_order_id
+                                    invoice._sales_order_id = sales_order_id
+                                except SalesOrder.DoesNotExist:
+                                    invoice.sales_order = None
+                                    invoice.sales_order_id = None
+                                    invoice._sales_order_id = None
+                            else:
+                                invoice.sales_order = None
+                                invoice.sales_order_id = None
+                                invoice._sales_order_id = None
+                        except Exception as e:
+                            import logging
+                            logger = logging.getLogger(__name__)
+                            logger.error(f"Error loading sales order for invoice {invoice.id}: {e}")
+                            invoice._prefetched_objects_cache = {'items': []}
+                            invoice.sales_order = None
+                    
+                    # Serialize invoices
+                    import logging
+                    logger = logging.getLogger(__name__)
+                    logger.info(f"Returning {len(invoices)} invoices from raw SQL")
+                    
+                    # Debug: Log first invoice before serialization
+                    if invoices:
+                        logger.info(f"First invoice before serialization: id={invoices[0].id}, sales_order_id={getattr(invoices[0], 'sales_order_id', None)}, has_sales_order={hasattr(invoices[0], 'sales_order') and invoices[0].sales_order is not None}")
+                    
+                    try:
+                        serializer = self.get_serializer(invoices, many=True)
+                        serialized_data = serializer.data
+                        
+                        # Debug: Log first invoice after serialization
+                        if serialized_data:
+                            logger.info(f"First invoice after serialization: sales_order={serialized_data[0].get('sales_order')}, payment_terms={serialized_data[0].get('payment_terms')}")
+                        
+                        return Response(serialized_data)
+                    except Exception as ser_error:
+                        logger.error(f"Error serializing invoices: {ser_error}")
+                        import traceback
+                        logger.error(traceback.format_exc())
+                        # Try to return at least basic data
+                        basic_data = []
+                        for inv in invoices:
+                            basic_data.append({
+                                'id': inv.id,
+                                'invoice_number': inv.invoice_number,
+                                'invoice_date': str(inv.invoice_date) if inv.invoice_date else None,
+                                'due_date': str(inv.due_date) if inv.due_date else None,
+                                'status': inv.status,
+                                'subtotal': inv.subtotal,
+                                'tax': getattr(inv, 'tax', 0.0),
+                                'grand_total': getattr(inv, 'grand_total', 0.0),
+                                'freight': getattr(inv, 'freight', 0.0),
+                                'discount': getattr(inv, 'discount', 0.0),
+                                'customer_vendor_name': getattr(inv, 'customer_vendor_name', None),
+                                'sales_order_id': getattr(inv, 'sales_order_id', None),
+                            })
+                        return Response(basic_data)
+                else:
+                    # Schema matches - use normal queryset
+                    # But we need to handle it outside the cursor context
+                    pass
+            
+            # If we get here, schema matches - use normal queryset
+            return super().list(request, *args, **kwargs)
+        except Exception as e:
+            import logging
+            import traceback
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error listing invoices: {e}")
+            logger.error(traceback.format_exc())
+            # Return more detailed error in debug mode
+            error_detail = str(e)
+            if hasattr(e, '__traceback__'):
+                import traceback as tb
+                error_detail += f"\n{tb.format_exc()}"
+            return Response({
+                'error': str(e),
+                'detail': error_detail,
+                'traceback': traceback.format_exc() if settings.DEBUG else None
+            }, status=http_status.HTTP_500_INTERNAL_SERVER_ERROR)
+    
+    def retrieve(self, request, *args, **kwargs):
+        """Override retrieve to handle schema mismatches"""
+        from django.db import connection
+        from rest_framework.response import Response
+        from rest_framework import status as http_status
+        from django.conf import settings
+        from django.utils import timezone
+        from datetime import date
+        
+        try:
+            invoice_id = kwargs.get('pk')
+            
+            # First, automatically update sent invoices to overdue if past due date
+            today = timezone.now().date()
+            try:
+                # Update this specific invoice if it's 'sent' and past due date
+                # Use raw sqlite3 to avoid Django's query logging issues
+                import sqlite3
+                from django.conf import settings
+                db_path = settings.DATABASES['default']['NAME']
+                raw_conn = sqlite3.connect(db_path)
+                raw_cursor = raw_conn.cursor()
+                try:
+                    raw_cursor.execute(
+                        "UPDATE erp_core_invoice SET status = 'overdue' WHERE id = ? AND status = 'sent' AND due_date < ?",
+                        [invoice_id, today]
+                    )
+                    raw_conn.commit()
+                finally:
+                    raw_conn.close()
+            except Exception as update_error:
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.warning(f"Error auto-updating overdue invoice: {update_error}")
+            
+            # Check what columns exist - use raw sqlite3 to avoid query logging issues
+            import sqlite3
+            from django.conf import settings
+            db_path = settings.DATABASES['default']['NAME']
+            raw_conn = sqlite3.connect(db_path)
+            raw_cursor = raw_conn.cursor()
+            
+            try:
+                # Get column info
+                raw_cursor.execute("PRAGMA table_info(erp_core_invoice)")
+                column_info = raw_cursor.fetchall()
+                columns = {col[1]: col for col in column_info}
+                column_names = [col[1] for col in column_info]
+                has_sales_order_column = 'sales_order_id' in columns
+                has_freight = 'freight' in columns
+                has_tax = 'tax' in columns
+                has_grand_total = 'grand_total' in columns
+                has_discount = 'discount' in columns
+                
+                # If model fields don't match DB, use raw SQL
+                if not has_freight or not has_tax or not has_grand_total or not has_discount:
+                    # Use raw SQL to get invoice
+                    raw_cursor.execute("SELECT * FROM erp_core_invoice WHERE id = ?", [invoice_id])
+                    row = raw_cursor.fetchone()
+                    
+                    if not row:
+                        return Response({'error': 'Invoice not found'}, status=http_status.HTTP_404_NOT_FOUND)
+                    invoice_dict = dict(zip(column_names, row))
+                    
+                    # Map database fields to model fields
+                    mapped_dict = {}
+                    for key, value in invoice_dict.items():
+                        if key == 'tax_amount':
+                            mapped_dict['tax'] = value
+                        elif key == 'total_amount':
+                            mapped_dict['grand_total'] = value
+                        else:
+                            mapped_dict[key] = value
+                    
+                    # Set defaults
+                    if 'freight' not in mapped_dict:
+                        mapped_dict['freight'] = 0.0
+                    if 'tax' not in mapped_dict:
+                        mapped_dict['tax'] = mapped_dict.get('tax_amount', 0.0)
+                    if 'discount' not in mapped_dict:
+                        mapped_dict['discount'] = 0.0
+                    if 'grand_total' not in mapped_dict:
+                        mapped_dict['grand_total'] = mapped_dict.get('total_amount', 0.0)
+                    
+                    # Create Invoice object
+                    invoice = Invoice()
+                    if 'id' in mapped_dict:
+                        invoice.id = mapped_dict['id']
+                    if 'invoice_number' in mapped_dict:
+                        invoice.invoice_number = mapped_dict['invoice_number']
+                    if 'invoice_date' in mapped_dict:
+                        invoice.invoice_date = mapped_dict['invoice_date']
+                    if 'due_date' in mapped_dict:
+                        invoice.due_date = mapped_dict['due_date']
+                    if 'status' in mapped_dict:
+                        invoice.status = mapped_dict['status']
+                    if 'subtotal' in mapped_dict:
+                        invoice.subtotal = mapped_dict['subtotal']
+                    if 'notes' in mapped_dict:
+                        invoice.notes = mapped_dict['notes']
+                    if 'created_at' in mapped_dict:
+                        invoice.created_at = mapped_dict['created_at']
+                    if 'updated_at' in mapped_dict:
+                        invoice.updated_at = mapped_dict['updated_at']
+                    
+                    invoice.tax = mapped_dict.get('tax', 0.0)
+                    invoice.grand_total = mapped_dict.get('grand_total', 0.0)
+                    invoice.freight = mapped_dict.get('freight', 0.0)
+                    invoice.discount = mapped_dict.get('discount', 0.0)
+                    
+                    if 'sales_order_id' in mapped_dict and mapped_dict['sales_order_id']:
+                        invoice.sales_order_id = mapped_dict['sales_order_id']
+                        invoice._sales_order_id = mapped_dict['sales_order_id']
+                    
+                    invoice._state.adding = False
+                    invoice._state.db = connection
+                    
+                    # Prefetch items using raw SQL
+                    from .models import InvoiceItem, SalesOrder
+                    try:
+                        raw_cursor.execute("PRAGMA table_info(erp_core_invoiceitem)")
+                        item_columns = [row[1] for row in raw_cursor.fetchall()]
+                        
+                        if 'invoice_id' in item_columns:
+                            raw_cursor.execute("SELECT * FROM erp_core_invoiceitem WHERE invoice_id = ?", [invoice.id])
+                            item_rows = raw_cursor.fetchall()
+                            
+                            items = []
+                            for item_row in item_rows:
+                                item_dict = dict(zip(item_columns, item_row))
+                                item = InvoiceItem()
+                                if 'id' in item_dict:
+                                    item.id = item_dict['id']
+                                if 'invoice_id' in item_dict:
+                                    item.invoice_id = item_dict['invoice_id']
+                                if 'description' in item_dict:
+                                    item.description = item_dict['description']
+                                if 'quantity' in item_dict:
+                                    item.quantity = item_dict['quantity']
+                                if 'unit_price' in item_dict:
+                                    item.unit_price = item_dict['unit_price']
+                                if 'total' in item_dict:
+                                    item.total = item_dict['total']
+                                item._state.adding = False
+                                item._state.db = connection
+                                items.append(item)
+                            
+                            invoice._prefetched_objects_cache = {'items': items}
+                        else:
+                            invoice._prefetched_objects_cache = {'items': []}
+                    except Exception as item_error:
+                        import logging
+                        logger = logging.getLogger(__name__)
+                        logger.warning(f"Error loading invoice items: {item_error}")
+                        invoice._prefetched_objects_cache = {'items': []}
+                    
+                    # Load sales order if exists
+                    if invoice.sales_order_id:
+                        try:
+                            invoice.sales_order = SalesOrder.objects.select_related('customer').get(id=invoice.sales_order_id)
+                        except SalesOrder.DoesNotExist:
+                            invoice.sales_order = None
+                    
+                    serializer = self.get_serializer(invoice)
+                    return Response(serializer.data)
+                else:
+                    # Schema matches - use normal queryset
+                    return super().retrieve(request, *args, **kwargs)
+            finally:
+                raw_conn.close()
+        except Exception as e:
+            import logging
+            import traceback
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error retrieving invoice: {e}")
+            logger.error(traceback.format_exc())
+            error_detail = str(e)
+            if settings.DEBUG:
+                error_detail += f"\n{traceback.format_exc()}"
+            return Response({
+                'error': str(e),
+                'detail': error_detail
+            }, status=http_status.HTTP_500_INTERNAL_SERVER_ERROR)
     
     @action(detail=False, methods=['get'])
     def aging_report(self, request):
@@ -3626,6 +5600,945 @@ class InvoiceViewSet(viewsets.ModelViewSet):
             },
             'grand_total': sum(totals.values())
         })
+    
+    def create(self, request, *args, **kwargs):
+        """Create a manual invoice (not tied to a sales order)"""
+        from django.db import connection
+        from rest_framework.response import Response
+        from rest_framework import status as http_status
+        from .models import Invoice, InvoiceItem
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        try:
+            data = request.data.copy()
+            
+            # Generate invoice number
+            invoice_number = generate_invoice_number()
+            
+            # Get invoice date
+            invoice_date = data.get('invoice_date')
+            if isinstance(invoice_date, str):
+                from datetime import datetime
+                invoice_date = datetime.strptime(invoice_date, '%Y-%m-%d').date()
+            
+            # Calculate due date from payment terms if provided
+            due_date = data.get('due_date')
+            if isinstance(due_date, str):
+                from datetime import datetime
+                due_date = datetime.strptime(due_date, '%Y-%m-%d').date()
+            elif not due_date and invoice_date:
+                # Default to 30 days if not provided
+                from datetime import timedelta
+                due_date = invoice_date + timedelta(days=30)
+            
+            # Calculate totals
+            items_data = data.get('items', [])
+            subtotal = sum(float(item.get('line_total', 0) or item.get('quantity', 0) * item.get('unit_price', 0)) for item in items_data)
+            tax = float(data.get('tax_amount', 0) or 0)
+            freight = float(data.get('freight', 0) or 0)
+            discount = float(data.get('discount', 0) or 0)
+            grand_total = subtotal + tax + freight - discount
+            
+            # Check database schema
+            with connection.cursor() as cursor:
+                cursor.execute("PRAGMA table_info(erp_core_invoice)")
+                columns = [row[1] for row in cursor.fetchall()]
+                has_sales_order_column = 'sales_order_id' in columns
+                has_freight = 'freight' in columns
+                has_tax = 'tax' in columns
+                has_grand_total = 'grand_total' in columns
+                has_discount = 'discount' in columns
+            
+            # Create invoice using raw SQL if schema doesn't match
+            if not has_freight or not has_tax or not has_grand_total or not has_discount:
+                import sqlite3
+                from django.conf import settings
+                db_path = settings.DATABASES['default']['NAME']
+                raw_conn = sqlite3.connect(db_path)
+                raw_cursor = raw_conn.cursor()
+                try:
+                    # Build column list based on what exists
+                    col_names = ['invoice_number', 'invoice_date', 'due_date', 'status', 'subtotal', 'notes']
+                    col_values = [invoice_number, invoice_date, due_date, 'draft', subtotal, data.get('notes', '')]
+                    
+                    if 'freight' in columns:
+                        col_names.append('freight')
+                        col_values.append(freight)
+                    if 'tax' in columns or 'tax_amount' in columns:
+                        col_name = 'tax' if 'tax' in columns else 'tax_amount'
+                        col_names.append(col_name)
+                        col_values.append(tax)
+                    if 'discount' in columns:
+                        col_names.append('discount')
+                        col_values.append(discount)
+                    if 'grand_total' in columns or 'total_amount' in columns:
+                        col_name = 'grand_total' if 'grand_total' in columns else 'total_amount'
+                        col_names.append(col_name)
+                        col_values.append(grand_total)
+                    if has_sales_order_column:
+                        col_names.append('sales_order_id')
+                        col_values.append(None)  # Manual invoice, no sales order
+                    if 'customer_vendor_name' in columns:
+                        col_names.append('customer_vendor_name')
+                        col_values.append(data.get('customer_vendor_name', ''))
+                    if 'customer_vendor_id' in columns:
+                        col_names.append('customer_vendor_id')
+                        col_values.append(data.get('customer_vendor_id', ''))
+                    
+                    placeholders = ','.join(['?' for _ in col_names])
+                    insert_sql = f"INSERT INTO erp_core_invoice ({','.join(col_names)}) VALUES ({placeholders})"
+                    raw_cursor.execute(insert_sql, col_values)
+                    invoice_id = raw_cursor.lastrowid
+                    raw_conn.commit()
+                finally:
+                    raw_conn.close()
+            else:
+                # Use ORM
+                invoice_data = {
+                    'invoice_number': invoice_number,
+                    'invoice_date': invoice_date,
+                    'due_date': due_date,
+                    'status': 'draft',
+                    'subtotal': subtotal,
+                    'freight': freight,
+                    'tax': tax,
+                    'discount': discount,
+                    'grand_total': grand_total,
+                    'notes': data.get('notes', ''),
+                }
+                if has_sales_order_column:
+                    invoice_data['sales_order'] = None  # Manual invoice
+                if 'customer_vendor_name' in columns:
+                    invoice_data['customer_vendor_name'] = data.get('customer_vendor_name', '')
+                if 'customer_vendor_id' in columns:
+                    invoice_data['customer_vendor_id'] = data.get('customer_vendor_id', '')
+                
+                invoice = Invoice.objects.create(**invoice_data)
+                invoice_id = invoice.id
+            
+            # Create invoice items
+            for item_data in items_data:
+                item_id = item_data.get('item_id')
+                quantity = float(item_data.get('quantity', 0))
+                unit_price = float(item_data.get('unit_price', 0))
+                line_total = float(item_data.get('line_total', quantity * unit_price))
+                description = item_data.get('description', '')
+                
+                InvoiceItem.objects.create(
+                    invoice_id=invoice_id,
+                    description=description,
+                    quantity=quantity,
+                    unit_price=unit_price,
+                    total=line_total
+                )
+            
+            # Return created invoice
+            invoice = Invoice.objects.get(id=invoice_id)
+            serializer = self.get_serializer(invoice)
+            return Response(serializer.data, status=http_status.HTTP_201_CREATED)
+            
+        except Exception as e:
+            logger.error(f"Error creating invoice: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return Response(
+                {'error': f'Failed to create invoice: {str(e)}'},
+                status=http_status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+    
+    def update(self, request, *args, **kwargs):
+        """Update invoice - handle status updates and other fields"""
+        from django.db import connection
+        from rest_framework.response import Response
+        from rest_framework import status as http_status
+        from .models import Invoice
+        from django.conf import settings
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        try:
+            partial = kwargs.pop('partial', False)
+            invoice_id = kwargs.get('pk')
+            data = request.data.copy()
+            
+            # Check database schema
+            with connection.cursor() as cursor:
+                cursor.execute("PRAGMA table_info(erp_core_invoice)")
+                column_info = cursor.fetchall()
+                columns = {col[1]: col for col in column_info}
+                column_names = [col[1] for col in column_info]
+                has_sales_order_column = 'sales_order_id' in columns
+                has_freight = 'freight' in columns
+                has_tax = 'tax' in columns
+                has_grand_total = 'grand_total' in columns
+                has_discount = 'discount' in columns
+                
+                # If model fields don't match DB, use raw SQL for update
+                if not has_freight or not has_tax or not has_grand_total or not has_discount:
+                    # Use raw SQL to update
+                    import sqlite3
+                    from django.conf import settings
+                    db_path = settings.DATABASES['default']['NAME']
+                    raw_conn = sqlite3.connect(db_path)
+                    raw_cursor = raw_conn.cursor()
+                    try:
+                        # Build UPDATE statement
+                        update_parts = []
+                        update_values = []
+                        
+                        if 'status' in data:
+                            update_parts.append('status = ?')
+                            update_values.append(data['status'])
+                        
+                        if 'invoice_date' in data:
+                            from datetime import datetime
+                            if isinstance(data['invoice_date'], str):
+                                invoice_date = datetime.strptime(data['invoice_date'], '%Y-%m-%d').date()
+                            else:
+                                invoice_date = data['invoice_date']
+                            update_parts.append('invoice_date = ?')
+                            update_values.append(invoice_date)
+                        
+                        if 'due_date' in data:
+                            from datetime import datetime
+                            if isinstance(data['due_date'], str):
+                                due_date = datetime.strptime(data['due_date'], '%Y-%m-%d').date()
+                            else:
+                                due_date = data['due_date']
+                            update_parts.append('due_date = ?')
+                            update_values.append(due_date)
+                        
+                        if 'notes' in data:
+                            update_parts.append('notes = ?')
+                            update_values.append(data['notes'])
+                        
+                        if 'subtotal' in data:
+                            update_parts.append('subtotal = ?')
+                            update_values.append(float(data['subtotal']))
+                        
+                        if has_freight and 'freight' in data:
+                            update_parts.append('freight = ?')
+                            update_values.append(float(data['freight']))
+                        
+                        if has_tax and 'tax' in data:
+                            update_parts.append('tax = ?')
+                            update_values.append(float(data['tax']))
+                        elif 'tax_amount' in data and 'tax_amount' in columns:
+                            update_parts.append('tax_amount = ?')
+                            update_values.append(float(data['tax_amount']))
+                        
+                        if has_discount and 'discount' in data:
+                            update_parts.append('discount = ?')
+                            update_values.append(float(data['discount']))
+                        
+                        if has_grand_total and 'grand_total' in data:
+                            update_parts.append('grand_total = ?')
+                            update_values.append(float(data['grand_total']))
+                        elif 'total_amount' in data and 'total_amount' in columns:
+                            update_parts.append('total_amount = ?')
+                            update_values.append(float(data['total_amount']))
+                        
+                        if 'customer_vendor_name' in data and 'customer_vendor_name' in columns:
+                            update_parts.append('customer_vendor_name = ?')
+                            update_values.append(data['customer_vendor_name'])
+                        
+                        if 'customer_vendor_id' in data and 'customer_vendor_id' in columns:
+                            update_parts.append('customer_vendor_id = ?')
+                            update_values.append(data['customer_vendor_id'])
+                        
+                        if update_parts:
+                            update_values.append(invoice_id)  # WHERE clause
+                            update_sql = f"UPDATE erp_core_invoice SET {', '.join(update_parts)} WHERE id = ?"
+                            raw_cursor.execute(update_sql, update_values)
+                            raw_conn.commit()
+                        else:
+                            # No fields to update
+                            pass
+                        
+                        # Get updated invoice
+                        raw_cursor.execute("SELECT * FROM erp_core_invoice WHERE id = ?", [invoice_id])
+                        row = raw_cursor.fetchone()
+                    finally:
+                        raw_conn.close()
+                    
+                    if not row:
+                        return Response({'error': 'Invoice not found'}, status=http_status.HTTP_404_NOT_FOUND)
+                    
+                    # Get column names and create invoice dict
+                    invoice_dict = dict(zip(column_names, row))
+                    
+                    # Map database fields to model fields
+                    mapped_dict = {}
+                    for key, value in invoice_dict.items():
+                        if key == 'tax_amount':
+                            mapped_dict['tax'] = value
+                        elif key == 'total_amount':
+                            mapped_dict['grand_total'] = value
+                        else:
+                            mapped_dict[key] = value
+                    
+                    # Set defaults
+                    if 'freight' not in mapped_dict:
+                        mapped_dict['freight'] = 0.0
+                    if 'tax' not in mapped_dict:
+                        mapped_dict['tax'] = mapped_dict.get('tax_amount', 0.0)
+                    if 'discount' not in mapped_dict:
+                        mapped_dict['discount'] = 0.0
+                    if 'grand_total' not in mapped_dict:
+                        mapped_dict['grand_total'] = mapped_dict.get('total_amount', 0.0)
+                    
+                    # Create Invoice object
+                    invoice = Invoice()
+                    if 'id' in mapped_dict:
+                        invoice.id = mapped_dict['id']
+                    if 'invoice_number' in mapped_dict:
+                        invoice.invoice_number = mapped_dict['invoice_number']
+                    if 'invoice_date' in mapped_dict:
+                        invoice.invoice_date = mapped_dict['invoice_date']
+                    if 'due_date' in mapped_dict:
+                        invoice.due_date = mapped_dict['due_date']
+                    if 'status' in mapped_dict:
+                        invoice.status = mapped_dict['status']
+                    if 'subtotal' in mapped_dict:
+                        invoice.subtotal = mapped_dict['subtotal']
+                    if 'notes' in mapped_dict:
+                        invoice.notes = mapped_dict['notes']
+                    if 'created_at' in mapped_dict:
+                        invoice.created_at = mapped_dict['created_at']
+                    if 'updated_at' in mapped_dict:
+                        invoice.updated_at = mapped_dict['updated_at']
+                    
+                    invoice.tax = mapped_dict.get('tax', 0.0)
+                    invoice.grand_total = mapped_dict.get('grand_total', 0.0)
+                    invoice.freight = mapped_dict.get('freight', 0.0)
+                    invoice.discount = mapped_dict.get('discount', 0.0)
+                    
+                    if 'sales_order_id' in mapped_dict and mapped_dict['sales_order_id']:
+                        invoice.sales_order_id = mapped_dict['sales_order_id']
+                        invoice._sales_order_id = mapped_dict['sales_order_id']
+                    
+                    invoice._state.adding = False
+                    invoice._state.db = connection
+                    
+                    # Prefetch items and sales order using raw SQL to avoid schema issues
+                    from .models import InvoiceItem, SalesOrder
+                    try:
+                        # Try to get items using raw SQL to avoid schema mismatches
+                        # Use raw sqlite3 to avoid Django's query logging issues
+                        import sqlite3
+                        from django.conf import settings
+                        db_path = settings.DATABASES['default']['NAME']
+                        raw_conn = sqlite3.connect(db_path)
+                        raw_cursor = raw_conn.cursor()
+                        
+                        item_columns = []
+                        item_rows = []
+                        try:
+                            raw_cursor.execute("PRAGMA table_info(erp_core_invoiceitem)")
+                            item_columns = [row[1] for row in raw_cursor.fetchall()]
+                            
+                            if 'invoice_id' in item_columns:
+                                # Use raw SQL to fetch items
+                                raw_cursor.execute("SELECT * FROM erp_core_invoiceitem WHERE invoice_id = ?", [invoice.id])
+                                item_rows = raw_cursor.fetchall()
+                        finally:
+                            raw_conn.close()
+                        
+                        if 'invoice_id' in item_columns and item_rows:
+                            items = []
+                            for item_row in item_rows:
+                                item_dict = dict(zip(item_columns, item_row))
+                                item = InvoiceItem()
+                                if 'id' in item_dict:
+                                    item.id = item_dict['id']
+                                if 'invoice_id' in item_dict:
+                                    item.invoice_id = item_dict['invoice_id']
+                                if 'description' in item_dict:
+                                    item.description = item_dict['description']
+                                if 'quantity' in item_dict:
+                                    item.quantity = item_dict['quantity']
+                                if 'unit_price' in item_dict:
+                                    item.unit_price = item_dict['unit_price']
+                                if 'total' in item_dict:
+                                    item.total = item_dict['total']
+                                item._state.adding = False
+                                item._state.db = connection
+                                items.append(item)
+                            
+                            invoice._prefetched_objects_cache = {'items': items}
+                        else:
+                            invoice._prefetched_objects_cache = {'items': []}
+                    except Exception as item_error:
+                        logger.warning(f"Error loading invoice items: {item_error}")
+                        invoice._prefetched_objects_cache = {'items': []}
+                    
+                    if invoice.sales_order_id:
+                        try:
+                            invoice.sales_order = SalesOrder.objects.select_related('customer').get(id=invoice.sales_order_id)
+                        except SalesOrder.DoesNotExist:
+                            invoice.sales_order = None
+                    
+                    # Serialize and return
+                    serializer = self.get_serializer(invoice)
+                    return Response(serializer.data)
+                else:
+                    # Schema matches - use ORM
+                    try:
+                        instance = Invoice.objects.get(id=invoice_id)
+                    except Invoice.DoesNotExist:
+                        return Response({'error': 'Invoice not found'}, status=http_status.HTTP_404_NOT_FOUND)
+                    
+                    # Update fields that are provided
+                    update_fields = []
+                    
+                    if 'status' in data:
+                        instance.status = data['status']
+                        update_fields.append('status')
+                    
+                    if 'invoice_date' in data:
+                        from datetime import datetime
+                        if isinstance(data['invoice_date'], str):
+                            instance.invoice_date = datetime.strptime(data['invoice_date'], '%Y-%m-%d').date()
+                        else:
+                            instance.invoice_date = data['invoice_date']
+                        update_fields.append('invoice_date')
+                    
+                    if 'due_date' in data:
+                        from datetime import datetime
+                        if isinstance(data['due_date'], str):
+                            instance.due_date = datetime.strptime(data['due_date'], '%Y-%m-%d').date()
+                        else:
+                            instance.due_date = data['due_date']
+                        update_fields.append('due_date')
+                    
+                    if 'notes' in data:
+                        instance.notes = data['notes']
+                        update_fields.append('notes')
+                    
+                    if 'subtotal' in data:
+                        instance.subtotal = float(data['subtotal'])
+                        update_fields.append('subtotal')
+                    
+                    if has_freight and 'freight' in data:
+                        instance.freight = float(data['freight'])
+                        update_fields.append('freight')
+                    
+                    if has_tax and 'tax' in data:
+                        instance.tax = float(data['tax'])
+                        update_fields.append('tax')
+                    
+                    if has_discount and 'discount' in data:
+                        instance.discount = float(data['discount'])
+                        update_fields.append('discount')
+                    
+                    if has_grand_total and 'grand_total' in data:
+                        instance.grand_total = float(data['grand_total'])
+                        update_fields.append('grand_total')
+                    
+                    # Save the instance
+                    if update_fields:
+                        instance.save(update_fields=update_fields)
+                    
+                    # Return updated invoice
+                    serializer = self.get_serializer(instance)
+                    return Response(serializer.data)
+            
+        except Exception as e:
+            logger.error(f"Error updating invoice: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return Response(
+                {'error': f'Failed to update invoice: {str(e)}'},
+                status=http_status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+    
+    @action(detail=True, methods=['get'], url_path='pdf', url_name='pdf')
+    def generate_pdf(self, request, pk=None):
+        """Generate a PDF invoice from template"""
+        from django.http import HttpResponse
+        from pathlib import Path
+        import os
+        import tempfile
+        from rest_framework.response import Response
+        from rest_framework import status as http_status
+        
+        # Get invoice using retrieve logic to handle schema mismatches
+        invoice = None
+        try:
+            # Try to get invoice using the same logic as retrieve
+            from django.db import connection
+            
+            with connection.cursor() as cursor:
+                cursor.execute("PRAGMA table_info(erp_core_invoice)")
+                column_info = cursor.fetchall()
+                columns = {col[1]: col for col in column_info}
+                has_freight = 'freight' in columns
+                has_tax = 'tax' in columns
+                has_grand_total = 'grand_total' in columns
+                has_discount = 'discount' in columns
+                
+                if not has_freight or not has_tax or not has_grand_total or not has_discount:
+                    # Use raw SQL - use raw sqlite3 to avoid Django's query logging issues
+                    import sqlite3
+                    from django.conf import settings
+                    db_path = settings.DATABASES['default']['NAME']
+                    raw_conn = sqlite3.connect(db_path)
+                    raw_cursor = raw_conn.cursor()
+                    try:
+                        raw_cursor.execute("SELECT * FROM erp_core_invoice WHERE id = ?", [pk])
+                        row = raw_cursor.fetchone()
+                    finally:
+                        raw_conn.close()
+                    if not row:
+                        from rest_framework.response import Response
+                        from rest_framework import status as http_status
+                        return Response({'error': 'Invoice not found'}, status=http_status.HTTP_404_NOT_FOUND)
+                    
+                    column_names = [col[1] for col in column_info]
+                    invoice_dict = dict(zip(column_names, row))
+                    
+                    # Map database fields to model fields
+                    mapped_dict = {}
+                    for key, value in invoice_dict.items():
+                        if key == 'tax_amount':
+                            mapped_dict['tax'] = value
+                        elif key == 'total_amount':
+                            mapped_dict['grand_total'] = value
+                        else:
+                            mapped_dict[key] = value
+                    
+                    # Set defaults
+                    if 'freight' not in mapped_dict:
+                        mapped_dict['freight'] = 0.0
+                    if 'tax' not in mapped_dict:
+                        mapped_dict['tax'] = mapped_dict.get('tax_amount', 0.0)
+                    if 'discount' not in mapped_dict:
+                        mapped_dict['discount'] = 0.0
+                    if 'grand_total' not in mapped_dict:
+                        mapped_dict['grand_total'] = mapped_dict.get('total_amount', 0.0)
+                    
+                    # Create Invoice object
+                    invoice = Invoice()
+                    if 'id' in mapped_dict:
+                        invoice.id = mapped_dict['id']
+                    if 'invoice_number' in mapped_dict:
+                        invoice.invoice_number = mapped_dict['invoice_number']
+                    if 'invoice_date' in mapped_dict:
+                        invoice.invoice_date = mapped_dict['invoice_date']
+                    if 'due_date' in mapped_dict:
+                        invoice.due_date = mapped_dict['due_date']
+                    if 'status' in mapped_dict:
+                        invoice.status = mapped_dict['status']
+                    if 'subtotal' in mapped_dict:
+                        invoice.subtotal = mapped_dict['subtotal']
+                    if 'notes' in mapped_dict:
+                        invoice.notes = mapped_dict['notes']
+                    
+                    invoice.tax = mapped_dict.get('tax', 0.0)
+                    invoice.grand_total = mapped_dict.get('grand_total', 0.0)
+                    invoice.freight = mapped_dict.get('freight', 0.0)
+                    invoice.discount = mapped_dict.get('discount', 0.0)
+                    
+                    if 'sales_order_id' in mapped_dict and mapped_dict['sales_order_id']:
+                        invoice.sales_order_id = mapped_dict['sales_order_id']
+                    
+                    invoice._state.adding = False
+                    invoice._state.db = connection
+                    
+                    # Get invoice items - use raw SQL to avoid schema issues
+                    from .models import InvoiceItem
+                    try:
+                        items = list(InvoiceItem.objects.filter(invoice_id=invoice.id))
+                    except Exception:
+                        # If ORM fails, use raw SQL
+                        raw_conn = sqlite3.connect(db_path)
+                        raw_cursor = raw_conn.cursor()
+                        try:
+                            raw_cursor.execute("SELECT * FROM erp_core_invoiceitem WHERE invoice_id = ?", [invoice.id])
+                            item_rows = raw_cursor.fetchall()
+                            raw_cursor.execute("PRAGMA table_info(erp_core_invoiceitem)")
+                            item_columns = [col[1] for col in raw_cursor.fetchall()]
+                            items = []
+                            for item_row in item_rows:
+                                item_dict = dict(zip(item_columns, item_row))
+                                item = InvoiceItem()
+                                item.id = item_dict.get('id')
+                                item.invoice_id = invoice.id
+                                item.description = item_dict.get('description', '')
+                                item.quantity = item_dict.get('quantity', 0.0)
+                                item.unit_price = item_dict.get('unit_price', 0.0)
+                                item.total = item_dict.get('total', 0.0)
+                                items.append(item)
+                        finally:
+                            raw_conn.close()
+                    invoice._prefetched_objects_cache = {'items': items}
+                    
+                    # Try to get sales order if it exists
+                    if invoice.sales_order_id:
+                        try:
+                            from .models import SalesOrder
+                            invoice.sales_order = SalesOrder.objects.select_related('customer').get(id=invoice.sales_order_id)
+                        except SalesOrder.DoesNotExist:
+                            invoice.sales_order = None
+                else:
+                    # Use normal ORM
+                    invoice = self.get_object()
+                    # Ensure items are prefetched
+                    if not hasattr(invoice, '_prefetched_objects_cache'):
+                        from .models import InvoiceItem
+                        try:
+                            items = list(InvoiceItem.objects.filter(invoice_id=invoice.id))
+                        except Exception:
+                            # If ORM fails, use raw SQL
+                            import sqlite3
+                            from django.conf import settings
+                            db_path = settings.DATABASES['default']['NAME']
+                            raw_conn = sqlite3.connect(db_path)
+                            raw_cursor = raw_conn.cursor()
+                            try:
+                                raw_cursor.execute("SELECT * FROM erp_core_invoiceitem WHERE invoice_id = ?", [invoice.id])
+                                item_rows = raw_cursor.fetchall()
+                                raw_cursor.execute("PRAGMA table_info(erp_core_invoiceitem)")
+                                item_columns = [col[1] for col in raw_cursor.fetchall()]
+                                items = []
+                                for item_row in item_rows:
+                                    item_dict = dict(zip(item_columns, item_row))
+                                    item = InvoiceItem()
+                                    item.id = item_dict.get('id')
+                                    item.invoice_id = invoice.id
+                                    item.description = item_dict.get('description', '')
+                                    item.quantity = item_dict.get('quantity', 0.0)
+                                    item.unit_price = item_dict.get('unit_price', 0.0)
+                                    item.total = item_dict.get('total', 0.0)
+                                    items.append(item)
+                            finally:
+                                raw_conn.close()
+                        invoice._prefetched_objects_cache = {'items': items}
+        except Exception as e:
+            import logging
+            import traceback
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error getting invoice for PDF: {e}")
+            logger.error(traceback.format_exc())
+            from rest_framework.response import Response
+            from rest_framework import status as http_status
+            return Response({'error': f'Error retrieving invoice: {str(e)}'}, status=http_status.HTTP_500_INTERNAL_SERVER_ERROR)
+        
+        if not invoice:
+            return Response({'error': 'Invoice not found'}, status=http_status.HTTP_404_NOT_FOUND)
+        
+        try:
+            from docx import Document
+            
+            # Get template path from Sensitive folder
+            PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+            template_path = PROJECT_ROOT / 'Sensitive' / 'Invoice Template.docx'
+            
+            if not template_path.exists():
+                return Response(
+                    {'error': 'Invoice template not found'},
+                    status=http_status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
+            
+            # Load template
+            doc = Document(str(template_path))
+            
+            # Helper function to format date (handles both date objects and strings)
+            def format_date(date_value):
+                if not date_value:
+                    return ''
+                if isinstance(date_value, str):
+                    try:
+                        from datetime import datetime
+                        date_obj = datetime.strptime(date_value, '%Y-%m-%d').date()
+                        return date_obj.strftime('%m/%d/%Y')
+                    except:
+                        return date_value
+                return date_value.strftime('%m/%d/%Y')
+            
+            # Get customer information
+            customer_name = ''
+            customer_address = ''
+            customer_city = ''
+            customer_state = ''
+            customer_zip = ''
+            customer_country = ''
+            customer_phone = ''
+            payment_terms = ''
+            tracking_number = ''
+            po_number = ''
+            
+            if invoice.sales_order:
+                if hasattr(invoice.sales_order, 'customer_name') and invoice.sales_order.customer_name:
+                    customer_name = invoice.sales_order.customer_name
+                elif hasattr(invoice.sales_order, 'customer') and invoice.sales_order.customer:
+                    customer_name = invoice.sales_order.customer.name
+                    if hasattr(invoice.sales_order.customer, 'address'):
+                        customer_address = invoice.sales_order.customer.address or ''
+                    if hasattr(invoice.sales_order.customer, 'payment_terms'):
+                        payment_terms = invoice.sales_order.customer.payment_terms or ''
+                
+                # Get address from sales order if available
+                if hasattr(invoice.sales_order, 'customer_address') and invoice.sales_order.customer_address:
+                    customer_address = invoice.sales_order.customer_address
+                if hasattr(invoice.sales_order, 'customer_city') and invoice.sales_order.customer_city:
+                    customer_city = invoice.sales_order.customer_city
+                if hasattr(invoice.sales_order, 'customer_state') and invoice.sales_order.customer_state:
+                    customer_state = invoice.sales_order.customer_state
+                if hasattr(invoice.sales_order, 'customer_zip') and invoice.sales_order.customer_zip:
+                    customer_zip = invoice.sales_order.customer_zip
+                if hasattr(invoice.sales_order, 'customer_country') and invoice.sales_order.customer_country:
+                    customer_country = invoice.sales_order.customer_country
+                if hasattr(invoice.sales_order, 'customer_phone') and invoice.sales_order.customer_phone:
+                    customer_phone = invoice.sales_order.customer_phone
+                if hasattr(invoice.sales_order, 'tracking_number') and invoice.sales_order.tracking_number:
+                    tracking_number = invoice.sales_order.tracking_number
+                if hasattr(invoice.sales_order, 'customer_reference_number') and invoice.sales_order.customer_reference_number:
+                    po_number = invoice.sales_order.customer_reference_number
+            
+            # Replace text in paragraphs
+            for paragraph in doc.paragraphs:
+                # Replace invoice number
+                if 'Invoice number:' in paragraph.text:
+                    paragraph.text = paragraph.text.replace('Invoice number:', f'Invoice number: {invoice.invoice_number}')
+                # Replace date
+                if 'Date:' in paragraph.text and 'Invoice number:' not in paragraph.text:
+                    paragraph.text = paragraph.text.replace('Date:', f'Date: {format_date(invoice.invoice_date)}')
+                # Replace payment terms
+                if 'Payment Terms:' in paragraph.text:
+                    paragraph.text = paragraph.text.replace('Payment Terms:', f'Payment Terms: {payment_terms}')
+                # Replace tracking number
+                if 'Tracking number:' in paragraph.text:
+                    paragraph.text = paragraph.text.replace('Tracking number:', f'Tracking number: {tracking_number}')
+            
+            # Replace text in tables
+            for table_idx, table in enumerate(doc.tables):
+                for row in table.rows:
+                    for cell in row.cells:
+                        cell_text = cell.text
+                        
+                        # Replace invoice number
+                        if 'Invoice number:' in cell_text:
+                            cell.text = cell_text.replace('Invoice number:', f'Invoice number: {invoice.invoice_number}')
+                        # Replace date
+                        if 'Date:' in cell_text and 'Invoice number:' not in cell_text:
+                            cell.text = cell_text.replace('Date:', f'Date: {format_date(invoice.invoice_date)}')
+                        # Replace customer info placeholder
+                        if '(customer, customer billing address, ship to address)' in cell_text:
+                            customer_info = customer_name
+                            if customer_address:
+                                customer_info += f'\n{customer_address}'
+                            if customer_city or customer_state or customer_zip:
+                                city_state_zip = ', '.join(filter(None, [customer_city, customer_state, customer_zip]))
+                                customer_info += f'\n{city_state_zip}'
+                            if customer_country:
+                                customer_info += f'\n{customer_country}'
+                            if customer_phone:
+                                customer_info += f'\nPhone: {customer_phone}'
+                            cell.text = cell_text.replace('(customer, customer billing address, ship to address)', customer_info)
+                        # Replace PO/REF number placeholder
+                        if '(PO number, REF number as applicable)' in cell_text:
+                            po_ref_text = po_number if po_number else ''
+                            cell.text = cell_text.replace('(PO number, REF number as applicable)', po_ref_text)
+            
+            # Fill in items table (Table 1 based on template structure)
+            if len(doc.tables) > 1:
+                items_table = doc.tables[1]  # Second table is the items table
+                
+                # Get invoice items
+                items = getattr(invoice, '_prefetched_objects_cache', {}).get('items', [])
+                if not items and hasattr(invoice, 'items'):
+                    try:
+                        items = list(invoice.items.all())
+                    except:
+                        items = []
+                
+                # Find the row with "(item description)" placeholder
+                item_start_row = None
+                for i, row in enumerate(items_table.rows):
+                    row_text = ' '.join([cell.text for cell in row.cells]).lower()
+                    if '(item description)' in row_text.lower():
+                        item_start_row = i
+                        break
+                
+                if item_start_row is not None:
+                    # Remove placeholder row and any empty rows after it (but keep freight and total rows)
+                    # Find where freight row starts
+                    freight_row = None
+                    total_row = None
+                    for i, row in enumerate(items_table.rows):
+                        row_text = ' '.join([cell.text for cell in row.cells]).lower()
+                        if 'freight' in row_text:
+                            freight_row = i
+                        if 'total' in row_text and i > (freight_row or 0):
+                            total_row = i
+                            break
+                    
+                    # Remove rows between item_start_row and freight_row (or total_row if no freight)
+                    rows_to_remove = []
+                    end_row = freight_row if freight_row else (total_row if total_row else len(items_table.rows))
+                    for i in range(item_start_row, end_row):
+                        rows_to_remove.append(i)
+                    
+                    # Remove rows in reverse order to maintain indices
+                    for i in reversed(rows_to_remove):
+                        items_table._element.remove(items_table.rows[i]._element)
+                    
+                    # Insert invoice items
+                    for item in items:
+                        new_row = items_table.add_row()
+                        cells = new_row.cells
+                        if len(cells) >= 1:
+                            cells[0].text = item.description or ''
+                        if len(cells) >= 2:
+                            cells[1].text = f"{item.quantity:.2f}" if item.quantity else ''
+                        if len(cells) >= 3:
+                            cells[2].text = f"${item.unit_price:.2f}" if item.unit_price else ''
+                        if len(cells) >= 4:
+                            cells[3].text = f"${item.total:.2f}" if item.total else ''
+                    
+                    # Update freight row if it exists
+                    if freight_row:
+                        # Find the new freight row index (it may have shifted)
+                        for i, row in enumerate(items_table.rows):
+                            row_text = ' '.join([cell.text for cell in row.cells]).lower()
+                            if 'freight' in row_text:
+                                freight_cells = row.cells
+                                if len(freight_cells) >= 4:
+                                    freight_cells[3].text = f"${invoice.freight:.2f}" if invoice.freight else ''
+                                break
+                    
+                    # Update total row
+                    if total_row:
+                        # Find the new total row index
+                        for i, row in enumerate(items_table.rows):
+                            row_text = ' '.join([cell.text for cell in row.cells]).lower()
+                            if 'total' in row_text and i > 0:
+                                total_cells = row.cells
+                                # Update all TOTAL cells with grand total
+                                for cell in total_cells:
+                                    if cell.text.strip().upper() == 'TOTAL':
+                                        cell.text = f"${invoice.grand_total:.2f}"
+                                break
+            
+            # Save to temporary file
+            import time
+            tmp_path = None
+            pdf_path = None
+            pdf_content = None
+            is_pdf = False
+            
+            try:
+                # Create temp file with unique name
+                tmp_fd, tmp_path = tempfile.mkstemp(suffix='.docx')
+                os.close(tmp_fd)  # Close the file descriptor so doc.save can use it
+                
+                # Save document
+                doc.save(tmp_path)
+                
+                # Try to convert to PDF
+                try:
+                    from docx2pdf import convert
+                    pdf_path = tmp_path.replace('.docx', '.pdf')
+                    convert(tmp_path, pdf_path)
+                    
+                    # Wait a moment to ensure file is fully written and closed
+                    time.sleep(0.1)
+                    
+                    # Read PDF content
+                    with open(pdf_path, 'rb') as pdf_file:
+                        pdf_content = pdf_file.read()
+                    is_pdf = pdf_content.startswith(b'%PDF')
+                    
+                    # Clean up temp PDF file
+                    try:
+                        if os.path.exists(pdf_path):
+                            os.unlink(pdf_path)
+                    except Exception as e:
+                        import logging
+                        logger = logging.getLogger(__name__)
+                        logger.warning(f"Could not delete temp PDF file {pdf_path}: {e}")
+                        
+                except Exception as e:
+                    # If PDF conversion fails, use DOCX file
+                    import logging
+                    logger = logging.getLogger(__name__)
+                    logger.warning(f"PDF conversion failed: {e}. Using DOCX file instead.")
+                    with open(tmp_path, 'rb') as docx_file:
+                        pdf_content = docx_file.read()
+                    is_pdf = False
+                
+                # Clean up temp DOCX file
+                try:
+                    if tmp_path and os.path.exists(tmp_path):
+                        # Wait a moment to ensure file is closed
+                        time.sleep(0.1)
+                        os.unlink(tmp_path)
+                except Exception as e:
+                    import logging
+                    logger = logging.getLogger(__name__)
+                    logger.warning(f"Could not delete temp DOCX file {tmp_path}: {e}")
+                    # Try again after a longer delay
+                    try:
+                        time.sleep(0.5)
+                        if os.path.exists(tmp_path):
+                            os.unlink(tmp_path)
+                    except:
+                        pass  # If it still fails, just continue - temp files will be cleaned up by OS
+            except Exception as e:
+                # If file operations fail, log and return error
+                import logging
+                import traceback
+                logger = logging.getLogger(__name__)
+                logger.error(f'Failed to save/convert invoice document: {str(e)}')
+                logger.error(f'Traceback: {traceback.format_exc()}')
+                return Response(
+                    {'error': f'Failed to generate invoice document: {str(e)}'},
+                    status=http_status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
+            
+            # Ensure we have content before returning
+            if pdf_content is None or len(pdf_content) == 0:
+                return Response(
+                    {'error': 'Failed to generate invoice document - no content'},
+                    status=http_status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
+            
+            # Return as HTTP response
+            filename = f"Invoice_{invoice.invoice_number}.pdf" if is_pdf else f"Invoice_{invoice.invoice_number}.docx"
+            content_type = 'application/pdf' if is_pdf else 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+            
+            try:
+                response = HttpResponse(pdf_content, content_type=content_type)
+                response['Content-Disposition'] = f'inline; filename="{filename}"'
+                response['X-Content-Type-Options'] = 'nosniff'
+                response['Content-Length'] = str(len(pdf_content))
+                return response
+            except Exception as e:
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.error(f'Failed to create HTTP response: {str(e)}')
+                return Response(
+                    {'error': f'Failed to create HTTP response: {str(e)}'},
+                    status=http_status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
+            
+        except ImportError:
+            return Response(
+                {'error': 'python-docx is not installed. Please install it with: pip install python-docx'},
+                status=http_status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+        except Exception as e:
+            import logging
+            import traceback
+            logger = logging.getLogger(__name__)
+            logger.error(f'Failed to generate invoice PDF: {str(e)}')
+            logger.error(f'Traceback: {traceback.format_exc()}')
+            return Response(
+                {'error': f'Failed to generate invoice PDF: {str(e)}'},
+                status=http_status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
 
 class CalendarEventsViewSet(viewsets.ViewSet):
@@ -5206,6 +8119,46 @@ class FinishedProductSpecificationViewSet(viewsets.ModelViewSet):
         return response
 
 
+class LotTransactionLogViewSet(viewsets.ReadOnlyModelViewSet):
+    """ViewSet for viewing lot transaction logs"""
+    queryset = LotTransactionLog.objects.select_related('lot', 'lot__item').all()
+    serializer_class = LotTransactionLogSerializer
+    
+    def get_queryset(self):
+        queryset = LotTransactionLog.objects.select_related('lot', 'lot__item').all()
+        
+        # Filter by lot_number
+        lot_number = self.request.query_params.get('lot_number', None)
+        if lot_number:
+            queryset = queryset.filter(lot_number__icontains=lot_number)
+        
+        # Filter by item_sku
+        sku = self.request.query_params.get('sku', None)
+        if sku:
+            queryset = queryset.filter(item_sku__icontains=sku)
+        
+        # Filter by transaction_type
+        transaction_type = self.request.query_params.get('transaction_type', None)
+        if transaction_type:
+            queryset = queryset.filter(transaction_type=transaction_type)
+        
+        # Filter by reference_number
+        reference_number = self.request.query_params.get('reference_number', None)
+        if reference_number:
+            queryset = queryset.filter(reference_number__icontains=reference_number)
+        
+        # Filter by date range
+        date_from = self.request.query_params.get('date_from', None)
+        if date_from:
+            queryset = queryset.filter(logged_at__gte=date_from)
+        
+        date_to = self.request.query_params.get('date_to', None)
+        if date_to:
+            queryset = queryset.filter(logged_at__lte=date_to)
+        
+        return queryset.order_by('-logged_at')
+
+
 class LotDepletionLogViewSet(viewsets.ReadOnlyModelViewSet):
     """ViewSet for viewing lot depletion logs"""
     queryset = LotDepletionLog.objects.all()
@@ -5291,6 +8244,768 @@ class PurchaseOrderLogViewSet(viewsets.ReadOnlyModelViewSet):
         return queryset.order_by('-logged_at')
 
 
+class FiscalPeriodViewSet(viewsets.ModelViewSet):
+    """ViewSet for managing fiscal periods"""
+    queryset = FiscalPeriod.objects.all()
+    serializer_class = FiscalPeriodSerializer
+    
+    def get_queryset(self):
+        queryset = FiscalPeriod.objects.all()
+        is_closed = self.request.query_params.get('is_closed', None)
+        if is_closed is not None:
+            is_closed_bool = is_closed.lower() == 'true'
+            queryset = queryset.filter(is_closed=is_closed_bool)
+        return queryset.order_by('-start_date')
+
+
+def generate_journal_entry_number():
+    """Generate a unique journal entry number in format JE-YYYYMMDD-001"""
+    from django.db import transaction
+    from datetime import date
+    
+    today = date.today()
+    date_prefix = today.strftime('%Y%m%d')
+    base_number = f"JE-{date_prefix}-"
+    
+    # Find the highest sequence number for today
+    with transaction.atomic():
+        existing_entries = JournalEntry.objects.filter(entry_number__startswith=base_number)
+        max_sequence = 0
+        
+        for entry in existing_entries:
+            try:
+                # Extract sequence number from entry_number (e.g., "JE-20240115-001" -> 1)
+                sequence_str = entry.entry_number.split('-')[-1]
+                sequence = int(sequence_str)
+                if sequence > max_sequence:
+                    max_sequence = sequence
+            except (ValueError, IndexError):
+                pass
+        
+        next_sequence = max_sequence + 1
+        entry_number = f"{base_number}{next_sequence:03d}"
+        
+        # Double-check uniqueness
+        max_retries = 10
+        retry_count = 0
+        while JournalEntry.objects.filter(entry_number=entry_number).exists() and retry_count < max_retries:
+            next_sequence += 1
+            entry_number = f"{base_number}{next_sequence:03d}"
+            retry_count += 1
+    
+    return entry_number
+
+
+class JournalEntryViewSet(viewsets.ModelViewSet):
+    """ViewSet for managing journal entries"""
+    queryset = JournalEntry.objects.prefetch_related('lines', 'lines__account').all()
+    serializer_class = JournalEntrySerializer
+    
+    def get_queryset(self):
+        queryset = JournalEntry.objects.prefetch_related('lines', 'lines__account').all()
+        
+        # Filter by status
+        status_filter = self.request.query_params.get('status', None)
+        if status_filter:
+            queryset = queryset.filter(status=status_filter)
+        
+        # Filter by date range
+        start_date = self.request.query_params.get('start_date', None)
+        end_date = self.request.query_params.get('end_date', None)
+        if start_date:
+            queryset = queryset.filter(entry_date__gte=start_date)
+        if end_date:
+            queryset = queryset.filter(entry_date__lte=end_date)
+        
+        # Filter by reference
+        reference_number = self.request.query_params.get('reference_number', None)
+        if reference_number:
+            queryset = queryset.filter(reference_number=reference_number)
+        
+        return queryset.order_by('-entry_date', '-created_at')
+    
+    def create(self, request, *args, **kwargs):
+        """Create a journal entry with lines"""
+        lines_data = request.data.pop('lines', [])
+        
+        # Validate that debits equal credits
+        total_debits = sum(float(line.get('amount', 0)) for line in lines_data if line.get('debit_credit') == 'debit')
+        total_credits = sum(float(line.get('amount', 0)) for line in lines_data if line.get('debit_credit') == 'credit')
+        
+        if abs(total_debits - total_credits) > 0.01:
+            return Response(
+                {'error': f'Journal entry must be balanced. Debits: ${total_debits:.2f}, Credits: ${total_credits:.2f}'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Generate entry number
+        entry_number = generate_journal_entry_number()
+        request.data['entry_number'] = entry_number
+        
+        # Determine fiscal period from entry_date
+        from django.utils.dateparse import parse_date
+        entry_date = parse_date(request.data.get('entry_date'))
+        if entry_date:
+            try:
+                fiscal_period = FiscalPeriod.objects.filter(
+                    start_date__lte=entry_date,
+                    end_date__gte=entry_date
+                ).first()
+                if fiscal_period:
+                    request.data['fiscal_period'] = fiscal_period.id
+            except Exception:
+                pass
+        
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        journal_entry = serializer.save()
+        
+        # Create journal entry lines
+        for line_data in lines_data:
+            JournalEntryLine.objects.create(
+                journal_entry=journal_entry,
+                account_id=line_data['account'],
+                debit_credit=line_data['debit_credit'],
+                amount=float(line_data['amount']),
+                description=line_data.get('description', '')
+            )
+        
+        # Reload with lines
+        journal_entry.refresh_from_db()
+        return Response(self.get_serializer(journal_entry).data, status=status.HTTP_201_CREATED)
+    
+    @action(detail=True, methods=['post'], url_path='post', url_name='post')
+    def post_entry(self, request, pk=None):
+        """Post a journal entry to the general ledger"""
+        journal_entry = self.get_object()
+        
+        if journal_entry.status == 'posted':
+            return Response(
+                {'error': 'Journal entry is already posted'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Validate balanced
+        if not journal_entry.validate_balanced():
+            return Response(
+                {'error': 'Journal entry is not balanced. Cannot post.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Create general ledger entries
+        for line in journal_entry.lines.all():
+            GeneralLedgerEntry.objects.create(
+                journal_entry=journal_entry,
+                account=line.account,
+                fiscal_period=journal_entry.fiscal_period,
+                entry_date=journal_entry.entry_date,
+                description=line.description or journal_entry.description,
+                debit=line.amount if line.debit_credit == 'debit' else 0.0,
+                credit=line.amount if line.debit_credit == 'credit' else 0.0
+            )
+        
+        # Update journal entry status
+        journal_entry.status = 'posted'
+        journal_entry.posted_by = request.user.username if hasattr(request.user, 'username') else 'system'
+        journal_entry.posted_at = timezone.now()
+        journal_entry.save()
+        
+        # Update account balances for the fiscal period
+        if journal_entry.fiscal_period:
+            for line in journal_entry.lines.all():
+                account_balance, created = AccountBalance.objects.get_or_create(
+                    account=line.account,
+                    fiscal_period=journal_entry.fiscal_period,
+                    defaults={
+                        'opening_balance': 0.0,
+                        'period_debits': 0.0,
+                        'period_credits': 0.0,
+                        'closing_balance': 0.0
+                    }
+                )
+                
+                if line.debit_credit == 'debit':
+                    account_balance.period_debits += line.amount
+                else:
+                    account_balance.period_credits += line.amount
+                
+                # Calculate closing balance based on account type
+                account_type = line.account.account_type
+                if account_type in ['asset', 'expense']:
+                    # Debits increase, credits decrease
+                    account_balance.closing_balance = account_balance.opening_balance + account_balance.period_debits - account_balance.period_credits
+                else:
+                    # Credits increase, debits decrease
+                    account_balance.closing_balance = account_balance.opening_balance + account_balance.period_credits - account_balance.period_debits
+                
+                account_balance.save()
+        
+        return Response(self.get_serializer(journal_entry).data)
+
+
+class GeneralLedgerViewSet(viewsets.ReadOnlyModelViewSet):
+    """ViewSet for viewing general ledger entries"""
+    queryset = GeneralLedgerEntry.objects.select_related('account', 'journal_entry', 'fiscal_period').all()
+    serializer_class = GeneralLedgerEntrySerializer
+    
+    def get_queryset(self):
+        queryset = GeneralLedgerEntry.objects.select_related('account', 'journal_entry', 'fiscal_period').all()
+        
+        # Filter by account
+        account_id = self.request.query_params.get('account_id', None)
+        if account_id:
+            queryset = queryset.filter(account_id=account_id)
+        
+        # Filter by date range
+        start_date = self.request.query_params.get('start_date', None)
+        end_date = self.request.query_params.get('end_date', None)
+        if start_date:
+            queryset = queryset.filter(entry_date__gte=start_date)
+        if end_date:
+            queryset = queryset.filter(entry_date__lte=end_date)
+        
+        # Filter by fiscal period
+        fiscal_period_id = self.request.query_params.get('fiscal_period_id', None)
+        if fiscal_period_id:
+            queryset = queryset.filter(fiscal_period_id=fiscal_period_id)
+        
+        return queryset.order_by('entry_date', 'id')
+    
+    @action(detail=False, methods=['get'], url_path='account-balance', url_name='account-balance')
+    def account_balance(self, request):
+        """Get account balance for a specific account and date"""
+        account_id = request.query_params.get('account_id')
+        as_of_date = request.query_params.get('as_of_date')
+        
+        if not account_id or not as_of_date:
+            return Response(
+                {'error': 'account_id and as_of_date are required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        from django.utils.dateparse import parse_date
+        as_of = parse_date(as_of_date)
+        if not as_of:
+            return Response(
+                {'error': 'Invalid date format'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            account = Account.objects.get(id=account_id)
+        except Account.DoesNotExist:
+            return Response(
+                {'error': 'Account not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Calculate balance from general ledger entries up to the date
+        entries = GeneralLedgerEntry.objects.filter(
+            account=account,
+            entry_date__lte=as_of
+        )
+        
+        total_debits = sum(e.amount for e in entries.filter(debit_credit='debit'))
+        total_credits = sum(e.amount for e in entries.filter(debit_credit='credit'))
+        
+        # Calculate balance based on account type
+        if account.account_type in ['asset', 'expense']:
+            balance = total_debits - total_credits
+        else:
+            balance = total_credits - total_debits
+        
+        return Response({
+            'account_id': account.id,
+            'account_number': account.account_number,
+            'account_name': account.name,
+            'as_of_date': as_of_date,
+            'total_debits': total_debits,
+            'total_credits': total_credits,
+            'balance': balance
+        })
+
+
+class AccountBalanceViewSet(viewsets.ReadOnlyModelViewSet):
+    """ViewSet for viewing account balances by fiscal period"""
+    queryset = AccountBalance.objects.select_related('account', 'fiscal_period').all()
+    serializer_class = AccountBalanceSerializer
+    
+    def get_queryset(self):
+        queryset = AccountBalance.objects.select_related('account', 'fiscal_period').all()
+        
+        # Filter by fiscal period
+        fiscal_period_id = self.request.query_params.get('fiscal_period_id', None)
+        if fiscal_period_id:
+            queryset = queryset.filter(fiscal_period_id=fiscal_period_id)
+        
+        # Filter by account
+        account_id = self.request.query_params.get('account_id', None)
+        if account_id:
+            queryset = queryset.filter(account_id=account_id)
+        
+        return queryset.order_by('account', 'fiscal_period')
+
+
+class FinancialReportsViewSet(viewsets.ViewSet):
+    """ViewSet for generating financial reports"""
+    
+    @action(detail=False, methods=['get'], url_path='trial-balance', url_name='trial-balance')
+    def trial_balance(self, request):
+        """Generate trial balance report"""
+        as_of_date = request.query_params.get('as_of_date', None)
+        fiscal_period_id = request.query_params.get('fiscal_period_id', None)
+        
+        if not as_of_date and not fiscal_period_id:
+            from datetime import date
+            as_of_date = date.today().isoformat()
+        
+        accounts = Account.objects.filter(is_active=True).order_by('account_number')
+        trial_balance_data = []
+        
+        for account in accounts:
+            # Calculate balance
+            if fiscal_period_id:
+                try:
+                    fiscal_period = FiscalPeriod.objects.get(id=fiscal_period_id)
+                    account_balance = AccountBalance.objects.filter(
+                        account=account,
+                        fiscal_period=fiscal_period
+                    ).first()
+                    
+                    if account_balance:
+                        balance = account_balance.closing_balance
+                        total_debits = account_balance.period_debits
+                        total_credits = account_balance.period_credits
+                    else:
+                        balance = 0.0
+                        total_debits = 0.0
+                        total_credits = 0.0
+                except FiscalPeriod.DoesNotExist:
+                    balance = 0.0
+                    total_debits = 0.0
+                    total_credits = 0.0
+            else:
+                # Calculate from general ledger entries
+                from django.utils.dateparse import parse_date
+                as_of = parse_date(as_of_date) if as_of_date else None
+                
+                if as_of:
+                    entries = GeneralLedgerEntry.objects.filter(
+                        account=account,
+                        entry_date__lte=as_of
+                    )
+                    total_debits = sum(e.amount for e in entries.filter(debit_credit='debit'))
+                    total_credits = sum(e.amount for e in entries.filter(debit_credit='credit'))
+                else:
+                    entries = GeneralLedgerEntry.objects.filter(account=account)
+                    total_debits = sum(e.amount for e in entries.filter(debit_credit='debit'))
+                    total_credits = sum(e.amount for e in entries.filter(debit_credit='credit'))
+                
+                # Calculate balance based on account type
+                if account.account_type in ['asset', 'expense']:
+                    balance = total_debits - total_credits
+                else:
+                    balance = total_credits - total_debits
+            
+            # Only include accounts with activity or non-zero balance
+            if abs(balance) > 0.01 or total_debits > 0.01 or total_credits > 0.01:
+                trial_balance_data.append({
+                    'account_id': account.id,
+                    'account_number': account.account_number,
+                    'account_name': account.name,
+                    'account_type': account.account_type,
+                    'debit_balance': balance if balance > 0 and account.account_type in ['asset', 'expense'] else 0.0,
+                    'credit_balance': abs(balance) if balance < 0 or account.account_type in ['liability', 'equity', 'revenue'] else 0.0,
+                    'total_debits': total_debits,
+                    'total_credits': total_credits,
+                    'balance': balance
+                })
+        
+        # Calculate totals
+        total_debits = sum(item['debit_balance'] for item in trial_balance_data)
+        total_credits = sum(item['credit_balance'] for item in trial_balance_data)
+        
+        return Response({
+            'as_of_date': as_of_date,
+            'fiscal_period_id': fiscal_period_id,
+            'accounts': trial_balance_data,
+            'total_debits': total_debits,
+            'total_credits': total_credits,
+            'is_balanced': abs(total_debits - total_credits) < 0.01
+        })
+    
+    @action(detail=False, methods=['get'], url_path='balance-sheet', url_name='balance-sheet')
+    def balance_sheet(self, request):
+        """Generate balance sheet report"""
+        as_of_date = request.query_params.get('as_of_date', None)
+        fiscal_period_id = request.query_params.get('fiscal_period_id', None)
+        
+        if not as_of_date and not fiscal_period_id:
+            from datetime import date
+            as_of_date = date.today().isoformat()
+        
+        # Get all accounts
+        accounts = Account.objects.filter(is_active=True).order_by('account_number')
+        
+        assets = []
+        liabilities = []
+        equity = []
+        
+        for account in accounts:
+            # Calculate balance
+            if fiscal_period_id:
+                try:
+                    fiscal_period = FiscalPeriod.objects.get(id=fiscal_period_id)
+                    account_balance = AccountBalance.objects.filter(
+                        account=account,
+                        fiscal_period=fiscal_period
+                    ).first()
+                    
+                    if account_balance:
+                        balance = account_balance.closing_balance
+                    else:
+                        balance = 0.0
+                except FiscalPeriod.DoesNotExist:
+                    balance = 0.0
+            else:
+                from django.utils.dateparse import parse_date
+                as_of = parse_date(as_of_date) if as_of_date else None
+                
+                if as_of:
+                    entries = GeneralLedgerEntry.objects.filter(
+                        account=account,
+                        entry_date__lte=as_of
+                    )
+                    total_debits = sum(e.amount for e in entries.filter(debit_credit='debit'))
+                    total_credits = sum(e.amount for e in entries.filter(debit_credit='credit'))
+                else:
+                    entries = GeneralLedgerEntry.objects.filter(account=account)
+                    total_debits = sum(e.amount for e in entries.filter(debit_credit='debit'))
+                    total_credits = sum(e.amount for e in entries.filter(debit_credit='credit'))
+                
+                if account.account_type in ['asset', 'expense']:
+                    balance = total_debits - total_credits
+                else:
+                    balance = total_credits - total_debits
+            
+            # Only include accounts with non-zero balance
+            if abs(balance) > 0.01:
+                account_data = {
+                    'account_id': account.id,
+                    'account_number': account.account_number,
+                    'account_name': account.name,
+                    'balance': balance
+                }
+                
+                if account.account_type == 'asset':
+                    assets.append(account_data)
+                elif account.account_type == 'liability':
+                    liabilities.append(account_data)
+                elif account.account_type == 'equity':
+                    equity.append(account_data)
+        
+        # Calculate totals
+        total_assets = sum(item['balance'] for item in assets)
+        total_liabilities = sum(item['balance'] for item in liabilities)
+        total_equity = sum(item['balance'] for item in equity)
+        total_liabilities_and_equity = total_liabilities + total_equity
+        
+        return Response({
+            'as_of_date': as_of_date,
+            'fiscal_period_id': fiscal_period_id,
+            'assets': assets,
+            'liabilities': liabilities,
+            'equity': equity,
+            'total_assets': total_assets,
+            'total_liabilities': total_liabilities,
+            'total_equity': total_equity,
+            'total_liabilities_and_equity': total_liabilities_and_equity,
+            'is_balanced': abs(total_assets - total_liabilities_and_equity) < 0.01
+        })
+    
+    @action(detail=False, methods=['get'], url_path='income-statement', url_name='income-statement')
+    def income_statement(self, request):
+        """Generate income statement (P&L) report"""
+        start_date = request.query_params.get('start_date', None)
+        end_date = request.query_params.get('end_date', None)
+        fiscal_period_id = request.query_params.get('fiscal_period_id', None)
+        
+        # If fiscal period is provided, use its dates
+        if fiscal_period_id:
+            try:
+                fiscal_period = FiscalPeriod.objects.get(id=fiscal_period_id)
+                start_date = fiscal_period.start_date.isoformat()
+                end_date = fiscal_period.end_date.isoformat()
+            except FiscalPeriod.DoesNotExist:
+                pass
+        
+        if not start_date or not end_date:
+            from datetime import date, timedelta
+            end_date = date.today().isoformat()
+            start_date = (date.today() - timedelta(days=30)).isoformat()
+        
+        # Get revenue and expense accounts
+        revenue_accounts = Account.objects.filter(
+            is_active=True,
+            account_type='revenue'
+        ).order_by('account_number')
+        
+        expense_accounts = Account.objects.filter(
+            is_active=True,
+            account_type='expense'
+        ).order_by('account_number')
+        
+        revenues = []
+        expenses = []
+        
+        from django.utils.dateparse import parse_date
+        start = parse_date(start_date)
+        end = parse_date(end_date)
+        
+        # Calculate revenue
+        for account in revenue_accounts:
+            if fiscal_period_id:
+                try:
+                    fiscal_period = FiscalPeriod.objects.get(id=fiscal_period_id)
+                    account_balance = AccountBalance.objects.filter(
+                        account=account,
+                        fiscal_period=fiscal_period
+                    ).first()
+                    
+                    if account_balance:
+                        # For revenue accounts, credits increase, debits decrease
+                        balance = account_balance.period_credits - account_balance.period_debits
+                    else:
+                        balance = 0.0
+                except FiscalPeriod.DoesNotExist:
+                    balance = 0.0
+            else:
+                if start and end:
+                    entries = GeneralLedgerEntry.objects.filter(
+                        account=account,
+                        entry_date__gte=start,
+                        entry_date__lte=end
+                    )
+                    total_debits = sum(e.amount for e in entries.filter(debit_credit='debit'))
+                    total_credits = sum(e.amount for e in entries.filter(debit_credit='credit'))
+                    # Revenue: credits increase, debits decrease
+                    balance = total_credits - total_debits
+                else:
+                    balance = 0.0
+            
+            if abs(balance) > 0.01:
+                revenues.append({
+                    'account_id': account.id,
+                    'account_number': account.account_number,
+                    'account_name': account.name,
+                    'amount': balance
+                })
+        
+        # Calculate expenses
+        for account in expense_accounts:
+            if fiscal_period_id:
+                try:
+                    fiscal_period = FiscalPeriod.objects.get(id=fiscal_period_id)
+                    account_balance = AccountBalance.objects.filter(
+                        account=account,
+                        fiscal_period=fiscal_period
+                    ).first()
+                    
+                    if account_balance:
+                        # For expense accounts, debits increase, credits decrease
+                        balance = account_balance.period_debits - account_balance.period_credits
+                    else:
+                        balance = 0.0
+                except FiscalPeriod.DoesNotExist:
+                    balance = 0.0
+            else:
+                if start and end:
+                    entries = GeneralLedgerEntry.objects.filter(
+                        account=account,
+                        entry_date__gte=start,
+                        entry_date__lte=end
+                    )
+                    total_debits = sum(e.amount for e in entries.filter(debit_credit='debit'))
+                    total_credits = sum(e.amount for e in entries.filter(debit_credit='credit'))
+                    # Expenses: debits increase, credits decrease
+                    balance = total_debits - total_credits
+                else:
+                    balance = 0.0
+            
+            if abs(balance) > 0.01:
+                expenses.append({
+                    'account_id': account.id,
+                    'account_number': account.account_number,
+                    'account_name': account.name,
+                    'amount': balance
+                })
+        
+        # Calculate totals
+        total_revenue = sum(item['amount'] for item in revenues)
+        total_expenses = sum(item['amount'] for item in expenses)
+        net_income = total_revenue - total_expenses
+        
+        return Response({
+            'start_date': start_date,
+            'end_date': end_date,
+            'fiscal_period_id': fiscal_period_id,
+            'revenues': revenues,
+            'expenses': expenses,
+            'total_revenue': total_revenue,
+            'total_expenses': total_expenses,
+            'net_income': net_income
+        })
+    
+    @action(detail=False, methods=['get'], url_path='cash-flow', url_name='cash-flow')
+    def cash_flow(self, request):
+        """Generate cash flow statement"""
+        start_date = request.query_params.get('start_date', None)
+        end_date = request.query_params.get('end_date', None)
+        fiscal_period_id = request.query_params.get('fiscal_period_id', None)
+        
+        # If fiscal period is provided, use its dates
+        if fiscal_period_id:
+            try:
+                fiscal_period = FiscalPeriod.objects.get(id=fiscal_period_id)
+                start_date = fiscal_period.start_date.isoformat()
+                end_date = fiscal_period.end_date.isoformat()
+            except FiscalPeriod.DoesNotExist:
+                pass
+        
+        if not start_date or not end_date:
+            from datetime import date, timedelta
+            end_date = date.today().isoformat()
+            start_date = (date.today() - timedelta(days=30)).isoformat()
+        
+        from django.utils.dateparse import parse_date
+        start = parse_date(start_date)
+        end = parse_date(end_date)
+        
+        # Find cash accounts (typically asset accounts with "cash" in the name)
+        cash_accounts = Account.objects.filter(
+            is_active=True,
+            account_type='asset'
+        ).filter(
+            models.Q(name__icontains='cash') | 
+            models.Q(account_number__icontains='cash') |
+            models.Q(name__icontains='checking') |
+            models.Q(name__icontains='bank')
+        )
+        
+        # Operating Activities - Revenue and Expense accounts
+        revenue_accounts = Account.objects.filter(is_active=True, account_type='revenue')
+        expense_accounts = Account.objects.filter(is_active=True, account_type='expense')
+        
+        operating_activities = []
+        investing_activities = []
+        financing_activities = []
+        
+        # Calculate operating activities (simplified - revenue minus expenses)
+        if start and end:
+            if fiscal_period_id:
+                try:
+                    fiscal_period = FiscalPeriod.objects.get(id=fiscal_period_id)
+                    # Get net income from income statement
+                    revenue_balance = 0.0
+                    for account in revenue_accounts:
+                        account_balance = AccountBalance.objects.filter(
+                            account=account,
+                            fiscal_period=fiscal_period
+                        ).first()
+                        if account_balance:
+                            revenue_balance += account_balance.period_credits - account_balance.period_debits
+                    
+                    expense_balance = 0.0
+                    for account in expense_accounts:
+                        account_balance = AccountBalance.objects.filter(
+                            account=account,
+                            fiscal_period=fiscal_period
+                        ).first()
+                        if account_balance:
+                            expense_balance += account_balance.period_debits - account_balance.period_credits
+                    
+                    net_income = revenue_balance - expense_balance
+                    operating_activities.append({
+                        'description': 'Net Income',
+                        'amount': net_income
+                    })
+                except FiscalPeriod.DoesNotExist:
+                    pass
+            else:
+                # Calculate from general ledger
+                revenue_total = 0.0
+                for account in revenue_accounts:
+                    entries = GeneralLedgerEntry.objects.filter(
+                        account=account,
+                        entry_date__gte=start,
+                        entry_date__lte=end
+                    )
+                    revenue_total += sum(e.amount for e in entries.filter(debit_credit='credit'))
+                    revenue_total -= sum(e.amount for e in entries.filter(debit_credit='debit'))
+                
+                expense_total = 0.0
+                for account in expense_accounts:
+                    entries = GeneralLedgerEntry.objects.filter(
+                        account=account,
+                        entry_date__gte=start,
+                        entry_date__lte=end
+                    )
+                    expense_total += sum(e.amount for e in entries.filter(debit_credit='debit'))
+                    expense_total -= sum(e.amount for e in entries.filter(debit_credit='credit'))
+                
+                net_income = revenue_total - expense_total
+                operating_activities.append({
+                    'description': 'Net Income',
+                    'amount': net_income
+                })
+        
+        # Calculate cash flow from operations, investing, and financing
+        cash_flow_operations = sum(item['amount'] for item in operating_activities)
+        cash_flow_investing = sum(item['amount'] for item in investing_activities)
+        cash_flow_financing = sum(item['amount'] for item in financing_activities)
+        net_cash_flow = cash_flow_operations + cash_flow_investing + cash_flow_financing
+        
+        # Calculate beginning and ending cash
+        beginning_cash = 0.0
+        ending_cash = 0.0
+        
+        for cash_account in cash_accounts:
+            if start:
+                # Beginning cash balance
+                entries_before = GeneralLedgerEntry.objects.filter(
+                    account=cash_account,
+                    entry_date__lt=start
+                )
+                debits_before = sum(e.amount for e in entries_before.filter(debit_credit='debit'))
+                credits_before = sum(e.amount for e in entries_before.filter(debit_credit='credit'))
+                beginning_cash += debits_before - credits_before
+            
+            if end:
+                # Ending cash balance
+                entries_through = GeneralLedgerEntry.objects.filter(
+                    account=cash_account,
+                    entry_date__lte=end
+                )
+                debits_through = sum(e.amount for e in entries_through.filter(debit_credit='debit'))
+                credits_through = sum(e.amount for e in entries_through.filter(debit_credit='credit'))
+                ending_cash += debits_through - credits_through
+        
+        return Response({
+            'start_date': start_date,
+            'end_date': end_date,
+            'fiscal_period_id': fiscal_period_id,
+            'operating_activities': operating_activities,
+            'investing_activities': investing_activities,
+            'financing_activities': financing_activities,
+            'cash_flow_operations': cash_flow_operations,
+            'cash_flow_investing': cash_flow_investing,
+            'cash_flow_financing': cash_flow_financing,
+            'net_cash_flow': net_cash_flow,
+            'beginning_cash': beginning_cash,
+            'ending_cash': ending_cash
+        })
+
+
 class ProductionLogViewSet(viewsets.ReadOnlyModelViewSet):
     """ViewSet for viewing production logs"""
     queryset = ProductionLog.objects.all()
@@ -5330,3 +9045,240 @@ class ProductionLogViewSet(viewsets.ReadOnlyModelViewSet):
         
         return queryset.order_by('-logged_at')
 
+
+
+class AccountsPayableViewSet(viewsets.ModelViewSet):
+    """ViewSet for managing Accounts Payable"""
+    queryset = AccountsPayable.objects.select_related('purchase_order', 'account', 'journal_entry').all()
+    serializer_class = AccountsPayableSerializer
+    
+    def get_queryset(self):
+        queryset = AccountsPayable.objects.select_related('purchase_order', 'account', 'journal_entry').all()
+        
+        # Filter by status
+        status = self.request.query_params.get('status', None)
+        if status:
+            queryset = queryset.filter(status=status)
+        
+        # Filter by vendor
+        vendor_name = self.request.query_params.get('vendor_name', None)
+        if vendor_name:
+            queryset = queryset.filter(vendor_name__icontains=vendor_name)
+        
+        # Filter by due date range
+        due_date_from = self.request.query_params.get('due_date_from', None)
+        due_date_to = self.request.query_params.get('due_date_to', None)
+        if due_date_from:
+            queryset = queryset.filter(due_date__gte=due_date_from)
+        if due_date_to:
+            queryset = queryset.filter(due_date__lte=due_date_to)
+        
+        return queryset.order_by('due_date', 'vendor_name')
+    
+    @action(detail=False, methods=['get'], url_path='aging', url_name='aging')
+    def aging_report(self, request):
+        """Generate AP Aging Report"""
+        from django.utils import timezone
+        
+        today = timezone.now().date()
+        
+        # Get all open AP entries
+        ap_entries = AccountsPayable.objects.filter(
+            status__in=['open', 'partial', 'overdue']
+        ).order_by('vendor_name', 'due_date')
+        
+        # Group by aging buckets
+        aging_data = {
+            'not_due': [],
+            '0-30': [],
+            '31-60': [],
+            '61-90': [],
+            'over_90': []
+        }
+        
+        totals = {
+            'not_due': 0.0,
+            '0-30': 0.0,
+            '31-60': 0.0,
+            '61-90': 0.0,
+            'over_90': 0.0,
+            'total': 0.0
+        }
+        
+        for entry in ap_entries:
+            bucket = entry.aging_bucket
+            aging_data[bucket].append({
+                'id': entry.id,
+                'vendor_name': entry.vendor_name,
+                'invoice_number': entry.invoice_number,
+                'invoice_date': entry.invoice_date,
+                'due_date': entry.due_date,
+                'original_amount': entry.original_amount,
+                'amount_paid': entry.amount_paid,
+                'balance': entry.balance,
+                'days_aging': entry.days_aging,
+                'status': entry.status,
+                'po_number': entry.purchase_order.po_number if entry.purchase_order else None
+            })
+            totals[bucket] += entry.balance
+            totals['total'] += entry.balance
+        
+        return Response({
+            'as_of_date': today,
+            'aging_data': aging_data,
+            'totals': totals
+        })
+
+
+class AccountsReceivableViewSet(viewsets.ModelViewSet):
+    """ViewSet for managing Accounts Receivable"""
+    queryset = AccountsReceivable.objects.select_related('invoice', 'sales_order', 'account', 'journal_entry').all()
+    serializer_class = AccountsReceivableSerializer
+    
+    def get_queryset(self):
+        queryset = AccountsReceivable.objects.select_related('invoice', 'sales_order', 'account', 'journal_entry').all()
+        
+        # Filter by status
+        status = self.request.query_params.get('status', None)
+        if status:
+            queryset = queryset.filter(status=status)
+        
+        # Filter by customer
+        customer_name = self.request.query_params.get('customer_name', None)
+        if customer_name:
+            queryset = queryset.filter(customer_name__icontains=customer_name)
+        
+        # Filter by due date range
+        due_date_from = self.request.query_params.get('due_date_from', None)
+        due_date_to = self.request.query_params.get('due_date_to', None)
+        if due_date_from:
+            queryset = queryset.filter(due_date__gte=due_date_from)
+        if due_date_to:
+            queryset = queryset.filter(due_date__lte=due_date_to)
+        
+        return queryset.order_by('due_date', 'customer_name')
+    
+    @action(detail=False, methods=['get'], url_path='aging', url_name='aging')
+    def aging_report(self, request):
+        """Generate AR Aging Report"""
+        from django.utils import timezone
+        
+        today = timezone.now().date()
+        
+        # Get all open AR entries
+        ar_entries = AccountsReceivable.objects.filter(
+            status__in=['open', 'partial', 'overdue']
+        ).order_by('customer_name', 'due_date')
+        
+        # Group by aging buckets
+        aging_data = {
+            'not_due': [],
+            '0-30': [],
+            '31-60': [],
+            '61-90': [],
+            'over_90': []
+        }
+        
+        totals = {
+            'not_due': 0.0,
+            '0-30': 0.0,
+            '31-60': 0.0,
+            '61-90': 0.0,
+            'over_90': 0.0,
+            'total': 0.0
+        }
+        
+        for entry in ar_entries:
+            bucket = entry.aging_bucket
+            aging_data[bucket].append({
+                'id': entry.id,
+                'customer_name': entry.customer_name,
+                'invoice_number': entry.invoice.invoice_number if entry.invoice else None,
+                'invoice_date': entry.invoice_date,
+                'due_date': entry.due_date,
+                'original_amount': entry.original_amount,
+                'amount_paid': entry.amount_paid,
+                'balance': entry.balance,
+                'days_aging': entry.days_aging,
+                'status': entry.status,
+                'so_number': entry.sales_order.so_number if entry.sales_order else None
+            })
+            totals[bucket] += entry.balance
+            totals['total'] += entry.balance
+        
+        return Response({
+            'as_of_date': today,
+            'aging_data': aging_data,
+            'totals': totals
+        })
+
+
+class PaymentViewSet(viewsets.ModelViewSet):
+    """ViewSet for managing Payments"""
+    queryset = Payment.objects.select_related('ap_entry', 'ar_entry', 'account', 'journal_entry').all()
+    serializer_class = PaymentSerializer
+    
+    def get_queryset(self):
+        queryset = Payment.objects.select_related('ap_entry', 'ar_entry', 'account', 'journal_entry').all()
+        
+        # Filter by payment type
+        payment_type = self.request.query_params.get('payment_type', None)
+        if payment_type:
+            queryset = queryset.filter(payment_type=payment_type)
+        
+        # Filter by date range
+        date_from = self.request.query_params.get('date_from', None)
+        date_to = self.request.query_params.get('date_to', None)
+        if date_from:
+            queryset = queryset.filter(payment_date__gte=date_from)
+        if date_to:
+            queryset = queryset.filter(payment_date__lte=date_to)
+        
+        return queryset.order_by('-payment_date', '-created_at')
+    
+    def create(self, request, *args, **kwargs):
+        """Create a payment and update AP/AR entry"""
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        payment = serializer.save()
+        
+        # Update AP or AR entry
+        if payment.ap_entry:
+            ap_entry = payment.ap_entry
+            ap_entry.amount_paid += payment.amount
+            ap_entry.balance = ap_entry.original_amount - ap_entry.amount_paid
+            
+            # Update status
+            if ap_entry.balance <= 0.01:  # Allow for floating point precision
+                ap_entry.status = 'paid'
+                ap_entry.balance = 0.0
+            elif ap_entry.amount_paid > 0:
+                ap_entry.status = 'partial'
+            
+            # Check if overdue
+            from django.utils import timezone
+            if ap_entry.status in ['open', 'partial'] and ap_entry.due_date < timezone.now().date():
+                ap_entry.status = 'overdue'
+            
+            ap_entry.save()
+        
+        elif payment.ar_entry:
+            ar_entry = payment.ar_entry
+            ar_entry.amount_paid += payment.amount
+            ar_entry.balance = ar_entry.original_amount - ar_entry.amount_paid
+            
+            # Update status
+            if ar_entry.balance <= 0.01:  # Allow for floating point precision
+                ar_entry.status = 'paid'
+                ar_entry.balance = 0.0
+            elif ar_entry.amount_paid > 0:
+                ar_entry.status = 'partial'
+            
+            # Check if overdue
+            from django.utils import timezone
+            if ar_entry.status in ['open', 'partial'] and ar_entry.due_date < timezone.now().date():
+                ar_entry.status = 'overdue'
+            
+            ar_entry.save()
+        
+        return Response(serializer.data, status=status.HTTP_201_CREATED)

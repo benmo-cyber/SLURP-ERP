@@ -1,10 +1,22 @@
 import { useState, useEffect } from 'react'
-import { getItems, updateItem, deleteItem } from '../../api/inventory'
+import { getItems, updateItem, deleteItem, getItemPackSizes, createItemPackSize, updateItemPackSize, deleteItemPackSize } from '../../api/inventory'
 import { getFormulas } from '../../api/inventory'
 import { getFinishedProductSpecification, getFpsPdfUrl } from '../../api/production'
 import { formatCurrency } from '../../utils/formatNumber'
 import ConfirmDialog from '../common/ConfirmDialog'
 import './ItemsList.css'
+
+interface ItemPackSize {
+  id: number
+  item: number
+  pack_size: number
+  pack_size_unit: string
+  price?: number
+  description?: string
+  is_default: boolean
+  is_active: boolean
+  pack_size_display?: string
+}
 
 interface Item {
   id: number
@@ -18,6 +30,8 @@ interface Item {
   price?: number
   on_order: number
   approved_for_formulas: boolean
+  pack_sizes?: ItemPackSize[]
+  default_pack_size?: ItemPackSize
 }
 
 function ItemsList() {
@@ -417,6 +431,13 @@ function ItemsList() {
                             Edit
                           </button>
                           <button
+                            onClick={() => handleManagePackSizes(item)}
+                            className="btn btn-sm btn-secondary"
+                            title="Manage Pack Sizes"
+                          >
+                            Pack Sizes
+                          </button>
+                          <button
                             onClick={() => handleUnfk(item)}
                             className="btn btn-sm btn-danger"
                           >
@@ -442,6 +463,159 @@ function ItemsList() {
             setItemToUnfk(null)
           }}
         />
+      )}
+
+      {showPackSizeModal && selectedItemForPackSize && (
+        <div className="modal-overlay" onClick={() => setShowPackSizeModal(false)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '800px' }}>
+            <div className="modal-header">
+              <h3>Manage Pack Sizes - {selectedItemForPackSize.sku}</h3>
+              <button onClick={() => setShowPackSizeModal(false)} className="close-btn">×</button>
+            </div>
+            
+            <div className="modal-body">
+              <form onSubmit={handlePackSizeSubmit} style={{ marginBottom: '20px' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px', marginBottom: '10px' }}>
+                  <div>
+                    <label>Pack Size *</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={packSizeForm.pack_size}
+                      onChange={(e) => setPackSizeForm({ ...packSizeForm, pack_size: e.target.value })}
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label>Unit *</label>
+                    <select
+                      value={packSizeForm.pack_size_unit}
+                      onChange={(e) => setPackSizeForm({ ...packSizeForm, pack_size_unit: e.target.value })}
+                      required
+                    >
+                      <option value="lbs">lbs</option>
+                      <option value="kg">kg</option>
+                      <option value="gal">gal</option>
+                      <option value="ea">ea</option>
+                      <option value="pcs">pcs</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label>Price</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={packSizeForm.price}
+                      onChange={(e) => setPackSizeForm({ ...packSizeForm, price: e.target.value })}
+                    />
+                  </div>
+                </div>
+                <div style={{ marginBottom: '10px' }}>
+                  <label>Description</label>
+                  <input
+                    type="text"
+                    value={packSizeForm.description}
+                    onChange={(e) => setPackSizeForm({ ...packSizeForm, description: e.target.value })}
+                    placeholder="e.g., 2000lb IBC, 5 gallon pail"
+                  />
+                </div>
+                <div style={{ display: 'flex', gap: '15px', marginBottom: '10px' }}>
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={packSizeForm.is_default}
+                      onChange={(e) => setPackSizeForm({ ...packSizeForm, is_default: e.target.checked })}
+                    />
+                    Default Pack Size
+                  </label>
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={packSizeForm.is_active}
+                      onChange={(e) => setPackSizeForm({ ...packSizeForm, is_active: e.target.checked })}
+                    />
+                    Active
+                  </label>
+                </div>
+                <button type="submit" className="btn btn-primary">
+                  {editingPackSizeId ? 'Update' : 'Create'} Pack Size
+                </button>
+                {editingPackSizeId && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPackSizeForm({
+                        pack_size: '',
+                        pack_size_unit: 'lbs',
+                        price: '',
+                        description: '',
+                        is_default: false,
+                        is_active: true
+                      })
+                      setEditingPackSizeId(null)
+                    }}
+                    className="btn btn-secondary"
+                    style={{ marginLeft: '10px' }}
+                  >
+                    Cancel Edit
+                  </button>
+                )}
+              </form>
+
+              <div>
+                <h4>Existing Pack Sizes</h4>
+                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <thead>
+                    <tr>
+                      <th>Pack Size</th>
+                      <th>Unit</th>
+                      <th>Price</th>
+                      <th>Description</th>
+                      <th>Default</th>
+                      <th>Active</th>
+                      <th>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {packSizes.length === 0 ? (
+                      <tr>
+                        <td colSpan={7} style={{ textAlign: 'center', padding: '20px' }}>
+                          No pack sizes defined
+                        </td>
+                      </tr>
+                    ) : (
+                      packSizes.map((ps) => (
+                        <tr key={ps.id}>
+                          <td>{ps.pack_size}</td>
+                          <td>{ps.pack_size_unit}</td>
+                          <td>{ps.price ? formatCurrency(ps.price) : '-'}</td>
+                          <td>{ps.description || '-'}</td>
+                          <td>{ps.is_default ? '✓' : '-'}</td>
+                          <td>{ps.is_active ? '✓' : '-'}</td>
+                          <td>
+                            <button
+                              onClick={() => handleEditPackSize(ps)}
+                              className="btn btn-sm btn-primary"
+                              style={{ marginRight: '5px' }}
+                            >
+                              Edit
+                            </button>
+                            <button
+                              onClick={() => handleDeletePackSize(ps.id)}
+                              className="btn btn-sm btn-danger"
+                            >
+                              Delete
+                            </button>
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )

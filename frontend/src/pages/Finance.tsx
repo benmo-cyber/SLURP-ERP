@@ -5,10 +5,12 @@ import JournalEntries from '../components/finance/JournalEntries'
 import PricingManagement from '../components/finance/PricingManagement'
 import FinancialReports from '../components/finance/FinancialReports'
 import CostMasterList from '../components/finance/CostMasterList'
+import AccountsPayable from '../components/finance/AccountsPayable'
+import AccountsReceivable from '../components/finance/AccountsReceivable'
 import './Finance.css'
 
 function Finance() {
-  const [activeTab, setActiveTab] = useState<'ledger' | 'invoices' | 'journal' | 'pricing' | 'reports' | 'cost-master'>('ledger')
+  const [activeTab, setActiveTab] = useState<'ledger' | 'invoices' | 'journal' | 'pricing' | 'reports' | 'cost-master' | 'ap' | 'ar'>('ledger')
 
   return (
     <div className="finance-page">
@@ -53,6 +55,18 @@ function Finance() {
         >
           Cost Master List
         </button>
+        <button
+          className={`tab-button ${activeTab === 'ap' ? 'active' : ''}`}
+          onClick={() => setActiveTab('ap')}
+        >
+          Accounts Payable
+        </button>
+        <button
+          className={`tab-button ${activeTab === 'ar' ? 'active' : ''}`}
+          onClick={() => setActiveTab('ar')}
+        >
+          Accounts Receivable
+        </button>
       </div>
 
       <div className="finance-content">
@@ -62,6 +76,8 @@ function Finance() {
         {activeTab === 'pricing' && <PricingManagement />}
         {activeTab === 'reports' && <FinancialReports />}
         {activeTab === 'cost-master' && <CostMasterList />}
+        {activeTab === 'ap' && <AccountsPayable />}
+        {activeTab === 'ar' && <AccountsReceivable />}
       </div>
     </div>
   )

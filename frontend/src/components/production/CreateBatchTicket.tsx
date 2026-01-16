@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { getItems, getFormulas, getLots, createProductionBatch } from '../../api/inventory'
+import { getItems, getFormulas, getLots, createProductionBatch, getItemPackSizes } from '../../api/inventory'
 import { formatNumber } from '../../utils/formatNumber'
 import './CreateBatchTicket.css'
 
@@ -55,6 +55,8 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
   const [productionDate, setProductionDate] = useState<string>(new Date().toISOString().split('T')[0])
   const [submitting, setSubmitting] = useState(false)
   const [loading, setLoading] = useState(true)
+  const [outputPackSizeId, setOutputPackSizeId] = useState<string>('')
+  const [availableOutputPackSizes, setAvailableOutputPackSizes] = useState<any[]>([])
 
   useEffect(() => {
     loadData()
@@ -439,6 +441,9 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
         batchData.finished_good_item_id = selectedFinishedGood!.id
       } else {
         batchData.finished_good_item_id = selectedRepackItem!.id
+        if (outputPackSizeId) {
+          batchData.output_pack_size_id = parseInt(outputPackSizeId)
+        }
       }
 
       console.log('Submitting batch data:', JSON.stringify(batchData, null, 2))
@@ -738,7 +743,13 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
                                     : lot.lot_number}
                                 </span>
                                 <span className="lot-available-badge">
-                                  {formatNumber(lot.quantity_remaining)} {lot.item.unit_of_measure} available
+                                  {formatNumber(
+                                    quantityUnit === lot.item.unit_of_measure
+                                      ? lot.quantity_remaining
+                                      : (lot.item.unit_of_measure === 'lbs'
+                                          ? convertWeight(lot.quantity_remaining, 'lbs', 'kg')
+                                          : convertWeight(lot.quantity_remaining, 'kg', 'lbs'))
+                                  )} {quantityUnit} available
                                 </span>
                               </div>
                               <div className="lot-quantity-section">
@@ -781,9 +792,30 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
           )}
 
           {batchType === 'repack' && selectedRepackItem && (
-            <div className="lots-section">
-              <label className="section-label">Select Input Lots (Available from Inventory) *</label>
-              <p className="section-hint">Select lots to repack. A new lot will be created with a new lot number.</p>
+            <>
+              {availableOutputPackSizes.length > 0 && (
+                <div className="form-group">
+                  <label>Output Pack Size (Optional)</label>
+                  <select
+                    value={outputPackSizeId}
+                    onChange={(e) => setOutputPackSizeId(e.target.value)}
+                  >
+                    <option value="">Use default pack size</option>
+                    {availableOutputPackSizes.map((ps) => (
+                      <option key={ps.id} value={ps.id}>
+                        {ps.pack_size} {ps.pack_size_unit} {ps.description ? `- ${ps.description}` : ''} {ps.is_default ? '(Default)' : ''}
+                      </option>
+                    ))}
+                  </select>
+                  <small className="form-hint">
+                    Select a different pack size for the repacked output lot. If not selected, the default pack size will be used.
+                  </small>
+                </div>
+              )}
+              
+              <div className="lots-section">
+                <label className="section-label">Select Input Lots (Available from Inventory) *</label>
+                <p className="section-hint">Select lots to repack. A new lot will be created with a new lot number.</p>
               
               {availableLots.length === 0 && (
                 <div className="warning-message" style={{ padding: '10px', background: '#f8d7da', border: '1px solid #dc3545', borderRadius: '4px', marginBottom: '15px' }}>
@@ -838,7 +870,8 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
                   ))}
                 </div>
               )}
-            </div>
+              </div>
+            </>
           )}
 
           <div className="form-actions">

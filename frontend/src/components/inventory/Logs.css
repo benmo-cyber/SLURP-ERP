@@ -248,9 +248,34 @@
   color: #388e3c;
 }
 
+.badge-receipt {
+  background: #e8f5e9;
+  color: #2e7d32;
+}
+
+.badge-allocation {
+  background: #e1f5fe;
+  color: #0277bd;
+}
+
+.badge-deallocation {
+  background: #fff3e0;
+  color: #ef6c00;
+}
+
 .badge-default {
   background: #f5f5f5;
   color: #666;
+}
+
+.quantity-positive {
+  color: #2e7d32;
+  font-weight: 600;
+}
+
+.quantity-negative {
+  color: #d32f2f;
+  font-weight: 600;
 }
 
 .notes-cell {

@@ -22,8 +22,8 @@ class Item(models.Model):
     item_type = models.CharField(max_length=50, choices=ITEM_TYPE_CHOICES)
     unit_of_measure = models.CharField(max_length=10, choices=UNIT_CHOICES)
     vendor = models.CharField(max_length=255, blank=True, null=True, db_index=True)
-    pack_size = models.FloatField(blank=True, null=True, help_text='Pack size in the unit of measure')
-    price = models.FloatField(blank=True, null=True, help_text='Price per unit of measure')
+    pack_size = models.FloatField(blank=True, null=True, help_text='Legacy field - use ItemPackSize model instead')
+    price = models.FloatField(blank=True, null=True, help_text='Legacy field - use ItemPackSize model instead')
     on_order = models.FloatField(default=0.0, help_text='Quantity currently on order')
     approved_for_formulas = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -35,6 +35,36 @@ class Item(models.Model):
     
     def __str__(self):
         return f"{self.sku} - {self.name}"
+
+
+class ItemPackSize(models.Model):
+    """Represents different pack sizes available for an item (e.g., 2000lb IBC, 5 gallon pail)"""
+    PACK_SIZE_UNIT_CHOICES = [
+        ('lbs', 'Pounds'),
+        ('kg', 'Kilograms'),
+        ('gal', 'Gallons'),
+        ('ea', 'Each'),
+        ('pcs', 'Pieces'),
+    ]
+    
+    item = models.ForeignKey(Item, on_delete=models.CASCADE, related_name='pack_sizes')
+    pack_size = models.FloatField(help_text='Pack size value (e.g., 2000, 5)')
+    pack_size_unit = models.CharField(max_length=10, choices=PACK_SIZE_UNIT_CHOICES, help_text='Unit for pack size (e.g., lbs, gal)')
+    price = models.FloatField(blank=True, null=True, help_text='Price per pack (optional, pack-size-specific pricing)')
+    description = models.CharField(max_length=255, blank=True, null=True, help_text='Description of pack size (e.g., "2000lb IBC", "5 gallon pail")')
+    is_default = models.BooleanField(default=False, help_text='Default pack size for this item')
+    is_active = models.BooleanField(default=True, help_text='Whether this pack size is currently available')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        ordering = ['item', 'pack_size', 'pack_size_unit']
+        unique_together = [['item', 'pack_size', 'pack_size_unit']]
+        verbose_name = 'Item Pack Size'
+        verbose_name_plural = 'Item Pack Sizes'
+    
+    def __str__(self):
+        return f"{self.item.sku} - {self.pack_size} {self.pack_size_unit}"
 
 
 class FinishedProductSpecification(models.Model):
@@ -145,6 +175,7 @@ class Lot(models.Model):
     lot_number = models.CharField(max_length=20, unique=True, db_index=True)
     vendor_lot_number = models.CharField(max_length=100, blank=True, null=True, help_text='Vendor lot number from check-in form')
     item = models.ForeignKey(Item, on_delete=models.CASCADE, related_name='lots')
+    pack_size = models.ForeignKey('ItemPackSize', on_delete=models.SET_NULL, null=True, blank=True, related_name='lots', help_text='Pack size for this lot')
     quantity = models.FloatField()
     quantity_remaining = models.FloatField()
     received_date = models.DateTimeField()
@@ -169,6 +200,8 @@ class InventoryTransaction(models.Model):
         ('sale', 'Sale'),
         ('adjustment', 'Adjustment'),
         ('production', 'Production'),
+        ('production_input', 'Production Input'),
+        ('production_output', 'Production Output'),
     ]
     
     transaction_type = models.CharField(max_length=20, choices=TRANSACTION_TYPE_CHOICES)
@@ -180,6 +213,58 @@ class InventoryTransaction(models.Model):
     
     class Meta:
         ordering = ['-transaction_date']
+
+
+class LotTransactionLog(models.Model):
+    """Logs ALL lot quantity transactions, not just depletions"""
+    TRANSACTION_TYPE_CHOICES = [
+        ('receipt', 'Receipt'),
+        ('production_input', 'Production Input'),
+        ('production_output', 'Production Output'),
+        ('sale', 'Sale'),
+        ('adjustment', 'Adjustment'),
+        ('allocation', 'Allocation'),
+        ('deallocation', 'Deallocation'),
+        ('manual', 'Manual'),
+        ('reversal', 'Reversal/Cancellation'),
+    ]
+    
+    lot = models.ForeignKey(Lot, on_delete=models.CASCADE, related_name='transaction_logs')
+    lot_number = models.CharField(max_length=20, db_index=True, help_text='Snapshot of lot number at time of transaction')
+    item_sku = models.CharField(max_length=255, db_index=True, help_text='Item SKU at time of transaction')
+    item_name = models.CharField(max_length=255, help_text='Item name at time of transaction')
+    vendor = models.CharField(max_length=255, blank=True, null=True, help_text='Vendor at time of transaction')
+    
+    transaction_type = models.CharField(max_length=20, choices=TRANSACTION_TYPE_CHOICES, help_text='Type of transaction')
+    quantity_before = models.FloatField(help_text='Quantity remaining before this transaction')
+    quantity_change = models.FloatField(help_text='Quantity change (positive for additions, negative for reductions)')
+    quantity_after = models.FloatField(help_text='Quantity remaining after this transaction')
+    
+    reference_number = models.CharField(max_length=100, blank=True, null=True, help_text='Batch number, SO number, PO number, etc.')
+    reference_type = models.CharField(max_length=50, blank=True, null=True, help_text='Type of reference (batch_number, so_number, po_number, etc.)')
+    
+    transaction_id = models.IntegerField(blank=True, null=True, help_text='Related InventoryTransaction ID if applicable')
+    batch_id = models.IntegerField(blank=True, null=True, help_text='Related ProductionBatch ID if applicable')
+    sales_order_id = models.IntegerField(blank=True, null=True, help_text='Related SalesOrder ID if applicable')
+    purchase_order_id = models.IntegerField(blank=True, null=True, help_text='Related PurchaseOrder ID if applicable')
+    
+    notes = models.TextField(blank=True, null=True, help_text='Additional context about the transaction')
+    logged_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    logged_by = models.CharField(max_length=255, blank=True, null=True, help_text='User who performed the transaction')
+    
+    class Meta:
+        ordering = ['-logged_at']
+        verbose_name = 'Lot Transaction Log'
+        verbose_name_plural = 'Lot Transaction Logs'
+        indexes = [
+            models.Index(fields=['-logged_at', 'lot_number']),
+            models.Index(fields=['item_sku', '-logged_at']),
+            models.Index(fields=['transaction_type', '-logged_at']),
+            models.Index(fields=['reference_number', '-logged_at']),
+        ]
+    
+    def __str__(self):
+        return f"Lot {self.lot_number} - {self.get_transaction_type_display()} on {self.logged_at.strftime('%Y-%m-%d %H:%M')}"
 
 
 class LotDepletionLog(models.Model):
@@ -340,7 +425,8 @@ class ProductionBatchOutput(models.Model):
 
 class ProductionLog(models.Model):
     """Logs all closed production batches with complete information"""
-    batch = models.ForeignKey(ProductionBatch, on_delete=models.CASCADE, related_name='logs')
+    # Allow null batch reference to preserve log entries even if batch is deleted/reversed
+    batch = models.ForeignKey(ProductionBatch, on_delete=models.SET_NULL, null=True, blank=True, related_name='logs')
     batch_number = models.CharField(max_length=100, db_index=True, help_text='Batch number at time of closure')
     batch_type = models.CharField(max_length=20, help_text='production or repack')
     
@@ -1064,7 +1150,6 @@ class Invoice(models.Model):
     """Invoice for sales orders"""
     STATUS_CHOICES = [
         ('draft', 'Draft'),
-        ('issued', 'Issued'),
         ('sent', 'Sent'),
         ('paid', 'Paid'),
         ('overdue', 'Overdue'),
@@ -1072,7 +1157,7 @@ class Invoice(models.Model):
     ]
     
     invoice_number = models.CharField(max_length=100, unique=True, db_index=True)
-    sales_order = models.ForeignKey(SalesOrder, on_delete=models.CASCADE, related_name='invoices')
+    sales_order = models.ForeignKey(SalesOrder, on_delete=models.CASCADE, related_name='invoices', blank=True, null=True, db_column='sales_order_id')
     invoice_date = models.DateField()
     due_date = models.DateField(help_text='Calculated from invoice_date + payment_terms')
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='draft')
@@ -1089,7 +1174,9 @@ class Invoice(models.Model):
         ordering = ['-invoice_date', '-created_at']
     
     def __str__(self):
-        return f"{self.invoice_number} - {self.sales_order.so_number}"
+        if self.sales_order:
+            return f"{self.invoice_number} - {self.sales_order.so_number}"
+        return f"{self.invoice_number}"
     
     @property
     def days_aging(self):
@@ -1115,4 +1202,311 @@ class InvoiceItem(models.Model):
     
     def __str__(self):
         return f"{self.invoice.invoice_number} - {self.description}"
+
+
+class FiscalPeriod(models.Model):
+    """Fiscal periods for accounting (monthly, quarterly, etc.)"""
+    period_name = models.CharField(max_length=50, unique=True, help_text='e.g., "2024-01" for January 2024')
+    start_date = models.DateField()
+    end_date = models.DateField()
+    is_closed = models.BooleanField(default=False, help_text='Whether this period has been closed')
+    closed_date = models.DateTimeField(blank=True, null=True)
+    closed_by = models.CharField(max_length=100, blank=True, null=True)
+    notes = models.TextField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        ordering = ['-start_date']
+        indexes = [
+            models.Index(fields=['start_date', 'end_date']),
+            models.Index(fields=['is_closed']),
+        ]
+    
+    def __str__(self):
+        return f"{self.period_name} ({'Closed' if self.is_closed else 'Open'})"
+
+
+class JournalEntry(models.Model):
+    """Journal entries for double-entry bookkeeping"""
+    STATUS_CHOICES = [
+        ('draft', 'Draft'),
+        ('posted', 'Posted'),
+        ('reversed', 'Reversed'),
+    ]
+    
+    entry_number = models.CharField(max_length=100, unique=True, db_index=True, help_text='Auto-generated journal entry number')
+    entry_date = models.DateField(db_index=True)
+    description = models.TextField()
+    reference_number = models.CharField(max_length=100, blank=True, null=True, help_text='Reference to source document (PO, SO, Invoice, etc.)')
+    reference_type = models.CharField(max_length=50, blank=True, null=True, help_text='Type of reference (invoice, purchase_order, sales_order, manual, etc.)')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='draft')
+    fiscal_period = models.ForeignKey(FiscalPeriod, on_delete=models.SET_NULL, blank=True, null=True, related_name='journal_entries')
+    created_by = models.CharField(max_length=100, blank=True, null=True)
+    posted_by = models.CharField(max_length=100, blank=True, null=True)
+    posted_at = models.DateTimeField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        verbose_name_plural = 'Journal Entries'
+        ordering = ['-entry_date', '-created_at']
+        indexes = [
+            models.Index(fields=['entry_date', 'status']),
+            models.Index(fields=['reference_number', 'reference_type']),
+            models.Index(fields=['fiscal_period', 'entry_date']),
+        ]
+    
+    def __str__(self):
+        return f"{self.entry_number} - {self.description[:50]}"
+    
+    def validate_balanced(self):
+        """Validate that debits equal credits"""
+        total_debits = sum(line.amount for line in self.lines.filter(debit_credit='debit'))
+        total_credits = sum(line.amount for line in self.lines.filter(debit_credit='credit'))
+        return abs(total_debits - total_credits) < 0.01
+
+
+class JournalEntryLine(models.Model):
+    """Individual lines within a journal entry"""
+    DEBIT_CREDIT_CHOICES = [
+        ('debit', 'Debit'),
+        ('credit', 'Credit'),
+    ]
+    
+    journal_entry = models.ForeignKey(JournalEntry, on_delete=models.CASCADE, related_name='lines')
+    account = models.ForeignKey(Account, on_delete=models.CASCADE, related_name='journal_lines')
+    debit_credit = models.CharField(max_length=10, choices=DEBIT_CREDIT_CHOICES)
+    amount = models.FloatField()
+    description = models.CharField(max_length=255, blank=True, null=True)
+    
+    class Meta:
+        ordering = ['id']
+        indexes = [
+            models.Index(fields=['account', 'journal_entry']),
+            models.Index(fields=['journal_entry', 'debit_credit']),
+        ]
+    
+    def __str__(self):
+        return f"{self.journal_entry.entry_number} - {self.account.account_number} - {self.debit_credit} ${self.amount}"
+
+
+class GeneralLedgerEntry(models.Model):
+    """General ledger entries (posted journal entry lines)"""
+    entry_date = models.DateField(db_index=True)
+    journal_entry = models.ForeignKey(JournalEntry, on_delete=models.CASCADE, related_name='ledger_entries')
+    journal_entry_line = models.ForeignKey(JournalEntryLine, on_delete=models.CASCADE, related_name='ledger_entry')
+    account = models.ForeignKey(Account, on_delete=models.CASCADE, related_name='ledger_entries')
+    debit_credit = models.CharField(max_length=10, choices=JournalEntryLine.DEBIT_CREDIT_CHOICES)
+    amount = models.FloatField()
+    description = models.CharField(max_length=255, blank=True, null=True)
+    reference_number = models.CharField(max_length=100, blank=True, null=True)
+    reference_type = models.CharField(max_length=50, blank=True, null=True)
+    fiscal_period = models.ForeignKey(FiscalPeriod, on_delete=models.SET_NULL, blank=True, null=True, related_name='ledger_entries')
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        verbose_name_plural = 'General Ledger Entries'
+        ordering = ['entry_date', 'id']
+        indexes = [
+            models.Index(fields=['account', 'entry_date']),
+            models.Index(fields=['entry_date', 'fiscal_period']),
+            models.Index(fields=['journal_entry', 'account']),
+        ]
+    
+    def __str__(self):
+        return f"{self.entry_date} - {self.account.account_number} - {self.debit_credit} ${self.amount}"
+
+
+class AccountBalance(models.Model):
+    """Account balances by fiscal period (for faster reporting)"""
+    account = models.ForeignKey(Account, on_delete=models.CASCADE, related_name='balances')
+    fiscal_period = models.ForeignKey(FiscalPeriod, on_delete=models.CASCADE, related_name='account_balances')
+    opening_balance = models.FloatField(default=0.0, help_text='Opening balance at start of period')
+    period_debits = models.FloatField(default=0.0)
+    period_credits = models.FloatField(default=0.0)
+    closing_balance = models.FloatField(default=0.0, help_text='Closing balance at end of period')
+    last_updated = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        unique_together = [['account', 'fiscal_period']]
+        ordering = ['account', 'fiscal_period']
+        indexes = [
+            models.Index(fields=['account', 'fiscal_period']),
+            models.Index(fields=['fiscal_period', 'account']),
+        ]
+    
+    def __str__(self):
+        return f"{self.account.account_number} - {self.fiscal_period.period_name} - Balance: ${self.closing_balance}"
+
+
+class AccountsPayable(models.Model):
+    """Accounts Payable - tracks amounts owed to vendors"""
+    STATUS_CHOICES = [
+        ('open', 'Open'),
+        ('partial', 'Partially Paid'),
+        ('paid', 'Paid'),
+        ('overdue', 'Overdue'),
+        ('cancelled', 'Cancelled'),
+    ]
+    
+    vendor_name = models.CharField(max_length=255, db_index=True, help_text='Vendor name')
+    vendor_id = models.CharField(max_length=100, blank=True, null=True, help_text='Vendor ID if available')
+    purchase_order = models.ForeignKey(PurchaseOrder, on_delete=models.SET_NULL, blank=True, null=True, related_name='ap_entries', help_text='Related purchase order')
+    invoice_number = models.CharField(max_length=100, blank=True, null=True, help_text='Vendor invoice number')
+    invoice_date = models.DateField(help_text='Date of vendor invoice')
+    due_date = models.DateField(help_text='Payment due date')
+    original_amount = models.FloatField(help_text='Original invoice amount')
+    amount_paid = models.FloatField(default=0.0, help_text='Amount paid so far')
+    balance = models.FloatField(help_text='Outstanding balance (original_amount - amount_paid)')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='open')
+    account = models.ForeignKey(Account, on_delete=models.SET_NULL, blank=True, null=True, related_name='ap_entries', help_text='AP account')
+    journal_entry = models.ForeignKey(JournalEntry, on_delete=models.SET_NULL, blank=True, null=True, related_name='ap_entries', help_text='Journal entry created for this AP')
+    notes = models.TextField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        verbose_name_plural = 'Accounts Payable'
+        ordering = ['due_date', 'vendor_name']
+        indexes = [
+            models.Index(fields=['vendor_name', 'status']),
+            models.Index(fields=['due_date', 'status']),
+            models.Index(fields=['purchase_order', 'status']),
+        ]
+    
+    def __str__(self):
+        return f"AP - {self.vendor_name} - ${self.balance} (Due: {self.due_date})"
+    
+    @property
+    def days_aging(self):
+        """Calculate days aging (overdue) from due date"""
+        from django.utils import timezone
+        if self.status == 'paid':
+            return 0
+        today = timezone.now().date()
+        return (today - self.due_date).days
+    
+    @property
+    def aging_bucket(self):
+        """Categorize into aging buckets"""
+        days = self.days_aging
+        if days < 0:
+            return 'not_due'
+        elif days <= 30:
+            return '0-30'
+        elif days <= 60:
+            return '31-60'
+        elif days <= 90:
+            return '61-90'
+        else:
+            return 'over_90'
+
+
+class AccountsReceivable(models.Model):
+    """Accounts Receivable - tracks amounts owed by customers"""
+    STATUS_CHOICES = [
+        ('open', 'Open'),
+        ('partial', 'Partially Paid'),
+        ('paid', 'Paid'),
+        ('overdue', 'Overdue'),
+        ('cancelled', 'Cancelled'),
+    ]
+    
+    customer_name = models.CharField(max_length=255, db_index=True, help_text='Customer name')
+    customer_id = models.CharField(max_length=100, blank=True, null=True, help_text='Customer ID if available')
+    invoice = models.ForeignKey(Invoice, on_delete=models.CASCADE, related_name='ar_entries', help_text='Related invoice')
+    sales_order = models.ForeignKey(SalesOrder, on_delete=models.SET_NULL, blank=True, null=True, related_name='ar_entries', help_text='Related sales order')
+    invoice_date = models.DateField(help_text='Date of invoice')
+    due_date = models.DateField(help_text='Payment due date')
+    original_amount = models.FloatField(help_text='Original invoice amount')
+    amount_paid = models.FloatField(default=0.0, help_text='Amount paid so far')
+    balance = models.FloatField(help_text='Outstanding balance (original_amount - amount_paid)')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='open')
+    account = models.ForeignKey(Account, on_delete=models.SET_NULL, blank=True, null=True, related_name='ar_entries', help_text='AR account')
+    journal_entry = models.ForeignKey(JournalEntry, on_delete=models.SET_NULL, blank=True, null=True, related_name='ar_entries', help_text='Journal entry created for this AR')
+    notes = models.TextField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        verbose_name_plural = 'Accounts Receivable'
+        ordering = ['due_date', 'customer_name']
+        indexes = [
+            models.Index(fields=['customer_name', 'status']),
+            models.Index(fields=['due_date', 'status']),
+            models.Index(fields=['invoice', 'status']),
+        ]
+    
+    def __str__(self):
+        return f"AR - {self.customer_name} - ${self.balance} (Due: {self.due_date})"
+    
+    @property
+    def days_aging(self):
+        """Calculate days aging (overdue) from due date"""
+        from django.utils import timezone
+        if self.status == 'paid':
+            return 0
+        today = timezone.now().date()
+        return (today - self.due_date).days
+    
+    @property
+    def aging_bucket(self):
+        """Categorize into aging buckets"""
+        days = self.days_aging
+        if days < 0:
+            return 'not_due'
+        elif days <= 30:
+            return '0-30'
+        elif days <= 60:
+            return '31-60'
+        elif days <= 90:
+            return '61-90'
+        else:
+            return 'over_90'
+
+
+class Payment(models.Model):
+    """Payments made (for AP) or received (for AR)"""
+    PAYMENT_TYPE_CHOICES = [
+        ('ap_payment', 'Accounts Payable Payment'),
+        ('ar_payment', 'Accounts Receivable Payment'),
+    ]
+    
+    PAYMENT_METHOD_CHOICES = [
+        ('check', 'Check'),
+        ('wire', 'Wire Transfer'),
+        ('ach', 'ACH'),
+        ('credit_card', 'Credit Card'),
+        ('cash', 'Cash'),
+        ('other', 'Other'),
+    ]
+    
+    payment_type = models.CharField(max_length=20, choices=PAYMENT_TYPE_CHOICES)
+    payment_date = models.DateField()
+    payment_method = models.CharField(max_length=20, choices=PAYMENT_METHOD_CHOICES)
+    amount = models.FloatField()
+    reference_number = models.CharField(max_length=100, blank=True, null=True, help_text='Check number, wire reference, etc.')
+    ap_entry = models.ForeignKey(AccountsPayable, on_delete=models.CASCADE, blank=True, null=True, related_name='payments', help_text='AP entry being paid')
+    ar_entry = models.ForeignKey(AccountsReceivable, on_delete=models.CASCADE, blank=True, null=True, related_name='payments', help_text='AR entry being paid')
+    account = models.ForeignKey(Account, on_delete=models.SET_NULL, blank=True, null=True, related_name='payments', help_text='Cash/bank account used for payment')
+    journal_entry = models.ForeignKey(JournalEntry, on_delete=models.SET_NULL, blank=True, null=True, related_name='payments', help_text='Journal entry created for this payment')
+    notes = models.TextField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        ordering = ['-payment_date', '-created_at']
+        indexes = [
+            models.Index(fields=['payment_type', 'payment_date']),
+            models.Index(fields=['ap_entry', 'payment_date']),
+            models.Index(fields=['ar_entry', 'payment_date']),
+        ]
+    
+    def __str__(self):
+        if self.ap_entry:
+            return f"AP Payment - {self.ap_entry.vendor_name} - ${self.amount}"
+        elif self.ar_entry:
+            return f"AR Payment - {self.ar_entry.customer_name} - ${self.amount}"
+        return f"Payment - ${self.amount}"
 

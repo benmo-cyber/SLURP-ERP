@@ -69,6 +69,7 @@ interface CheckOutModalProps {
 }
 
 function CheckOutModal({ onClose, onSuccess }: CheckOutModalProps) {
+  console.log('CheckOutModal rendered')
   const [salesOrders, setSalesOrders] = useState<SalesOrder[]>([])
   const [selectedSOId, setSelectedSOId] = useState<number | null>(null)
   const [salesOrder, setSalesOrder] = useState<SalesOrder | null>(null)
@@ -77,7 +78,6 @@ function CheckOutModal({ onClose, onSuccess }: CheckOutModalProps) {
   const [rawMaterialLots, setRawMaterialLots] = useState<Map<number, Lot[]>>(new Map())
   const [allocations, setAllocations] = useState<Map<number, ItemAllocation>>(new Map())
   const [shipDate, setShipDate] = useState<string>('')
-  const [trackingNumber, setTrackingNumber] = useState<string>('')
   const [unitDisplay, setUnitDisplay] = useState<'lbs' | 'kg'>('lbs')
   const [saving, setSaving] = useState(false)
   const [shipping, setShipping] = useState(false)
@@ -110,8 +110,11 @@ function CheckOutModal({ onClose, onSuccess }: CheckOutModalProps) {
   const loadSalesOrders = async () => {
     try {
       setLoading(true)
+      console.log('Loading available sales orders...')
       const orders = await getAvailableSalesOrders()
-      setSalesOrders(orders)
+      console.log('Received sales orders:', orders)
+      console.log('Number of orders:', orders?.length || 0)
+      setSalesOrders(orders || [])
     } catch (error) {
       console.error('Failed to load sales orders:', error)
       alert('Failed to load sales orders')
@@ -136,75 +139,50 @@ function CheckOutModal({ onClose, onSuccess }: CheckOutModalProps) {
   const loadAvailableLots = async () => {
     if (!salesOrder) return
 
+    // For checkout, we only show lots that are already allocated to this sales order
     const lotsMap = new Map<number, Lot[]>()
-    const rawMaterialMap = new Map<number, Lot[]>()
-    const items = await getItems()
-
-    for (const item of salesOrder.items) {
-      if (item.item.item_type === 'distributed_item') {
-        // For distributed items, load raw materials
-        // Get all raw material items
-        const rawMaterials = items.filter((i: any) => i.item_type === 'raw_material')
-        const rawLots: Lot[] = []
-        
-        for (const rm of rawMaterials) {
-          try {
-            const lots = await getLotsBySkuVendor(rm.sku)
-            // getLotsBySkuVendor returns an array of lots
-            const lotsArray = Array.isArray(lots) ? lots : []
-            rawLots.push(...lotsArray.filter((lot: Lot) => 
-              lot.item && lot.item.id === rm.id && lot.quantity_remaining > 0
-            ))
-          } catch (error) {
-            console.error(`Failed to load lots for raw material ${rm.sku}:`, error)
+    
+    for (const soItem of salesOrder.items) {
+      // Only show allocated lots for this item
+      const allocatedLots: Lot[] = []
+      if (soItem.allocated_lots) {
+        for (const alloc of soItem.allocated_lots) {
+          if (alloc.quantity_allocated > 0 && alloc.lot) {
+            allocatedLots.push(alloc.lot)
           }
         }
-        
-        rawMaterialMap.set(item.id, rawLots)
-      } else {
-        // For regular items, load lots matching the item
-        try {
-          const lots = await getLotsBySkuVendor(item.item.sku)
-          // getLotsBySkuVendor returns an array of lots
-          const lotsArray = Array.isArray(lots) ? lots : []
-          const itemLots = lotsArray.filter((lot: Lot) => 
-            lot.item && 
-            lot.item.id === item.item.id && 
-            lot.quantity_remaining > 0 &&
-            lot.item.unit_of_measure === item.item.unit_of_measure
-          )
-          lotsMap.set(item.id, itemLots)
-        } catch (error) {
-          console.error(`Failed to load lots for item ${item.item.sku}:`, error)
-        }
       }
+      lotsMap.set(soItem.id, allocatedLots)
     }
 
     setAvailableLots(lotsMap)
-    setRawMaterialLots(rawMaterialMap)
+    setRawMaterialLots(new Map()) // Not used in checkout
   }
 
   const initializeAllocations = () => {
     if (!salesOrder) return
 
+    // Initialize with quantities to ship (default to all allocated)
     const allocMap = new Map<number, ItemAllocation>()
 
     for (const item of salesOrder.items) {
-      const isDistributed = item.item.item_type === 'distributed_item'
       const existingAllocations: Allocation[] = []
 
+      // Start with all allocated quantities as default quantities to ship
       if (item.allocated_lots) {
         for (const alloc of item.allocated_lots) {
-          existingAllocations.push({
-            lot_id: alloc.lot.id,
-            quantity: alloc.quantity_allocated
-          })
+          if (alloc.quantity_allocated > 0) {
+            existingAllocations.push({
+              lot_id: alloc.lot.id,
+              quantity: alloc.quantity_allocated // Default to ship all allocated
+            })
+          }
         }
       }
 
       allocMap.set(item.id, {
         item_id: item.item.id,
-        is_distributed: isDistributed,
+        is_distributed: false, // Not used in checkout
         allocations: existingAllocations,
         raw_materials: []
       })
@@ -309,43 +287,48 @@ function CheckOutModal({ onClose, onSuccess }: CheckOutModalProps) {
       return
     }
 
-    if (!trackingNumber || trackingNumber.trim() === '') {
-      alert('Please enter a tracking number')
-      return
-    }
-
-    // Validate at least some items are allocated (partial shipments allowed)
-    let hasAllocations = false
+    // Build items array with quantities to ship
+    const itemsToShip: Array<{ item_id: number; quantity: number }> = []
+    
     for (const item of salesOrder.items) {
-      const totalAllocated = getTotalAllocated(item.id)
-      if (totalAllocated > 0) {
-        hasAllocations = true
-        break
+      const alloc = allocations.get(item.id)
+      if (alloc) {
+        const totalToShip = alloc.allocations.reduce((sum, a) => sum + a.quantity, 0)
+        if (totalToShip > 0) {
+          // Validate we're not shipping more than allocated
+          if (totalToShip > item.quantity_allocated) {
+            alert(`Cannot ship ${totalToShip} of ${item.item.name}. Only ${item.quantity_allocated} is allocated.`)
+            return
+          }
+          itemsToShip.push({
+            item_id: item.id,
+            quantity: totalToShip
+          })
+        }
       }
     }
     
-    if (!hasAllocations) {
-      alert('No items are allocated. Please allocate material before shipping.')
+    if (itemsToShip.length === 0) {
+      alert('Please select quantities to ship')
       return
     }
 
-    if (!confirm('Are you sure you want to ship this order? This will create an invoice and mark the order as shipped.')) {
+    if (!confirm('Are you sure you want to checkout this order? This will create a DRAFT invoice and packing list.')) {
       return
     }
 
     try {
       setShipping(true)
-      await shipSalesOrder(salesOrder.id, {
+      const result = await shipSalesOrder(salesOrder.id, {
         ship_date: shipDate,
-        invoice_date: shipDate,
-        tracking_number: trackingNumber.trim()
+        items: itemsToShip
       })
-      alert('Order shipped successfully! Invoice created.')
+      alert('Order checked out successfully! DRAFT invoice created. You can now go to Finance > Invoices to review and issue it.')
       onSuccess()
       onClose()
     } catch (error: any) {
-      console.error('Failed to ship order:', error)
-      alert(`Failed to ship order: ${error.response?.data?.error || error.message}`)
+      console.error('Failed to checkout order:', error)
+      alert(`Failed to checkout order: ${error.response?.data?.error || error.message}`)
     } finally {
       setShipping(false)
     }
@@ -426,18 +409,49 @@ function CheckOutModal({ onClose, onSuccess }: CheckOutModalProps) {
           {/* Step 1: Select Sales Order */}
           <div className="checkout-step">
             <h3>Step 1: Select Sales Order</h3>
-            <select
-              value={selectedSOId || ''}
-              onChange={(e) => setSelectedSOId(Number(e.target.value) || null)}
-              className="form-select"
-            >
-              <option value="">-- Select Sales Order --</option>
-              {salesOrders.map(so => (
-                <option key={so.id} value={so.id}>
-                  {so.so_number} - {so.customer_name} ({so.status})
-                </option>
-              ))}
-            </select>
+            {loading ? (
+              <div>Loading sales orders...</div>
+            ) : salesOrders.length === 0 ? (
+              <div className="warning-text">
+                No issued sales orders with allocations available for checkout.
+                <br />
+                <small>Make sure you have sales orders with status 'issued' that have material allocated.</small>
+              </div>
+            ) : (
+              <>
+                <select
+                  value={selectedSOId ? String(selectedSOId) : ''}
+                  onChange={(e) => {
+                    const value = e.target.value
+                    console.log('Selected sales order ID:', value)
+                    if (value) {
+                      const id = parseInt(value, 10)
+                      if (!isNaN(id)) {
+                        setSelectedSOId(id)
+                      } else {
+                        setSelectedSOId(null)
+                      }
+                    } else {
+                      setSelectedSOId(null)
+                    }
+                  }}
+                  className="form-select"
+                  style={{ width: '100%', padding: '8px', fontSize: '14px' }}
+                >
+                  <option value="">-- Select Sales Order --</option>
+                  {salesOrders.map(so => (
+                    <option key={so.id} value={String(so.id)}>
+                      {so.so_number} - {so.customer_name} ({so.status})
+                    </option>
+                  ))}
+                </select>
+                {process.env.NODE_ENV === 'development' && (
+                  <div style={{ fontSize: '12px', color: '#666', marginTop: '10px' }}>
+                    Debug: {salesOrders.length} sales orders loaded, selected: {selectedSOId || 'none'}
+                  </div>
+                )}
+              </>
+            )}
           </div>
 
           {salesOrder && (
@@ -445,6 +459,12 @@ function CheckOutModal({ onClose, onSuccess }: CheckOutModalProps) {
               {/* Step 2: Allocate Lots */}
               <div className="checkout-step">
                 <h3>Step 2: Allocate Inventory</h3>
+                {/* Debug info */}
+                {process.env.NODE_ENV === 'development' && (
+                  <div style={{ fontSize: '12px', color: '#666', marginBottom: '10px' }}>
+                    Debug: Sales Order {salesOrder.so_number} has {salesOrder.items.length} items
+                  </div>
+                )}
                 <div className="unit-toggle">
                   <label>Display Units:</label>
                   <button
@@ -475,10 +495,8 @@ function CheckOutModal({ onClose, onSuccess }: CheckOutModalProps) {
                         <h4>{item.item.name} ({item.item.sku})</h4>
                         <div className="item-stats">
                           <span>Ordered: {formatNumber(convertQuantity(item.quantity_ordered, item.item.unit_of_measure))} {unitDisplay}</span>
-                          <span>Allocated: {formatNumber(convertQuantity(totalAllocated, item.item.unit_of_measure))} {unitDisplay}</span>
-                          <span className={remaining > 0 ? 'warning' : 'success'}>
-                            Remaining: {formatNumber(convertQuantity(remaining, item.item.unit_of_measure))} {unitDisplay}
-                          </span>
+                          <span>Allocated: {formatNumber(convertQuantity(item.quantity_allocated, item.item.unit_of_measure))} {unitDisplay}</span>
+                          <span>Quantity to Ship: {formatNumber(convertQuantity(totalAllocated, item.item.unit_of_measure))} {unitDisplay}</span>
                         </div>
                       </div>
 
@@ -531,25 +549,33 @@ function CheckOutModal({ onClose, onSuccess }: CheckOutModalProps) {
                                 <div key={lot.id} className="lot-row">
                                   <div className="lot-info">
                                     <span>{lot.lot_number}</span>
-                                    <span>Available: {formatNumber(convertQuantity(lot.quantity_remaining, lot.item.unit_of_measure))} {unitDisplay}</span>
+                                    <span>Allocated: {formatNumber(convertQuantity(
+                                      item.allocated_lots?.find((a: any) => a.lot.id === lot.id)?.quantity_allocated || 0,
+                                      lot.item.unit_of_measure
+                                    ))} {unitDisplay}</span>
                                     <span>Received: {new Date(lot.received_date).toLocaleDateString()}</span>
                                     {lot.expiration_date && (
                                       <span>Expires: {new Date(lot.expiration_date).toLocaleDateString()}</span>
                                     )}
                                   </div>
-                                  <input
-                                    type="number"
-                                    min="0"
-                                    max={lot.quantity_remaining}
-                                    step="0.01"
-                                    value={allocatedQty}
-                                    onChange={(e) => updateAllocation(
-                                      item.id,
-                                      lot.id,
-                                      parseFloat(e.target.value) || 0
-                                    )}
-                                    className="quantity-input"
-                                  />
+                                  <div className="quantity-input-group">
+                                    <label>Quantity to Ship:</label>
+                                    <input
+                                      type="number"
+                                      min="0"
+                                      max={maxQty}
+                                      step="0.01"
+                                      value={allocatedQty}
+                                      onChange={(e) => {
+                                        const val = parseFloat(e.target.value) || 0
+                                        if (val <= maxQty) {
+                                          updateAllocation(item.id, lot.id, val)
+                                        }
+                                      }}
+                                      className="quantity-input"
+                                    />
+                                    <span className="max-hint">(Max: {formatNumber(convertQuantity(maxQty, lot.item.unit_of_measure))} {unitDisplay})</span>
+                                  </div>
                                 </div>
                               )
                             })}
@@ -564,9 +590,9 @@ function CheckOutModal({ onClose, onSuccess }: CheckOutModalProps) {
                 })}
               </div>
 
-              {/* Step 3: Ship Date and Tracking */}
+              {/* Step 3: Ship Date */}
               <div className="checkout-step">
-                <h3>Step 3: Ship Date and Tracking</h3>
+                <h3>Step 3: Ship Date</h3>
                 <div className="form-group">
                   <label>Ship Date *</label>
                   <input
@@ -576,56 +602,24 @@ function CheckOutModal({ onClose, onSuccess }: CheckOutModalProps) {
                     className="form-input"
                     required
                   />
-                </div>
-                <div className="form-group">
-                  <label>Tracking Number *</label>
-                  <input
-                    type="text"
-                    value={trackingNumber}
-                    onChange={(e) => setTrackingNumber(e.target.value)}
-                    className="form-input"
-                    placeholder="Enter tracking number"
-                    required
-                  />
+                  <p className="info-text">You can set the ship date earlier than the requested date if needed.</p>
                 </div>
               </div>
-
-              {/* Step 4: Packing List */}
-              {salesOrder.status === 'ready_for_shipment' && (
-                <div className="checkout-step">
-                  <h3>Step 4: Packing List</h3>
-                  <button
-                    type="button"
-                    onClick={handlePrintBOL}
-                    className="btn btn-secondary"
-                  >
-                    Generate & Print Packing List
-                  </button>
-                </div>
-              )}
 
               {/* Actions */}
               <div className="checkout-actions">
                 <button
-                  onClick={handleSaveAllocations}
-                  disabled={saving}
-                  className="btn btn-secondary"
-                >
-                  {saving ? 'Saving...' : 'Save Allocations'}
-                </button>
-                <button
                   onClick={handleShipOrder}
-                  disabled={shipping || !shipDate || !trackingNumber}
+                  disabled={shipping || !shipDate}
                   className="btn btn-primary"
                 >
-                  {shipping ? 'Shipping...' : 'Ship Order & Create Invoice'}
+                  {shipping ? 'Processing...' : 'Checkout Order & Create Invoice'}
                 </button>
                 <button
-                  onClick={handleCancelOrder}
-                  disabled={cancelling}
-                  className="btn btn-danger"
+                  onClick={onClose}
+                  className="btn btn-secondary"
                 >
-                  {cancelling ? 'Cancelling...' : 'Cancel Order'}
+                  Cancel
                 </button>
               </div>
             </>

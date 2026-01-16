@@ -1,13 +1,14 @@
 import { useState, useEffect } from 'react'
-import { getInvoices, updateInvoice, getAgingReport } from '../../api/invoices'
+import { getInvoices, updateInvoice, getAgingReport, getInvoicePdfUrl } from '../../api/invoices'
 import { formatCurrency } from '../../utils/formatNumber'
 import CreateInvoice from './CreateInvoice'
+import ViewInvoice from './ViewInvoice'
 import './Invoices.css'
 
 interface Invoice {
   id: number
   invoice_number: string
-  sales_order: {
+  sales_order?: {
     id: number
     so_number: string
     customer_name: string
@@ -16,6 +17,8 @@ interface Invoice {
       payment_terms?: string
     }
   }
+  customer_name?: string
+  payment_terms?: string
   invoice_date: string
   due_date: string
   status: string
@@ -37,6 +40,7 @@ function Invoices() {
   const [agingReport, setAgingReport] = useState<any>(null)
   const [editingStatus, setEditingStatus] = useState<number | null>(null)
   const [newStatus, setNewStatus] = useState<string>('')
+  const [viewingInvoice, setViewingInvoice] = useState<number | null>(null)
 
   useEffect(() => {
     loadInvoices()
@@ -56,8 +60,12 @@ function Invoices() {
         params.status = statusFilter
       }
       const data = await getInvoices(params)
+      
+      // Ensure data is an array
+      const invoiceArray = Array.isArray(data) ? data : (data?.results || [])
+      
       // Sort invoices: draft first, then by date descending
-      const sorted = [...data].sort((a: Invoice, b: Invoice) => {
+      const sorted = [...invoiceArray].sort((a: Invoice, b: Invoice) => {
         if (a.status === 'draft' && b.status !== 'draft') return -1
         if (a.status !== 'draft' && b.status === 'draft') return 1
         return new Date(b.invoice_date).getTime() - new Date(a.invoice_date).getTime()
@@ -131,9 +139,9 @@ function Invoices() {
           <button 
             onClick={() => setShowCreate(true)} 
             className="btn btn-primary"
-            title="Create new invoice or review draft invoices from shipped orders"
+            title="Create a manual invoice not tied to a sales order"
           >
-            + Create Invoice
+            + Create Manual Invoice
           </button>
           {invoices.filter((inv: Invoice) => inv.status === 'draft').length > 0 && (
             <span className="draft-count-badge">
@@ -212,12 +220,13 @@ function Invoices() {
               <th>Days Aging</th>
               <th>Grand Total</th>
               <th>Status</th>
+              <th>Packing List</th>
             </tr>
           </thead>
           <tbody>
             {invoices.length === 0 ? (
               <tr>
-                <td colSpan={10} className="empty-state">
+                <td colSpan={11} className="empty-state">
                   No invoices found.
                 </td>
               </tr>
@@ -227,13 +236,35 @@ function Invoices() {
                   key={invoice.id}
                   className={invoice.status === 'draft' ? 'draft-invoice' : ''}
                 >
-                  <td className="invoice-number">{invoice.invoice_number}</td>
-                  <td>{invoice.sales_order?.so_number || '-'}</td>
-                  <td>{invoice.sales_order?.customer_name || '-'}</td>
-                  <td>{invoice.sales_order?.tracking_number || '-'}</td>
-                  <td>{new Date(invoice.invoice_date).toLocaleDateString()}</td>
-                  <td>{new Date(invoice.due_date).toLocaleDateString()}</td>
-                  <td>{invoice.sales_order?.customer?.payment_terms || '-'}</td>
+                  <td className="invoice-number">
+                    <a
+                      href={getInvoicePdfUrl(invoice.id)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{ color: '#0066cc', textDecoration: 'underline', cursor: 'pointer' }}
+                      onClick={(e) => {
+                        e.preventDefault()
+                        window.open(getInvoicePdfUrl(invoice.id), '_blank')
+                      }}
+                      title="Click to view/print invoice PDF"
+                    >
+                      {invoice.invoice_number}
+                    </a>
+                  </td>
+                  <td>
+                    {invoice.sales_order?.so_number || '-'}
+                  </td>
+                  <td>
+                    {invoice.customer_name || invoice.sales_order?.customer_name || '-'}
+                  </td>
+                  <td>
+                    {invoice.sales_order?.tracking_number || '-'}
+                  </td>
+                  <td>{invoice.invoice_date ? new Date(invoice.invoice_date).toLocaleDateString() : '-'}</td>
+                  <td>{invoice.due_date ? new Date(invoice.due_date).toLocaleDateString() : '-'}</td>
+                  <td>
+                    {invoice.payment_terms || invoice.sales_order?.customer?.payment_terms || '-'}
+                  </td>
                   <td>
                     <span className={`aging-badge ${getAgingColor(invoice.days_aging)}`}>
                       {getAgingLabel(invoice.days_aging)}
@@ -263,7 +294,6 @@ function Invoices() {
                         className="status-select"
                       >
                         <option value="draft">Draft</option>
-                        <option value="issued">Issued</option>
                         <option value="sent">Sent</option>
                         <option value="paid">Paid</option>
                         <option value="overdue">Overdue</option>
@@ -282,6 +312,23 @@ function Invoices() {
                       </span>
                     )}
                   </td>
+                  <td>
+                    {invoice.sales_order?.id ? (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          const url = `http://localhost:8000/api/sales-orders/${invoice.sales_order!.id}/packing-list/`
+                          window.open(url, '_blank', 'noopener,noreferrer')
+                        }}
+                        className="btn btn-small btn-secondary"
+                        title="View Packing List in new window"
+                      >
+                        View
+                      </button>
+                    ) : (
+                      <span style={{ color: '#999' }}>-</span>
+                    )}
+                  </td>
                 </tr>
               ))
             )}
@@ -293,6 +340,17 @@ function Invoices() {
         <CreateInvoice
           onClose={() => setShowCreate(false)}
           onSuccess={handleCreateSuccess}
+        />
+      )}
+
+      {viewingInvoice && (
+        <ViewInvoice
+          invoiceId={viewingInvoice}
+          onClose={() => setViewingInvoice(null)}
+          onSuccess={() => {
+            setViewingInvoice(null)
+            setRefreshKey(prev => prev + 1)
+          }}
         />
       )}
     </div>

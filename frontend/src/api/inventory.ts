@@ -37,6 +37,28 @@ export const deleteItem = async (id: number) => {
   return response.data
 }
 
+// Item Pack Sizes API
+export const getItemPackSizes = async (itemId?: number) => {
+  const url = itemId ? `/item-pack-sizes/?item_id=${itemId}` : '/item-pack-sizes/'
+  const response = await api.get(url)
+  return response.data.results || response.data
+}
+
+export const createItemPackSize = async (data: any) => {
+  const response = await api.post('/item-pack-sizes/', data)
+  return response.data
+}
+
+export const updateItemPackSize = async (id: number, data: any) => {
+  const response = await api.put(`/item-pack-sizes/${id}/`, data)
+  return response.data
+}
+
+export const deleteItemPackSize = async (id: number) => {
+  const response = await api.delete(`/item-pack-sizes/${id}/`)
+  return response.data
+}
+
 // Lots API
 export const getLots = async () => {
   const response = await api.get('/lots/')
@@ -161,8 +183,23 @@ export const getLotsBySkuVendor = async (sku: string, vendor?: string) => {
   if (vendor) {
     params.append('vendor', vendor)
   }
-  const response = await api.get(`/lots/lots_by_sku_vendor/?${params}`)
-  return response.data
+  try {
+    const response = await api.get(`/lots/lots_by_sku_vendor/?${params}`)
+    // If response contains an error, return empty array
+    if (response.data && typeof response.data === 'object' && !Array.isArray(response.data) && response.data.error) {
+      console.warn(`API returned error for SKU ${sku}, vendor ${vendor}:`, response.data.error)
+      return []
+    }
+    return response.data || []
+  } catch (error: any) {
+    // Handle 404 and other errors
+    if (error.response?.status === 404) {
+      console.warn(`No items found for SKU ${sku}, vendor ${vendor}`)
+      return []
+    }
+    console.error(`Error fetching lots for SKU ${sku}, vendor ${vendor}:`, error)
+    throw error
+  }
 }
 
 // Lot Depletion Logs API
@@ -202,7 +239,52 @@ export const getLotDepletionLogs = async (filters?: {
   if (filters?.date_from) params.append('date_from', filters.date_from)
   if (filters?.date_to) params.append('date_to', filters.date_to)
   
-  const url = `/lot-depletion-logs/${params.toString() ? `?${params}` : ''}`
+  const url = params.toString() ? `/lot-depletion-logs/?${params}` : '/lot-depletion-logs/'
+  const response = await api.get(url)
+  return response.data.results || response.data
+}
+
+// Lot Transaction Logs API
+export interface LotTransactionLog {
+  id: number
+  lot: number
+  lot_number: string
+  item_sku: string
+  item_name: string
+  vendor?: string
+  transaction_type: 'receipt' | 'production_input' | 'production_output' | 'sale' | 'adjustment' | 'allocation' | 'deallocation' | 'manual' | 'reversal'
+  transaction_type_display: string
+  quantity_before: number
+  quantity_change: number
+  quantity_after: number
+  reference_number?: string
+  reference_type?: string
+  transaction_id?: number
+  batch_id?: number
+  sales_order_id?: number
+  purchase_order_id?: number
+  notes?: string
+  logged_at: string
+  logged_by?: string
+}
+
+export const getLotTransactionLogs = async (filters?: {
+  lot_number?: string
+  sku?: string
+  transaction_type?: string
+  reference_number?: string
+  date_from?: string
+  date_to?: string
+}) => {
+  const params = new URLSearchParams()
+  if (filters?.lot_number) params.append('lot_number', filters.lot_number)
+  if (filters?.sku) params.append('sku', filters.sku)
+  if (filters?.transaction_type) params.append('transaction_type', filters.transaction_type)
+  if (filters?.reference_number) params.append('reference_number', filters.reference_number)
+  if (filters?.date_from) params.append('date_from', filters.date_from)
+  if (filters?.date_to) params.append('date_to', filters.date_to)
+  
+  const url = params.toString() ? `/lot-transaction-logs/?${params}` : '/lot-transaction-logs/'
   const response = await api.get(url)
   return response.data.results || response.data
 }
@@ -250,7 +332,7 @@ export const getPurchaseOrderLogs = async (filters?: {
   if (filters?.date_from) params.append('date_from', filters.date_from)
   if (filters?.date_to) params.append('date_to', filters.date_to)
   
-  const url = `/purchase-order-logs/${params.toString() ? `?${params}` : ''}`
+  const url = params.toString() ? `/purchase-order-logs/?${params}` : '/purchase-order-logs/'
   const response = await api.get(url)
   return response.data.results || response.data
 }
@@ -296,7 +378,7 @@ export const getProductionLogs = async (filters?: {
   if (filters?.date_from) params.append('date_from', filters.date_from)
   if (filters?.date_to) params.append('date_to', filters.date_to)
   
-  const url = `/production-logs/${params.toString() ? `?${params}` : ''}`
+  const url = params.toString() ? `/production-logs/?${params}` : '/production-logs/'
   const response = await api.get(url)
   return response.data.results || response.data
 }

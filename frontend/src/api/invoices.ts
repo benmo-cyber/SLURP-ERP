@@ -33,3 +33,7 @@ export const getAgingReport = async () => {
   const response = await api.get('/invoices/aging-report/')
   return response.data
 }
+
+export const getInvoicePdfUrl = (invoiceId: number) => {
+  return `${API_BASE_URL}/invoices/${invoiceId}/pdf/`
+}

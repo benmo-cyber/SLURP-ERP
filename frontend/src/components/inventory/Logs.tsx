@@ -1,15 +1,16 @@
 import React, { useState, useEffect } from 'react'
-import { getLotDepletionLogs, getPurchaseOrderLogs, getProductionLogs, LotDepletionLog, PurchaseOrderLog, ProductionLog } from '../../api/inventory'
+import { getLotDepletionLogs, getLotTransactionLogs, getPurchaseOrderLogs, getProductionLogs, LotDepletionLog, LotTransactionLog, PurchaseOrderLog, ProductionLog } from '../../api/inventory'
 import { formatNumber } from '../../utils/formatNumber'
 import './Logs.css'
 
 interface LogsProps {
-  defaultLogType?: 'depletion' | 'purchase-orders' | 'production'
+  defaultLogType?: 'depletion' | 'transactions' | 'purchase-orders' | 'production'
 }
 
-function Logs({ defaultLogType = 'depletion' }: LogsProps) {
-  const [activeLogType, setActiveLogType] = useState<'depletion' | 'purchase-orders' | 'production'>(defaultLogType)
+function Logs({ defaultLogType = 'transactions' }: LogsProps) {
+  const [activeLogType, setActiveLogType] = useState<'depletion' | 'transactions' | 'purchase-orders' | 'production'>(defaultLogType)
   const [depletionLogs, setDepletionLogs] = useState<LotDepletionLog[]>([])
+  const [transactionLogs, setTransactionLogs] = useState<LotTransactionLog[]>([])
   const [poLogs, setPoLogs] = useState<PurchaseOrderLog[]>([])
   const [productionLogs, setProductionLogs] = useState<ProductionLog[]>([])
   const [loading, setLoading] = useState(true)
@@ -18,6 +19,15 @@ function Logs({ defaultLogType = 'depletion' }: LogsProps) {
     lot_number: '',
     sku: '',
     method: '',
+    date_from: '',
+    date_to: ''
+  })
+  
+  const [transactionFilters, setTransactionFilters] = useState({
+    lot_number: '',
+    sku: '',
+    transaction_type: '',
+    reference_number: '',
     date_from: '',
     date_to: ''
   })
@@ -83,9 +93,11 @@ function Logs({ defaultLogType = 'depletion' }: LogsProps) {
     }
   }
 
-  const handleFilterChange = (type: 'depletion' | 'po' | 'production', field: string, value: string) => {
+  const handleFilterChange = (type: 'depletion' | 'transactions' | 'po' | 'production', field: string, value: string) => {
     if (type === 'depletion') {
       setDepletionFilters(prev => ({ ...prev, [field]: value }))
+    } else if (type === 'transactions') {
+      setTransactionFilters(prev => ({ ...prev, [field]: value }))
     } else if (type === 'po') {
       setPoFilters(prev => ({ ...prev, [field]: value }))
     } else if (type === 'production') {
@@ -98,7 +110,9 @@ function Logs({ defaultLogType = 'depletion' }: LogsProps) {
   }
 
   const handleClearFilters = () => {
-    if (activeLogType === 'depletion') {
+    if (activeLogType === 'transactions') {
+      setTransactionFilters({ lot_number: '', sku: '', transaction_type: '', reference_number: '', date_from: '', date_to: '' })
+    } else if (activeLogType === 'depletion') {
       setDepletionFilters({ lot_number: '', sku: '', method: '', date_from: '', date_to: '' })
     } else if (activeLogType === 'purchase-orders') {
       setPoFilters({ po_number: '', vendor: '', action: '', lot_number: '', date_from: '', date_to: '' })
@@ -126,6 +140,11 @@ function Logs({ defaultLogType = 'depletion' }: LogsProps) {
       'adjustment': 'badge-adjustment',
       'manual': 'badge-manual',
       'reversal': 'badge-reversal',
+      'receipt': 'badge-receipt',
+      'production_input': 'badge-production',
+      'production_output': 'badge-production',
+      'allocation': 'badge-allocation',
+      'deallocation': 'badge-deallocation',
       'created': 'badge-created',
       'updated': 'badge-updated',
       'check_in': 'badge-check-in',
@@ -153,6 +172,12 @@ function Logs({ defaultLogType = 'depletion' }: LogsProps) {
 
       <div className="log-type-tabs">
         <button
+          className={`log-type-tab ${activeLogType === 'transactions' ? 'active' : ''}`}
+          onClick={() => setActiveLogType('transactions')}
+        >
+          Transaction Logs
+        </button>
+        <button
           className={`log-type-tab ${activeLogType === 'depletion' ? 'active' : ''}`}
           onClick={() => setActiveLogType('depletion')}
         >
@@ -171,6 +196,128 @@ function Logs({ defaultLogType = 'depletion' }: LogsProps) {
           Production Logs
         </button>
       </div>
+
+      {/* Transaction Logs */}
+      {activeLogType === 'transactions' && (
+        <>
+          <div className="filters-section">
+            <div className="filters-grid">
+              <div className="filter-group">
+                <label>Lot Number</label>
+                <input
+                  type="text"
+                  value={transactionFilters.lot_number}
+                  onChange={(e) => handleFilterChange('transactions', 'lot_number', e.target.value)}
+                  placeholder="Filter by lot number"
+                />
+              </div>
+              <div className="filter-group">
+                <label>SKU</label>
+                <input
+                  type="text"
+                  value={transactionFilters.sku}
+                  onChange={(e) => handleFilterChange('transactions', 'sku', e.target.value)}
+                  placeholder="Filter by SKU"
+                />
+              </div>
+              <div className="filter-group">
+                <label>Transaction Type</label>
+                <select
+                  value={transactionFilters.transaction_type}
+                  onChange={(e) => handleFilterChange('transactions', 'transaction_type', e.target.value)}
+                >
+                  <option value="">All Types</option>
+                  <option value="receipt">Receipt</option>
+                  <option value="production_input">Production Input</option>
+                  <option value="production_output">Production Output</option>
+                  <option value="sale">Sale</option>
+                  <option value="adjustment">Adjustment</option>
+                  <option value="allocation">Allocation</option>
+                  <option value="deallocation">Deallocation</option>
+                  <option value="manual">Manual</option>
+                  <option value="reversal">Reversal</option>
+                </select>
+              </div>
+              <div className="filter-group">
+                <label>Reference Number</label>
+                <input
+                  type="text"
+                  value={transactionFilters.reference_number}
+                  onChange={(e) => handleFilterChange('transactions', 'reference_number', e.target.value)}
+                  placeholder="PO, Batch, SO number"
+                />
+              </div>
+              <div className="filter-group">
+                <label>Date From</label>
+                <input
+                  type="datetime-local"
+                  value={transactionFilters.date_from}
+                  onChange={(e) => handleFilterChange('transactions', 'date_from', e.target.value)}
+                />
+              </div>
+              <div className="filter-group">
+                <label>Date To</label>
+                <input
+                  type="datetime-local"
+                  value={transactionFilters.date_to}
+                  onChange={(e) => handleFilterChange('transactions', 'date_to', e.target.value)}
+                />
+              </div>
+            </div>
+            <div className="filter-actions">
+              <button onClick={handleApplyFilters} className="btn-apply">Apply Filters</button>
+              <button onClick={handleClearFilters} className="btn-clear">Clear Filters</button>
+            </div>
+          </div>
+
+          <div className="logs-table-wrapper">
+            <table className="logs-table">
+              <thead>
+                <tr>
+                  <th>Logged At</th>
+                  <th>Lot Number</th>
+                  <th>SKU</th>
+                  <th>Item Name</th>
+                  <th>Transaction Type</th>
+                  <th>Qty Before</th>
+                  <th>Qty Change</th>
+                  <th>Qty After</th>
+                  <th>Reference</th>
+                  <th>Notes</th>
+                </tr>
+              </thead>
+              <tbody>
+                {transactionLogs.length === 0 ? (
+                  <tr>
+                    <td colSpan={10} className="no-data">No transaction logs found</td>
+                  </tr>
+                ) : (
+                  transactionLogs.map((log) => (
+                    <tr key={log.id}>
+                      <td>{formatDate(log.logged_at)}</td>
+                      <td><strong>{log.lot_number}</strong></td>
+                      <td>{log.item_sku}</td>
+                      <td>{log.item_name}</td>
+                      <td>
+                        <span className={`method-badge ${getMethodBadgeClass(log.transaction_type)}`}>
+                          {log.transaction_type_display}
+                        </span>
+                      </td>
+                      <td>{formatNumber(log.quantity_before)}</td>
+                      <td className={log.quantity_change >= 0 ? 'quantity-positive' : 'quantity-negative'}>
+                        {log.quantity_change >= 0 ? '+' : ''}{formatNumber(log.quantity_change)}
+                      </td>
+                      <td>{formatNumber(log.quantity_after)}</td>
+                      <td>{log.reference_number || '-'}</td>
+                      <td className="notes-cell">{log.notes || '-'}</td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
 
       {/* Depletion Logs */}
       {activeLogType === 'depletion' && (

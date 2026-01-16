@@ -35,6 +35,12 @@ interface Lot {
   received_date: string
   expiration_date?: string
   status: string
+  pack_size_obj?: {
+    id: number
+    pack_size: number
+    pack_size_unit: string
+    description?: string
+  }
   item: {
     id: number
     sku: string
@@ -379,6 +385,7 @@ function InventoryTable() {
                                           <tr>
                                             <th>Vendor Lot #</th>
                                             <th>Internal Lot #</th>
+                                            <th>Pack Size</th>
                                             <th>Received Date</th>
                                             <th>Expiration Date</th>
                                             <th>Quantity</th>
@@ -394,6 +401,9 @@ function InventoryTable() {
                                             const lotDisplayUnit = getDisplayUnit(lotUnit)
                                             const receivedDate = new Date(lot.received_date).toLocaleDateString()
                                             const expDate = lot.expiration_date ? new Date(lot.expiration_date).toLocaleDateString() : 'N/A'
+                                            const packSizeDisplay = lot.pack_size_obj 
+                                              ? `${lot.pack_size_obj.pack_size} ${lot.pack_size_obj.pack_size_unit}${lot.pack_size_obj.description ? ` (${lot.pack_size_obj.description})` : ''}`
+                                              : '-'
                                             
                                             const isEditingVendorLot = editingLot?.lotId === lot.id && editingLot?.field === 'vendor_lot_number'
                                             const isEditingExpDate = editingLot?.lotId === lot.id && editingLot?.field === 'expiration_date'
@@ -487,6 +497,7 @@ function InventoryTable() {
                                                     return lot.lot_number || '-'
                                                   })()}
                                                 </td>
+                                                <td>{packSizeDisplay}</td>
                                                 <td>{receivedDate}</td>
                                                 <td 
                                                   className="editable-cell"

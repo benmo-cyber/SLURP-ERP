@@ -1,24 +1,53 @@
 from rest_framework import serializers
 from .models import (
-    Item, Lot, ProductionBatch, ProductionBatchInput, ProductionBatchOutput, Formula, FormulaItem,
+    Item, ItemPackSize, Lot, ProductionBatch, ProductionBatchInput, ProductionBatchOutput, Formula, FormulaItem,
     PurchaseOrder, PurchaseOrderItem, SalesOrder, SalesOrderItem,
     InventoryTransaction, Vendor, VendorHistory, SupplierSurvey,
     SupplierDocument, TemporaryException, CostMaster, CostMasterHistory, Account,
     FinishedProductSpecification, Customer, CustomerPricing, VendorPricing, SalesOrderLot, Invoice, InvoiceItem,
-    ShipToLocation, CustomerContact, SalesCall, CustomerForecast, LotDepletionLog, PurchaseOrderLog, ProductionLog,
-    Shipment, ShipmentItem
+    ShipToLocation, CustomerContact, SalesCall, CustomerForecast, LotDepletionLog, LotTransactionLog, PurchaseOrderLog, ProductionLog,
+    Shipment, ShipmentItem, AccountsPayable, AccountsReceivable, Payment, FiscalPeriod, JournalEntry, JournalEntryLine, GeneralLedgerEntry, AccountBalance
 )
 
 
+class ItemPackSizeSerializer(serializers.ModelSerializer):
+    pack_size_display = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = ItemPackSize
+        fields = '__all__'
+    
+    def get_pack_size_display(self, obj):
+        """Return formatted pack size string"""
+        return f"{obj.pack_size} {obj.pack_size_unit}"
+
+
 class ItemSerializer(serializers.ModelSerializer):
+    pack_sizes = serializers.SerializerMethodField()
+    default_pack_size = serializers.SerializerMethodField()
+    
     class Meta:
         model = Item
         fields = '__all__'
+    
+    def get_pack_sizes(self, obj):
+        """Return all active pack sizes for this item"""
+        active_pack_sizes = obj.pack_sizes.filter(is_active=True)
+        return ItemPackSizeSerializer(active_pack_sizes, many=True).data
+    
+    def get_default_pack_size(self, obj):
+        """Return the default pack size for this item"""
+        default = obj.pack_sizes.filter(is_default=True, is_active=True).first()
+        if default:
+            return ItemPackSizeSerializer(default).data
+        return None
 
 
 class LotSerializer(serializers.ModelSerializer):
     item = ItemSerializer(read_only=True)
     item_id = serializers.IntegerField(write_only=True)
+    pack_size_obj = ItemPackSizeSerializer(read_only=True, source='pack_size')
+    pack_size_id = serializers.IntegerField(write_only=True, required=False, allow_null=True)
     received_date = serializers.DateTimeField(required=False, allow_null=True)
     quantity_remaining = serializers.SerializerMethodField()
     lot_number = serializers.CharField(required=False, read_only=True)
@@ -31,19 +60,25 @@ class LotSerializer(serializers.ModelSerializer):
         }
     
     def get_quantity_remaining(self, obj):
-        """Calculate quantity_remaining excluding sales allocations"""
+        """Calculate quantity_remaining excluding sales allocations
+        
+        Note: The lot's quantity_remaining in the database already reflects shipped quantities.
+        We only need to subtract allocations for orders that haven't been shipped yet.
+        """
         from django.db.models import Sum
         from .models import SalesOrderLot
         
-        # Start with the lot's quantity_remaining
+        # Start with the lot's quantity_remaining (already accounts for shipped material)
         remaining = obj.quantity_remaining
         
-        # Subtract any allocations to sales orders
+        # Only subtract allocations for orders that haven't been shipped yet
+        # (shipped orders already reduced the lot's quantity_remaining)
         try:
             allocated_to_sales = SalesOrderLot.objects.filter(
                 lot=obj,
                 sales_order_item__sales_order__status__in=[
-                    'draft', 'allocated', 'issued', 'ready_for_shipment', 'shipped'
+                    'draft', 'allocated', 'issued', 'ready_for_shipment'
+                    # Note: 'shipped' orders already reduced quantity_remaining, so don't subtract again
                 ]
             ).aggregate(
                 total=Sum('quantity_allocated')
@@ -224,6 +259,7 @@ class ShipmentSerializer(serializers.ModelSerializer):
 class SalesOrderSerializer(serializers.ModelSerializer):
     items = SalesOrderItemSerializer(many=True, read_only=True)
     customer_detail = serializers.SerializerMethodField()
+    customer = serializers.SerializerMethodField()  # Add customer field for frontend compatibility
     shipments = ShipmentSerializer(many=True, read_only=True)
     
     class Meta:
@@ -231,6 +267,12 @@ class SalesOrderSerializer(serializers.ModelSerializer):
         fields = '__all__'
     
     def get_customer_detail(self, obj):
+        if obj.customer:
+            return CustomerSerializer(obj.customer).data
+        return None
+    
+    def get_customer(self, obj):
+        """Get customer data including payment_terms"""
         if obj.customer:
             return CustomerSerializer(obj.customer).data
         return None
@@ -532,11 +574,142 @@ class InvoiceItemSerializer(serializers.ModelSerializer):
 
 class InvoiceSerializer(serializers.ModelSerializer):
     items = InvoiceItemSerializer(many=True, read_only=True)
-    sales_order = SalesOrderSerializer(read_only=True)
-    days_aging = serializers.ReadOnlyField()
+    sales_order = serializers.SerializerMethodField()
+    days_aging = serializers.SerializerMethodField()  # Changed to SerializerMethodField to handle manually created objects
+    # Map database field names to expected frontend field names
+    tax = serializers.SerializerMethodField()
+    grand_total = serializers.SerializerMethodField()
+    freight = serializers.SerializerMethodField()
+    discount = serializers.SerializerMethodField()
+    # Add customer_name and payment_terms from invoice or sales order
+    customer_name = serializers.SerializerMethodField()
+    payment_terms = serializers.SerializerMethodField()
     
     class Meta:
         model = Invoice
+        fields = '__all__'
+    
+    def get_days_aging(self, obj):
+        """Calculate days aging - handle manually created invoice objects"""
+        try:
+            # Try to use the property if it exists
+            if hasattr(obj, 'days_aging'):
+                return obj.days_aging
+            # Otherwise calculate manually
+            from django.utils import timezone
+            if obj.status == 'paid':
+                return 0
+            if not hasattr(obj, 'due_date') or not obj.due_date:
+                return 0
+            today = timezone.now().date()
+            return (today - obj.due_date).days
+        except Exception:
+            return 0
+    
+    def get_customer_name(self, obj):
+        """Get customer name from invoice or sales order"""
+        # First try to get from invoice's customer_vendor_name field
+        if hasattr(obj, 'customer_vendor_name') and obj.customer_vendor_name:
+            return obj.customer_vendor_name
+        # Fall back to sales order
+        if hasattr(obj, 'sales_order') and obj.sales_order:
+            if hasattr(obj.sales_order, 'customer_name') and obj.sales_order.customer_name:
+                return obj.sales_order.customer_name
+            if hasattr(obj.sales_order, 'customer') and obj.sales_order.customer:
+                return obj.sales_order.customer.name
+        return None
+    
+    def get_payment_terms(self, obj):
+        """Get payment terms from sales order customer"""
+        if hasattr(obj, 'sales_order') and obj.sales_order:
+            if hasattr(obj.sales_order, 'customer') and obj.sales_order.customer:
+                return getattr(obj.sales_order.customer, 'payment_terms', None)
+        return None
+    
+    def get_tax(self, obj):
+        """Map tax_amount to tax for frontend compatibility"""
+        return getattr(obj, 'tax_amount', getattr(obj, 'tax', 0.0))
+    
+    def get_grand_total(self, obj):
+        """Map total_amount to grand_total for frontend compatibility"""
+        return getattr(obj, 'total_amount', getattr(obj, 'grand_total', 0.0))
+    
+    def get_freight(self, obj):
+        """Get freight - may not exist in database"""
+        return getattr(obj, 'freight', 0.0)
+    
+    def get_discount(self, obj):
+        """Get discount - may not exist in database"""
+        return getattr(obj, 'discount', 0.0)
+    
+    def get_sales_order(self, obj):
+        """Get sales order - handle case where sales_order_id column doesn't exist"""
+        from .models import SalesOrder
+        try:
+            # Strategy 1: If sales_order is already attached to the object, use it (but ensure customer is loaded)
+            if hasattr(obj, 'sales_order') and obj.sales_order is not None:
+                # Check if customer is loaded
+                if hasattr(obj.sales_order, 'customer') and obj.sales_order.customer is not None:
+                    # Customer is loaded, serialize it
+                    return SalesOrderSerializer(obj.sales_order).data
+                else:
+                    # Customer not loaded, reload with customer
+                    try:
+                        so = SalesOrder.objects.select_related('customer').get(id=obj.sales_order.id)
+                        return SalesOrderSerializer(so).data
+                    except SalesOrder.DoesNotExist:
+                        # Sales order was deleted, return None
+                        return None
+            
+            # Strategy 2: Get sales_order_id from any source and load it
+            sales_order_id = None
+            if hasattr(obj, 'sales_order_id') and obj.sales_order_id:
+                sales_order_id = obj.sales_order_id
+            elif hasattr(obj, '_sales_order_id') and obj._sales_order_id:
+                sales_order_id = obj._sales_order_id
+            
+            if sales_order_id:
+                try:
+                    so = SalesOrder.objects.select_related('customer').get(id=sales_order_id)
+                    return SalesOrderSerializer(so).data
+                except SalesOrder.DoesNotExist:
+                    # Sales order doesn't exist
+                    return None
+            
+            # Strategy 3: Try to find from notes (fallback for old invoices)
+            if hasattr(obj, 'notes') and obj.notes:
+                import re
+                # Look for "sales order {so_number}" or "from sales order {id}"
+                match = re.search(r'sales order[:\s]+([A-Z0-9-]+)', obj.notes, re.IGNORECASE)
+                if match:
+                    so_identifier = match.group(1)
+                    try:
+                        # Try as SO number first
+                        so = SalesOrder.objects.select_related('customer').get(so_number=so_identifier)
+                        return SalesOrderSerializer(so).data
+                    except SalesOrder.DoesNotExist:
+                        try:
+                            # Try as ID
+                            so = SalesOrder.objects.select_related('customer').get(id=int(so_identifier))
+                            return SalesOrderSerializer(so).data
+                        except (ValueError, SalesOrder.DoesNotExist):
+                            pass
+            
+            return None
+        except Exception as e:
+            import logging
+            import traceback
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error getting sales order for invoice {getattr(obj, 'invoice_number', 'unknown')}: {e}")
+            logger.error(traceback.format_exc())
+            return None
+
+
+class LotTransactionLogSerializer(serializers.ModelSerializer):
+    transaction_type_display = serializers.CharField(source='get_transaction_type_display', read_only=True)
+    
+    class Meta:
+        model = LotTransactionLog
         fields = '__all__'
 
 
@@ -560,6 +733,128 @@ class PurchaseOrderLogSerializer(serializers.ModelSerializer):
         model = PurchaseOrderLog
         fields = '__all__'
         read_only_fields = ['logged_at']
+
+
+class FiscalPeriodSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = FiscalPeriod
+        fields = '__all__'
+        read_only_fields = ['created_at', 'updated_at']
+
+
+class JournalEntryLineSerializer(serializers.ModelSerializer):
+    account_number = serializers.CharField(source='account.account_number', read_only=True)
+    account_name = serializers.CharField(source='account.name', read_only=True)
+    
+    class Meta:
+        model = JournalEntryLine
+        fields = '__all__'
+
+
+class JournalEntrySerializer(serializers.ModelSerializer):
+    lines = JournalEntryLineSerializer(many=True, read_only=True)
+    total_debits = serializers.SerializerMethodField()
+    total_credits = serializers.SerializerMethodField()
+    is_balanced = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = JournalEntry
+        fields = '__all__'
+        read_only_fields = ['entry_number', 'created_at', 'updated_at', 'posted_at']
+    
+    def get_total_debits(self, obj):
+        return sum(line.amount for line in obj.lines.filter(debit_credit='debit'))
+    
+    def get_total_credits(self, obj):
+        return sum(line.amount for line in obj.lines.filter(debit_credit='credit'))
+    
+    def get_is_balanced(self, obj):
+        return abs(self.get_total_debits(obj) - self.get_total_credits(obj)) < 0.01
+
+
+class GeneralLedgerEntrySerializer(serializers.ModelSerializer):
+    account_number = serializers.CharField(source='account.account_number', read_only=True)
+    account_name = serializers.CharField(source='account.name', read_only=True)
+    journal_entry_number = serializers.CharField(source='journal_entry.entry_number', read_only=True)
+    
+    class Meta:
+        model = GeneralLedgerEntry
+        fields = '__all__'
+        read_only_fields = ['created_at']
+
+
+class AccountBalanceSerializer(serializers.ModelSerializer):
+    account_number = serializers.CharField(source='account.account_number', read_only=True)
+    account_name = serializers.CharField(source='account.name', read_only=True)
+    period_name = serializers.CharField(source='fiscal_period.period_name', read_only=True)
+    
+    class Meta:
+        model = AccountBalance
+        fields = '__all__'
+        read_only_fields = ['last_updated']
+
+
+class AccountsPayableSerializer(serializers.ModelSerializer):
+    days_aging = serializers.ReadOnlyField()
+    aging_bucket = serializers.ReadOnlyField()
+    vendor_display = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = AccountsPayable
+        fields = '__all__'
+        read_only_fields = ['created_at', 'updated_at', 'balance', 'status', 'days_aging', 'aging_bucket']
+    
+    def get_vendor_display(self, obj):
+        return obj.vendor_name
+
+
+class AccountsReceivableSerializer(serializers.ModelSerializer):
+    days_aging = serializers.ReadOnlyField()
+    aging_bucket = serializers.ReadOnlyField()
+    customer_display = serializers.SerializerMethodField()
+    invoice_number_display = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = AccountsReceivable
+        fields = '__all__'
+        read_only_fields = ['created_at', 'updated_at', 'balance', 'status', 'days_aging', 'aging_bucket']
+    
+    def get_customer_display(self, obj):
+        return obj.customer_name
+    
+    def get_invoice_number_display(self, obj):
+        try:
+            return obj.invoice.invoice_number if obj.invoice else None
+        except Exception:
+            # If invoice is not loaded, try to get it from the invoice_id
+            if hasattr(obj, 'invoice_id') and obj.invoice_id:
+                from .models import Invoice
+                try:
+                    invoice = Invoice.objects.get(id=obj.invoice_id)
+                    return invoice.invoice_number
+                except Invoice.DoesNotExist:
+                    return None
+            return None
+
+
+class PaymentSerializer(serializers.ModelSerializer):
+    ap_entry_display = serializers.SerializerMethodField()
+    ar_entry_display = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = Payment
+        fields = '__all__'
+        read_only_fields = ['created_at', 'updated_at']
+    
+    def get_ap_entry_display(self, obj):
+        if obj.ap_entry:
+            return f"{obj.ap_entry.vendor_name} - ${obj.ap_entry.balance}"
+        return None
+    
+    def get_ar_entry_display(self, obj):
+        if obj.ar_entry:
+            return f"{obj.ar_entry.customer_name} - ${obj.ar_entry.balance}"
+        return None
 
 
 class ProductionLogSerializer(serializers.ModelSerializer):

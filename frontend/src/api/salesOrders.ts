@@ -39,7 +39,7 @@ export const allocateSalesOrder = async (id: number, data: any) => {
   return response.data
 }
 
-export const shipSalesOrder = async (id: number, data: { ship_date: string; invoice_date?: string; tracking_number: string }) => {
+export const shipSalesOrder = async (id: number, data: { ship_date: string; items: Array<{ item_id: number; quantity: number }> }) => {
   const response = await api.post(`/sales-orders/${id}/ship/`, data)
   return response.data
 }

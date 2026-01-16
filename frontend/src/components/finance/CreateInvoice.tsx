@@ -34,6 +34,8 @@ function CreateInvoice({ onClose, onSuccess, salesOrderId }: CreateInvoiceProps)
     invoice_date: new Date().toISOString().split('T')[0],
     due_date: '',
     tax_amount: '0',
+    freight: '0',
+    discount: '0',
   })
   const [invoiceItems, setInvoiceItems] = useState<InvoiceItem[]>([
     { item_id: '', description: '', quantity: '', unit_price: '', line_total: '' }
@@ -131,8 +133,10 @@ function CreateInvoice({ onClose, onSuccess, salesOrderId }: CreateInvoiceProps)
   const calculateTotals = () => {
     const subtotal = invoiceItems.reduce((sum, item) => sum + parseFloat(item.line_total || '0'), 0)
     const tax = parseFloat(formData.tax_amount || '0')
-    const total = subtotal + tax
-    return { subtotal, tax, total }
+    const freight = parseFloat(formData.freight || '0')
+    const discount = parseFloat(formData.discount || '0')
+    const total = subtotal + tax + freight - discount
+    return { subtotal, tax, freight, discount, total }
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -152,7 +156,7 @@ function CreateInvoice({ onClose, onSuccess, salesOrderId }: CreateInvoiceProps)
     try {
       setSubmitting(true)
       
-      const { subtotal, tax, total } = calculateTotals()
+      const { subtotal, tax, freight, discount, total } = calculateTotals()
       
       const invoiceData: any = {
         invoice_type: formData.invoice_type,
@@ -161,6 +165,8 @@ function CreateInvoice({ onClose, onSuccess, salesOrderId }: CreateInvoiceProps)
         invoice_date: formData.invoice_date,
         due_date: formData.due_date || null,
         tax_amount: tax,
+        freight: freight,
+        discount: discount,
         items: validItems.map(item => ({
           item_id: item.item_id ? parseInt(item.item_id) : null,
           description: item.description || '',
@@ -193,7 +199,7 @@ function CreateInvoice({ onClose, onSuccess, salesOrderId }: CreateInvoiceProps)
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal-content invoice-modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
-          <h2>{salesOrderId ? 'Review & Issue Invoice' : 'Create Invoice'}</h2>
+          <h2>{salesOrderId ? 'Review & Issue Invoice' : 'Create Manual Invoice'}</h2>
           <button onClick={onClose} className="close-btn">×</button>
         </div>
 
@@ -345,6 +351,28 @@ function CreateInvoice({ onClose, onSuccess, salesOrderId }: CreateInvoiceProps)
                 min="0"
                 value={formData.tax_amount}
                 onChange={(e) => setFormData({ ...formData, tax_amount: e.target.value })}
+                className="tax-input"
+              />
+            </div>
+            <div className="total-row">
+              <label>Freight:</label>
+              <input
+                type="number"
+                step="0.01"
+                min="0"
+                value={formData.freight}
+                onChange={(e) => setFormData({ ...formData, freight: e.target.value })}
+                className="tax-input"
+              />
+            </div>
+            <div className="total-row">
+              <label>Discount:</label>
+              <input
+                type="number"
+                step="0.01"
+                min="0"
+                value={formData.discount}
+                onChange={(e) => setFormData({ ...formData, discount: e.target.value })}
                 className="tax-input"
               />
             </div>
