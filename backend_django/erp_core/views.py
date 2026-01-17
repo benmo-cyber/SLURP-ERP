@@ -43,7 +43,7 @@ def log_lot_transaction(lot, quantity_before, quantity_change, transaction_type,
         lot: The Lot instance
         quantity_before: Quantity remaining before this transaction
         quantity_change: Quantity change (positive for additions, negative for reductions)
-        transaction_type: One of 'receipt', 'production_input', 'production_output', 'sale', 'adjustment', 'allocation', 'deallocation', 'manual', 'reversal'
+        transaction_type: One of 'receipt', 'production_input', 'production_output', 'repack_input', 'repack_output', 'sale', 'adjustment', 'allocation', 'deallocation', 'manual', 'reversal'
         reference_number: Batch number, SO number, PO number, etc.
         reference_type: Type of reference ('batch_number', 'so_number', 'po_number', etc.)
         transaction_id: Related InventoryTransaction ID if applicable
@@ -992,6 +992,12 @@ def log_production_batch_closure(batch, notes=None):
         # Get QC information if available (would need to be passed or retrieved)
         # For now, we'll leave these as None and they can be added later if needed
         
+        # Create notes that clarify if this is a repack of a distributed item
+        item_type_label = 'Distributed Item' if batch.batch_type == 'repack' and batch.finished_good_item.item_type == 'distributed_item' else 'Finished Good'
+        closure_notes = notes or f'Batch {batch.batch_number} closed'
+        if batch.batch_type == 'repack' and batch.finished_good_item.item_type == 'distributed_item':
+            closure_notes = f'Repack/Relabel of distributed item (not production). {closure_notes}'
+        
         ProductionLog.objects.create(
             batch=batch,
             batch_number=batch.batch_number,
@@ -1009,7 +1015,7 @@ def log_production_batch_closure(batch, notes=None):
             input_lots=json.dumps(input_lots),
             output_lot_number=output_lot_number,
             output_quantity=output_quantity,
-            notes=notes or f'Batch {batch.batch_number} closed'
+            notes=closure_notes
         )
     except Exception as e:
         import logging
@@ -1363,7 +1369,184 @@ class ItemViewSet(viewsets.ModelViewSet):
                 cost_master.save()
         
         headers = self.get_success_headers(serializer.data)
+        
+        # Check for orphaned inventory that can be reassigned (matching SKU and vendor)
+        self._reassign_orphaned_inventory(item)
+        
         return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+    
+    def _reassign_orphaned_inventory(self, item):
+        """Reassign orphaned inventory to a newly created item if SKU matches"""
+        from .models import OrphanedInventory, OrphanedPurchaseOrderItem, Lot, PurchaseOrderItem
+        from django.utils import timezone
+        
+        # Find orphaned inventory with matching SKU and vendor
+        orphaned_lots = OrphanedInventory.objects.filter(
+            original_item_sku=item.sku,
+            original_item_vendor=item.vendor or '',
+            reassigned_item__isnull=True
+        )
+        
+        for orphaned_lot in orphaned_lots:
+            # Create a new lot with the orphaned inventory data
+            new_lot = Lot.objects.create(
+                lot_number=orphaned_lot.lot_number,
+                vendor_lot_number=orphaned_lot.vendor_lot_number,
+                item=item,
+                quantity=orphaned_lot.quantity,
+                quantity_remaining=orphaned_lot.quantity_remaining,
+                received_date=orphaned_lot.received_date,
+                expiration_date=orphaned_lot.expiration_date,
+                status=orphaned_lot.status,
+                po_number=orphaned_lot.po_number,
+                freight_actual=orphaned_lot.freight_actual,
+                short_reason=orphaned_lot.short_reason
+            )
+            
+            # Mark as reassigned
+            orphaned_lot.reassigned_item = item
+            orphaned_lot.reassigned_at = timezone.now()
+            orphaned_lot.save()
+        
+        # Find orphaned PO items with matching SKU and vendor
+        orphaned_po_items = OrphanedPurchaseOrderItem.objects.filter(
+            original_item_sku=item.sku,
+            original_item_vendor=item.vendor or '',
+            reassigned_item__isnull=True
+        )
+        
+        for orphaned_po_item in orphaned_po_items:
+            # Find PO items without an item reference (orphaned)
+            po_items = PurchaseOrderItem.objects.filter(
+                purchase_order=orphaned_po_item.purchase_order,
+                item__isnull=True
+            )
+            
+            # Try to match by quantity and unit price
+            matching_po_item = po_items.filter(
+                quantity_ordered=orphaned_po_item.quantity_ordered,
+                unit_price=orphaned_po_item.unit_price
+            ).first()
+            
+            if matching_po_item:
+                matching_po_item.item = item
+                matching_po_item.save()
+            else:
+                # Create new PO item if no match found
+                PurchaseOrderItem.objects.create(
+                    purchase_order=orphaned_po_item.purchase_order,
+                    item=item,
+                    quantity_ordered=orphaned_po_item.quantity_ordered,
+                    quantity_received=orphaned_po_item.quantity_received,
+                    unit_price=orphaned_po_item.unit_price,
+                    notes=orphaned_po_item.notes
+                )
+            
+            # Mark as reassigned
+            orphaned_po_item.reassigned_item = item
+            orphaned_po_item.reassigned_at = timezone.now()
+            orphaned_po_item.save()
+    
+    @action(detail=True, methods=['post'], url_path='reassign-orphaned-inventory')
+    def reassign_orphaned_inventory(self, request, pk=None):
+        """Manually reassign orphaned inventory to this item"""
+        item = self.get_object()
+        
+        # Get counts before reassignment
+        from .models import OrphanedInventory, OrphanedPurchaseOrderItem
+        orphaned_lots_count = OrphanedInventory.objects.filter(
+            original_item_sku=item.sku,
+            original_item_vendor=item.vendor or '',
+            reassigned_item__isnull=True
+        ).count()
+        orphaned_po_items_count = OrphanedPurchaseOrderItem.objects.filter(
+            original_item_sku=item.sku,
+            original_item_vendor=item.vendor or '',
+            reassigned_item__isnull=True
+        ).count()
+        
+        # Perform reassignment
+        self._reassign_orphaned_inventory(item)
+        
+        # Get counts after reassignment
+        reassigned_lots = OrphanedInventory.objects.filter(
+            original_item_sku=item.sku,
+            original_item_vendor=item.vendor or '',
+            reassigned_item=item
+        ).count()
+        reassigned_po_items = OrphanedPurchaseOrderItem.objects.filter(
+            original_item_sku=item.sku,
+            original_item_vendor=item.vendor or '',
+            reassigned_item=item
+        ).count()
+        
+        return Response({
+            'message': 'Orphaned inventory reassigned successfully',
+            'lots_reassigned': reassigned_lots,
+            'po_items_reassigned': reassigned_po_items,
+            'lots_found': orphaned_lots_count,
+            'po_items_found': orphaned_po_items_count
+        }, status=status.HTTP_200_OK)
+    
+    @action(detail=False, methods=['get'], url_path='orphaned-inventory')
+    def list_orphaned_inventory(self, request):
+        """List all orphaned inventory that hasn't been reassigned"""
+        from .models import OrphanedInventory, OrphanedPurchaseOrderItem
+        
+        # Get query parameters
+        sku = request.query_params.get('sku', None)
+        vendor = request.query_params.get('vendor', None)
+        
+        # Filter orphaned lots
+        orphaned_lots = OrphanedInventory.objects.filter(reassigned_item__isnull=True)
+        if sku:
+            orphaned_lots = orphaned_lots.filter(original_item_sku=sku)
+        if vendor:
+            orphaned_lots = orphaned_lots.filter(original_item_vendor=vendor or '')
+        
+        # Filter orphaned PO items
+        orphaned_po_items = OrphanedPurchaseOrderItem.objects.filter(reassigned_item__isnull=True)
+        if sku:
+            orphaned_po_items = orphaned_po_items.filter(original_item_sku=sku)
+        if vendor:
+            orphaned_po_items = orphaned_po_items.filter(original_item_vendor=vendor or '')
+        
+        # Serialize results
+        lots_data = [{
+            'id': lot.id,
+            'original_item_sku': lot.original_item_sku,
+            'original_item_name': lot.original_item_name,
+            'original_item_vendor': lot.original_item_vendor,
+            'lot_number': lot.lot_number,
+            'quantity_remaining': lot.quantity_remaining,
+            'received_date': lot.received_date,
+            'expiration_date': lot.expiration_date,
+            'status': lot.status,
+            'po_number': lot.po_number,
+            'created_at': lot.created_at,
+            'notes': lot.notes
+        } for lot in orphaned_lots]
+        
+        po_items_data = [{
+            'id': po_item.id,
+            'original_item_sku': po_item.original_item_sku,
+            'original_item_name': po_item.original_item_name,
+            'original_item_vendor': po_item.original_item_vendor,
+            'purchase_order_id': po_item.purchase_order_id,
+            'purchase_order_number': po_item.purchase_order.po_number,
+            'quantity_ordered': po_item.quantity_ordered,
+            'quantity_received': po_item.quantity_received,
+            'unit_price': po_item.unit_price,
+            'created_at': po_item.created_at,
+            'notes': po_item.notes
+        } for po_item in orphaned_po_items]
+        
+        return Response({
+            'orphaned_lots': lots_data,
+            'orphaned_po_items': po_items_data,
+            'total_orphaned_lots': len(lots_data),
+            'total_orphaned_po_items': len(po_items_data)
+        }, status=status.HTTP_200_OK)
     
     def update(self, request, *args, **kwargs):
         """Update item and sync to CostMaster, creating history if price changed"""
@@ -1479,6 +1662,68 @@ class ItemViewSet(viewsets.ModelViewSet):
                 )
         
         return Response(serializer.data)
+    
+    def destroy(self, request, *args, **kwargs):
+        """Delete an item, but preserve inventory by creating orphaned inventory entries"""
+        from .models import OrphanedInventory, OrphanedPurchaseOrderItem
+        from django.utils import timezone
+        
+        item = self.get_object()
+        
+        # Store item details before deletion
+        item_sku = item.sku
+        item_name = item.name
+        item_vendor = item.vendor or ''
+        item_type = item.item_type
+        item_unit = item.unit_of_measure
+        
+        # Check for active inventory
+        has_lots = item.lots.filter(quantity_remaining__gt=0).exists()
+        has_po_items = item.purchase_order_items.filter(purchase_order__status__in=['draft', 'issued']).exists()
+        
+        # Create orphaned inventory entries for lots with remaining quantity
+        if has_lots:
+            for lot in item.lots.filter(quantity_remaining__gt=0):
+                OrphanedInventory.objects.create(
+                    original_item_sku=item_sku,
+                    original_item_name=item_name,
+                    original_item_vendor=item_vendor,
+                    original_item_type=item_type,
+                    original_item_unit=item_unit,
+                    lot_number=lot.lot_number,
+                    vendor_lot_number=lot.vendor_lot_number,
+                    quantity=lot.quantity,
+                    quantity_remaining=lot.quantity_remaining,
+                    received_date=lot.received_date,
+                    expiration_date=lot.expiration_date,
+                    status=lot.status,
+                    po_number=lot.po_number,
+                    freight_actual=lot.freight_actual,
+                    short_reason=lot.short_reason,
+                    notes=f'Item deleted on {timezone.now().strftime("%Y-%m-%d %H:%M:%S")}'
+                )
+        
+        # Create orphaned PO item entries for active purchase orders
+        if has_po_items:
+            for po_item in item.purchase_order_items.filter(purchase_order__status__in=['draft', 'issued']):
+                OrphanedPurchaseOrderItem.objects.create(
+                    original_item_sku=item_sku,
+                    original_item_name=item_name,
+                    original_item_vendor=item_vendor,
+                    original_item_unit=item_unit,
+                    purchase_order=po_item.purchase_order,
+                    quantity_ordered=po_item.quantity_ordered,
+                    quantity_received=po_item.quantity_received,
+                    unit_price=po_item.unit_price,
+                    notes=po_item.notes or f'Item deleted on {timezone.now().strftime("%Y-%m-%d %H:%M:%S")}'
+                )
+                # Clear the item reference but keep the PO item
+                po_item.item = None
+                po_item.save()
+        
+        # Now delete the item (which will cascade delete lots and other references)
+        # But we've already preserved the important data in orphaned inventory
+        return super().destroy(request, *args, **kwargs)
 
 
 class LotViewSet(viewsets.ModelViewSet):
@@ -1598,6 +1843,11 @@ class LotViewSet(viewsets.ModelViewSet):
         try:
             # Get all items
             items = Item.objects.all()
+            
+            # Filter by item_type if provided
+            item_type_filter = request.query_params.get('item_type', None)
+            if item_type_filter:
+                items = items.filter(item_type=item_type_filter)
         except (OperationalError, Exception) as e:
             import traceback
             traceback.print_exc()
@@ -1691,7 +1941,12 @@ class LotViewSet(viewsets.ModelViewSet):
             except Exception:
                 pass
             
+            # Only include lots with quantity_remaining > 0 (depleted lots are removed from table, exist only in log)
             for lot in item_lots:
+                # Skip lots that are depleted (quantity_remaining <= 0)
+                if lot.quantity_remaining <= 0:
+                    continue
+                
                 vendor_name = None
                 if lot.po_number and po_table_exists:
                     try:
@@ -1972,13 +2227,15 @@ class LotViewSet(viewsets.ModelViewSet):
             except Item.DoesNotExist:
                 pass
         
-        # Only generate internal lot number for finished goods
-        # Raw materials should use vendor lot number only
+        # Lot numbers should NEVER be generated on receipt/check-in
+        # Lot numbers are ONLY generated when:
+        # 1. Production batch closure (output lots)
+        # 2. Repack batch closure (output lots)
+        # For raw materials, use vendor_lot_number as the lot_number
+        # For other items checked in, use vendor_lot_number if provided, otherwise leave blank (will be set on batch closure)
         lot_number = None
-        if item and item.item_type == 'finished_good':
-            lot_number = generate_lot_number()
         
-        # For raw materials, vendor_lot_number is required
+        # For raw materials, vendor_lot_number is required and used as lot_number
         if item and item.item_type == 'raw_material':
             vendor_lot_number = request.data.get('vendor_lot_number')
             # Handle None, empty string, or whitespace-only strings
@@ -1996,6 +2253,17 @@ class LotViewSet(viewsets.ModelViewSet):
                 )
             # Use vendor lot number as the lot number for raw materials
             lot_number = vendor_lot_number
+        else:
+            # For non-raw materials, use vendor_lot_number if provided, otherwise leave blank
+            # Lot number will be generated when batch is closed
+            vendor_lot_number = request.data.get('vendor_lot_number')
+            if vendor_lot_number:
+                if isinstance(vendor_lot_number, str):
+                    vendor_lot_number = vendor_lot_number.strip()
+                else:
+                    vendor_lot_number = str(vendor_lot_number).strip()
+                if vendor_lot_number:
+                    lot_number = vendor_lot_number
         
         # Get lot_status from request data (renamed to avoid shadowing status module)
         lot_status = request.data.get('status', 'accepted')
@@ -2006,15 +2274,10 @@ class LotViewSet(viewsets.ModelViewSet):
             'status': lot_status,
         }
         
-        # Only set lot_number if we have one
+        # Only set lot_number if we have one (vendor_lot_number for raw materials or provided vendor_lot_number for others)
         if lot_number:
             serializer_data['lot_number'] = lot_number
-        elif not item:
-            # Fallback: if item doesn't exist, generate a lot number anyway
-            # (shouldn't happen, but handle gracefully)
-            # Only generate for non-raw materials (can't check item_type if item doesn't exist, but this is a fallback)
-            lot_number = generate_lot_number()
-            serializer_data['lot_number'] = lot_number
+        # If no lot_number is set, the lot will be created without one (will be generated on batch closure)
         
         serializer = self.get_serializer(data=serializer_data)
         serializer.is_valid(raise_exception=True)
@@ -2456,9 +2719,9 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
         
         # Validate inputs before creating batch
         from .models import ProductionBatchInput, ProductionBatchOutput, InventoryTransaction
-        quantity_produced = round(float(data.get('quantity_produced', 0)), 2)  # Round to 2 decimal places
-        data['quantity_produced'] = quantity_produced
+        quantity_produced_from_request = round(float(data.get('quantity_produced', 0)), 2)  # Round to 2 decimal places
         total_input_quantity_in_lbs = 0.0  # Track total in lbs for validation
+        total_input_quantity_native = 0.0  # Track total in item's native unit (for repack batches)
         
         # First pass: validate all inputs and calculate total
         for input_data in inputs_data:
@@ -2479,7 +2742,7 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
                         status=status.HTTP_400_BAD_REQUEST
                     )
                 
-                # Convert quantity to lbs for validation (quantity_produced is in lbs)
+                # Convert quantity to lbs for validation
                 quantity_used_in_lbs = quantity_used
                 if lot.item.unit_of_measure == 'kg':
                     quantity_used_in_lbs = quantity_used * 2.20462  # Convert kg to lbs
@@ -2488,6 +2751,7 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
                     quantity_used_in_lbs = quantity_used
                 
                 total_input_quantity_in_lbs += quantity_used_in_lbs
+                total_input_quantity_native += quantity_used  # Keep in native unit
                 
             except Lot.DoesNotExist:
                 return Response(
@@ -2495,15 +2759,36 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
                     status=status.HTTP_404_NOT_FOUND
                 )
         
+        # For repack batches, quantity_produced should be in the item's native unit (not lbs)
+        # For production batches, quantity_produced is in lbs
+        if batch_type == 'repack':
+            # Use total input quantity in native unit for repack batches
+            quantity_produced = round(total_input_quantity_native, 2)
+        else:
+            # For production batches, use the value from request (already in lbs)
+            quantity_produced = quantity_produced_from_request
+        
+        data['quantity_produced'] = quantity_produced
+        
         # Validate that total input quantity equals quantity to produce (with tolerance for floating point precision)
+        # For repack, compare in native units; for production, compare in lbs
         tolerance = 0.1  # Increased tolerance to account for conversion rounding differences
-        if abs(total_input_quantity_in_lbs - quantity_produced) > tolerance:
-            return Response(
-                {
-                    'error': f'Quantity mismatch: Total quantity used ({total_input_quantity_in_lbs:.2f} lbs) must equal quantity to produce ({quantity_produced:.2f} lbs)'
-                },
-                status=status.HTTP_400_BAD_REQUEST
-            )
+        if batch_type == 'repack':
+            if abs(total_input_quantity_native - quantity_produced) > tolerance:
+                return Response(
+                    {
+                        'error': f'Quantity mismatch: Total quantity used ({total_input_quantity_native:.2f} {lot.item.unit_of_measure}) must equal quantity to produce ({quantity_produced:.2f} {lot.item.unit_of_measure})'
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        else:
+            if abs(total_input_quantity_in_lbs - quantity_produced) > tolerance:
+                return Response(
+                    {
+                        'error': f'Quantity mismatch: Total quantity used ({total_input_quantity_in_lbs:.2f} lbs) must equal quantity to produce ({quantity_produced:.2f} lbs)'
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
+                )
         
         # Create the batch
         serializer = self.get_serializer(data=data)
@@ -2532,15 +2817,20 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
                 quantity_used=quantity_used
             )
             
+            # Determine transaction types based on batch type
+            input_transaction_type = 'repack_input' if batch_type == 'repack' else 'production_input'
+            depletion_method = 'repack' if batch_type == 'repack' else 'production'
+            batch_type_label = 'repack' if batch_type == 'repack' else 'production'
+            
             # Create inventory transaction for input (reduce quantity) - round to 2 decimal places
             rounded_quantity = round(quantity_used, 2)
             quantity_before = lot.quantity_remaining
             
             transaction = InventoryTransaction.objects.create(
-                transaction_type='production_input',
+                transaction_type=input_transaction_type,
                 lot=lot,
                 quantity=round(-rounded_quantity, 2),
-                notes=f'Batch {batch.batch_number} input',
+                notes=f'{"Repack" if batch_type == "repack" else "Production"} batch {batch.batch_number} input',
                 reference_number=batch.batch_number
             )
             
@@ -2549,12 +2839,12 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
                 lot=lot,
                 quantity_before=quantity_before,
                 quantity_change=-rounded_quantity,
-                transaction_type='production_input',
+                transaction_type=input_transaction_type,
                 reference_number=batch.batch_number,
                 reference_type='batch_number',
                 transaction_id=transaction.id,
                 batch_id=batch.id,
-                notes=f'Used in production batch {batch.batch_number}'
+                notes=f'Used in {batch_type_label} batch {batch.batch_number}' + (' - Distributed item repack/relabel' if batch_type == 'repack' else '')
             )
             
             # Update lot quantity_remaining - round to 2 decimal places
@@ -2566,23 +2856,38 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
                 lot=lot,
                 quantity_before=quantity_before,
                 quantity_used=rounded_quantity,
-                depletion_method='production',
+                depletion_method=depletion_method,
                 reference_number=batch.batch_number,
                 reference_type='batch_number',
                 batch_id=batch.id,
-                notes=f'Used in production batch {batch.batch_number}'
+                notes=f'Used in {batch_type_label} batch {batch.batch_number}' + (' - Distributed item repack/relabel' if batch_type == 'repack' else '')
             )
         
         # Validate that total input quantity equals quantity to produce (with tolerance for floating point)
+        # This is a second validation check after batch creation
         tolerance = 0.01
-        if abs(total_input_quantity_in_lbs - quantity_produced) > tolerance:
-            batch.delete()
-            return Response(
-                {
-                    'error': f'Quantity mismatch: Total quantity used ({total_input_quantity_in_lbs:.2f} lbs) must equal quantity to produce ({quantity_produced:.2f} lbs)'
-                },
-                status=status.HTTP_400_BAD_REQUEST
-            )
+        if batch_type == 'repack':
+            # For repack, we need to get the item to know the unit
+            if inputs_data:
+                first_lot = Lot.objects.get(id=inputs_data[0]['lot_id'])
+                item_unit = first_lot.item.unit_of_measure
+                if abs(total_input_quantity_native - quantity_produced) > tolerance:
+                    batch.delete()
+                    return Response(
+                        {
+                            'error': f'Quantity mismatch: Total quantity used ({total_input_quantity_native:.2f} {item_unit}) must equal quantity to produce ({quantity_produced:.2f} {item_unit})'
+                        },
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+        else:
+            if abs(total_input_quantity_in_lbs - quantity_produced) > tolerance:
+                batch.delete()
+                return Response(
+                    {
+                        'error': f'Quantity mismatch: Total quantity used ({total_input_quantity_in_lbs:.2f} lbs) must equal quantity to produce ({quantity_produced:.2f} lbs)'
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
+                )
         
         # Create outputs
         if batch_type == 'repack':
@@ -2601,16 +2906,24 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
                 if not pack_size:
                     pack_size = ItemPackSize.objects.filter(item=batch.finished_good_item, is_default=True, is_active=True).first()
                 
-                # Auto-create output lot if not provided
-                output_quantity = batch.quantity_produced if batch.quantity_produced > 0 else total_input_quantity
+                # For repack batches, output quantity should equal total input quantity (not quantity_produced)
+                # Calculate total_input_quantity in the item's unit of measure
+                total_input_quantity = 0.0
+                for input_data in inputs_data:
+                    lot_id = input_data.get('lot_id')
+                    quantity_used = round(float(input_data.get('quantity_used', 0)), 2)
+                    lot = Lot.objects.get(id=lot_id)
+                    total_input_quantity += quantity_used  # quantity_used is already in lot's native unit
+                
+                # For repack, use the total input quantity as output quantity (same units)
+                # quantity_produced may be in lbs, but output should match input units
+                output_quantity = total_input_quantity
                 item = batch.finished_good_item
                 
-                # Generate new lot number
-                lot_number = generate_lot_number()
-                
-                # Create new lot
+                # DO NOT generate lot number here - lot numbers are ONLY generated on batch closure
+                # Create new lot without lot_number (will be generated when batch is closed)
                 new_lot = Lot.objects.create(
-                    lot_number=lot_number,
+                    lot_number=None,  # Will be generated when batch is closed
                     item=item,
                     pack_size=pack_size,
                     quantity=output_quantity,
@@ -2628,7 +2941,7 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
                 
                 # Create inventory transaction for output (add quantity)
                 transaction = InventoryTransaction.objects.create(
-                    transaction_type='production_output',
+                    transaction_type='repack_output',
                     lot=new_lot,
                     quantity=output_quantity,
                     notes=f'Repack batch {batch.batch_number} output',
@@ -2640,12 +2953,12 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
                     lot=new_lot,
                     quantity_before=0.0,  # New lot
                     quantity_change=output_quantity,
-                    transaction_type='production_output',
+                    transaction_type='repack_output',
                     reference_number=batch.batch_number,
                     reference_type='batch_number',
                     transaction_id=transaction.id,
                     batch_id=batch.id,
-                    notes=f'Repack batch {batch.batch_number} output'
+                    notes=f'Repack batch {batch.batch_number} output - Distributed item relabeled/repacked'
                 )
             else:
                 # Use provided outputs
@@ -2669,13 +2982,27 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
                         )
                         
                         # Create inventory transaction
-                        InventoryTransaction.objects.create(
-                            transaction_type='production_output',
+                        transaction = InventoryTransaction.objects.create(
+                            transaction_type='repack_output' if batch_type == 'repack' else 'production_output',
                             lot=lot,
                             quantity=quantity_produced,
-                            notes=f'Batch {batch.batch_number} output',
+                            notes=f'{"Repack" if batch_type == "repack" else "Production"} batch {batch.batch_number} output',
                             reference_number=batch.batch_number
                         )
+                        
+                        # Log the transaction for repacks
+                        if batch_type == 'repack':
+                            log_lot_transaction(
+                                lot=lot,
+                                quantity_before=0.0,  # New lot
+                                quantity_change=quantity_produced,
+                                transaction_type='repack_output',
+                                reference_number=batch.batch_number,
+                                reference_type='batch_number',
+                                transaction_id=transaction.id,
+                                batch_id=batch.id,
+                                notes=f'Repack batch {batch.batch_number} output - Distributed item relabeled/repacked'
+                            )
                     except Lot.DoesNotExist:
                         batch.delete()
                         return Response(
@@ -2858,6 +3185,22 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
                     import logging
                     logger = logging.getLogger(__name__)
                     logger.info(f'Created output lot {new_lot.lot_number} for batch {batch.batch_number}: item={item.sku}, quantity={output_quantity}, status={new_lot.status}')
+            
+            # For repack batches, generate lot number for existing output lot when batch is closed
+            elif batch.batch_type == 'repack':
+                output = batch.outputs.first()
+                if output and output.lot:
+                    # Check if lot already has a lot number
+                    if not output.lot.lot_number:
+                        # Generate lot number for repack output (ONLY on batch closure)
+                        lot_number = generate_lot_number()
+                        output.lot.lot_number = lot_number
+                        output.lot.save()
+                        
+                        # Log the lot number assignment
+                        import logging
+                        logger = logging.getLogger(__name__)
+                        logger.info(f'Generated lot number {lot_number} for repack batch {batch.batch_number} output lot')
         
         # Return the updated batch
         serializer = self.get_serializer(batch)
@@ -2935,7 +3278,8 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
         base_unit = batch.finished_good_item.unit_of_measure or 'lbs'
         
         # Helper function to convert quantity from lbs (stored in DB) to base unit
-        # quantity_produced, quantity_actual, variance, wastes, spills are all stored in lbs
+        # For production batches: quantity_produced, quantity_actual, variance, wastes, spills are stored in lbs
+        # For repack batches: quantity_produced is stored in the item's native unit (not lbs)
         def convert_from_lbs_to_base(quantity_in_lbs):
             if base_unit == 'lbs' or base_unit == 'ea':
                 return quantity_in_lbs
@@ -2945,7 +3289,14 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
             return quantity_in_lbs
         
         # Convert quantity_produced to base unit for display
-        quantity_produced_display = convert_from_lbs_to_base(batch.quantity_produced)
+        # For repack batches, quantity_produced is already in base unit (not lbs)
+        # For production batches, quantity_produced is in lbs and needs conversion
+        if batch.batch_type == 'repack':
+            # For repack, quantity_produced is already in the item's native unit
+            quantity_produced_display = batch.quantity_produced
+        else:
+            # For production, quantity_produced is in lbs, convert to base unit
+            quantity_produced_display = convert_from_lbs_to_base(batch.quantity_produced)
         
         # Batch Information
         batch_data = [
@@ -3075,8 +3426,14 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
                 lot = batch_output.lot
                 item = lot.item
                 # Convert quantity to base unit
-                # quantity_produced is stored in lbs in the DB
-                quantity_in_base = convert_from_lbs_to_base(batch_output.quantity_produced)
+                # For repack batches, quantity_produced is already in the item's native unit
+                # For production batches, quantity_produced is in lbs
+                if batch.batch_type == 'repack':
+                    # For repack, quantity_produced is already in the item's native unit
+                    quantity_in_base = batch_output.quantity_produced
+                else:
+                    # For production, convert from lbs to base unit
+                    quantity_in_base = convert_from_lbs_to_base(batch_output.quantity_produced)
                 output_data.append([
                     lot.lot_number,
                     item.name,

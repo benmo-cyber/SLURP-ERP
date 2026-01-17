@@ -1,7 +1,7 @@
 .inventory-table-container {
   background: white;
-  border-radius: 8px;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  border-radius: 12px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
   overflow: hidden;
 }
 
@@ -9,9 +9,9 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 1rem 1.5rem;
-  border-bottom: 1px solid #e0e0e0;
-  background: #f8f9fa;
+  padding: 1.25rem 1.5rem;
+  border-bottom: 1px solid #e5e7eb;
+  background: #ffffff;
   flex-wrap: wrap;
   gap: 1rem;
 }
@@ -28,25 +28,61 @@
   margin-right: 0.5rem;
 }
 
-.toggle-btn {
-  padding: 0.5rem 1rem;
-  border: 1px solid #ddd;
+.item-type-filter {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.item-type-filter label {
+  font-weight: 500;
+  color: #2c3e50;
+  margin-right: 0.5rem;
+}
+
+.filter-select {
+  padding: 0.5rem 0.875rem;
+  border: 1px solid #d1d5db;
   background: white;
-  color: #666;
+  color: #374151;
+  border-radius: 6px;
+  font-size: 0.875rem;
   cursor: pointer;
-  border-radius: 4px;
-  font-size: 0.9rem;
-  transition: all 0.2s;
+  transition: all 0.15s ease;
+  min-width: 180px;
+}
+
+.filter-select:hover {
+  border-color: #9ca3af;
+}
+
+.filter-select:focus {
+  outline: none;
+  border-color: #6366f1;
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+}
+
+.toggle-btn {
+  padding: 0.5rem 0.875rem;
+  border: 1px solid #d1d5db;
+  background: white;
+  color: #6b7280;
+  cursor: pointer;
+  border-radius: 6px;
+  font-size: 0.875rem;
+  font-weight: 500;
+  transition: all 0.15s ease;
 }
 
 .toggle-btn:hover {
-  background: #f0f0f0;
+  background: #f9fafb;
+  border-color: #9ca3af;
 }
 
 .toggle-btn.active {
-  background: #3498db;
+  background: #6366f1;
   color: white;
-  border-color: #3498db;
+  border-color: #6366f1;
 }
 
 .table-wrapper {
@@ -55,31 +91,49 @@
 
 .inventory-table {
   width: 100%;
-  border-collapse: collapse;
-  min-width: 1200px;
+  border-collapse: separate;
+  border-spacing: 0;
+  min-width: 1000px;
 }
 
 .inventory-table thead {
-  background-color: #2c3e50;
-  color: white;
+  background-color: #e0f2fe;
+  border-bottom: 2px solid #bae6fd;
 }
 
 .inventory-table th {
-  padding: 1rem;
+  padding: 0.875rem 1rem;
   text-align: left;
   font-weight: 600;
-  font-size: 0.9rem;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #6b7280;
   white-space: nowrap;
 }
 
+.sortable-header {
+  transition: background-color 0.15s ease;
+}
+
+.sortable-header:hover {
+  background-color: #cfe2ff !important;
+  color: #1e40af !important;
+}
+
 .inventory-table td {
-  padding: 0.75rem 1rem;
-  border-bottom: 1px solid #e0e0e0;
-  font-size: 0.9rem;
+  padding: 1rem;
+  border-bottom: 1px solid #f3f4f6;
+  font-size: 0.875rem;
+  color: #1f2937;
+}
+
+.inventory-table tbody tr {
+  transition: background-color 0.15s ease;
 }
 
 .inventory-table tbody tr:hover {
-  background-color: #f8f9fa;
+  background-color: #f9fafb;
 }
 
 .inventory-table tbody tr:last-child td {
@@ -87,21 +141,21 @@
 }
 
 .available {
-  font-weight: 600;
-  color: #27ae60;
+  font-weight: 500;
+  color: #059669;
 }
 
 .unavailable {
-  color: #e74c3c;
-  font-weight: 600;
+  color: #dc2626;
+  font-weight: 500;
 }
 
 .on-hold {
-  background-color: #fff3cd;
+  background-color: #fef3c7;
 }
 
 .on-hold td {
-  color: #856404;
+  color: #92400e;
 }
 
 .no-data {
@@ -143,16 +197,17 @@
 }
 
 .fps-link {
-  color: #3498db;
+  color: #6366f1;
   text-decoration: none;
   font-weight: 500;
-  border-bottom: 1px dotted #3498db;
+  border-bottom: 1px dotted #6366f1;
   cursor: pointer;
+  transition: color 0.15s ease;
 }
 
 .fps-link:hover {
-  color: #2980b9;
-  border-bottom-color: #2980b9;
+  color: #4f46e5;
+  border-bottom-color: #4f46e5;
   text-decoration: underline;
 }
 
@@ -166,37 +221,47 @@
   background: none;
   border: none;
   cursor: pointer;
-  font-size: 0.8rem;
-  color: #3498db;
-  padding: 0.25rem 0.5rem;
-  border-radius: 3px;
-  transition: background 0.2s;
+  font-size: 0.875rem;
+  color: #6b7280;
+  padding: 0.25rem;
+  border-radius: 4px;
+  transition: all 0.15s ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
 }
 
 .expand-btn:hover {
-  background: #f0f0f0;
+  background: #f3f4f6;
+  color: #374151;
 }
 
 .lot-details-row {
-  background-color: #f8f9fa;
+  background-color: #ffffff;
 }
 
 .lot-details-cell {
-  padding: 1rem !important;
-  background-color: #f8f9fa;
+  padding: 1.25rem !important;
+  background-color: #fafafa;
+  border-left: 3px solid #e5e7eb;
 }
 
 .lot-breakdown {
-  padding: 1rem;
+  padding: 1.25rem;
   background: white;
-  border-radius: 4px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  border-radius: 8px;
+  border: 1px solid #e5e7eb;
 }
 
 .lot-breakdown h4 {
   margin: 0 0 1rem 0;
-  color: #2c3e50;
-  font-size: 1rem;
+  color: #111827;
+  font-size: 0.875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
 }
 
 .lot-table {
@@ -206,35 +271,40 @@
 }
 
 .lot-table thead {
-  background-color: #2c3e50;
-  color: white;
+  background-color: #f9fafb;
+  border-bottom: 1px solid #e5e7eb;
 }
 
 .lot-table thead tr:hover {
-  background-color: #2c3e50 !important;
+  background-color: #f9fafb !important;
 }
 
 .lot-table th {
-  padding: 0.5rem;
+  padding: 0.75rem;
   text-align: left;
   font-weight: 600;
-  border-bottom: 2px solid #dee2e6;
-  color: white;
-  background-color: #2c3e50 !important;
+  border-bottom: 1px solid #e5e7eb;
+  color: #6b7280;
+  background-color: #f9fafb !important;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
 }
 
 .lot-table th:hover {
-  background-color: #2c3e50 !important;
-  color: white !important;
+  background-color: #f9fafb !important;
+  color: #6b7280 !important;
 }
 
 .lot-table td {
-  padding: 0.5rem;
-  border-bottom: 1px solid #dee2e6;
+  padding: 0.75rem;
+  border-bottom: 1px solid #f3f4f6;
+  font-size: 0.8125rem;
+  color: #374151;
 }
 
 .lot-table tbody tr:hover {
-  background-color: #f8f9fa;
+  background-color: #f9fafb;
 }
 
 .editable-cell {
@@ -288,32 +358,46 @@
 }
 
 .sku-master-row {
-  background-color: #f0f7ff;
-  font-weight: 600;
+  background-color: #f0f9ff;
+  font-weight: 500;
 }
 
 .sku-master-row td {
-  border-top: 2px solid #3498db;
+  border-top: none;
+}
+
+.sku-master-row:not(:first-child) td {
+  border-top: 1px solid #e5e7eb;
+  padding-top: 1.25rem;
 }
 
 .sku-master-label {
   font-weight: 600;
-  font-size: 1.05rem;
+  font-size: 0.9375rem;
+  color: #111827;
 }
 
 .vendor-count-badge {
-  font-size: 0.85rem;
-  color: #666;
+  font-size: 0.75rem;
+  color: #9ca3af;
   margin-left: 0.5rem;
-  font-weight: normal;
+  font-weight: 400;
+  background: #f3f4f6;
+  padding: 0.125rem 0.5rem;
+  border-radius: 12px;
 }
 
 .vendor-row {
-  background-color: #fafafa;
+  background-color: #ffffff;
 }
 
 .vendor-row:hover {
-  background-color: #f0f0f0;
+  background-color: #f9fafb;
+}
+
+.vendor-row td {
+  color: #6b7280;
+  font-size: 0.8125rem;
 }
 
 

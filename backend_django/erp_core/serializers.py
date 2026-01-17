@@ -23,6 +23,13 @@ class ItemPackSizeSerializer(serializers.ModelSerializer):
 
 
 class ItemSerializer(serializers.ModelSerializer):
+    display_name_for_vendor = serializers.SerializerMethodField()
+    
+    def get_display_name_for_vendor(self, obj):
+        """Returns vendor_item_name if available and item has a vendor, otherwise returns name"""
+        if obj.vendor_item_name and obj.vendor:
+            return obj.vendor_item_name
+        return obj.name
     pack_sizes = serializers.SerializerMethodField()
     default_pack_size = serializers.SerializerMethodField()
     
@@ -134,14 +141,12 @@ class LotSerializer(serializers.ModelSerializer):
             # Default to quantity if status is not recognized
             validated_data['quantity_remaining'] = quantity
         
-        # Generate lot number if not provided - but ONLY for non-raw materials
-        # Raw materials should have their lot_number set to vendor_lot_number in the view
-        if 'lot_number' not in validated_data or not validated_data.get('lot_number'):
-            # Check if this is a raw material - if so, don't generate a lot number
-            item_type = validated_data.get('item') and validated_data['item'].item_type
-            if item_type != 'raw_material':
-                from .views import generate_lot_number
-                validated_data['lot_number'] = generate_lot_number()
+        # Lot numbers should NEVER be generated here
+        # Lot numbers are ONLY generated when:
+        # 1. Production batch closure (output lots)
+        # 2. Repack batch closure (output lots)
+        # If lot_number is not provided, leave it blank (will be generated on batch closure)
+        # Raw materials should have lot_number set to vendor_lot_number in the view
         
         return super().create(validated_data)
 

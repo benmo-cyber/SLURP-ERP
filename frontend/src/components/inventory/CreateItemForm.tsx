@@ -32,6 +32,7 @@ function CreateItemForm({ onClose, onSuccess }: CreateItemFormProps) {
   const [formData, setFormData] = useState({
     vendor: '',
     vendor_item_number: '',
+    vendor_item_name: '',
     wwi_item_number: '',
     name: '',
     description: '',
@@ -54,6 +55,7 @@ function CreateItemForm({ onClose, onSuccess }: CreateItemFormProps) {
         ...formData,
         wwi_item_number: selectedItem.sku,
         name: selectedItem.name,
+        vendor_item_name: selectedItem.vendor_item_name || '',
         description: selectedItem.description || '',
         item_type: selectedItem.item_type as any,
         unit_of_measure: selectedItem.unit_of_measure as 'lbs' | 'kg' | 'ea',
@@ -67,6 +69,7 @@ function CreateItemForm({ onClose, onSuccess }: CreateItemFormProps) {
       setFormData({
         vendor: '',
         vendor_item_number: '',
+        vendor_item_name: '',
         wwi_item_number: '',
         name: '',
         description: '',
@@ -160,6 +163,7 @@ function CreateItemForm({ onClose, onSuccess }: CreateItemFormProps) {
       payload = {
         sku: formData.wwi_item_number,
         name: formData.name,
+        vendor_item_name: formData.vendor_item_name || null,
         description: formData.description || null,
         item_type: formData.item_type,
         unit_of_measure: formData.unit_of_measure,
@@ -350,6 +354,18 @@ function CreateItemForm({ onClose, onSuccess }: CreateItemFormProps) {
                 value={formData.vendor_item_number}
                 onChange={(e) => setFormData({ ...formData, vendor_item_number: e.target.value })}
               />
+            </div>
+
+            <div className="form-group">
+              <label htmlFor="vendor_item_name">Vendor Item Name</label>
+              <input
+                type="text"
+                id="vendor_item_name"
+                value={formData.vendor_item_name}
+                onChange={(e) => setFormData({ ...formData, vendor_item_name: e.target.value })}
+                placeholder="Name used in purchase orders to vendor"
+              />
+              <small className="form-hint">This name will be used in purchase orders sent to vendors. If empty, the WWI Item Name will be used.</small>
             </div>
 
             <div className="form-group">

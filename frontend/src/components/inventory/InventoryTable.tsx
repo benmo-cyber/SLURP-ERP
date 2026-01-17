@@ -30,6 +30,7 @@ interface Lot {
   id: number
   lot_number: string
   vendor_lot_number?: string
+  po_number?: string
   quantity: number
   quantity_remaining: number
   received_date: string
@@ -53,21 +54,49 @@ function InventoryTable() {
   const [inventoryDetails, setInventoryDetails] = useState<InventoryDetail[]>([])
   const [loading, setLoading] = useState(true)
   const [unitDisplay, setUnitDisplay] = useState<'lbs' | 'kg'>('lbs')
+  const [itemTypeFilter, setItemTypeFilter] = useState<string>('')
   const [fpsLinks, setFpsLinks] = useState<Map<number, number>>(new Map())
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set())
   const [lotDetails, setLotDetails] = useState<Map<string, Lot[]>>(new Map())
   const [loadingLots, setLoadingLots] = useState<Set<string>>(new Set())
   const [editingLot, setEditingLot] = useState<{lotId: number, field: 'vendor_lot_number' | 'expiration_date'} | null>(null)
   const [editValue, setEditValue] = useState<string>('')
+  const [sortConfig, setSortConfig] = useState<{key: 'description' | 'vendor' | null, direction: 'asc' | 'desc'}>({ key: null, direction: 'asc' })
 
   useEffect(() => {
     loadData()
-  }, [])
+  }, [itemTypeFilter])
 
   // Reload data when component key changes (refresh trigger)
   useEffect(() => {
     loadData()
   }, []) // This will reload when the component is remounted via key prop
+
+  const handleSort = (key: 'description' | 'vendor') => {
+    setSortConfig(prevConfig => ({
+      key,
+      direction: prevConfig.key === key && prevConfig.direction === 'asc' ? 'desc' : 'asc'
+    }))
+  }
+
+  const sortedInventoryDetails = [...inventoryDetails].sort((a, b) => {
+    if (!sortConfig.key) return 0
+    
+    let aValue = ''
+    let bValue = ''
+    
+    if (sortConfig.key === 'description') {
+      aValue = a.description?.toLowerCase() || ''
+      bValue = b.description?.toLowerCase() || ''
+    } else if (sortConfig.key === 'vendor') {
+      aValue = (a.vendor || 'zzz').toLowerCase()  // 'zzz' for "All Vendors" to sort last
+      bValue = (b.vendor || 'zzz').toLowerCase()
+    }
+    
+    if (aValue < bValue) return sortConfig.direction === 'asc' ? -1 : 1
+    if (aValue > bValue) return sortConfig.direction === 'asc' ? 1 : -1
+    return 0
+  })
 
   useEffect(() => {
     // Load FPS links for finished goods
@@ -78,7 +107,7 @@ function InventoryTable() {
     try {
       setLoading(true)
       console.log('Loading inventory details...')
-      const data = await getInventoryDetails()
+      const data = await getInventoryDetails(itemTypeFilter || undefined)
       console.log('Inventory data received:', data)
       console.log('Number of entries:', Array.isArray(data) ? data.length : 'Not an array')
       if (Array.isArray(data) && data.length > 0) {
@@ -210,33 +239,58 @@ function InventoryTable() {
             kg
           </button>
         </div>
+        <div className="item-type-filter">
+          <label htmlFor="item-type-filter">Filter by Type:</label>
+          <select
+            id="item-type-filter"
+            value={itemTypeFilter}
+            onChange={(e) => setItemTypeFilter(e.target.value)}
+            className="filter-select"
+          >
+            <option value="">All Types</option>
+            <option value="raw_material">Raw Material</option>
+            <option value="finished_good">Finished Good</option>
+            <option value="indirect_material">Indirect Material</option>
+            <option value="distributed_item">Distributed Item</option>
+          </select>
+        </div>
       </div>
 
       <div className="table-wrapper">
         <table className="inventory-table">
           <thead>
             <tr>
-              <th>ID</th>
               <th>SKU</th>
-              <th>Description</th>
-              <th>Vendor</th>
+              <th 
+                className="sortable-header"
+                onClick={() => handleSort('description')}
+                style={{ cursor: 'pointer', userSelect: 'none' }}
+              >
+                Description {sortConfig.key === 'description' && (sortConfig.direction === 'asc' ? '↑' : '↓')}
+              </th>
+              <th 
+                className="sortable-header"
+                onClick={() => handleSort('vendor')}
+                style={{ cursor: 'pointer', userSelect: 'none' }}
+              >
+                Vendor {sortConfig.key === 'vendor' && (sortConfig.direction === 'asc' ? '↑' : '↓')}
+              </th>
               <th>Pack Size</th>
-              <th>TQ</th>
+              <th>Total</th>
+              <th>Available</th>
               <th>Allocated to Sales</th>
               <th>Allocated to Production</th>
               <th>On Hold</th>
-              <th>On Order</th>
-              <th>Available</th>
               <th>Lots</th>
             </tr>
           </thead>
           <tbody>
-            {inventoryDetails.length === 0 ? (
+            {sortedInventoryDetails.length === 0 ? (
               <tr>
-                <td colSpan={12} className="no-data">No inventory found</td>
+                <td colSpan={10} className="no-data">No inventory found</td>
               </tr>
             ) : (
-              inventoryDetails.map((detail) => {
+              sortedInventoryDetails.map((detail) => {
                 // Master SKU row
                 if (detail.level === 'sku') {
                   const unit = detail.pack_size_unit
@@ -258,7 +312,6 @@ function InventoryTable() {
                   return (
                     <React.Fragment key={detail.id}>
                       <tr className={`sku-master-row ${detail.on_hold > 0 ? 'on-hold' : ''}`}>
-                        <td>{detail.item_id}</td>
                         <td>
                           <div className="sku-cell">
                             <span className="sku-master-label">{detail.item_sku}</span>
@@ -272,7 +325,7 @@ function InventoryTable() {
                               </button>
                             )}
                             {vendors.length > 1 && (
-                              <span className="vendor-count-badge">({vendors.length} vendors)</span>
+                              <span className="vendor-count-badge">{vendors.length}</span>
                             )}
                           </div>
                         </td>
@@ -285,25 +338,22 @@ function InventoryTable() {
                               className="fps-link"
                               onClick={(e) => e.stopPropagation()}
                             >
-                              <strong>{detail.description}</strong>
+                              {detail.description}
                             </a>
                           ) : (
-                            <strong>{detail.description}</strong>
+                            detail.description
                           )}
                         </td>
-                        <td>
-                          <strong>All Vendors</strong>
-                        </td>
+                        <td>All Vendors</td>
                         <td>-</td>
-                        <td><strong>{displayTQ} {displayUnit}</strong></td>
-                        <td><strong>{displayAllocSales} {displayUnit}</strong></td>
-                        <td><strong>{displayAllocProd} {displayUnit}</strong></td>
-                        <td><strong>{displayOnHold} {displayUnit}</strong></td>
-                        <td><strong>{displayOnOrder} {displayUnit}</strong></td>
+                        <td>{displayTQ} {displayUnit}</td>
                         <td className={detail.available > 0 ? 'available' : 'unavailable'}>
-                          <strong>{displayAvailable} {displayUnit}</strong>
+                          {displayAvailable} {displayUnit}
                         </td>
-                        <td><strong>{detail.lot_count || 0}</strong></td>
+                        <td>{displayAllocSales} {displayUnit}</td>
+                        <td>{displayAllocProd} {displayUnit}</td>
+                        <td>{displayOnHold} {displayUnit}</td>
+                        <td>{detail.lot_count || 0}</td>
                       </tr>
                       {isSkuExpanded && vendors.map((vendorDetail) => {
                         const vendorUnit = vendorDetail.pack_size_unit
@@ -324,10 +374,9 @@ function InventoryTable() {
                         return (
                           <React.Fragment key={vendorDetail.id}>
                             <tr className={`vendor-row ${vendorDetail.on_hold > 0 ? 'on-hold' : ''}`}>
-                              <td></td>
                               <td>
-                                <div className="sku-cell" style={{ paddingLeft: '1.5rem' }}>
-                                  <span style={{ color: '#666' }}>↳ {vendorDetail.item_sku}</span>
+                                <div className="sku-cell">
+                                  <span>↳ {vendorDetail.item_sku}</span>
                                   {vendorDetail.lot_count && vendorDetail.lot_count > 0 && (
                                     <button
                                       className="expand-btn"
@@ -339,40 +388,21 @@ function InventoryTable() {
                                   )}
                                 </div>
                               </td>
-                              <td style={{ paddingLeft: '1.5rem', color: '#666' }}>
-                                {vendorDetail.description}
-                              </td>
-                              <td style={{ paddingLeft: '1.5rem', color: '#666' }}>
-                                {vendorDetail.vendor}
-                              </td>
-                              <td style={{ paddingLeft: '1.5rem', color: '#666' }}>
-                                {vendorPackSizeDisplay}
-                              </td>
-                              <td style={{ paddingLeft: '1.5rem', color: '#666' }}>
-                                {vendorDisplayTQ} {vendorDisplayUnit}
-                              </td>
-                              <td style={{ paddingLeft: '1.5rem', color: '#666' }}>
-                                {vendorDisplayAllocSales} {vendorDisplayUnit}
-                              </td>
-                              <td style={{ paddingLeft: '1.5rem', color: '#666' }}>
-                                {vendorDisplayAllocProd} {vendorDisplayUnit}
-                              </td>
-                              <td style={{ paddingLeft: '1.5rem', color: '#666' }}>
-                                {vendorDisplayOnHold} {vendorDisplayUnit}
-                              </td>
-                              <td style={{ paddingLeft: '1.5rem', color: '#666' }}>
-                                {vendorDisplayOnOrder} {vendorDisplayUnit}
-                              </td>
-                              <td className={vendorDetail.available > 0 ? 'available' : 'unavailable'} style={{ paddingLeft: '1.5rem' }}>
+                              <td>{vendorDetail.description}</td>
+                              <td>{vendorDetail.vendor}</td>
+                              <td>{vendorPackSizeDisplay}</td>
+                              <td>{vendorDisplayTQ} {vendorDisplayUnit}</td>
+                              <td className={vendorDetail.available > 0 ? 'available' : 'unavailable'}>
                                 {vendorDisplayAvailable} {vendorDisplayUnit}
                               </td>
-                              <td style={{ paddingLeft: '1.5rem', color: '#666' }}>
-                                {vendorDetail.lot_count || 0}
-                              </td>
+                        <td>{vendorDisplayAllocSales} {vendorDisplayUnit}</td>
+                        <td>{vendorDisplayAllocProd} {vendorDisplayUnit}</td>
+                        <td>{vendorDisplayOnHold} {vendorDisplayUnit}</td>
+                              <td>{vendorDetail.lot_count || 0}</td>
                             </tr>
                             {isVendorExpanded && (
                               <tr className="lot-details-row">
-                                <td colSpan={12} className="lot-details-cell" style={{ paddingLeft: '3rem' }}>
+                                <td colSpan={10} className="lot-details-cell">
                                   {isLoadingVendorLots ? (
                                     <div className="loading-lots">Loading lot details...</div>
                                   ) : vendorLots.length === 0 ? (
@@ -385,6 +415,7 @@ function InventoryTable() {
                                           <tr>
                                             <th>Vendor Lot #</th>
                                             <th>Internal Lot #</th>
+                                            <th>PO Number</th>
                                             <th>Pack Size</th>
                                             <th>Received Date</th>
                                             <th>Expiration Date</th>
@@ -497,6 +528,7 @@ function InventoryTable() {
                                                     return lot.lot_number || '-'
                                                   })()}
                                                 </td>
+                                                <td>{lot.po_number || '-'}</td>
                                                 <td>{packSizeDisplay}</td>
                                                 <td>{receivedDate}</td>
                                                 <td 

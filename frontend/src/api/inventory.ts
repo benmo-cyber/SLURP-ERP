@@ -172,8 +172,13 @@ export const createSalesOrder = async (data: any) => {
 }
 
 // Inventory Details API
-export const getInventoryDetails = async () => {
-  const response = await api.get('/lots/inventory_details/')
+export const getInventoryDetails = async (itemType?: string) => {
+  const params = new URLSearchParams()
+  if (itemType) {
+    params.append('item_type', itemType)
+  }
+  const url = params.toString() ? `/lots/inventory_details/?${params}` : '/lots/inventory_details/'
+  const response = await api.get(url)
   return response.data
 }
 
@@ -252,7 +257,7 @@ export interface LotTransactionLog {
   item_sku: string
   item_name: string
   vendor?: string
-  transaction_type: 'receipt' | 'production_input' | 'production_output' | 'sale' | 'adjustment' | 'allocation' | 'deallocation' | 'manual' | 'reversal'
+  transaction_type: 'receipt' | 'production_input' | 'production_output' | 'repack_input' | 'repack_output' | 'sale' | 'adjustment' | 'allocation' | 'deallocation' | 'manual' | 'reversal'
   transaction_type_display: string
   quantity_before: number
   quantity_change: number

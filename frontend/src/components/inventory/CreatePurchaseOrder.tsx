@@ -24,6 +24,8 @@ interface Item {
   unit_of_measure: string
   price?: number
   pack_size?: number
+  vendor_item_name?: string
+  display_name_for_vendor?: string
 }
 
 interface POItem {
@@ -236,10 +238,12 @@ function CreatePurchaseOrder({ onClose, onSuccess }: CreatePurchaseOrderProps) {
         )
         
         if (matchingItem) {
+          // Use vendor_item_name if available, otherwise use name (WWI name)
+          const displayName = (matchingItem as any).display_name_for_vendor || matchingItem.vendor_item_name || matchingItem.name
           updated[index] = {
             ...updated[index],
             item_id: matchingItem.id,
-            description: matchingItem.name,
+            description: displayName,
             unit_of_measure: matchingItem.unit_of_measure,
             original_unit: matchingItem.unit_of_measure
           }
@@ -268,13 +272,15 @@ function CreatePurchaseOrder({ onClose, onSuccess }: CreatePurchaseOrderProps) {
         )
         
         if (matchingItem) {
+          // Use vendor_item_name if available, otherwise use name (WWI name)
+          const displayName = (matchingItem as any).display_name_for_vendor || matchingItem.vendor_item_name || matchingItem.name
           // Update with the matching item - use the selected vendor name
           const vendorValue = String(vendorName).trim()
           updated[index] = { 
             ...updated[index], 
             vendor: vendorValue,
             item_id: matchingItem.id,
-            description: matchingItem.name,
+            description: displayName,
             unit_of_measure: matchingItem.unit_of_measure,
             original_unit: matchingItem.unit_of_measure
           }

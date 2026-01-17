@@ -17,7 +17,8 @@ class Item(models.Model):
     ]
     
     sku = models.CharField(max_length=255, db_index=True)
-    name = models.CharField(max_length=255)
+    name = models.CharField(max_length=255, help_text='WWI Item Name - used for sales orders and internal reference')
+    vendor_item_name = models.CharField(max_length=255, blank=True, null=True, help_text='Vendor Item Name - used in purchase orders to vendors')
     description = models.TextField(blank=True, null=True)
     item_type = models.CharField(max_length=50, choices=ITEM_TYPE_CHOICES)
     unit_of_measure = models.CharField(max_length=10, choices=UNIT_CHOICES)
@@ -172,7 +173,7 @@ class Lot(models.Model):
         ('on_hold', 'On Hold'),
     ]
     
-    lot_number = models.CharField(max_length=20, unique=True, db_index=True)
+    lot_number = models.CharField(max_length=20, unique=True, db_index=True, blank=True, null=True, help_text='Lot number - generated on batch closure, or vendor_lot_number for raw materials')
     vendor_lot_number = models.CharField(max_length=100, blank=True, null=True, help_text='Vendor lot number from check-in form')
     item = models.ForeignKey(Item, on_delete=models.CASCADE, related_name='lots')
     pack_size = models.ForeignKey('ItemPackSize', on_delete=models.SET_NULL, null=True, blank=True, related_name='lots', help_text='Pack size for this lot')
@@ -202,6 +203,8 @@ class InventoryTransaction(models.Model):
         ('production', 'Production'),
         ('production_input', 'Production Input'),
         ('production_output', 'Production Output'),
+        ('repack_input', 'Repack Input'),
+        ('repack_output', 'Repack Output'),
     ]
     
     transaction_type = models.CharField(max_length=20, choices=TRANSACTION_TYPE_CHOICES)
@@ -221,6 +224,8 @@ class LotTransactionLog(models.Model):
         ('receipt', 'Receipt'),
         ('production_input', 'Production Input'),
         ('production_output', 'Production Output'),
+        ('repack_input', 'Repack Input'),
+        ('repack_output', 'Repack Output'),
         ('sale', 'Sale'),
         ('adjustment', 'Adjustment'),
         ('allocation', 'Allocation'),
@@ -1509,4 +1514,67 @@ class Payment(models.Model):
         elif self.ar_entry:
             return f"AR Payment - {self.ar_entry.customer_name} - ${self.amount}"
         return f"Payment - ${self.amount}"
+
+
+class OrphanedInventory(models.Model):
+    """Stores orphaned lots when an item is deleted but has inventory"""
+    original_item_sku = models.CharField(max_length=255, db_index=True, help_text='SKU of the deleted item')
+    original_item_name = models.CharField(max_length=255, help_text='Name of the deleted item')
+    original_item_vendor = models.CharField(max_length=255, blank=True, null=True, help_text='Vendor of the deleted item')
+    original_item_type = models.CharField(max_length=50, help_text='Item type of the deleted item')
+    original_item_unit = models.CharField(max_length=10, help_text='Unit of measure of the deleted item')
+    
+    lot_number = models.CharField(max_length=20, unique=True, db_index=True, help_text='Lot number that was orphaned')
+    vendor_lot_number = models.CharField(max_length=100, blank=True, null=True)
+    quantity = models.FloatField(help_text='Total quantity in the lot')
+    quantity_remaining = models.FloatField(help_text='Quantity remaining in the lot')
+    received_date = models.DateTimeField(help_text='Original received date')
+    expiration_date = models.DateTimeField(blank=True, null=True)
+    status = models.CharField(max_length=20, default='accepted')
+    po_number = models.CharField(max_length=100, blank=True, null=True)
+    freight_actual = models.FloatField(blank=True, null=True)
+    short_reason = models.CharField(max_length=255, blank=True, null=True)
+    
+    # Link to new item if reassigned
+    reassigned_item = models.ForeignKey('Item', on_delete=models.SET_NULL, blank=True, null=True, related_name='reassigned_orphaned_inventory', help_text='Item this orphaned inventory was reassigned to')
+    reassigned_at = models.DateTimeField(blank=True, null=True, help_text='When this inventory was reassigned')
+    reassigned_by = models.CharField(max_length=255, blank=True, null=True, help_text='Who reassigned this inventory')
+    
+    created_at = models.DateTimeField(auto_now_add=True, help_text='When the item was deleted and inventory orphaned')
+    notes = models.TextField(blank=True, null=True, help_text='Additional notes about the orphaned inventory')
+    
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name_plural = 'Orphaned Inventory'
+    
+    def __str__(self):
+        return f"Orphaned: {self.lot_number} ({self.original_item_sku})"
+
+
+class OrphanedPurchaseOrderItem(models.Model):
+    """Stores orphaned purchase order items when an item is deleted"""
+    original_item_sku = models.CharField(max_length=255, db_index=True, help_text='SKU of the deleted item')
+    original_item_name = models.CharField(max_length=255, help_text='Name of the deleted item')
+    original_item_vendor = models.CharField(max_length=255, blank=True, null=True)
+    original_item_unit = models.CharField(max_length=10, help_text='Unit of measure of the deleted item')
+    
+    purchase_order = models.ForeignKey('PurchaseOrder', on_delete=models.CASCADE, related_name='orphaned_items', help_text='Purchase order this item belongs to')
+    quantity_ordered = models.FloatField()
+    quantity_received = models.FloatField(default=0.0)
+    unit_price = models.FloatField(blank=True, null=True)
+    notes = models.TextField(blank=True, null=True)
+    
+    # Link to new item if reassigned
+    reassigned_item = models.ForeignKey('Item', on_delete=models.SET_NULL, blank=True, null=True, related_name='reassigned_orphaned_po_items', help_text='Item this orphaned PO item was reassigned to')
+    reassigned_at = models.DateTimeField(blank=True, null=True)
+    reassigned_by = models.CharField(max_length=255, blank=True, null=True)
+    
+    created_at = models.DateTimeField(auto_now_add=True, help_text='When the item was deleted and PO item orphaned')
+    
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name_plural = 'Orphaned Purchase Order Items'
+    
+    def __str__(self):
+        return f"Orphaned PO Item: {self.original_item_sku} (PO: {self.purchase_order.po_number})"
 

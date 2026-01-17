@@ -44,6 +44,18 @@ function ItemsList() {
   const [itemToUnfk, setItemToUnfk] = useState<Item | null>(null)
   const [formulas, setFormulas] = useState<any[]>([])
   const [fpsLinks, setFpsLinks] = useState<Map<number, number>>(new Map())
+  const [showPackSizeModal, setShowPackSizeModal] = useState(false)
+  const [selectedItemForPackSize, setSelectedItemForPackSize] = useState<Item | null>(null)
+  const [packSizes, setPackSizes] = useState<ItemPackSize[]>([])
+  const [editingPackSizeId, setEditingPackSizeId] = useState<number | null>(null)
+  const [packSizeForm, setPackSizeForm] = useState({
+    pack_size: '',
+    pack_size_unit: 'lbs',
+    price: '',
+    description: '',
+    is_default: false,
+    is_active: true
+  })
 
   useEffect(() => {
     loadItems()
@@ -238,6 +250,106 @@ function ItemsList() {
     }
   }
 
+  const handleManagePackSizes = async (item: Item) => {
+    setSelectedItemForPackSize(item)
+    setShowPackSizeModal(true)
+    setEditingPackSizeId(null)
+    setPackSizeForm({
+      pack_size: '',
+      pack_size_unit: 'lbs',
+      price: '',
+      description: '',
+      is_default: false,
+      is_active: true
+    })
+    
+    try {
+      const data = await getItemPackSizes(item.id)
+      setPackSizes(data)
+    } catch (error) {
+      console.error('Failed to load pack sizes:', error)
+      alert('Failed to load pack sizes')
+      setPackSizes([])
+    }
+  }
+
+  const handlePackSizeSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!selectedItemForPackSize) return
+
+    try {
+      const payload: any = {
+        item: selectedItemForPackSize.id,
+        pack_size: parseFloat(packSizeForm.pack_size),
+        pack_size_unit: packSizeForm.pack_size_unit,
+        is_default: packSizeForm.is_default,
+        is_active: packSizeForm.is_active
+      }
+      
+      if (packSizeForm.price) {
+        payload.price = parseFloat(packSizeForm.price)
+      }
+      if (packSizeForm.description) {
+        payload.description = packSizeForm.description.trim()
+      }
+
+      if (editingPackSizeId) {
+        await updateItemPackSize(editingPackSizeId, payload)
+        alert('Pack size updated successfully')
+      } else {
+        await createItemPackSize(payload)
+        alert('Pack size created successfully')
+      }
+
+      // Reload pack sizes
+      const data = await getItemPackSizes(selectedItemForPackSize.id)
+      setPackSizes(data)
+      
+      // Reset form
+      setPackSizeForm({
+        pack_size: '',
+        pack_size_unit: 'lbs',
+        price: '',
+        description: '',
+        is_default: false,
+        is_active: true
+      })
+      setEditingPackSizeId(null)
+    } catch (error: any) {
+      console.error('Failed to save pack size:', error)
+      alert(error.response?.data?.detail || error.response?.data?.message || 'Failed to save pack size')
+    }
+  }
+
+  const handleEditPackSize = (packSize: ItemPackSize) => {
+    setEditingPackSizeId(packSize.id)
+    setPackSizeForm({
+      pack_size: packSize.pack_size.toString(),
+      pack_size_unit: packSize.pack_size_unit,
+      price: packSize.price?.toString() || '',
+      description: packSize.description || '',
+      is_default: packSize.is_default,
+      is_active: packSize.is_active
+    })
+  }
+
+  const handleDeletePackSize = async (id: number) => {
+    if (!confirm('Are you sure you want to delete this pack size?')) return
+
+    try {
+      await deleteItemPackSize(id)
+      alert('Pack size deleted successfully')
+      
+      if (selectedItemForPackSize) {
+        const data = await getItemPackSizes(selectedItemForPackSize.id)
+        setPackSizes(data)
+      }
+    } catch (error: any) {
+      console.error('Failed to delete pack size:', error)
+      alert(error.response?.data?.detail || error.response?.data?.message || 'Failed to delete pack size')
+    }
+  }
+
   const filteredItems = items.filter(item => {
     if (filter === 'all') return true
     if (filter === 'raw_material') return item.item_type === 'raw_material'
@@ -303,6 +415,7 @@ function ItemsList() {
             <tr>
               <th>SKU</th>
               <th>Name</th>
+              <th>Vendor Item Name</th>
               <th>Vendor</th>
               <th>Pack Size</th>
               <th>Unit</th>
@@ -314,7 +427,7 @@ function ItemsList() {
           <tbody>
             {filteredItems.length === 0 ? (
               <tr>
-                <td colSpan={8} className="empty-state">No items found</td>
+                <td colSpan={9} className="empty-state">No items found</td>
               </tr>
             ) : (
               sortedSkus.flatMap((sku) => {
@@ -365,6 +478,9 @@ function ItemsList() {
                       ) : (
                         index === 0 ? item.name : <span style={{ color: '#666' }}>{item.name}</span>
                       )}
+                    </td>
+                    <td>
+                      {(item as any).vendor_item_name || '-'}
                     </td>
                     <td>
                       {editingId === item.id ? (
@@ -467,151 +583,176 @@ function ItemsList() {
 
       {showPackSizeModal && selectedItemForPackSize && (
         <div className="modal-overlay" onClick={() => setShowPackSizeModal(false)}>
-          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '800px' }}>
+          <div className="modal-content pack-size-modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '900px' }}>
             <div className="modal-header">
-              <h3>Manage Pack Sizes - {selectedItemForPackSize.sku}</h3>
+              <h3>Manage Pack Sizes</h3>
+              <div className="modal-subtitle">{selectedItemForPackSize.sku} - {selectedItemForPackSize.name}</div>
               <button onClick={() => setShowPackSizeModal(false)} className="close-btn">×</button>
             </div>
             
             <div className="modal-body">
-              <form onSubmit={handlePackSizeSubmit} style={{ marginBottom: '20px' }}>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px', marginBottom: '10px' }}>
-                  <div>
-                    <label>Pack Size *</label>
+              <div className="pack-size-form-section">
+                <h4>{editingPackSizeId ? 'Edit Pack Size' : 'Add New Pack Size'}</h4>
+                <form onSubmit={handlePackSizeSubmit} className="pack-size-form">
+                  <div className="form-row">
+                    <div className="form-group">
+                      <label htmlFor="pack_size">Pack Size *</label>
+                      <input
+                        id="pack_size"
+                        type="number"
+                        step="0.01"
+                        min="0.01"
+                        value={packSizeForm.pack_size}
+                        onChange={(e) => setPackSizeForm({ ...packSizeForm, pack_size: e.target.value })}
+                        required
+                        placeholder="e.g., 2000"
+                      />
+                    </div>
+                    <div className="form-group">
+                      <label htmlFor="pack_size_unit">Unit *</label>
+                      <select
+                        id="pack_size_unit"
+                        value={packSizeForm.pack_size_unit}
+                        onChange={(e) => setPackSizeForm({ ...packSizeForm, pack_size_unit: e.target.value })}
+                        required
+                      >
+                        <option value="lbs">Pounds (lbs)</option>
+                        <option value="kg">Kilograms (kg)</option>
+                        <option value="gal">Gallons (gal)</option>
+                        <option value="ea">Each (ea)</option>
+                        <option value="pcs">Pieces (pcs)</option>
+                      </select>
+                    </div>
+                    <div className="form-group">
+                      <label htmlFor="pack_size_price">Price (Optional)</label>
+                      <input
+                        id="pack_size_price"
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        value={packSizeForm.price}
+                        onChange={(e) => setPackSizeForm({ ...packSizeForm, price: e.target.value })}
+                        placeholder="Price per pack"
+                      />
+                    </div>
+                  </div>
+                  
+                  <div className="form-group">
+                    <label htmlFor="pack_size_description">Description (Optional)</label>
                     <input
-                      type="number"
-                      step="0.01"
-                      value={packSizeForm.pack_size}
-                      onChange={(e) => setPackSizeForm({ ...packSizeForm, pack_size: e.target.value })}
-                      required
+                      id="pack_size_description"
+                      type="text"
+                      value={packSizeForm.description}
+                      onChange={(e) => setPackSizeForm({ ...packSizeForm, description: e.target.value })}
+                      placeholder="e.g., 2000lb IBC, 5 gallon pail"
                     />
                   </div>
-                  <div>
-                    <label>Unit *</label>
-                    <select
-                      value={packSizeForm.pack_size_unit}
-                      onChange={(e) => setPackSizeForm({ ...packSizeForm, pack_size_unit: e.target.value })}
-                      required
-                    >
-                      <option value="lbs">lbs</option>
-                      <option value="kg">kg</option>
-                      <option value="gal">gal</option>
-                      <option value="ea">ea</option>
-                      <option value="pcs">pcs</option>
-                    </select>
+                  
+                  <div className="form-checkboxes">
+                    <label className="checkbox-label">
+                      <input
+                        type="checkbox"
+                        checked={packSizeForm.is_default}
+                        onChange={(e) => setPackSizeForm({ ...packSizeForm, is_default: e.target.checked })}
+                      />
+                      <span>Set as default pack size</span>
+                    </label>
+                    <label className="checkbox-label">
+                      <input
+                        type="checkbox"
+                        checked={packSizeForm.is_active}
+                        onChange={(e) => setPackSizeForm({ ...packSizeForm, is_active: e.target.checked })}
+                      />
+                      <span>Active (available for use)</span>
+                    </label>
                   </div>
-                  <div>
-                    <label>Price</label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      value={packSizeForm.price}
-                      onChange={(e) => setPackSizeForm({ ...packSizeForm, price: e.target.value })}
-                    />
-                  </div>
-                </div>
-                <div style={{ marginBottom: '10px' }}>
-                  <label>Description</label>
-                  <input
-                    type="text"
-                    value={packSizeForm.description}
-                    onChange={(e) => setPackSizeForm({ ...packSizeForm, description: e.target.value })}
-                    placeholder="e.g., 2000lb IBC, 5 gallon pail"
-                  />
-                </div>
-                <div style={{ display: 'flex', gap: '15px', marginBottom: '10px' }}>
-                  <label>
-                    <input
-                      type="checkbox"
-                      checked={packSizeForm.is_default}
-                      onChange={(e) => setPackSizeForm({ ...packSizeForm, is_default: e.target.checked })}
-                    />
-                    Default Pack Size
-                  </label>
-                  <label>
-                    <input
-                      type="checkbox"
-                      checked={packSizeForm.is_active}
-                      onChange={(e) => setPackSizeForm({ ...packSizeForm, is_active: e.target.checked })}
-                    />
-                    Active
-                  </label>
-                </div>
-                <button type="submit" className="btn btn-primary">
-                  {editingPackSizeId ? 'Update' : 'Create'} Pack Size
-                </button>
-                {editingPackSizeId && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setPackSizeForm({
-                        pack_size: '',
-                        pack_size_unit: 'lbs',
-                        price: '',
-                        description: '',
-                        is_default: false,
-                        is_active: true
-                      })
-                      setEditingPackSizeId(null)
-                    }}
-                    className="btn btn-secondary"
-                    style={{ marginLeft: '10px' }}
-                  >
-                    Cancel Edit
-                  </button>
-                )}
-              </form>
-
-              <div>
-                <h4>Existing Pack Sizes</h4>
-                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                  <thead>
-                    <tr>
-                      <th>Pack Size</th>
-                      <th>Unit</th>
-                      <th>Price</th>
-                      <th>Description</th>
-                      <th>Default</th>
-                      <th>Active</th>
-                      <th>Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {packSizes.length === 0 ? (
-                      <tr>
-                        <td colSpan={7} style={{ textAlign: 'center', padding: '20px' }}>
-                          No pack sizes defined
-                        </td>
-                      </tr>
-                    ) : (
-                      packSizes.map((ps) => (
-                        <tr key={ps.id}>
-                          <td>{ps.pack_size}</td>
-                          <td>{ps.pack_size_unit}</td>
-                          <td>{ps.price ? formatCurrency(ps.price) : '-'}</td>
-                          <td>{ps.description || '-'}</td>
-                          <td>{ps.is_default ? '✓' : '-'}</td>
-                          <td>{ps.is_active ? '✓' : '-'}</td>
-                          <td>
-                            <button
-                              onClick={() => handleEditPackSize(ps)}
-                              className="btn btn-sm btn-primary"
-                              style={{ marginRight: '5px' }}
-                            >
-                              Edit
-                            </button>
-                            <button
-                              onClick={() => handleDeletePackSize(ps.id)}
-                              className="btn btn-sm btn-danger"
-                            >
-                              Delete
-                            </button>
-                          </td>
-                        </tr>
-                      ))
+                  
+                  <div className="form-actions">
+                    <button type="submit" className="btn btn-primary">
+                      {editingPackSizeId ? 'Update Pack Size' : 'Add Pack Size'}
+                    </button>
+                    {editingPackSizeId && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPackSizeForm({
+                            pack_size: '',
+                            pack_size_unit: 'lbs',
+                            price: '',
+                            description: '',
+                            is_default: false,
+                            is_active: true
+                          })
+                          setEditingPackSizeId(null)
+                        }}
+                        className="btn btn-secondary"
+                      >
+                        Cancel
+                      </button>
                     )}
-                  </tbody>
-                </table>
+                  </div>
+                </form>
+              </div>
+
+              <div className="pack-size-list-section">
+                <h4>Existing Pack Sizes ({packSizes.length})</h4>
+                {packSizes.length === 0 ? (
+                  <div className="empty-state">
+                    <p>No pack sizes have been defined yet.</p>
+                    <p className="empty-state-hint">Add a pack size above to get started.</p>
+                  </div>
+                ) : (
+                  <div className="pack-size-table-wrapper">
+                    <table className="pack-size-table">
+                      <thead>
+                        <tr>
+                          <th>Pack Size</th>
+                          <th>Description</th>
+                          <th>Price</th>
+                          <th>Status</th>
+                          <th>Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {packSizes.map((ps) => (
+                          <tr key={ps.id} className={ps.is_default ? 'default-pack-size' : ''}>
+                            <td>
+                              <strong>{ps.pack_size} {ps.pack_size_unit}</strong>
+                              {ps.is_default && <span className="badge badge-primary">Default</span>}
+                            </td>
+                            <td>{ps.description || <span className="text-muted">No description</span>}</td>
+                            <td>{ps.price ? formatCurrency(ps.price) : <span className="text-muted">—</span>}</td>
+                            <td>
+                              {ps.is_active ? (
+                                <span className="badge badge-success">Active</span>
+                              ) : (
+                                <span className="badge badge-secondary">Inactive</span>
+                              )}
+                            </td>
+                            <td>
+                              <div className="action-buttons">
+                                <button
+                                  onClick={() => handleEditPackSize(ps)}
+                                  className="btn btn-sm btn-primary"
+                                  title="Edit pack size"
+                                >
+                                  Edit
+                                </button>
+                                <button
+                                  onClick={() => handleDeletePackSize(ps.id)}
+                                  className="btn btn-sm btn-danger"
+                                  title="Delete pack size"
+                                >
+                                  Delete
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </div>
             </div>
           </div>

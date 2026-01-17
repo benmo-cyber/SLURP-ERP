@@ -17,8 +17,11 @@ interface PurchaseOrderItem {
   item: {
     id: number
     name: string
+    sku: string
+    vendor_item_name?: string
+    display_name_for_vendor?: string
   }
-  description: string
+  description?: string
   unit_cost: number
   quantity_ordered: number
   quantity_received: number
@@ -359,17 +362,21 @@ function PurchaseOrderList() {
                 </tr>
               </thead>
               <tbody>
-                {selectedPO.items?.map((item) => (
-                  <tr key={item.id}>
-                    <td>{item.item?.name || 'N/A'}</td>
-                    <td>{item.description || 'N/A'}</td>
-                    <td>{item.unit_cost ? formatCurrency(item.unit_cost) : '0.00'}</td>
-                    <td>{item.quantity_ordered}</td>
-                    <td>{item.quantity_received || 0}</td>
-                    <td>{formatCurrency((item.unit_cost || 0) * item.quantity_ordered)}</td>
-                    <td>{item.notes || ''}</td>
-                  </tr>
-                ))}
+                {selectedPO.items?.map((item) => {
+                  // Use vendor_item_name if available, otherwise use name (WWI name)
+                  const displayName = item.item?.display_name_for_vendor || item.item?.vendor_item_name || item.item?.name || item.description || 'N/A'
+                  return (
+                    <tr key={item.id}>
+                      <td>{item.item?.sku || 'N/A'}</td>
+                      <td>{displayName}</td>
+                      <td>{item.unit_cost ? formatCurrency(item.unit_cost) : '0.00'}</td>
+                      <td>{item.quantity_ordered}</td>
+                      <td>{item.quantity_received || 0}</td>
+                      <td>{formatCurrency((item.unit_cost || 0) * item.quantity_ordered)}</td>
+                      <td>{item.notes || ''}</td>
+                    </tr>
+                  )
+                })}
               </tbody>
             </table>
           </div>
