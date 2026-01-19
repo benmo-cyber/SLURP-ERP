@@ -31,6 +31,8 @@ from .serializers import (
     LotTransactionLogSerializer, PurchaseOrderLogSerializer, ProductionLogSerializer, ItemPackSizeSerializer,
     FiscalPeriodSerializer, JournalEntrySerializer, JournalEntryLineSerializer, GeneralLedgerEntrySerializer, AccountBalanceSerializer
 )
+from .email_service import send_invoice_email, send_purchase_order_email, send_sales_order_confirmation_email
+from .pdf_generator import generate_invoice_pdf, generate_purchase_order_pdf, generate_sales_order_pdf
 
 
 def log_lot_transaction(lot, quantity_before, quantity_change, transaction_type, reference_number=None, 
@@ -1063,7 +1065,7 @@ def generate_lot_number():
     return lot_number
 
 def generate_po_number():
-    """Generate a unique PO number in format 2yy0000 (7 digits: 2 + year + 4-digit sequence)"""
+    """Generate a unique PO number in format 2yy000 (6 digits: 2 + year + 3-digit sequence)"""
     from django.db import transaction
     from .models import PONumberSequence
     
@@ -1079,8 +1081,8 @@ def generate_po_number():
         sequence.sequence_number += 1
         sequence.save()
         
-        # Format: 2 + yy + 4-digit sequence (2yy0000)
-        po_number = f"2{year_prefix}{sequence.sequence_number:04d}"
+        # Format: 2 + yy + 3-digit sequence (2yy000)
+        po_number = f"2{year_prefix}{sequence.sequence_number:03d}"
         
         # Double-check uniqueness
         max_retries = 10
@@ -1089,7 +1091,7 @@ def generate_po_number():
         while PurchaseOrder.objects.filter(po_number=po_number).exists() and retry_count < max_retries:
             sequence.sequence_number += 1
             sequence.save()
-            po_number = f"2{year_prefix}{sequence.sequence_number:04d}"
+            po_number = f"2{year_prefix}{sequence.sequence_number:03d}"
             retry_count += 1
     
     return po_number
@@ -1229,13 +1231,13 @@ def generate_invoice_number():
     return invoice_number
 
 def generate_batch_number(batch_type='production'):
-    """Generate a unique batch number in format BATCH-YYYYMMDD-001 or REPACK-YYYYMMDD-001"""
+    """Generate a unique batch number in format BT-YYYYMMDD-001 or R-YYYYMMDD-001"""
     from django.db import transaction
     from .models import BatchNumberSequence
     
     today = timezone.now()
     date_prefix = today.strftime('%Y%m%d')  # YYYYMMDD
-    prefix = 'REPACK' if batch_type == 'repack' else 'BATCH'
+    prefix = 'R' if batch_type == 'repack' else 'BT'
     
     # Use select_for_update to lock the row and prevent race conditions
     with transaction.atomic():
@@ -1333,25 +1335,56 @@ class ItemViewSet(viewsets.ModelViewSet):
                     price_per_kg = price
                     price_per_lb = price
             
-            # Calculate landed cost (price + freight)
+            # Calculate landed cost using Excel formula: (Price per kg * (1 + Tariff)) + Freight per kg
+            # Tariff defaults to 0 if not provided
+            tariff = float(data.get('tariff', 0)) if data.get('tariff') else 0.0
             landed_cost_per_kg = None
             landed_cost_per_lb = None
             if price_per_kg is not None:
-                landed_cost_per_kg = price_per_kg + freight_per_kg
+                landed_cost_per_kg = (price_per_kg * (1 + tariff)) + freight_per_kg
             if price_per_lb is not None:
-                landed_cost_per_lb = price_per_lb + (freight_per_kg / 2.20462)
+                # Convert freight to lb and apply same formula
+                landed_cost_per_lb = (price_per_lb * (1 + tariff)) + (freight_per_kg / 2.20462)
             
             # Get or create CostMaster entry (one per SKU + vendor combination)
+            # Calculate tariff from Flexport if HTS code and country of origin are provided
+            tariff = 0.0
+            if data.get('hts_code') and data.get('country_of_origin'):
+                # Import tariff calculation function
+                from .flexport_tariff import get_tariff_from_flexport
+                flexport_tariff = get_tariff_from_flexport(data['hts_code'], data['country_of_origin'])
+                if flexport_tariff is not None:
+                    tariff = flexport_tariff
+                    # Also update item tariff
+                    item.tariff = tariff
+                    item.save()
+                else:
+                    # If Flexport lookup fails, use provided tariff or default to 0
+                    tariff = float(data.get('tariff', 0)) if data.get('tariff') else 0.0
+            else:
+                # No HTS/origin, use provided tariff or default to 0
+                tariff = float(data.get('tariff', 0)) if data.get('tariff') else 0.0
+            
+            # Get vendor name - handle both Vendor object and string
+            vendor_name = None
+            if item.vendor:
+                if hasattr(item.vendor, 'name'):
+                    vendor_name = item.vendor.name
+                else:
+                    vendor_name = str(item.vendor)
+            
             cost_master, created = CostMaster.objects.get_or_create(
                 wwi_product_code=item.sku,
-                vendor=item.vendor,
+                vendor=vendor_name,
                 defaults={
                     'vendor_material': item.name,
                     'price_per_kg': price_per_kg,
                     'price_per_lb': price_per_lb,
                     'freight_per_kg': freight_per_kg,
-                    'landed_cost_per_kg': landed_cost_per_kg,
-                    'landed_cost_per_lb': landed_cost_per_lb,
+                    'tariff': tariff,
+                    'hts_code': data.get('hts_code') or None,
+                    'origin': data.get('country_of_origin') or None,
+                    # Landed cost will be calculated automatically in save()
                 }
             )
             # Update if it already existed
@@ -1362,10 +1395,13 @@ class ItemViewSet(viewsets.ModelViewSet):
                 if price_per_lb is not None:
                     cost_master.price_per_lb = price_per_lb
                 cost_master.freight_per_kg = freight_per_kg
-                if landed_cost_per_kg is not None:
-                    cost_master.landed_cost_per_kg = landed_cost_per_kg
-                if landed_cost_per_lb is not None:
-                    cost_master.landed_cost_per_lb = landed_cost_per_lb
+                cost_master.tariff = tariff
+                # Update HTS code and origin if provided
+                if data.get('hts_code'):
+                    cost_master.hts_code = data['hts_code']
+                if data.get('country_of_origin'):
+                    cost_master.origin = data['country_of_origin']
+                # Landed cost will be recalculated automatically in save()
                 cost_master.save()
         
         headers = self.get_success_headers(serializer.data)
@@ -1599,15 +1635,40 @@ class ItemViewSet(viewsets.ModelViewSet):
         item = serializer.save()
         
         # Sync to CostMaster if vendor exists
-        if item.vendor and (data.get('price') is not None or data.get('pack_size') is not None):
+        if item.vendor and (data.get('price') is not None or data.get('pack_size') is not None or data.get('hts_code') is not None or data.get('country_of_origin') is not None):
             # Find or create CostMaster entry
+            # Get vendor name - handle both Vendor object and string
+            vendor_name = None
+            if item.vendor:
+                if hasattr(item.vendor, 'name'):
+                    vendor_name = item.vendor.name
+                else:
+                    vendor_name = str(item.vendor)
+            
             cost_master, created = CostMaster.objects.get_or_create(
                 wwi_product_code=item.sku,
+                vendor=vendor_name,
                 defaults={
                     'vendor_material': item.name,
-                    'vendor': item.vendor,
+                    'vendor': vendor_name,
                 }
             )
+            
+            # Update HTS code and origin if provided
+            if data.get('hts_code'):
+                cost_master.hts_code = data['hts_code']
+            if data.get('country_of_origin'):
+                cost_master.origin = data['country_of_origin']
+            
+            # Calculate tariff if HTS code and origin are provided
+            if data.get('hts_code') and data.get('country_of_origin'):
+                from .flexport_tariff import get_tariff_from_flexport
+                flexport_tariff = get_tariff_from_flexport(data['hts_code'], data['country_of_origin'])
+                if flexport_tariff is not None:
+                    cost_master.tariff = flexport_tariff
+                    # Also update item tariff
+                    item.tariff = flexport_tariff
+                    item.save()
             
             # Check if price changed
             price_changed = False
@@ -1640,14 +1701,34 @@ class ItemViewSet(viewsets.ModelViewSet):
                 cost_master.price_per_lb = new_price_per_lb
             if not created:
                 cost_master.vendor_material = item.name
-                cost_master.vendor = item.vendor
+                # Get vendor name - handle both Vendor object and string
+                vendor_name = None
+                if item.vendor:
+                    if hasattr(item.vendor, 'name'):
+                        vendor_name = item.vendor.name
+                    else:
+                        vendor_name = str(item.vendor)
+                cost_master.vendor = vendor_name
             
-            # Recalculate landed cost
-            freight_per_kg = cost_master.freight_per_kg or 0.0
-            if cost_master.price_per_kg is not None:
-                cost_master.landed_cost_per_kg = cost_master.price_per_kg + freight_per_kg
-            if cost_master.price_per_lb is not None:
-                cost_master.landed_cost_per_lb = cost_master.price_per_lb + (freight_per_kg / 2.20462)
+            # Update HTS code and origin if provided in update
+            if data.get('hts_code') is not None:
+                cost_master.hts_code = data['hts_code']
+            if data.get('country_of_origin') is not None:
+                cost_master.origin = data['country_of_origin']
+            
+            # Calculate tariff if HTS code and origin are provided
+            # Check if we need to recalculate tariff (if HTS or origin changed)
+            if data.get('hts_code') and data.get('country_of_origin'):
+                from .flexport_tariff import get_tariff_from_flexport
+                flexport_tariff = get_tariff_from_flexport(data['hts_code'], data['country_of_origin'])
+                if flexport_tariff is not None:
+                    cost_master.tariff = flexport_tariff
+                    # Also update item tariff
+                    item.tariff = flexport_tariff
+                    item.save()
+            
+            # Recalculate landed cost using Excel formula: (Price per kg * (1 + Tariff)) + Freight per kg
+            # The save() method will handle this automatically via calculate_landed_cost()
             
             cost_master.save()
             
@@ -1759,8 +1840,91 @@ class LotViewSet(viewsets.ModelViewSet):
             status='accepted'
         ).select_related('item').order_by('-received_date')
         
+        # Get PO tracking info for lots with PO numbers
+        from .models import PurchaseOrder
+        po_tracking_map = {}
+        po_numbers = [lot.po_number for lot in lots if lot.po_number]
+        if po_numbers:
+            pos = PurchaseOrder.objects.filter(po_number__in=po_numbers)
+            for po in pos:
+                po_tracking_map[po.po_number] = {
+                    'tracking_number': po.tracking_number,
+                    'carrier': po.carrier
+                }
+        
         serializer = self.get_serializer(lots, many=True)
-        return Response(serializer.data)
+        data = serializer.data
+        
+        # Add PO tracking info to each lot
+        for lot_data in data:
+            if lot_data.get('po_number') and lot_data['po_number'] in po_tracking_map:
+                tracking_info = po_tracking_map[lot_data['po_number']]
+                lot_data['po_tracking_number'] = tracking_info['tracking_number']
+                lot_data['po_carrier'] = tracking_info['carrier']
+        
+        return Response(data)
+    
+    @action(detail=True, methods=['post'])
+    def checkout_indirect_material(self, request, pk=None):
+        """Checkout indirect material from a lot (simple checkout without batch)"""
+        from .models import InventoryTransaction
+        
+        lot = self.get_object()
+        
+        # Verify it's an indirect material
+        if lot.item.item_type != 'indirect_material':
+            return Response(
+                {'error': 'This lot is not an indirect material'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        quantity = request.data.get('quantity')
+        notes = request.data.get('notes', '')
+        reference_number = request.data.get('reference_number', '')
+        
+        if not quantity or float(quantity) <= 0:
+            return Response(
+                {'error': 'Valid quantity is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        quantity = round(float(quantity), 2)
+        
+        # Check available quantity
+        if lot.quantity_remaining < quantity:
+            return Response(
+                {'error': f'Insufficient quantity. Available: {lot.quantity_remaining}, Requested: {quantity}'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Create inventory transaction
+        quantity_before = lot.quantity_remaining
+        transaction = InventoryTransaction.objects.create(
+            transaction_type='indirect_material_checkout',
+            lot=lot,
+            quantity=round(-quantity, 2),
+            notes=notes or f'Indirect material checkout - {lot.item.name}',
+            reference_number=reference_number
+        )
+        
+        # Log the transaction
+        log_lot_transaction(
+            lot=lot,
+            quantity_before=quantity_before,
+            quantity_change=-quantity,
+            transaction_type='indirect_material_checkout',
+            reference_number=reference_number,
+            reference_type='checkout',
+            transaction_id=transaction.id,
+            notes=notes or f'Indirect material checkout - {lot.item.name}'
+        )
+        
+        # Update lot quantity_remaining
+        lot.quantity_remaining = round(lot.quantity_remaining - quantity, 2)
+        lot.save()
+        
+        serializer = self.get_serializer(lot)
+        return Response(serializer.data, status=status.HTTP_200_OK)
     
     @action(detail=False, methods=['get'])
     def debug_lot(self, request):
@@ -2277,7 +2441,10 @@ class LotViewSet(viewsets.ModelViewSet):
         # Only set lot_number if we have one (vendor_lot_number for raw materials or provided vendor_lot_number for others)
         if lot_number:
             serializer_data['lot_number'] = lot_number
-        # If no lot_number is set, the lot will be created without one (will be generated on batch closure)
+        else:
+            # Database requires lot_number to be NOT NULL, so generate one if not provided
+            # This will be used for the lot and can be replaced on batch closure if needed
+            serializer_data['lot_number'] = generate_lot_number()
         
         serializer = self.get_serializer(data=serializer_data)
         serializer.is_valid(raise_exception=True)
@@ -2644,6 +2811,7 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
         data = request.data.copy()
         inputs_data = data.pop('inputs', [])
         outputs_data = data.pop('outputs', [])
+        indirect_materials_data = data.pop('indirect_materials', [])  # Separate indirect materials
         batch_type = data.get('batch_type', 'production')
         
         # Convert production_date from date string to datetime if needed
@@ -2890,24 +3058,13 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
                 )
         
         # Create outputs
+        # NOTE: For both production and repack batches, output lots are created when the batch is closed, not on creation
+        # This ensures internal lot numbers are only generated when batches are completed
         if batch_type == 'repack':
-            # For repack, create a new lot with the same item
+            # For repack, don't create output lot yet - it will be created when batch is closed
+            # Just validate that we have the necessary data
             if not outputs_data:
-                # Get pack_size_id from request data if provided (for repack to different pack size)
-                pack_size_id = request.data.get('output_pack_size_id')
-                pack_size = None
-                if pack_size_id:
-                    try:
-                        pack_size = ItemPackSize.objects.get(id=pack_size_id, item=batch.finished_good_item, is_active=True)
-                    except ItemPackSize.DoesNotExist:
-                        pass
-                
-                # If no pack_size specified, use default for the item
-                if not pack_size:
-                    pack_size = ItemPackSize.objects.filter(item=batch.finished_good_item, is_default=True, is_active=True).first()
-                
-                # For repack batches, output quantity should equal total input quantity (not quantity_produced)
-                # Calculate total_input_quantity in the item's unit of measure
+                # Calculate total_input_quantity for validation
                 total_input_quantity = 0.0
                 for input_data in inputs_data:
                     lot_id = input_data.get('lot_id')
@@ -2915,51 +3072,7 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
                     lot = Lot.objects.get(id=lot_id)
                     total_input_quantity += quantity_used  # quantity_used is already in lot's native unit
                 
-                # For repack, use the total input quantity as output quantity (same units)
-                # quantity_produced may be in lbs, but output should match input units
-                output_quantity = total_input_quantity
-                item = batch.finished_good_item
-                
-                # DO NOT generate lot number here - lot numbers are ONLY generated on batch closure
-                # Create new lot without lot_number (will be generated when batch is closed)
-                new_lot = Lot.objects.create(
-                    lot_number=None,  # Will be generated when batch is closed
-                    item=item,
-                    pack_size=pack_size,
-                    quantity=output_quantity,
-                    quantity_remaining=output_quantity,
-                    received_date=timezone.now(),
-                    status='accepted'
-                )
-                
-                # Create output record
-                ProductionBatchOutput.objects.create(
-                    batch=batch,
-                    lot=new_lot,
-                    quantity_produced=output_quantity
-                )
-                
-                # Create inventory transaction for output (add quantity)
-                transaction = InventoryTransaction.objects.create(
-                    transaction_type='repack_output',
-                    lot=new_lot,
-                    quantity=output_quantity,
-                    notes=f'Repack batch {batch.batch_number} output',
-                    reference_number=batch.batch_number
-                )
-                
-                # Log the transaction
-                log_lot_transaction(
-                    lot=new_lot,
-                    quantity_before=0.0,  # New lot
-                    quantity_change=output_quantity,
-                    transaction_type='repack_output',
-                    reference_number=batch.batch_number,
-                    reference_type='batch_number',
-                    transaction_id=transaction.id,
-                    batch_id=batch.id,
-                    notes=f'Repack batch {batch.batch_number} output - Distributed item relabeled/repacked'
-                )
+                # Output lot will be created when batch is closed with lot number generated at that time
             else:
                 # Use provided outputs
                 for output_data in outputs_data:
@@ -3033,6 +3146,70 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
                         )
                     except Lot.DoesNotExist:
                         pass  # Allow production batches to be created without outputs initially
+        
+        # Process indirect materials consumption
+        for indirect_data in indirect_materials_data:
+            lot_id = indirect_data.get('lot_id')
+            quantity_used = round(float(indirect_data.get('quantity_used', 0)), 2)
+            
+            if not lot_id or quantity_used <= 0:
+                continue  # Skip invalid entries
+            
+            try:
+                lot = Lot.objects.get(id=lot_id)
+                
+                # Verify it's an indirect material
+                if lot.item.item_type != 'indirect_material':
+                    continue  # Skip if not an indirect material
+                
+                # Check available quantity
+                if lot.quantity_remaining < quantity_used:
+                    batch.delete()
+                    return Response(
+                        {'error': f'Insufficient quantity in indirect material lot {lot.lot_number}. Available: {lot.quantity_remaining}, Requested: {quantity_used}'},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                
+                # Create ProductionBatchInput for indirect material (reusing the same model)
+                ProductionBatchInput.objects.create(
+                    batch=batch,
+                    lot=lot,
+                    quantity_used=quantity_used
+                )
+                
+                # Create inventory transaction
+                quantity_before = lot.quantity_remaining
+                transaction = InventoryTransaction.objects.create(
+                    transaction_type='indirect_material_consumption',
+                    lot=lot,
+                    quantity=round(-quantity_used, 2),
+                    notes=f'{batch.get_batch_type_display()} batch {batch.batch_number} - indirect material consumption',
+                    reference_number=batch.batch_number
+                )
+                
+                # Log the transaction
+                log_lot_transaction(
+                    lot=lot,
+                    quantity_before=quantity_before,
+                    quantity_change=-quantity_used,
+                    transaction_type='indirect_material_consumption',
+                    reference_number=batch.batch_number,
+                    reference_type='batch_number',
+                    transaction_id=transaction.id,
+                    batch_id=batch.id,
+                    notes=f'Indirect material consumed in {batch.get_batch_type_display()} batch {batch.batch_number}'
+                )
+                
+                # Update lot quantity_remaining
+                lot.quantity_remaining = round(lot.quantity_remaining - quantity_used, 2)
+                lot.save()
+                
+            except Lot.DoesNotExist:
+                batch.delete()
+                return Response(
+                    {'error': f'Indirect material lot with id {lot_id} not found'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
         
         # Return the created batch
         serializer = self.get_serializer(batch)
@@ -3186,21 +3363,68 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
                     logger = logging.getLogger(__name__)
                     logger.info(f'Created output lot {new_lot.lot_number} for batch {batch.batch_number}: item={item.sku}, quantity={output_quantity}, status={new_lot.status}')
             
-            # For repack batches, generate lot number for existing output lot when batch is closed
+            # For repack batches, create output lot when batch is closed (similar to production batches)
             elif batch.batch_type == 'repack':
-                output = batch.outputs.first()
-                if output and output.lot:
-                    # Check if lot already has a lot number
-                    if not output.lot.lot_number:
-                        # Generate lot number for repack output (ONLY on batch closure)
-                        lot_number = generate_lot_number()
-                        output.lot.lot_number = lot_number
-                        output.lot.save()
-                        
-                        # Log the lot number assignment
-                        import logging
-                        logger = logging.getLogger(__name__)
-                        logger.info(f'Generated lot number {lot_number} for repack batch {batch.batch_number} output lot')
+                # Check if batch has outputs
+                if not batch.outputs.exists():
+                    # Calculate output quantity from inputs
+                    total_input_quantity = 0.0
+                    for input_item in batch.inputs.all():
+                        total_input_quantity += input_item.quantity_used
+                    
+                    output_quantity = round(total_input_quantity, 2)
+                    item = batch.finished_good_item
+                    
+                    # Get pack_size from first input or use default
+                    pack_size = None
+                    first_input = batch.inputs.first()
+                    if first_input and first_input.lot and first_input.lot.pack_size:
+                        pack_size = first_input.lot.pack_size
+                    else:
+                        pack_size = ItemPackSize.objects.filter(item=item, is_default=True, is_active=True).first()
+                    
+                    # Generate new lot number (ONLY on batch closure)
+                    lot_number = generate_lot_number()
+                    
+                    # Create new lot
+                    new_lot = Lot.objects.create(
+                        lot_number=lot_number,
+                        item=item,
+                        pack_size=pack_size,
+                        quantity=output_quantity,
+                        quantity_remaining=output_quantity,
+                        received_date=timezone.now(),
+                        status='accepted'
+                    )
+                    
+                    # Create output record
+                    ProductionBatchOutput.objects.create(
+                        batch=batch,
+                        lot=new_lot,
+                        quantity_produced=output_quantity
+                    )
+                    
+                    # Create inventory transaction for output (add quantity)
+                    transaction = InventoryTransaction.objects.create(
+                        transaction_type='repack_output',
+                        lot=new_lot,
+                        quantity=output_quantity,
+                        notes=f'Repack batch {batch.batch_number} output',
+                        reference_number=batch.batch_number
+                    )
+                    
+                    # Log the transaction
+                    log_lot_transaction(
+                        lot=new_lot,
+                        quantity_before=0.0,  # New lot
+                        quantity_change=output_quantity,
+                        transaction_type='repack_output',
+                        reference_number=batch.batch_number,
+                        reference_type='batch_number',
+                        transaction_id=transaction.id,
+                        batch_id=batch.id,
+                        notes=f'Repack batch {batch.batch_number} output - Distributed item relabeled/repacked'
+                    )
         
         # Return the updated batch
         serializer = self.get_serializer(batch)
@@ -3767,7 +3991,7 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
                     status=status.HTTP_400_BAD_REQUEST
                 )
         
-        # Generate PO number if not provided (format: 2yy0000)
+        # Generate PO number if not provided (format: 2yy000)
         if not data.get('po_number'):
             data['po_number'] = generate_po_number()
         
@@ -3867,6 +4091,16 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
                 item = po_item.item
                 item.on_order = (item.on_order or 0) + po_item.quantity_ordered
                 item.save()
+        
+        # Generate PDF and send email
+        try:
+            pdf_content = generate_purchase_order_pdf(purchase_order)
+            send_purchase_order_email(purchase_order, pdf_content)
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Failed to send purchase order email: {str(e)}")
+            # Don't fail the request if email fails
         
         # Return updated purchase order
         serializer = self.get_serializer(purchase_order)
@@ -4024,6 +4258,31 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
         
         serializer = self.get_serializer(purchase_order)
         return Response(serializer.data, status=status.HTTP_200_OK)
+    
+    @action(detail=True, methods=['get'], url_path='pdf', url_name='pdf')
+    def generate_pdf(self, request, pk=None):
+        """Generate a PDF purchase order"""
+        from django.http import HttpResponse
+        from .pdf_generator import generate_purchase_order_pdf
+        
+        purchase_order = self.get_object()
+        
+        try:
+            pdf_content = generate_purchase_order_pdf(purchase_order)
+            
+            response = HttpResponse(pdf_content, content_type='application/pdf')
+            response['Content-Disposition'] = f'inline; filename="Purchase_Order_{purchase_order.po_number}.pdf"'
+            return response
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Failed to generate purchase order PDF: {str(e)}")
+            from rest_framework.response import Response
+            from rest_framework import status as http_status
+            return Response(
+                {'error': f'Failed to generate PDF: {str(e)}'},
+                status=http_status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
 
 class SalesOrderViewSet(viewsets.ModelViewSet):
@@ -4928,6 +5187,20 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
                     logger.error(f"Error creating invoice with ORM: {e}")
                     logger.error(f"Invoice data keys: {list(invoice_data.keys())}")
                     raise
+                
+                # Create AR entry when invoice is created
+                create_ar_entry_from_invoice(invoice)
+                
+                # Send invoice email if status is 'sent' (auto-send when created from shipment)
+                if invoice.status == 'sent':
+                    try:
+                        pdf_content = generate_invoice_pdf(invoice)
+                        send_invoice_email(invoice, pdf_content)
+                    except Exception as e:
+                        import logging
+                        logger = logging.getLogger(__name__)
+                        logger.error(f"Failed to send invoice email: {str(e)}")
+                        # Don't fail the request if email fails
             
             # Create invoice items from shipped quantities in this shipment
             for shipment_item in shipment.items.all():
@@ -4968,6 +5241,16 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
         # Update status to issued
         sales_order.status = 'issued'
         sales_order.save()
+        
+        # Generate PDF and send confirmation email
+        try:
+            pdf_content = generate_sales_order_pdf(sales_order)
+            send_sales_order_confirmation_email(sales_order, pdf_content)
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Failed to send sales order confirmation email: {str(e)}")
+            # Don't fail the request if email fails
         
         # Return updated sales order
         serializer = self.get_serializer(sales_order)
@@ -6278,6 +6561,19 @@ class InvoiceViewSet(viewsets.ModelViewSet):
                     invoice._state.adding = False
                     invoice._state.db = connection
                     
+                    # Check if status was changed to 'sent' and send email
+                    if 'status' in data and data['status'] == 'sent':
+                        try:
+                            # Reload invoice with items to generate PDF
+                            invoice = Invoice.objects.get(id=invoice_id)
+                            pdf_content = generate_invoice_pdf(invoice)
+                            send_invoice_email(invoice, pdf_content)
+                        except Exception as e:
+                            import logging
+                            logger = logging.getLogger(__name__)
+                            logger.error(f"Failed to send invoice email: {str(e)}")
+                            # Don't fail the request if email fails
+                    
                     # Prefetch items and sales order using raw SQL to avoid schema issues
                     from .models import InvoiceItem, SalesOrder
                     try:
@@ -6350,8 +6646,20 @@ class InvoiceViewSet(viewsets.ModelViewSet):
                     update_fields = []
                     
                     if 'status' in data:
+                        old_status = instance.status
                         instance.status = data['status']
                         update_fields.append('status')
+                        
+                        # Send email if status changed to 'sent'
+                        if old_status != 'sent' and data['status'] == 'sent':
+                            try:
+                                pdf_content = generate_invoice_pdf(instance)
+                                send_invoice_email(instance, pdf_content)
+                            except Exception as e:
+                                import logging
+                                logger = logging.getLogger(__name__)
+                                logger.error(f"Failed to send invoice email: {str(e)}")
+                                # Don't fail the request if email fails
                     
                     if 'invoice_date' in data:
                         from datetime import datetime
@@ -7922,6 +8230,70 @@ class SupplierDocumentViewSet(viewsets.ModelViewSet):
         if vendor_id:
             queryset = queryset.filter(vendor_id=vendor_id)
         return queryset
+    
+    def create(self, request, *args, **kwargs):
+        """Handle file upload for document creation"""
+        # Handle multipart/form-data for file uploads
+        if hasattr(request, 'FILES') and 'file' in request.FILES:
+            file = request.FILES['file']
+            # Read file content into binary field
+            file_content = file.read()
+            
+            # Prepare data
+            data = request.data.copy()
+            data['file'] = file_content
+            data['file_name'] = file.name
+            data['file_size'] = file.size
+            data['mime_type'] = file.content_type or 'application/pdf'
+            
+            serializer = self.get_serializer(data=data)
+            serializer.is_valid(raise_exception=True)
+            self.perform_create(serializer)
+            headers = self.get_success_headers(serializer.data)
+            return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+        
+        return super().create(request, *args, **kwargs)
+    
+    def update(self, request, *args, **kwargs):
+        """Handle file upload for document replacement"""
+        partial = kwargs.pop('partial', False)
+        instance = self.get_object()
+        
+        # Handle multipart/form-data for file uploads
+        if hasattr(request, 'FILES') and 'file' in request.FILES:
+            file = request.FILES['file']
+            # Read file content into binary field
+            file_content = file.read()
+            
+            # Prepare data
+            data = request.data.copy()
+            data['file'] = file_content
+            data['file_name'] = file.name
+            data['file_size'] = file.size
+            data['mime_type'] = file.content_type or 'application/pdf'
+            
+            serializer = self.get_serializer(instance, data=data, partial=partial)
+            serializer.is_valid(raise_exception=True)
+            self.perform_update(serializer)
+            return Response(serializer.data)
+        
+        return super().update(request, *args, **kwargs)
+    
+    @action(detail=True, methods=['get'])
+    def download(self, request, pk=None):
+        """Download/view a supplier document"""
+        from django.http import HttpResponse
+        document = self.get_object()
+        
+        if not document.file:
+            return Response(
+                {'error': 'Document file not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        response = HttpResponse(document.file, content_type=document.mime_type or 'application/pdf')
+        response['Content-Disposition'] = f'inline; filename="{document.file_name or document.document_name}"'
+        return response
 
 
 class TemporaryExceptionViewSet(viewsets.ModelViewSet):
@@ -9361,6 +9733,159 @@ class FinancialReportsViewSet(viewsets.ViewSet):
             'beginning_cash': beginning_cash,
             'ending_cash': ending_cash
         })
+    
+    @action(detail=False, methods=['get'], url_path='dashboard-metrics', url_name='dashboard-metrics')
+    def dashboard_metrics(self, request):
+        """Get aggregated financial metrics for dashboard visualization"""
+        from django.db.models import Sum, Q, F
+        from django.utils.dateparse import parse_date
+        from datetime import datetime, timedelta
+        from collections import defaultdict
+        
+        period_type = request.query_params.get('period_type', 'monthly')  # monthly or quarterly
+        months_back = int(request.query_params.get('months_back', 12))
+        
+        # Calculate date range
+        end_date = datetime.now().date()
+        start_date = end_date - timedelta(days=months_back * 30)
+        
+        # Get revenue and expense accounts
+        revenue_accounts = Account.objects.filter(
+            is_active=True,
+            account_type='revenue'
+        )
+        
+        expense_accounts = Account.objects.filter(
+            is_active=True,
+            account_type='expense'
+        )
+        
+        # Get cash accounts
+        cash_accounts = Account.objects.filter(
+            is_active=True,
+            account_type='asset',
+            account_number__startswith='1000'  # Cash accounts typically start with 1000
+        )
+        
+        # Aggregate data by period
+        periods_data = defaultdict(lambda: {
+            'revenue': 0.0,
+            'expenses': 0.0,
+            'profit': 0.0,
+            'cash_flow': 0.0
+        })
+        
+        # Get revenue by period
+        for account in revenue_accounts:
+            entries = GeneralLedgerEntry.objects.filter(
+                account=account,
+                entry_date__gte=start_date,
+                entry_date__lte=end_date
+            )
+            
+            for entry in entries:
+                period_key = self._get_period_key(entry.entry_date, period_type)
+                if entry.debit_credit == 'credit':
+                    periods_data[period_key]['revenue'] += entry.amount
+                else:
+                    periods_data[period_key]['revenue'] -= entry.amount
+        
+        # Get expenses by period
+        for account in expense_accounts:
+            entries = GeneralLedgerEntry.objects.filter(
+                account=account,
+                entry_date__gte=start_date,
+                entry_date__lte=end_date
+            )
+            
+            for entry in entries:
+                period_key = self._get_period_key(entry.entry_date, period_type)
+                if entry.debit_credit == 'debit':
+                    periods_data[period_key]['expenses'] += entry.amount
+                else:
+                    periods_data[period_key]['expenses'] -= entry.amount
+        
+        # Get cash flow by period
+        for account in cash_accounts:
+            entries = GeneralLedgerEntry.objects.filter(
+                account=account,
+                entry_date__gte=start_date,
+                entry_date__lte=end_date
+            )
+            
+            for entry in entries:
+                period_key = self._get_period_key(entry.entry_date, period_type)
+                if entry.debit_credit == 'debit':
+                    periods_data[period_key]['cash_flow'] += entry.amount
+                else:
+                    periods_data[period_key]['cash_flow'] -= entry.amount
+        
+        # Calculate profit for each period
+        for period_key in periods_data:
+            periods_data[period_key]['profit'] = (
+                periods_data[period_key]['revenue'] - 
+                periods_data[period_key]['expenses']
+            )
+        
+        # Convert to list and sort by period
+        periods_list = []
+        for period_key in sorted(periods_data.keys()):
+            periods_list.append({
+                'period': period_key,
+                **periods_data[period_key]
+            })
+        
+        # Get current period metrics
+        current_period_key = self._get_period_key(end_date, period_type)
+        current_metrics = periods_data.get(current_period_key, {
+            'revenue': 0.0,
+            'expenses': 0.0,
+            'profit': 0.0,
+            'cash_flow': 0.0
+        })
+        
+        # Get AR and AP totals
+        try:
+            ar_total = AccountsReceivable.objects.filter(
+                status='open'
+            ).aggregate(total=Sum('amount_due'))['total'] or 0.0
+            
+            ap_total = AccountsPayable.objects.filter(
+                status='open'
+            ).aggregate(total=Sum('amount_due'))['total'] or 0.0
+        except Exception:
+            ar_total = 0.0
+            ap_total = 0.0
+        
+        # Get cash balance
+        cash_balance = 0.0
+        for account in cash_accounts:
+            entries = GeneralLedgerEntry.objects.filter(
+                account=account,
+                entry_date__lte=end_date
+            )
+            for entry in entries:
+                if entry.debit_credit == 'debit':
+                    cash_balance += entry.amount
+                else:
+                    cash_balance -= entry.amount
+        
+        return Response({
+            'period_type': period_type,
+            'periods': periods_list,
+            'current_metrics': current_metrics,
+            'ar_total': ar_total,
+            'ap_total': ap_total,
+            'cash_balance': cash_balance
+        })
+    
+    def _get_period_key(self, date, period_type):
+        """Get period key for grouping (e.g., '2025-01' for monthly, '2025-Q1' for quarterly)"""
+        if period_type == 'quarterly':
+            quarter = (date.month - 1) // 3 + 1
+            return f"{date.year}-Q{quarter}"
+        else:  # monthly
+            return f"{date.year}-{date.month:02d}"
 
 
 class ProductionLogViewSet(viewsets.ReadOnlyModelViewSet):

@@ -62,5 +62,7 @@ export const updateDeliveryFromTracking = async (id: number, trackingNumber: str
   return response.data
 }
 
-
+export const getPurchaseOrderPdfUrl = (poId: number) => {
+  return `${API_BASE_URL}/purchase-orders/${poId}/pdf/`
+}
 

@@ -269,9 +269,20 @@
 
 .survey-empty {
   text-align: center;
-  padding: 3rem;
+  padding: 4rem 2rem;
   color: #7f8c8d;
-  font-style: italic;
+  background: #f9f9f9;
+  border: 2px dashed #e0e0e0;
+  border-radius: 8px;
+  margin: 2rem 0;
+}
+
+.survey-empty p {
+  font-size: 1.1rem;
+  font-style: normal;
+  font-weight: 500;
+  margin: 0;
+  color: #95a5a6;
 }
 
 .documents-tab {
@@ -336,6 +347,40 @@
   padding: 1.5rem;
   background: #f9f9f9;
   border-radius: 4px;
+}
+
+.documents-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 1rem;
+}
+
+.documents-table th,
+.documents-table td {
+  padding: 0.75rem;
+  text-align: left;
+  border-bottom: 1px solid #e0e0e0;
+}
+
+.documents-table th {
+  background-color: #f5f5f5;
+  font-weight: 600;
+  color: #2c3e50;
+}
+
+.documents-table tr:hover {
+  background-color: #f9f9f9;
+}
+
+.documents-table .expired {
+  color: #e74c3c;
+  font-weight: 500;
+}
+
+.documents-table .btn-sm {
+  padding: 0.25rem 0.5rem;
+  font-size: 0.875rem;
+  margin-right: 0.5rem;
 }
 
 .uploaded-documents h4 {

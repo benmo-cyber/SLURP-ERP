@@ -1,0 +1,22 @@
+================================================================================
+E2E TEST RESULTS: SALES ORDER, CHECKOUT, INVOICING, BOOKKEEPING
+Date: 2026-01-19 12:00:47.220423
+================================================================================
+
+Passed: 8
+Failed: 0
+Warnings: 1
+Inventory Issues: 0
+
+PASSED TESTS:
+  [PASS] Setup test data - Item: SALESTEST1768845647, Lot: LOT-1768845647
+  [PASS] Create customer - Customer ID: CUST1768845647
+  [PASS] Create sales order - SO Number: 3260020
+  [PASS] Inventory allocation - Allocated 50.0 from lot FG-LOT-1768845444
+  [PASS] Inventory checkout - Shipped 50.0, remaining: 0.0
+  [PASS] Create invoice from sales order - Invoice: 4260012, Total: $1250.00
+  [PASS] Create AR entry - AR Entry ID: 1, Balance: $1250.00
+  [PASS] AR entry balance correct
+
+WARNINGS:
+  [WARN] Journal entry creation: No journal entry linked to AR entry

@@ -108,3 +108,40 @@
   color: #666;
 }
 
+.read-only {
+  color: #666;
+  font-style: italic;
+}
+
+.cost-master-table td.landed-cost {
+  font-weight: 600;
+  color: #2c3e50;
+}
+
+.edit-input {
+  width: 100%;
+  padding: 4px 6px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 13px;
+}
+
+.edit-input:focus {
+  outline: none;
+  border-color: #4a90e2;
+  box-shadow: 0 0 0 2px rgba(74, 144, 226, 0.1);
+}
+
+.cost-master-info {
+  margin-top: 20px;
+  padding: 15px;
+  background: #f8f9fa;
+  border-radius: 4px;
+  font-size: 14px;
+  color: #666;
+}
+
+.cost-master-info p {
+  margin: 5px 0;
+}
+

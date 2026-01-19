@@ -1,0 +1,32 @@
+================================================================================
+E2E TEST RESULTS WITH UNFK TESTING (ORM Direct)
+Date: 2026-01-19 11:51:16.852549
+================================================================================
+
+Passed: 18
+Failed: 0
+Warnings: 1
+Inventory Issues: 0
+
+PASSED TESTS:
+  [PASS] Create vendor - Vendor ID: 30
+  [PASS] Create item - Item ID: 55
+  [PASS] Reject duplicate SKU
+  [PASS] Create purchase order - PO Number: 2260001
+  [PASS] Issue purchase order
+  [PASS] PO issued - on_order updated correctly
+  [PASS] Check in lot - Lot ID: 31
+  [PASS] Lot check-in - inventory counts correct
+  [PASS] UNFK reverse check-in
+  [PASS] UNFK reverse check-in - lot deleted
+  [PASS] Create finished good item
+  [PASS] Create production batch - Batch: BT26001001
+  [PASS] Close production batch
+  [PASS] Output lot created when batch closed
+  [PASS] UNFK batch
+  [PASS] UNFK batch - batch deleted
+  [PASS] UNFK batch - output lot removed
+  [PASS] Create customer
+
+WARNINGS:
+  [WARN] Create sales order: Schema mismatch - skipping: NOT NULL constraint failed: erp_core_salesorder.discount

@@ -31,6 +31,8 @@ interface Lot {
   lot_number: string
   vendor_lot_number?: string
   po_number?: string
+  po_tracking_number?: string
+  po_carrier?: string
   quantity: number
   quantity_remaining: number
   received_date: string
@@ -278,6 +280,7 @@ function InventoryTable() {
               <th>Pack Size</th>
               <th>Total</th>
               <th>Available</th>
+              <th>On Order</th>
               <th>Allocated to Sales</th>
               <th>Allocated to Production</th>
               <th>On Hold</th>
@@ -287,7 +290,7 @@ function InventoryTable() {
           <tbody>
             {sortedInventoryDetails.length === 0 ? (
               <tr>
-                <td colSpan={10} className="no-data">No inventory found</td>
+                <td colSpan={11} className="no-data">No inventory found</td>
               </tr>
             ) : (
               sortedInventoryDetails.map((detail) => {
@@ -350,6 +353,9 @@ function InventoryTable() {
                         <td className={detail.available > 0 ? 'available' : 'unavailable'}>
                           {displayAvailable} {displayUnit}
                         </td>
+                        <td className={detail.on_order > 0 ? 'on-order' : ''}>
+                          {displayOnOrder} {displayUnit}
+                        </td>
                         <td>{displayAllocSales} {displayUnit}</td>
                         <td>{displayAllocProd} {displayUnit}</td>
                         <td>{displayOnHold} {displayUnit}</td>
@@ -395,14 +401,17 @@ function InventoryTable() {
                               <td className={vendorDetail.available > 0 ? 'available' : 'unavailable'}>
                                 {vendorDisplayAvailable} {vendorDisplayUnit}
                               </td>
-                        <td>{vendorDisplayAllocSales} {vendorDisplayUnit}</td>
-                        <td>{vendorDisplayAllocProd} {vendorDisplayUnit}</td>
-                        <td>{vendorDisplayOnHold} {vendorDisplayUnit}</td>
+                              <td className={vendorDetail.on_order > 0 ? 'on-order' : ''}>
+                                {vendorDisplayOnOrder} {vendorDisplayUnit}
+                              </td>
+                              <td>{vendorDisplayAllocSales} {vendorDisplayUnit}</td>
+                              <td>{vendorDisplayAllocProd} {vendorDisplayUnit}</td>
+                              <td>{vendorDisplayOnHold} {vendorDisplayUnit}</td>
                               <td>{vendorDetail.lot_count || 0}</td>
                             </tr>
                             {isVendorExpanded && (
                               <tr className="lot-details-row">
-                                <td colSpan={10} className="lot-details-cell">
+                                <td colSpan={11} className="lot-details-cell">
                                   {isLoadingVendorLots ? (
                                     <div className="loading-lots">Loading lot details...</div>
                                   ) : vendorLots.length === 0 ? (
@@ -416,6 +425,7 @@ function InventoryTable() {
                                             <th>Vendor Lot #</th>
                                             <th>Internal Lot #</th>
                                             <th>PO Number</th>
+                                            <th>Tracking</th>
                                             <th>Pack Size</th>
                                             <th>Received Date</th>
                                             <th>Expiration Date</th>
@@ -529,6 +539,14 @@ function InventoryTable() {
                                                   })()}
                                                 </td>
                                                 <td>{lot.po_number || '-'}</td>
+                                                <td>
+                                                  {lot.po_tracking_number ? (
+                                                    <span>
+                                                      {lot.po_tracking_number}
+                                                      {lot.po_carrier && ` (${lot.po_carrier})`}
+                                                    </span>
+                                                  ) : '-'}
+                                                </td>
                                                 <td>{packSizeDisplay}</td>
                                                 <td>{receivedDate}</td>
                                                 <td 

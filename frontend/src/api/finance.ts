@@ -205,3 +205,15 @@ export const updatePayment = async (id: number, data: any) => {
   const response = await api.put(`/payments/${id}/`, data)
   return response.data
 }
+
+// Dashboard Metrics API
+export const getDashboardMetrics = async (params?: { period_type?: 'monthly' | 'quarterly', months_back?: number }) => {
+  const response = await api.get('/financial-reports/dashboard-metrics/', { params })
+  return response.data
+}
+
+// Customer Forecasts API (for forecast vs actual)
+export const getCustomerForecasts = async (params?: { customer_id?: number, forecast_period?: string }) => {
+  const response = await api.get('/customer-forecasts/', { params })
+  return response.data.results || response.data
+}

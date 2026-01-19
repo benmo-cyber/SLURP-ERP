@@ -39,7 +39,10 @@ function App() {
       <div className="App">
         <header className="app-header">
           <div className="header-content">
-            <h1>SLURP</h1>
+            <div className="header-brand">
+              <img src="/logo.png" alt="Wildwood Ingredients" className="header-logo" />
+              <h1>SLURP</h1>
+            </div>
             <Navigation />
           </div>
         </header>

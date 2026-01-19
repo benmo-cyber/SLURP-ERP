@@ -57,6 +57,9 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
   const [loading, setLoading] = useState(true)
   const [outputPackSizeId, setOutputPackSizeId] = useState<string>('')
   const [availableOutputPackSizes, setAvailableOutputPackSizes] = useState<any[]>([])
+  const [indirectMaterialLots, setIndirectMaterialLots] = useState<Lot[]>([])
+  const [selectedIndirectMaterials, setSelectedIndirectMaterials] = useState<{ [key: number]: number }>({})
+  const [indirectMaterialInputValues, setIndirectMaterialInputValues] = useState<{ [key: number]: string }>({})
 
   useEffect(() => {
     loadData()
@@ -135,6 +138,14 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
       )
       setFinishedGoods(finishedGoods)
       setRepackItems(repackItems)
+      
+      // Load indirect material lots
+      const indirectMaterialLots = lotsData.filter((lot: Lot) => 
+        lot.item.item_type === 'indirect_material' && 
+        lot.quantity_remaining > 0 &&
+        (!lot.status || lot.status === 'accepted')
+      )
+      setIndirectMaterialLots(indirectMaterialLots)
       
       // Debug formulas
       console.log('Loaded formulas:', formulasData)
@@ -434,6 +445,10 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
         inputs: Object.keys(selectedLots).map(lotId => ({
           lot_id: parseInt(lotId),
           quantity_used: selectedLots[parseInt(lotId)]
+        })),
+        indirect_materials: Object.keys(selectedIndirectMaterials).map(lotId => ({
+          lot_id: parseInt(lotId),
+          quantity_used: selectedIndirectMaterials[parseInt(lotId)]
         }))
       }
 
@@ -873,6 +888,89 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
               </div>
             </>
           )}
+
+          {/* Indirect Materials Section - Available for both production and repack */}
+          <div className="indirect-materials-section" style={{ marginTop: '30px', paddingTop: '20px', borderTop: '2px solid #e0e0e0' }}>
+            <label className="section-label">Indirect Materials (Optional)</label>
+            <p className="section-hint">Select indirect materials consumed during this batch (e.g., boxes, labels, etc.)</p>
+            
+            {indirectMaterialLots.length === 0 ? (
+              <div className="info-message" style={{ padding: '10px', background: '#d1ecf1', border: '1px solid #bee5eb', borderRadius: '4px', marginBottom: '15px' }}>
+                ℹ️ No indirect materials available in inventory.
+              </div>
+            ) : (
+              <div className="lots-grid">
+                {indirectMaterialLots.map((lot) => (
+                  <div key={lot.id} className={`lot-card ${selectedIndirectMaterials[lot.id] ? 'selected' : ''}`}>
+                    <div className="lot-card-header">
+                      <span className="lot-number-badge">
+                        {lot.lot_number}
+                      </span>
+                      <span className="lot-available-badge">
+                        {formatNumber(lot.quantity_remaining)} {lot.item.unit_of_measure} available
+                      </span>
+                    </div>
+                    <div style={{ padding: '10px', fontSize: '14px', color: '#666' }}>
+                      <strong>{lot.item.name}</strong> ({lot.item.sku})
+                    </div>
+                    <div className="lot-quantity-section">
+                      <label>Quantity to Use</label>
+                      <div className="quantity-input-group">
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          max={lot.quantity_remaining}
+                          value={indirectMaterialInputValues[lot.id] || ''}
+                          onChange={(e) => {
+                            const value = e.target.value
+                            const newInputValues = { ...indirectMaterialInputValues }
+                            const newSelected = { ...selectedIndirectMaterials }
+                            
+                            if (value === '' || parseFloat(value) <= 0 || isNaN(parseFloat(value))) {
+                              delete newInputValues[lot.id]
+                              delete newSelected[lot.id]
+                            } else {
+                              const qty = parseFloat(value)
+                              if (qty <= lot.quantity_remaining) {
+                                newInputValues[lot.id] = value
+                                newSelected[lot.id] = qty
+                              } else {
+                                alert(`Cannot exceed available quantity: ${lot.quantity_remaining}`)
+                                return
+                              }
+                            }
+                            
+                            setIndirectMaterialInputValues(newInputValues)
+                            setSelectedIndirectMaterials(newSelected)
+                          }}
+                          placeholder="0.00"
+                          className="quantity-input"
+                        />
+                        <span className="unit-label">{lot.item.unit_of_measure}</span>
+                      </div>
+                      {selectedIndirectMaterials[lot.id] && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const newInputValues = { ...indirectMaterialInputValues }
+                            const newSelected = { ...selectedIndirectMaterials }
+                            delete newInputValues[lot.id]
+                            delete newSelected[lot.id]
+                            setIndirectMaterialInputValues(newInputValues)
+                            setSelectedIndirectMaterials(newSelected)
+                          }}
+                          className="btn-clear-lot"
+                        >
+                          Clear
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
 
           <div className="form-actions">
             <button type="button" onClick={onClose} className="btn btn-secondary">

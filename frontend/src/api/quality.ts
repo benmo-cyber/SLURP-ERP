@@ -96,8 +96,13 @@ export const createSupplierDocument = async (data: FormData) => {
   return response.data
 }
 
-export const updateSupplierDocument = async (id: number, data: any) => {
-  const response = await api.put(`/supplier-documents/${id}/`, data)
+export const updateSupplierDocument = async (id: number, data: FormData | any) => {
+  // Check if data is FormData (file upload) or regular object
+  const headers = data instanceof FormData 
+    ? { 'Content-Type': 'multipart/form-data' }
+    : { 'Content-Type': 'application/json' }
+  
+  const response = await api.put(`/supplier-documents/${id}/`, data, { headers })
   return response.data
 }
 

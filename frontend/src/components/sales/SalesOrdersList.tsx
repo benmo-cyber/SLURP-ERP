@@ -317,7 +317,7 @@ function SalesOrdersList({ refreshKey = 0, onSelectOrder, onEditOrder }: SalesOr
                       <div className="items-list">
                         {order.items.map((item, idx) => (
                           <div key={idx} className="item-line">
-                            <span className="item-sku">{item.item.sku}</span>
+                            <span className="item-sku">{item.item?.sku || 'N/A'}</span>
                             <span className="item-quantity">{formatNumber(item.quantity_ordered)}</span>
                             {item.quantity_allocated > 0 && (
                               <span className="allocated-badge">
@@ -472,7 +472,7 @@ function SalesOrdersList({ refreshKey = 0, onSelectOrder, onEditOrder }: SalesOr
                         <div className="items-list">
                           {order.items.map((item, idx) => (
                             <div key={idx} className="item-line">
-                              <span className="item-sku">{item.item.sku}</span>
+                              <span className="item-sku">{item.item?.sku || 'N/A'}</span>
                               <span className="item-quantity">{formatNumber(item.quantity_ordered)}</span>
                             </div>
                           ))}

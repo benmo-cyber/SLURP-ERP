@@ -40,6 +40,8 @@ function CreateItemForm({ onClose, onSuccess }: CreateItemFormProps) {
     unit_of_measure: 'lbs' as 'lbs' | 'kg' | 'ea',
     price: '',
     item_type: 'raw_material' as 'raw_material' | 'distributed_item' | 'finished_good' | 'indirect_material',
+    hts_code: '',
+    country_of_origin: '',
   })
   const [submitting, setSubmitting] = useState(false)
 
@@ -168,6 +170,8 @@ function CreateItemForm({ onClose, onSuccess }: CreateItemFormProps) {
         item_type: formData.item_type,
         unit_of_measure: formData.unit_of_measure,
         vendor: formData.vendor || null,
+        hts_code: formData.hts_code || null,
+        country_of_origin: formData.country_of_origin || null,
       }
       
       // Only include pack_size and price if they have values
@@ -351,7 +355,7 @@ function CreateItemForm({ onClose, onSuccess }: CreateItemFormProps) {
               <input
                 type="text"
                 id="vendor_item_number"
-                value={formData.vendor_item_number}
+                value={formData.vendor_item_number || ''}
                 onChange={(e) => setFormData({ ...formData, vendor_item_number: e.target.value })}
               />
             </div>
@@ -361,7 +365,7 @@ function CreateItemForm({ onClose, onSuccess }: CreateItemFormProps) {
               <input
                 type="text"
                 id="vendor_item_name"
-                value={formData.vendor_item_name}
+                value={formData.vendor_item_name || ''}
                 onChange={(e) => setFormData({ ...formData, vendor_item_name: e.target.value })}
                 placeholder="Name used in purchase orders to vendor"
               />
@@ -403,7 +407,7 @@ function CreateItemForm({ onClose, onSuccess }: CreateItemFormProps) {
               <textarea
                 id="description"
                 rows={3}
-                value={formData.description}
+                value={formData.description || ''}
                 onChange={(e) => setFormData({ ...formData, description: e.target.value })}
               />
             </div>
@@ -466,6 +470,34 @@ function CreateItemForm({ onClose, onSuccess }: CreateItemFormProps) {
               </div>
               <small className="form-hint">Price per unit of measure</small>
             </div>
+
+            {(formData.item_type === 'raw_material' || formData.item_type === 'distributed_item') && (
+              <>
+                <div className="form-group">
+                  <label htmlFor="hts_code">HTS Code</label>
+                  <input
+                    type="text"
+                    id="hts_code"
+                    value={formData.hts_code || ''}
+                    onChange={(e) => setFormData({ ...formData, hts_code: e.target.value })}
+                    placeholder="Harmonized Tariff Schedule code"
+                  />
+                  <small className="form-hint">Used for tariff calculation via Flexport</small>
+                </div>
+
+                <div className="form-group">
+                  <label htmlFor="country_of_origin">Country of Origin</label>
+                  <input
+                    type="text"
+                    id="country_of_origin"
+                    value={formData.country_of_origin || ''}
+                    onChange={(e) => setFormData({ ...formData, country_of_origin: e.target.value })}
+                    placeholder="Country of origin"
+                  />
+                  <small className="form-hint">Used for tariff calculation via Flexport</small>
+                </div>
+              </>
+            )}
           </div>
 
           <div className="form-actions">

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { getVendor, updateVendor, approveVendor, getSupplierSurvey, getSupplierDocuments, getVendorItems } from '../../api/quality'
+import { getVendor, updateVendor, approveVendor, getSupplierSurvey, getSupplierDocuments, getVendorItems, createSupplierDocument, updateSupplierDocument } from '../../api/quality'
 import './VendorDetail.css'
 
 interface Vendor {
@@ -34,7 +34,11 @@ function VendorDetail({ vendor: initialVendor, onClose }: VendorDetailProps) {
   const [formData, setFormData] = useState({
     name: vendor.name,
     vendor_id: vendor.vendor_id || '',
-    address: vendor.address || '',
+    street_address: vendor.street_address || '',
+    city: vendor.city || '',
+    state: vendor.state || '',
+    zip_code: vendor.zip_code || '',
+    country: vendor.country || 'USA',
     phone: vendor.phone || '',
     email: vendor.email || '',
     contact_name: vendor.contact_name || '',
@@ -56,7 +60,11 @@ function VendorDetail({ vendor: initialVendor, onClose }: VendorDetailProps) {
       setFormData({
         name: data.name || '',
         vendor_id: data.vendor_id || '',
-        address: data.address || '',
+        street_address: data.street_address || '',
+        city: data.city || '',
+        state: data.state || '',
+        zip_code: data.zip_code || '',
+        country: data.country || 'USA',
         phone: data.phone || '',
         email: data.email || '',
         contact_name: data.contact_name || '',
@@ -76,7 +84,11 @@ function VendorDetail({ vendor: initialVendor, onClose }: VendorDetailProps) {
         ...formData,
         // Convert empty strings to null for optional fields
         vendor_id: formData.vendor_id || null,
-        address: formData.address || null,
+        street_address: formData.street_address || null,
+        city: formData.city || null,
+        state: formData.state || null,
+        zip_code: formData.zip_code || null,
+        country: formData.country || 'USA',
         phone: formData.phone || null,
         email: formData.email || null,
         contact_name: formData.contact_name || null,
@@ -99,7 +111,11 @@ function VendorDetail({ vendor: initialVendor, onClose }: VendorDetailProps) {
     setFormData({
       name: vendor.name || '',
       vendor_id: vendor.vendor_id || '',
-      address: vendor.address || '',
+      street_address: vendor.street_address || '',
+      city: vendor.city || '',
+      state: vendor.state || '',
+      zip_code: vendor.zip_code || '',
+      country: vendor.country || 'USA',
       phone: vendor.phone || '',
       email: vendor.email || '',
       contact_name: vendor.contact_name || '',
@@ -247,12 +263,48 @@ function VendorDetail({ vendor: initialVendor, onClose }: VendorDetailProps) {
                   />
                 </div>
                 <div className="form-group">
-                  <label>Address</label>
+                  <label>Street Address</label>
                   <input
                     type="text"
-                    value={formData.address}
-                    onChange={(e) => setFormData({ ...formData, address: e.target.value })}
+                    value={formData.street_address}
+                    onChange={(e) => setFormData({ ...formData, street_address: e.target.value })}
                   />
+                </div>
+                <div className="form-row">
+                  <div className="form-group">
+                    <label>City</label>
+                    <input
+                      type="text"
+                      value={formData.city}
+                      onChange={(e) => setFormData({ ...formData, city: e.target.value })}
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label>State</label>
+                    <input
+                      type="text"
+                      value={formData.state}
+                      onChange={(e) => setFormData({ ...formData, state: e.target.value })}
+                    />
+                  </div>
+                </div>
+                <div className="form-row">
+                  <div className="form-group">
+                    <label>ZIP Code</label>
+                    <input
+                      type="text"
+                      value={formData.zip_code}
+                      onChange={(e) => setFormData({ ...formData, zip_code: e.target.value })}
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label>Country</label>
+                    <input
+                      type="text"
+                      value={formData.country}
+                      onChange={(e) => setFormData({ ...formData, country: e.target.value })}
+                    />
+                  </div>
                 </div>
                 <div className="form-group">
                   <label>Phone</label>
@@ -323,7 +375,14 @@ function VendorDetail({ vendor: initialVendor, onClose }: VendorDetailProps) {
                 </div>
                 <div className="info-item">
                   <label>Address:</label>
-                  <span>{vendor.address || 'N/A'}</span>
+                  <span>
+                    {vendor.street_address || vendor.address || ''}
+                    {vendor.city && `, ${vendor.city}`}
+                    {vendor.state && `, ${vendor.state}`}
+                    {vendor.zip_code && ` ${vendor.zip_code}`}
+                    {vendor.country && `, ${vendor.country}`}
+                    {!vendor.street_address && !vendor.address && !vendor.city && 'N/A'}
+                  </span>
                 </div>
                 <div className="info-item">
                   <label>Phone:</label>
@@ -396,17 +455,57 @@ function VendorDetail({ vendor: initialVendor, onClose }: VendorDetailProps) {
               <div className="document-category">
                 <h4>General Documents</h4>
                 {[
-                  'Certificate of Insurance',
-                  'Letter of Guarantee',
-                  'Third-Party Audit Certificate',
-                  'Recall Statement',
-                  'Completed Wildwood Ingredients Questionnaire'
+                  { name: 'Certificate of Insurance', type: 'certificate_of_insurance' },
+                  { name: 'Letter of Guarantee', type: 'letter_of_guarantee' },
+                  { name: 'Third-Party Audit Certificate', type: 'third_party_audit' },
+                  { name: 'Recall Statement', type: 'recall_plan' },
+                  { name: 'Completed Wildwood Ingredients Questionnaire', type: 'other' }
                 ].map(doc => {
-                  const hasDoc = documents.some(d => d.document_name === doc || d.document_type === doc.toLowerCase().replace(/\s+/g, '_'))
+                  const docType = doc.type
+                  const existingDoc = documents.find(d => d.document_type === docType)
+                  const hasDoc = !!existingDoc
                   return (
-                    <div key={doc} className="document-item">
-                      <input type="checkbox" checked={hasDoc} disabled />
-                      <label className={hasDoc ? 'completed' : 'missing'}>{doc}</label>
+                    <div key={doc.name} className="document-item">
+                      <input 
+                        type="checkbox" 
+                        checked={hasDoc} 
+                        onChange={() => {
+                          if (!hasDoc) {
+                            // Trigger file upload
+                            const input = document.createElement('input')
+                            input.type = 'file'
+                            input.accept = '.pdf,.doc,.docx'
+                            input.onchange = async (e: any) => {
+                              const file = e.target.files[0]
+                              if (file) {
+                                try {
+                                  setLoading(true)
+                                  const formData = new FormData()
+                                  formData.append('vendor', vendor.id.toString())
+                                  formData.append('document_type', docType)
+                                  formData.append('document_name', doc.name)
+                                  formData.append('file', file)
+                                  await createSupplierDocument(formData)
+                                  await loadDocuments()
+                                  alert('Document uploaded successfully')
+                                } catch (error: any) {
+                                  console.error('Failed to upload document:', error)
+                                  alert(error.response?.data?.detail || error.message || 'Failed to upload document')
+                                } finally {
+                                  setLoading(false)
+                                }
+                              }
+                            }
+                            input.click()
+                          }
+                        }}
+                      />
+                      <label className={hasDoc ? 'completed' : 'missing'}>{doc.name}</label>
+                      {hasDoc && existingDoc && (
+                        <span className="document-status">
+                          {existingDoc.expiration_date && new Date(existingDoc.expiration_date) < new Date() ? ' (Expired)' : ' (Current)'}
+                        </span>
+                      )}
                     </div>
                   )
                 })}
@@ -414,16 +513,55 @@ function VendorDetail({ vendor: initialVendor, onClose }: VendorDetailProps) {
               <div className="document-category">
                 <h4>Food Safety Information</h4>
                 {[
-                  'FSMA Statement',
-                  'HACCP Plan and flowchart',
-                  'Food Defense Statement',
-                  'Environmental Sampling Monitoring Statement'
+                  { name: 'FSMA Statement', type: 'fsma_statement' },
+                  { name: 'HACCP Plan and flowchart', type: 'haccp_plan' },
+                  { name: 'Food Defense Statement', type: 'food_defense_statement' },
+                  { name: 'Environmental Sampling Monitoring Statement', type: 'other' }
                 ].map(doc => {
-                  const hasDoc = documents.some(d => d.document_name === doc || d.document_type === doc.toLowerCase().replace(/\s+/g, '_'))
+                  const docType = doc.type
+                  const existingDoc = documents.find(d => d.document_type === docType)
+                  const hasDoc = !!existingDoc
                   return (
-                    <div key={doc} className="document-item">
-                      <input type="checkbox" checked={hasDoc} disabled />
-                      <label className={hasDoc ? 'completed' : 'missing'}>{doc}</label>
+                    <div key={doc.name} className="document-item">
+                      <input 
+                        type="checkbox" 
+                        checked={hasDoc} 
+                        onChange={() => {
+                          if (!hasDoc) {
+                            const input = document.createElement('input')
+                            input.type = 'file'
+                            input.accept = '.pdf,.doc,.docx'
+                            input.onchange = async (e: any) => {
+                              const file = e.target.files[0]
+                              if (file) {
+                                try {
+                                  setLoading(true)
+                                  const formData = new FormData()
+                                  formData.append('vendor', vendor.id.toString())
+                                  formData.append('document_type', docType)
+                                  formData.append('document_name', doc.name)
+                                  formData.append('file', file)
+                                  await createSupplierDocument(formData)
+                                  await loadDocuments()
+                                  alert('Document uploaded successfully')
+                                } catch (error: any) {
+                                  console.error('Failed to upload document:', error)
+                                  alert(error.response?.data?.detail || error.message || 'Failed to upload document')
+                                } finally {
+                                  setLoading(false)
+                                }
+                              }
+                            }
+                            input.click()
+                          }
+                        }}
+                      />
+                      <label className={hasDoc ? 'completed' : 'missing'}>{doc.name}</label>
+                      {hasDoc && existingDoc && (
+                        <span className="document-status">
+                          {existingDoc.expiration_date && new Date(existingDoc.expiration_date) < new Date() ? ' (Expired)' : ' (Current)'}
+                        </span>
+                      )}
                     </div>
                   )
                 })}
@@ -431,30 +569,69 @@ function VendorDetail({ vendor: initialVendor, onClose }: VendorDetailProps) {
               <div className="document-category">
                 <h4>Per Ingredient Documents</h4>
                 {[
-                  'Spec Sheet',
-                  'Safety Data Sheet (SDS)',
-                  'Nutritional Information',
-                  'Allergen Statement',
-                  'Ingredient Breakdown',
-                  'Storage and Shelf-Life Statement',
-                  'Halal Certificate (if applicable)',
-                  'Kosher Certificate',
-                  'BE and GMO Statement',
-                  'Certificate of Origin',
-                  'Proposition 65 Statement',
-                  'PHOs Statement',
-                  'Sterilization/Irradiation Statement',
-                  'No Animal Testing Statement',
-                  'Pesticide Statement',
-                  'Heavy Metal Statement',
-                  'Food Grade Packaging Statement',
-                  'PFAS Statement for Product and Packaging'
+                  { name: 'Spec Sheet', type: 'spec_sheet' },
+                  { name: 'Safety Data Sheet (SDS)', type: 'sds' },
+                  { name: 'Nutritional Information', type: 'nutritional_info' },
+                  { name: 'Allergen Statement', type: 'allergen_statement' },
+                  { name: 'Ingredient Breakdown', type: 'other' },
+                  { name: 'Storage and Shelf-Life Statement', type: 'other' },
+                  { name: 'Halal Certificate (if applicable)', type: 'halal_certificate' },
+                  { name: 'Kosher Certificate', type: 'kosher_certificate' },
+                  { name: 'BE and GMO Statement', type: 'other' },
+                  { name: 'Certificate of Origin', type: 'other' },
+                  { name: 'Proposition 65 Statement', type: 'other' },
+                  { name: 'PHOs Statement', type: 'other' },
+                  { name: 'Sterilization/Irradiation Statement', type: 'other' },
+                  { name: 'No Animal Testing Statement', type: 'other' },
+                  { name: 'Pesticide Statement', type: 'other' },
+                  { name: 'Heavy Metal Statement', type: 'other' },
+                  { name: 'Food Grade Packaging Statement', type: 'other' },
+                  { name: 'PFAS Statement for Product and Packaging', type: 'other' }
                 ].map(doc => {
-                  const hasDoc = documents.some(d => d.document_name === doc || d.document_type === doc.toLowerCase().replace(/\s+/g, '_'))
+                  const docType = doc.type
+                  const existingDoc = documents.find(d => d.document_type === docType)
+                  const hasDoc = !!existingDoc
                   return (
-                    <div key={doc} className="document-item">
-                      <input type="checkbox" checked={hasDoc} disabled />
-                      <label className={hasDoc ? 'completed' : 'missing'}>{doc}</label>
+                    <div key={doc.name} className="document-item">
+                      <input 
+                        type="checkbox" 
+                        checked={hasDoc} 
+                        onChange={() => {
+                          if (!hasDoc) {
+                            const input = document.createElement('input')
+                            input.type = 'file'
+                            input.accept = '.pdf,.doc,.docx'
+                            input.onchange = async (e: any) => {
+                              const file = e.target.files[0]
+                              if (file) {
+                                try {
+                                  setLoading(true)
+                                  const formData = new FormData()
+                                  formData.append('vendor', vendor.id.toString())
+                                  formData.append('document_type', docType)
+                                  formData.append('document_name', doc.name)
+                                  formData.append('file', file)
+                                  await createSupplierDocument(formData)
+                                  await loadDocuments()
+                                  alert('Document uploaded successfully')
+                                } catch (error: any) {
+                                  console.error('Failed to upload document:', error)
+                                  alert(error.response?.data?.detail || error.message || 'Failed to upload document')
+                                } finally {
+                                  setLoading(false)
+                                }
+                              }
+                            }
+                            input.click()
+                          }
+                        }}
+                      />
+                      <label className={hasDoc ? 'completed' : 'missing'}>{doc.name}</label>
+                      {hasDoc && existingDoc && (
+                        <span className="document-status">
+                          {existingDoc.expiration_date && new Date(existingDoc.expiration_date) < new Date() ? ' (Expired)' : ' (Current)'}
+                        </span>
+                      )}
                     </div>
                   )
                 })}
@@ -463,18 +640,78 @@ function VendorDetail({ vendor: initialVendor, onClose }: VendorDetailProps) {
             {documents.length > 0 && (
               <div className="uploaded-documents">
                 <h4>Uploaded Documents</h4>
-                <ul>
-                  {documents.map(doc => (
-                    <li key={doc.id}>
-                      {doc.document_name} ({doc.document_type})
-                      {doc.expiration_date && (
-                        <span className={new Date(doc.expiration_date) < new Date() ? 'expired' : ''}>
-                          {' '}- Expires: {new Date(doc.expiration_date).toLocaleDateString()}
-                        </span>
-                      )}
-                    </li>
-                  ))}
-                </ul>
+                <table className="documents-table">
+                  <thead>
+                    <tr>
+                      <th>Document Name</th>
+                      <th>Type</th>
+                      <th>Uploaded</th>
+                      <th>Expiration</th>
+                      <th>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {documents.map(doc => (
+                      <tr key={doc.id}>
+                        <td>{doc.document_name}</td>
+                        <td>{doc.document_type}</td>
+                        <td>{new Date(doc.uploaded_at).toLocaleDateString()}</td>
+                        <td>
+                          {doc.expiration_date ? (
+                            <span className={new Date(doc.expiration_date) < new Date() ? 'expired' : ''}>
+                              {new Date(doc.expiration_date).toLocaleDateString()}
+                            </span>
+                          ) : 'N/A'}
+                        </td>
+                        <td>
+                          <button
+                            className="btn btn-sm btn-secondary"
+                            onClick={() => {
+                              // Open document in new tab
+                              window.open(`http://localhost:8000/api/supplier-documents/${doc.id}/download/`, '_blank')
+                            }}
+                          >
+                            View
+                          </button>
+                          <button
+                            className="btn btn-sm btn-primary"
+                            onClick={() => {
+                              // Replace document
+                              const input = document.createElement('input')
+                              input.type = 'file'
+                              input.accept = '.pdf,.doc,.docx'
+                              input.onchange = async (e: any) => {
+                                const file = e.target.files[0]
+                                if (file) {
+                                  try {
+                                    setLoading(true)
+                                    const formData = new FormData()
+                                    formData.append('vendor', vendor.id.toString())
+                                    formData.append('document_type', doc.document_type)
+                                    formData.append('document_name', doc.document_name)
+                                    formData.append('file', file)
+                                    // Update existing document
+                                    await updateSupplierDocument(doc.id, formData)
+                                    await loadDocuments()
+                                    alert('Document replaced successfully')
+                                  } catch (error: any) {
+                                    console.error('Failed to replace document:', error)
+                                    alert(error.response?.data?.detail || error.message || 'Failed to replace document')
+                                  } finally {
+                                    setLoading(false)
+                                  }
+                                }
+                              }
+                              input.click()
+                            }}
+                          >
+                            Replace
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
             )}
           </div>

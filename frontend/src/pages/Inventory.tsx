@@ -6,6 +6,7 @@ import ReverseCheckIn from '../components/inventory/ReverseCheckIn'
 import ItemsList from '../components/inventory/ItemsList'
 import PurchaseOrderList from '../components/inventory/PurchaseOrderList'
 import CreatePurchaseOrder from '../components/inventory/CreatePurchaseOrder'
+import IndirectMaterialCheckout from '../components/inventory/IndirectMaterialCheckout'
 import Logs from '../components/inventory/Logs'
 import './Inventory.css'
 
@@ -15,6 +16,7 @@ function Inventory() {
   const [showCreateItem, setShowCreateItem] = useState(false)
   const [showReverseCheckIn, setShowReverseCheckIn] = useState(false)
   const [showCreatePO, setShowCreatePO] = useState(false)
+  const [showIndirectMaterialCheckout, setShowIndirectMaterialCheckout] = useState(false)
   const [refreshKey, setRefreshKey] = useState(0)
 
   const handleCheckInSuccess = () => {
@@ -69,13 +71,18 @@ function Inventory() {
             <button onClick={() => setShowCheckIn(true)} className="btn btn-primary">
               Check-In
             </button>
-            <button onClick={() => setShowCreateItem(true)} className="btn btn-primary">
-              Create New Item
+            <button onClick={() => setShowIndirectMaterialCheckout(true)} className="btn btn-primary">
+              Checkout Indirect Material
             </button>
             <button onClick={() => setShowReverseCheckIn(true)} className="btn btn-danger">
               UNFK
             </button>
           </>
+        )}
+        {activeTab === 'items' && (
+          <button onClick={() => setShowCreateItem(true)} className="btn btn-primary">
+            Create New Item
+          </button>
         )}
         {activeTab === 'purchase-orders' && (
           <button onClick={() => setShowCreatePO(true)} className="btn btn-primary">
@@ -117,6 +124,15 @@ function Inventory() {
         <CreatePurchaseOrder
           onClose={() => setShowCreatePO(false)}
           onSuccess={handleCreatePOSuccess}
+        />
+      )}
+      {showIndirectMaterialCheckout && (
+        <IndirectMaterialCheckout
+          onClose={() => setShowIndirectMaterialCheckout(false)}
+          onSuccess={() => {
+            setShowIndirectMaterialCheckout(false)
+            setRefreshKey(prev => prev + 1)
+          }}
         />
       )}
     </div>

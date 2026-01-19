@@ -7,7 +7,8 @@ import {
   revisePurchaseOrder,
   cancelPurchaseOrder,
   deletePurchaseOrder,
-  updateDeliveryFromTracking
+  updateDeliveryFromTracking,
+  getPurchaseOrderPdfUrl,
 } from '../../api/purchaseOrders'
 import { formatCurrency, formatNumber } from '../../utils/formatNumber'
 import './PurchaseOrderList.css'
@@ -289,7 +290,19 @@ function PurchaseOrderList() {
               <div className="info-item">
                 <label>PO Number:</label>
                 <span>
-                  {selectedPO.po_number}
+                  <a
+                    href={getPurchaseOrderPdfUrl(selectedPO.id)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{ color: '#0066cc', textDecoration: 'underline', cursor: 'pointer' }}
+                    onClick={(e) => {
+                      e.preventDefault()
+                      window.open(getPurchaseOrderPdfUrl(selectedPO.id), '_blank')
+                    }}
+                    title="Click to view/print purchase order PDF"
+                  >
+                    {selectedPO.po_number}
+                  </a>
                   {selectedPO.revision_number && selectedPO.revision_number > 0 && (
                     <span className="revision-badge">Rev {selectedPO.revision_number}</span>
                   )}
@@ -541,8 +554,20 @@ function PurchaseOrderList() {
               
               return (
               <tr key={po.id}>
-                <td>
-                  {po.po_number}
+                <td className="po-number">
+                  <a
+                    href={getPurchaseOrderPdfUrl(po.id)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{ color: '#0066cc', textDecoration: 'underline', cursor: 'pointer' }}
+                    onClick={(e) => {
+                      e.preventDefault()
+                      window.open(getPurchaseOrderPdfUrl(po.id), '_blank')
+                    }}
+                    title="Click to view/print purchase order PDF"
+                  >
+                    {po.po_number}
+                  </a>
                   {po.revision_number && po.revision_number > 0 && (
                     <span className="revision-badge"> Rev {po.revision_number}</span>
                   )}

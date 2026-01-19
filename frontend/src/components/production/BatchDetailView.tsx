@@ -17,6 +17,7 @@ interface Lot {
     sku: string
     name: string
     unit_of_measure: string
+    item_type?: string
   }
 }
 
@@ -210,7 +211,7 @@ function BatchDetailView({ batchId, onClose }: BatchDetailViewProps) {
 
           <div className="batch-inputs-section">
             <h3>Raw Material Lots Used</h3>
-            {batch.inputs && batch.inputs.length > 0 ? (
+            {batch.inputs && batch.inputs.filter(input => input.lot.item.item_type !== 'indirect_material').length > 0 ? (
               <table className="batch-lots-table">
                 <thead>
                   <tr>
@@ -225,7 +226,7 @@ function BatchDetailView({ batchId, onClose }: BatchDetailViewProps) {
                   </tr>
                 </thead>
                 <tbody>
-                  {batch.inputs.map((input) => (
+                  {batch.inputs.filter(input => input.lot.item.item_type !== 'indirect_material').map((input) => (
                     <tr key={input.id}>
                       <td>{input.lot.lot_number}</td>
                       <td>{input.lot.vendor_lot_number || 'N/A'}</td>
@@ -243,6 +244,35 @@ function BatchDetailView({ batchId, onClose }: BatchDetailViewProps) {
               <div className="empty-state">No raw material lots used</div>
             )}
           </div>
+
+          {/* Indirect Materials Section */}
+          {batch.inputs && batch.inputs.filter(input => input.lot.item.item_type === 'indirect_material').length > 0 && (
+            <div className="batch-inputs-section" style={{ marginTop: '20px' }}>
+              <h3>Indirect Materials Consumed</h3>
+              <table className="batch-lots-table">
+                <thead>
+                  <tr>
+                    <th>Lot Number</th>
+                    <th>Item</th>
+                    <th>SKU</th>
+                    <th>Quantity Used</th>
+                    <th>Unit</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {batch.inputs.filter(input => input.lot.item.item_type === 'indirect_material').map((input) => (
+                    <tr key={input.id}>
+                      <td>{input.lot.lot_number}</td>
+                      <td>{input.lot.item.name}</td>
+                      <td>{input.lot.item.sku}</td>
+                      <td>{convertQuantity(input.quantity_used, input.lot.item.unit_of_measure)}</td>
+                      <td>{getDisplayUnit(input.lot.item.unit_of_measure)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
 
           {batch.outputs && batch.outputs.length > 0 && (
             <div className="batch-outputs-section">

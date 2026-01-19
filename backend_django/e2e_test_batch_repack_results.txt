@@ -1,0 +1,25 @@
+================================================================================
+E2E TEST RESULTS: PRODUCTION AND REPACK BATCHES
+Date: 2026-01-19 12:05:30.613056
+================================================================================
+
+Passed: 15
+Failed: 0
+Warnings: 0
+
+PASSED TESTS:
+  [PASS] Setup test data - Item: BATCHTEST1768845930, Lot: BATCH-LOT-1768845930
+  [PASS] Create finished good item - SKU: FG-BATCH-1768845930
+  [PASS] Generate production batch number - Batch: BT-20260119-003
+  [PASS] Batch number has BT prefix
+  [PASS] Create production batch - Batch: BT-20260119-003, Input: 80 lbs
+  [PASS] Close production batch - Output lot: BT-20260119-003, Quantity: 100 lbs
+  [PASS] ProductionLog entry created - Log ID: 6
+  [PASS] Production batch visible in system
+  [PASS] Create distributed item for repack - SKU: DIST-REPACK-1768845930
+  [PASS] Generate repack batch number - Batch: R-20260119-004
+  [PASS] Batch number has R prefix
+  [PASS] Create repack batch - Batch: R-20260119-004, Input: 50 lbs
+  [PASS] Close repack batch - Output lot: R-20260119-004, Quantity: 50 ea
+  [PASS] ProductionLog entry created - Log ID: 7
+  [PASS] Repack batch visible in system

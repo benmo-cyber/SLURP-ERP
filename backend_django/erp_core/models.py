@@ -25,6 +25,9 @@ class Item(models.Model):
     vendor = models.CharField(max_length=255, blank=True, null=True, db_index=True)
     pack_size = models.FloatField(blank=True, null=True, help_text='Legacy field - use ItemPackSize model instead')
     price = models.FloatField(blank=True, null=True, help_text='Legacy field - use ItemPackSize model instead')
+    tariff = models.FloatField(default=0.0, help_text='Tariff rate (as decimal, e.g., 0.381 for 38.1%). Used for raw materials and distributed items.')
+    hts_code = models.CharField(max_length=50, blank=True, null=True, help_text='HTS (Harmonized Tariff Schedule) code for tariff calculation')
+    country_of_origin = models.CharField(max_length=255, blank=True, null=True, help_text='Country of origin for tariff calculation')
     on_order = models.FloatField(default=0.0, help_text='Quantity currently on order')
     approved_for_formulas = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -122,7 +125,7 @@ class LotNumberSequence(models.Model):
         ordering = ['-year_prefix', '-sequence_number']
 
 class PONumberSequence(models.Model):
-    """Sequence tracking for PO numbers (format: 2yy0000)"""
+    """Sequence tracking for PO numbers (format: 2yy000)"""
     year_prefix = models.CharField(max_length=2, unique=True)  # yy
     sequence_number = models.IntegerField(default=0)
     last_updated = models.DateTimeField(auto_now=True)
@@ -205,9 +208,11 @@ class InventoryTransaction(models.Model):
         ('production_output', 'Production Output'),
         ('repack_input', 'Repack Input'),
         ('repack_output', 'Repack Output'),
+        ('indirect_material_consumption', 'Indirect Material Consumption'),
+        ('indirect_material_checkout', 'Indirect Material Checkout'),
     ]
     
-    transaction_type = models.CharField(max_length=20, choices=TRANSACTION_TYPE_CHOICES)
+    transaction_type = models.CharField(max_length=30, choices=TRANSACTION_TYPE_CHOICES)
     lot = models.ForeignKey(Lot, on_delete=models.CASCADE, related_name='inventory_transactions')
     quantity = models.FloatField()
     transaction_date = models.DateTimeField(auto_now_add=True)
@@ -232,6 +237,8 @@ class LotTransactionLog(models.Model):
         ('deallocation', 'Deallocation'),
         ('manual', 'Manual'),
         ('reversal', 'Reversal/Cancellation'),
+        ('indirect_material_consumption', 'Indirect Material Consumption'),
+        ('indirect_material_checkout', 'Indirect Material Checkout'),
     ]
     
     lot = models.ForeignKey(Lot, on_delete=models.CASCADE, related_name='transaction_logs')
@@ -240,7 +247,7 @@ class LotTransactionLog(models.Model):
     item_name = models.CharField(max_length=255, help_text='Item name at time of transaction')
     vendor = models.CharField(max_length=255, blank=True, null=True, help_text='Vendor at time of transaction')
     
-    transaction_type = models.CharField(max_length=20, choices=TRANSACTION_TYPE_CHOICES, help_text='Type of transaction')
+    transaction_type = models.CharField(max_length=30, choices=TRANSACTION_TYPE_CHOICES, help_text='Type of transaction')
     quantity_before = models.FloatField(help_text='Quantity remaining before this transaction')
     quantity_change = models.FloatField(help_text='Quantity change (positive for additions, negative for reductions)')
     quantity_after = models.FloatField(help_text='Quantity remaining after this transaction')
@@ -676,7 +683,12 @@ class Vendor(models.Model):
     contact_name = models.CharField(max_length=255, blank=True, null=True)
     email = models.EmailField(blank=True, null=True)
     phone = models.CharField(max_length=50, blank=True, null=True)
-    address = models.TextField(blank=True, null=True)
+    address = models.TextField(blank=True, null=True, help_text='Legacy field - use street_address, city, state, country instead')
+    street_address = models.CharField(max_length=255, blank=True, null=True, help_text='Street address')
+    city = models.CharField(max_length=100, blank=True, null=True)
+    state = models.CharField(max_length=50, blank=True, null=True)
+    zip_code = models.CharField(max_length=20, blank=True, null=True)
+    country = models.CharField(max_length=100, blank=True, null=True, default='USA')
     approval_status = models.CharField(max_length=20, choices=APPROVAL_STATUS_CHOICES, default='pending')
     risk_profile = models.CharField(max_length=20, choices=RISK_PROFILE_CHOICES, default='2')
     risk_tier = models.CharField(max_length=20, choices=RISK_TIER_CHOICES, blank=True, null=True)
@@ -852,6 +864,27 @@ class CostMaster(models.Model):
             models.Index(fields=['vendor']),
             models.Index(fields=['vendor_material']),
         ]
+    
+    def calculate_landed_cost(self):
+        """Calculate landed cost based on Excel formula: (Price per kg * (1 + Tariff)) + Freight per kg"""
+        if self.price_per_kg is not None:
+            # Formula: (Price per kg * (1 + Tariff)) + Freight per kg
+            self.landed_cost_per_kg = (self.price_per_kg * (1 + (self.tariff or 0))) + (self.freight_per_kg or 0)
+            # Convert to lb
+            self.landed_cost_per_lb = self.landed_cost_per_kg / 2.20462
+        elif self.price_per_lb is not None:
+            # If only price_per_lb is available, convert to kg first
+            price_per_kg = self.price_per_lb * 2.20462
+            self.landed_cost_per_kg = (price_per_kg * (1 + (self.tariff or 0))) + (self.freight_per_kg or 0)
+            self.landed_cost_per_lb = self.landed_cost_per_kg / 2.20462
+        else:
+            self.landed_cost_per_kg = None
+            self.landed_cost_per_lb = None
+    
+    def save(self, *args, **kwargs):
+        """Override save to auto-calculate landed cost"""
+        self.calculate_landed_cost()
+        super().save(*args, **kwargs)
     
     def __str__(self):
         return f"{self.vendor_material} - {self.wwi_product_code or 'N/A'}"

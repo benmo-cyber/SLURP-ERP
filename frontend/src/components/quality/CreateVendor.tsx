@@ -14,7 +14,11 @@ function CreateVendor({ onClose, onSuccess }: CreateVendorProps) {
     contact_name: '',
     email: '',
     phone: '',
-    address: '',
+    street_address: '',
+    city: '',
+    state: '',
+    zip_code: '',
+    country: 'USA',
     risk_profile: '2',
     notes: '',
   })
@@ -37,7 +41,11 @@ function CreateVendor({ onClose, onSuccess }: CreateVendorProps) {
         contact_name: formData.contact_name || null,
         email: formData.email || null,
         phone: formData.phone || null,
-        address: formData.address || null,
+        street_address: formData.street_address || null,
+        city: formData.city || null,
+        state: formData.state || null,
+        zip_code: formData.zip_code || null,
+        country: formData.country || 'USA',
         risk_profile: formData.risk_profile,
         approval_status: 'pending',
         notes: formData.notes || null,
@@ -125,12 +133,50 @@ function CreateVendor({ onClose, onSuccess }: CreateVendorProps) {
           </div>
 
           <div className="form-group">
-            <label>Address</label>
-            <textarea
-              value={formData.address}
-              onChange={(e) => setFormData({ ...formData, address: e.target.value })}
-              rows={3}
+            <label>Street Address</label>
+            <input
+              type="text"
+              value={formData.street_address}
+              onChange={(e) => setFormData({ ...formData, street_address: e.target.value })}
             />
+          </div>
+
+          <div className="form-row">
+            <div className="form-group">
+              <label>City</label>
+              <input
+                type="text"
+                value={formData.city}
+                onChange={(e) => setFormData({ ...formData, city: e.target.value })}
+              />
+            </div>
+            <div className="form-group">
+              <label>State</label>
+              <input
+                type="text"
+                value={formData.state}
+                onChange={(e) => setFormData({ ...formData, state: e.target.value })}
+              />
+            </div>
+          </div>
+
+          <div className="form-row">
+            <div className="form-group">
+              <label>ZIP Code</label>
+              <input
+                type="text"
+                value={formData.zip_code}
+                onChange={(e) => setFormData({ ...formData, zip_code: e.target.value })}
+              />
+            </div>
+            <div className="form-group">
+              <label>Country</label>
+              <input
+                type="text"
+                value={formData.country}
+                onChange={(e) => setFormData({ ...formData, country: e.target.value })}
+              />
+            </div>
           </div>
 
           <div className="form-group">

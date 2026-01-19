@@ -57,7 +57,7 @@ class LotSerializer(serializers.ModelSerializer):
     pack_size_id = serializers.IntegerField(write_only=True, required=False, allow_null=True)
     received_date = serializers.DateTimeField(required=False, allow_null=True)
     quantity_remaining = serializers.SerializerMethodField()
-    lot_number = serializers.CharField(required=False, read_only=True)
+    lot_number = serializers.CharField(required=False, allow_blank=False)
     
     class Meta:
         model = Lot
@@ -141,12 +141,37 @@ class LotSerializer(serializers.ModelSerializer):
             # Default to quantity if status is not recognized
             validated_data['quantity_remaining'] = quantity
         
-        # Lot numbers should NEVER be generated here
-        # Lot numbers are ONLY generated when:
-        # 1. Production batch closure (output lots)
-        # 2. Repack batch closure (output lots)
-        # If lot_number is not provided, leave it blank (will be generated on batch closure)
-        # Raw materials should have lot_number set to vendor_lot_number in the view
+        # Ensure lot_number is set - database requires NOT NULL
+        # If not provided, it should have been set in the view's create method
+        # But as a safety fallback, generate one if still missing
+        if not validated_data.get('lot_number'):
+            # Import here to avoid circular import
+            from django.db import transaction
+            from django.utils import timezone
+            from .models import LotNumberSequence, Lot
+            
+            today = timezone.now()
+            year_prefix = today.strftime('%y')
+            
+            with transaction.atomic():
+                sequence, created = LotNumberSequence.objects.select_for_update().get_or_create(
+                    year_prefix=year_prefix,
+                    defaults={'sequence_number': 0}
+                )
+                sequence.sequence_number += 1
+                sequence.save()
+                lot_number = f"1{year_prefix}{sequence.sequence_number:05d}"
+                
+                # Ensure uniqueness
+                max_retries = 10
+                retry_count = 0
+                while Lot.objects.filter(lot_number=lot_number).exists() and retry_count < max_retries:
+                    sequence.sequence_number += 1
+                    sequence.save()
+                    lot_number = f"1{year_prefix}{sequence.sequence_number:05d}"
+                    retry_count += 1
+            
+            validated_data['lot_number'] = lot_number
         
         return super().create(validated_data)
 

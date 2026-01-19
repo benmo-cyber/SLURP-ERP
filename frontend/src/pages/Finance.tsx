@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import FinancialDashboard from '../components/finance/FinancialDashboard'
 import GeneralLedger from '../components/finance/GeneralLedger'
 import Invoices from '../components/finance/Invoices'
 import JournalEntries from '../components/finance/JournalEntries'
@@ -7,10 +8,12 @@ import FinancialReports from '../components/finance/FinancialReports'
 import CostMasterList from '../components/finance/CostMasterList'
 import AccountsPayable from '../components/finance/AccountsPayable'
 import AccountsReceivable from '../components/finance/AccountsReceivable'
+import PLActual from '../components/finance/PLActual'
+import PLProForma from '../components/finance/PLProForma'
 import './Finance.css'
 
 function Finance() {
-  const [activeTab, setActiveTab] = useState<'ledger' | 'invoices' | 'journal' | 'pricing' | 'reports' | 'cost-master' | 'ap' | 'ar'>('ledger')
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'ledger' | 'invoices' | 'journal' | 'pricing' | 'reports' | 'cost-master' | 'ap' | 'ar' | 'pl-actual' | 'pl-proforma'>('dashboard')
 
   return (
     <div className="finance-page">
@@ -19,6 +22,12 @@ function Finance() {
       </div>
 
       <div className="finance-tabs">
+        <button
+          className={`tab-button ${activeTab === 'dashboard' ? 'active' : ''}`}
+          onClick={() => setActiveTab('dashboard')}
+        >
+          Dashboard
+        </button>
         <button
           className={`tab-button ${activeTab === 'ledger' ? 'active' : ''}`}
           onClick={() => setActiveTab('ledger')}
@@ -67,9 +76,22 @@ function Finance() {
         >
           Accounts Receivable
         </button>
+        <button
+          className={`tab-button ${activeTab === 'pl-actual' ? 'active' : ''}`}
+          onClick={() => setActiveTab('pl-actual')}
+        >
+          P&L Actual
+        </button>
+        <button
+          className={`tab-button ${activeTab === 'pl-proforma' ? 'active' : ''}`}
+          onClick={() => setActiveTab('pl-proforma')}
+        >
+          P&L Pro-Forma
+        </button>
       </div>
 
       <div className="finance-content">
+        {activeTab === 'dashboard' && <FinancialDashboard />}
         {activeTab === 'ledger' && <GeneralLedger />}
         {activeTab === 'invoices' && <Invoices />}
         {activeTab === 'journal' && <JournalEntries />}
@@ -78,6 +100,8 @@ function Finance() {
         {activeTab === 'cost-master' && <CostMasterList />}
         {activeTab === 'ap' && <AccountsPayable />}
         {activeTab === 'ar' && <AccountsReceivable />}
+        {activeTab === 'pl-actual' && <PLActual />}
+        {activeTab === 'pl-proforma' && <PLProForma />}
       </div>
     </div>
   )

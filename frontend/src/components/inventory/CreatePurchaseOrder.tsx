@@ -179,11 +179,15 @@ function CreatePurchaseOrder({ onClose, onSuccess }: CreatePurchaseOrderProps) {
       const vendor = vendors.find(v => String(v.id) === vendorIdStr)
       
       if (vendor) {
-        // Update vendor address fields if available - do it in one state update
+        // Update vendor address fields if available - use structured fields if available, fallback to legacy address
         setFormData(prev => ({ 
           ...prev, 
           vendor_id: vendorIdStr,
-          vendor_address: vendor.address || prev.vendor_address || ''
+          vendor_address: vendor.street_address || vendor.address || prev.vendor_address || '',
+          vendor_city: vendor.city || prev.vendor_city || '',
+          vendor_state: vendor.state || prev.vendor_state || '',
+          vendor_zip: vendor.zip_code || prev.vendor_zip || '',
+          vendor_country: vendor.country || prev.vendor_country || 'USA'
         }))
         
         // Clear all PO items when vendor changes since items are vendor-specific
