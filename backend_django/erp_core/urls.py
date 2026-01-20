@@ -9,7 +9,7 @@ from .views import (
     InvoiceViewSet, CalendarEventsViewSet, CustomerViewSet, CustomerPricingViewSet, VendorPricingViewSet,
     ShipToLocationViewSet, CustomerContactViewSet, SalesCallViewSet,
     CustomerForecastViewSet, CustomerUsageViewSet, LotDepletionLogViewSet, LotTransactionLogViewSet,
-    PurchaseOrderLogViewSet, ProductionLogViewSet,     FiscalPeriodViewSet, JournalEntryViewSet,
+    PurchaseOrderLogViewSet, ProductionLogViewSet, CheckInLogViewSet, FiscalPeriodViewSet, JournalEntryViewSet,
     GeneralLedgerViewSet, AccountBalanceViewSet, FinancialReportsViewSet,
     AccountsPayableViewSet, AccountsReceivableViewSet, PaymentViewSet
 )
@@ -44,6 +44,7 @@ router.register(r'lot-depletion-logs', LotDepletionLogViewSet, basename='lot-dep
 router.register(r'lot-transaction-logs', LotTransactionLogViewSet, basename='lot-transaction-logs')
 router.register(r'purchase-order-logs', PurchaseOrderLogViewSet, basename='purchase-order-logs')
 router.register(r'production-logs', ProductionLogViewSet, basename='production-logs')
+router.register(r'check-in-logs', CheckInLogViewSet, basename='check-in-logs')
 router.register(r'fiscal-periods', FiscalPeriodViewSet, basename='fiscal-periods')
 router.register(r'journal-entries', JournalEntryViewSet, basename='journal-entries')
 router.register(r'general-ledger', GeneralLedgerViewSet, basename='general-ledger')

@@ -1,18 +1,20 @@
 import React, { useState, useEffect } from 'react'
-import { getLotDepletionLogs, getLotTransactionLogs, getPurchaseOrderLogs, getProductionLogs, LotDepletionLog, LotTransactionLog, PurchaseOrderLog, ProductionLog } from '../../api/inventory'
+import { getLotDepletionLogs, getLotTransactionLogs, getPurchaseOrderLogs, getProductionLogs, getCheckInLogs, LotDepletionLog, LotTransactionLog, PurchaseOrderLog, ProductionLog, CheckInLog } from '../../api/inventory'
 import { formatNumber } from '../../utils/formatNumber'
 import './Logs.css'
 
 interface LogsProps {
-  defaultLogType?: 'depletion' | 'transactions' | 'purchase-orders' | 'production'
+  defaultLogType?: 'depletion' | 'transactions' | 'purchase-orders' | 'production' | 'check-ins'
 }
 
 function Logs({ defaultLogType = 'transactions' }: LogsProps) {
-  const [activeLogType, setActiveLogType] = useState<'depletion' | 'transactions' | 'purchase-orders' | 'production'>(defaultLogType)
+  const [activeLogType, setActiveLogType] = useState<'depletion' | 'transactions' | 'purchase-orders' | 'production' | 'check-ins'>(defaultLogType)
+  const [unitDisplay, setUnitDisplay] = useState<'lbs' | 'kg'>('lbs')
   const [depletionLogs, setDepletionLogs] = useState<LotDepletionLog[]>([])
   const [transactionLogs, setTransactionLogs] = useState<LotTransactionLog[]>([])
   const [poLogs, setPoLogs] = useState<PurchaseOrderLog[]>([])
   const [productionLogs, setProductionLogs] = useState<ProductionLog[]>([])
+  const [checkInLogs, setCheckInLogs] = useState<CheckInLog[]>([])
   const [loading, setLoading] = useState(true)
   
   const [depletionFilters, setDepletionFilters] = useState({
@@ -48,6 +50,22 @@ function Logs({ defaultLogType = 'transactions' }: LogsProps) {
     date_from: '',
     date_to: ''
   })
+  
+  const [checkInFilters, setCheckInFilters] = useState({
+    item_sku: '',
+    po_number: '',
+    date_from: '',
+    date_to: ''
+  })
+  
+  // Unit conversion helper
+  const convertQuantity = (quantity: number, fromUnit: 'lbs' | 'kg' | 'ea', toUnit: 'lbs' | 'kg'): number => {
+    if (fromUnit === 'ea' || toUnit === 'ea') return quantity
+    if (fromUnit === toUnit) return quantity
+    if (fromUnit === 'lbs' && toUnit === 'kg') return quantity * 0.453592
+    if (fromUnit === 'kg' && toUnit === 'lbs') return quantity * 2.20462
+    return quantity
+  }
 
   useEffect(() => {
     loadLogs()
@@ -84,6 +102,24 @@ function Logs({ defaultLogType = 'transactions' }: LogsProps) {
         if (productionFilters.date_to) activeFilters.date_to = productionFilters.date_to
         const data = await getProductionLogs(Object.keys(activeFilters).length > 0 ? activeFilters : undefined)
         setProductionLogs(Array.isArray(data) ? data : [])
+      } else if (activeLogType === 'check-ins') {
+        const activeFilters: any = {}
+        if (checkInFilters.item_sku) activeFilters.item_sku = checkInFilters.item_sku
+        if (checkInFilters.po_number) activeFilters.po_number = checkInFilters.po_number
+        if (checkInFilters.date_from) activeFilters.date_from = checkInFilters.date_from
+        if (checkInFilters.date_to) activeFilters.date_to = checkInFilters.date_to
+        const data = await getCheckInLogs(Object.keys(activeFilters).length > 0 ? activeFilters : undefined)
+        setCheckInLogs(Array.isArray(data) ? data : [])
+      } else if (activeLogType === 'transactions') {
+        const activeFilters: any = {}
+        if (transactionFilters.lot_number) activeFilters.lot_number = transactionFilters.lot_number
+        if (transactionFilters.sku) activeFilters.sku = transactionFilters.sku
+        if (transactionFilters.transaction_type) activeFilters.transaction_type = transactionFilters.transaction_type
+        if (transactionFilters.reference_number) activeFilters.reference_number = transactionFilters.reference_number
+        if (transactionFilters.date_from) activeFilters.date_from = transactionFilters.date_from
+        if (transactionFilters.date_to) activeFilters.date_to = transactionFilters.date_to
+        const data = await getLotTransactionLogs(Object.keys(activeFilters).length > 0 ? activeFilters : undefined)
+        setTransactionLogs(Array.isArray(data) ? data : [])
       }
     } catch (error: any) {
       console.error('Failed to load logs:', error)
@@ -93,7 +129,7 @@ function Logs({ defaultLogType = 'transactions' }: LogsProps) {
     }
   }
 
-  const handleFilterChange = (type: 'depletion' | 'transactions' | 'po' | 'production', field: string, value: string) => {
+  const handleFilterChange = (type: 'depletion' | 'transactions' | 'po' | 'production' | 'check-ins', field: string, value: string) => {
     if (type === 'depletion') {
       setDepletionFilters(prev => ({ ...prev, [field]: value }))
     } else if (type === 'transactions') {
@@ -102,6 +138,8 @@ function Logs({ defaultLogType = 'transactions' }: LogsProps) {
       setPoFilters(prev => ({ ...prev, [field]: value }))
     } else if (type === 'production') {
       setProductionFilters(prev => ({ ...prev, [field]: value }))
+    } else if (type === 'check-ins') {
+      setCheckInFilters(prev => ({ ...prev, [field]: value }))
     }
   }
 
@@ -118,6 +156,8 @@ function Logs({ defaultLogType = 'transactions' }: LogsProps) {
       setPoFilters({ po_number: '', vendor: '', action: '', lot_number: '', date_from: '', date_to: '' })
     } else if (activeLogType === 'production') {
       setProductionFilters({ batch_number: '', sku: '', batch_type: '', date_from: '', date_to: '' })
+    } else if (activeLogType === 'check-ins') {
+      setCheckInFilters({ item_sku: '', po_number: '', date_from: '', date_to: '' })
     }
     setTimeout(loadLogs, 100)
   }
@@ -166,8 +206,25 @@ function Logs({ defaultLogType = 'transactions' }: LogsProps) {
   return (
     <div className="logs-container">
       <div className="logs-header">
-        <h2>System Logs</h2>
-        <p className="subtitle">Track all system activities and transactions</p>
+        <div>
+          <h2>System Logs</h2>
+          <p className="subtitle">Track all system activities and transactions</p>
+        </div>
+        <div className="unit-toggle">
+          <label>Unit of Measure:</label>
+          <button
+            className={`unit-toggle-btn ${unitDisplay === 'lbs' ? 'active' : ''}`}
+            onClick={() => setUnitDisplay('lbs')}
+          >
+            lbs
+          </button>
+          <button
+            className={`unit-toggle-btn ${unitDisplay === 'kg' ? 'active' : ''}`}
+            onClick={() => setUnitDisplay('kg')}
+          >
+            kg
+          </button>
+        </div>
       </div>
 
       <div className="log-type-tabs">
@@ -194,6 +251,12 @@ function Logs({ defaultLogType = 'transactions' }: LogsProps) {
           onClick={() => setActiveLogType('production')}
         >
           Production Logs
+        </button>
+        <button
+          className={`log-type-tab ${activeLogType === 'check-ins' ? 'active' : ''}`}
+          onClick={() => setActiveLogType('check-ins')}
+        >
+          Check-In Logs
         </button>
       </div>
 
@@ -279,9 +342,9 @@ function Logs({ defaultLogType = 'transactions' }: LogsProps) {
                   <th>SKU</th>
                   <th>Item Name</th>
                   <th>Transaction Type</th>
-                  <th>Qty Before</th>
-                  <th>Qty Change</th>
-                  <th>Qty After</th>
+                  <th>Qty Before ({unitDisplay})</th>
+                  <th>Qty Change ({unitDisplay})</th>
+                  <th>Qty After ({unitDisplay})</th>
                   <th>Reference</th>
                   <th>Notes</th>
                 </tr>
@@ -303,11 +366,11 @@ function Logs({ defaultLogType = 'transactions' }: LogsProps) {
                           {log.transaction_type_display}
                         </span>
                       </td>
-                      <td>{formatNumber(log.quantity_before)}</td>
+                      <td>{formatNumber(convertQuantity(log.quantity_before, (log as any).unit_of_measure || 'lbs', unitDisplay))} {unitDisplay}</td>
                       <td className={log.quantity_change >= 0 ? 'quantity-positive' : 'quantity-negative'}>
-                        {log.quantity_change >= 0 ? '+' : ''}{formatNumber(log.quantity_change)}
+                        {log.quantity_change >= 0 ? '+' : ''}{formatNumber(convertQuantity(Math.abs(log.quantity_change), (log as any).unit_of_measure || 'lbs', unitDisplay))} {unitDisplay}
                       </td>
-                      <td>{formatNumber(log.quantity_after)}</td>
+                      <td>{formatNumber(convertQuantity(log.quantity_after, (log as any).unit_of_measure || 'lbs', unitDisplay))} {unitDisplay}</td>
                       <td>{log.reference_number || '-'}</td>
                       <td className="notes-cell">{log.notes || '-'}</td>
                     </tr>
@@ -388,10 +451,10 @@ function Logs({ defaultLogType = 'transactions' }: LogsProps) {
                   <th>SKU</th>
                   <th>Item Name</th>
                   <th>Vendor</th>
-                  <th>Initial Qty</th>
-                  <th>Qty Before</th>
-                  <th>Qty Used</th>
-                  <th>Final Qty</th>
+                  <th>Initial Qty ({unitDisplay})</th>
+                  <th>Qty Before ({unitDisplay})</th>
+                  <th>Qty Used ({unitDisplay})</th>
+                  <th>Final Qty ({unitDisplay})</th>
                   <th>Method</th>
                   <th>Reference</th>
                   <th>Notes</th>
@@ -410,11 +473,11 @@ function Logs({ defaultLogType = 'transactions' }: LogsProps) {
                       <td>{log.item_sku}</td>
                       <td>{log.item_name}</td>
                       <td>{log.vendor || '-'}</td>
-                      <td>{formatNumber(log.initial_quantity)}</td>
-                      <td>{formatNumber(log.quantity_before)}</td>
-                      <td className="quantity-used">{formatNumber(log.quantity_used)}</td>
+                      <td>{formatNumber(convertQuantity(log.initial_quantity, (log as any).unit_of_measure || 'lbs', unitDisplay))} {unitDisplay}</td>
+                      <td>{formatNumber(convertQuantity(log.quantity_before, (log as any).unit_of_measure || 'lbs', unitDisplay))} {unitDisplay}</td>
+                      <td className="quantity-used">{formatNumber(convertQuantity(log.quantity_used, (log as any).unit_of_measure || 'lbs', unitDisplay))} {unitDisplay}</td>
                       <td className={log.final_quantity < 0 ? 'negative' : 'zero'}>
-                        {formatNumber(log.final_quantity)}
+                        {formatNumber(convertQuantity(log.final_quantity, (log as any).unit_of_measure || 'lbs', unitDisplay))} {unitDisplay}
                       </td>
                       <td>
                         <span className={`method-badge ${getMethodBadgeClass(log.depletion_method)}`}>
@@ -623,11 +686,11 @@ function Logs({ defaultLogType = 'transactions' }: LogsProps) {
                   <th>Type</th>
                   <th>Finished Good SKU</th>
                   <th>Finished Good Name</th>
-                  <th>Qty Produced</th>
-                  <th>Qty Actual</th>
-                  <th>Variance</th>
-                  <th>Wastes</th>
-                  <th>Spills</th>
+                  <th>Qty Produced ({unitDisplay})</th>
+                  <th>Qty Actual ({unitDisplay})</th>
+                  <th>Variance ({unitDisplay})</th>
+                  <th>Wastes ({unitDisplay})</th>
+                  <th>Spills ({unitDisplay})</th>
                   <th>Output Lot</th>
                   <th>Production Date</th>
                   <th>Notes</th>
@@ -646,11 +709,11 @@ function Logs({ defaultLogType = 'transactions' }: LogsProps) {
                       <td>{log.batch_type}</td>
                       <td>{log.finished_good_sku}</td>
                       <td>{log.finished_good_name}</td>
-                      <td>{formatNumber(log.quantity_produced)}</td>
-                      <td>{formatNumber(log.quantity_actual)}</td>
-                      <td>{formatNumber(log.variance)}</td>
-                      <td>{formatNumber(log.wastes)}</td>
-                      <td>{formatNumber(log.spills)}</td>
+                      <td>{formatNumber(convertQuantity(log.quantity_produced, (log as any).unit_of_measure || 'lbs', unitDisplay))} {unitDisplay}</td>
+                      <td>{formatNumber(convertQuantity(log.quantity_actual, (log as any).unit_of_measure || 'lbs', unitDisplay))} {unitDisplay}</td>
+                      <td>{formatNumber(convertQuantity(log.variance, (log as any).unit_of_measure || 'lbs', unitDisplay))} {unitDisplay}</td>
+                      <td>{formatNumber(convertQuantity(log.wastes, (log as any).unit_of_measure || 'lbs', unitDisplay))} {unitDisplay}</td>
+                      <td>{formatNumber(convertQuantity(log.spills, (log as any).unit_of_measure || 'lbs', unitDisplay))} {unitDisplay}</td>
                       <td>{log.output_lot_number || '-'}</td>
                       <td>{formatDate(log.production_date)}</td>
                       <td className="notes-cell">{log.notes || '-'}</td>
@@ -663,9 +726,126 @@ function Logs({ defaultLogType = 'transactions' }: LogsProps) {
         </>
       )}
 
+      {/* Check-In Logs */}
+      {activeLogType === 'check-ins' && (
+        <>
+          <div className="filters-section">
+            <div className="filters-grid">
+              <div className="filter-group">
+                <label>Item SKU</label>
+                <input
+                  type="text"
+                  value={checkInFilters.item_sku}
+                  onChange={(e) => handleFilterChange('check-ins', 'item_sku', e.target.value)}
+                  placeholder="Filter by SKU"
+                />
+              </div>
+              <div className="filter-group">
+                <label>PO Number</label>
+                <input
+                  type="text"
+                  value={checkInFilters.po_number}
+                  onChange={(e) => handleFilterChange('check-ins', 'po_number', e.target.value)}
+                  placeholder="Filter by PO number"
+                />
+              </div>
+              <div className="filter-group">
+                <label>Date From</label>
+                <input
+                  type="datetime-local"
+                  value={checkInFilters.date_from}
+                  onChange={(e) => handleFilterChange('check-ins', 'date_from', e.target.value)}
+                />
+              </div>
+              <div className="filter-group">
+                <label>Date To</label>
+                <input
+                  type="datetime-local"
+                  value={checkInFilters.date_to}
+                  onChange={(e) => handleFilterChange('check-ins', 'date_to', e.target.value)}
+                />
+              </div>
+            </div>
+            <div className="filter-actions">
+              <button onClick={handleApplyFilters} className="btn-apply">Apply Filters</button>
+              <button onClick={handleClearFilters} className="btn-clear">Clear Filters</button>
+            </div>
+          </div>
+
+          <div className="logs-table-wrapper">
+            <table className="logs-table">
+              <thead>
+                <tr>
+                  <th>Checked In At</th>
+                  <th>Lot Number</th>
+                  <th>Vendor Lot #</th>
+                  <th>SKU</th>
+                  <th>Item Name</th>
+                  <th>PO Number</th>
+                  <th>Vendor</th>
+                  <th>Quantity ({unitDisplay})</th>
+                  <th>Status</th>
+                  <th>Carrier</th>
+                  <th>COA</th>
+                  <th>Prod Free Pests</th>
+                  <th>Carrier Free Pests</th>
+                  <th>Shipment Accepted</th>
+                  <th>Initials</th>
+                  <th>Short Reason</th>
+                  <th>Notes</th>
+                </tr>
+              </thead>
+              <tbody>
+                {checkInLogs.length === 0 ? (
+                  <tr>
+                    <td colSpan={17} className="no-data">No check-in logs found</td>
+                  </tr>
+                ) : (
+                  checkInLogs.map((log) => (
+                    <tr key={log.id}>
+                      <td>{formatDate(log.checked_in_at)}</td>
+                      <td><strong>{log.lot_number}</strong></td>
+                      <td>{log.vendor_lot_number || '-'}</td>
+                      <td>{log.item_sku}</td>
+                      <td>{log.item_name}</td>
+                      <td>{log.po_number || '-'}</td>
+                      <td>{log.vendor_name || '-'}</td>
+                      <td>{formatNumber(convertQuantity(log.quantity, log.quantity_unit, unitDisplay))} {unitDisplay}</td>
+                      <td>
+                        <span className={`method-badge ${getMethodBadgeClass(log.status)}`}>
+                          {log.status}
+                        </span>
+                      </td>
+                      <td>{log.carrier || '-'}</td>
+                      <td>{log.coa ? 'Yes' : 'No'}</td>
+                      <td>{log.prod_free_pests ? 'Yes' : 'No'}</td>
+                      <td>{log.carrier_free_pests ? 'Yes' : 'No'}</td>
+                      <td>{log.shipment_accepted ? 'Yes' : 'No'}</td>
+                      <td>{log.initials || '-'}</td>
+                      <td>{log.short_reason || '-'}</td>
+                      <td className="notes-cell">{log.notes || '-'}</td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+
       <div className="logs-summary">
-        <p>Total {activeLogType === 'depletion' ? 'depletion' : activeLogType === 'purchase-orders' ? 'purchase order' : 'production'} logs: <strong>
-          {activeLogType === 'depletion' ? depletionLogs.length : activeLogType === 'purchase-orders' ? poLogs.length : productionLogs.length}
+        <p>Total {
+          activeLogType === 'depletion' ? 'depletion' : 
+          activeLogType === 'purchase-orders' ? 'purchase order' : 
+          activeLogType === 'production' ? 'production' :
+          activeLogType === 'check-ins' ? 'check-in' :
+          'transaction'
+        } logs: <strong>
+          {activeLogType === 'depletion' ? depletionLogs.length : 
+           activeLogType === 'purchase-orders' ? poLogs.length : 
+           activeLogType === 'production' ? productionLogs.length :
+           activeLogType === 'check-ins' ? checkInLogs.length :
+           transactionLogs.length}
         </strong></p>
       </div>
     </div>

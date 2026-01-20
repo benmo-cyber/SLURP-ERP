@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { getItems, getFormulas, getLots, createProductionBatch, getItemPackSizes } from '../../api/inventory'
+import { getItems, getFormulas, getLots, createProductionBatch, getItemPackSizes, getPartialLots } from '../../api/inventory'
 import { formatNumber } from '../../utils/formatNumber'
 import './CreateBatchTicket.css'
 
@@ -60,6 +60,8 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
   const [indirectMaterialLots, setIndirectMaterialLots] = useState<Lot[]>([])
   const [selectedIndirectMaterials, setSelectedIndirectMaterials] = useState<{ [key: number]: number }>({})
   const [indirectMaterialInputValues, setIndirectMaterialInputValues] = useState<{ [key: number]: string }>({})
+  const [partialLots, setPartialLots] = useState<Lot[]>([])
+  const [selectedPartials, setSelectedPartials] = useState<Set<number>>(new Set())
 
   useEffect(() => {
     loadData()
@@ -83,8 +85,13 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
         alert(`No formula found for ${selectedFinishedGood.sku}. Please create a formula first.`)
       }
       setSelectedFormula(formula || null)
+      
+      // Load partial lots for this finished good
+      loadPartialLots(selectedFinishedGood.id)
     } else {
       setSelectedFormula(null)
+      setPartialLots([])
+      setSelectedPartials(new Set())
     }
     
     if (batchType === 'repack') {
@@ -119,6 +126,27 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
     }
   }, [batchType, selectedFormula, allLots])
 
+
+  const loadPartialLots = async (finishedGoodItemId: number) => {
+    try {
+      const partials = await getPartialLots(finishedGoodItemId)
+      setPartialLots(partials)
+      console.log('Loaded partial lots:', partials)
+    } catch (error) {
+      console.error('Failed to load partial lots:', error)
+      setPartialLots([])
+    }
+  }
+
+  const handlePartialToggle = (lotId: number) => {
+    const newSelected = new Set(selectedPartials)
+    if (newSelected.has(lotId)) {
+      newSelected.delete(lotId)
+    } else {
+      newSelected.add(lotId)
+    }
+    setSelectedPartials(newSelected)
+  }
 
   const loadData = async () => {
     try {
@@ -454,6 +482,12 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
 
       if (batchType === 'production') {
         batchData.finished_good_item_id = selectedFinishedGood!.id
+        // Add selected partials to work in (will be processed when batch is closed)
+        if (selectedPartials.size > 0) {
+          batchData.work_in_partials = Array.from(selectedPartials).map(lotId => ({
+            lot_id: lotId
+          }))
+        }
       } else {
         batchData.finished_good_item_id = selectedRepackItem!.id
         if (outputPackSizeId) {
@@ -625,6 +659,46 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
                 </div>
               </div>
             </>
+          )}
+
+          {batchType === 'production' && selectedFinishedGood && partialLots.length > 0 && (
+            <div className="form-group">
+              <label className="section-label">Work In Partials (Optional)</label>
+              <p className="section-hint">
+                Select partial lots (quantities less than pack size) to work into this batch. 
+                These will be combined with the new production when the batch is closed.
+              </p>
+              <div className="lots-grid" style={{ marginTop: '10px' }}>
+                {partialLots.map((lot) => (
+                  <div 
+                    key={lot.id} 
+                    className={`lot-card ${selectedPartials.has(lot.id) ? 'selected' : ''}`}
+                    style={{ cursor: 'pointer' }}
+                    onClick={() => handlePartialToggle(lot.id)}
+                  >
+                    <div className="lot-card-header">
+                      <input
+                        type="checkbox"
+                        checked={selectedPartials.has(lot.id)}
+                        onChange={() => handlePartialToggle(lot.id)}
+                        onClick={(e) => e.stopPropagation()}
+                        style={{ marginRight: '8px' }}
+                      />
+                      <span className="lot-number-badge">{lot.lot_number}</span>
+                      <span className="lot-available-badge" style={{ background: '#ffc107', color: '#000' }}>
+                        Partial: {formatNumber(lot.quantity_remaining)} {lot.item.unit_of_measure}
+                      </span>
+                    </div>
+                    <div className="lot-info">
+                      <span>Received: {new Date(lot.received_date).toLocaleDateString()}</span>
+                      {lot.pack_size_obj && (
+                        <span>Pack Size: {formatNumber(lot.pack_size_obj.pack_size)} {lot.pack_size_obj.pack_size_unit}</span>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
           )}
 
           <div className="form-row">

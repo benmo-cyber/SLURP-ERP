@@ -251,6 +251,7 @@ class LotTransactionLog(models.Model):
     quantity_before = models.FloatField(help_text='Quantity remaining before this transaction')
     quantity_change = models.FloatField(help_text='Quantity change (positive for additions, negative for reductions)')
     quantity_after = models.FloatField(help_text='Quantity remaining after this transaction')
+    unit_of_measure = models.CharField(max_length=10, choices=Item.UNIT_CHOICES, default='lbs', help_text='Unit of measure for quantities')
     
     reference_number = models.CharField(max_length=100, blank=True, null=True, help_text='Batch number, SO number, PO number, etc.')
     reference_type = models.CharField(max_length=50, blank=True, null=True, help_text='Type of reference (batch_number, so_number, po_number, etc.)')
@@ -299,6 +300,7 @@ class LotDepletionLog(models.Model):
     quantity_before = models.FloatField(help_text='Quantity remaining before this transaction')
     quantity_used = models.FloatField(help_text='Quantity used in this transaction')
     final_quantity = models.FloatField(help_text='Quantity remaining after this transaction (should be 0 or negative)')
+    unit_of_measure = models.CharField(max_length=10, choices=Item.UNIT_CHOICES, default='lbs', help_text='Unit of measure for quantities')
     
     depletion_method = models.CharField(max_length=20, choices=DEPLETION_METHOD_CHOICES, help_text='How the lot was depleted')
     reference_number = models.CharField(max_length=100, blank=True, null=True, help_text='Batch number, SO number, etc.')
@@ -452,6 +454,7 @@ class ProductionLog(models.Model):
     variance = models.FloatField(default=0.0)
     wastes = models.FloatField(default=0.0)
     spills = models.FloatField(default=0.0)
+    unit_of_measure = models.CharField(max_length=10, choices=Item.UNIT_CHOICES, default='lbs', help_text='Unit of measure for quantities')
     
     # Dates
     production_date = models.DateTimeField(help_text='When batch was produced')
@@ -486,6 +489,61 @@ class ProductionLog(models.Model):
     
     def __str__(self):
         return f"Batch {self.batch_number} closed on {self.closed_date.strftime('%Y-%m-%d %H:%M')}"
+
+
+class CheckInLog(models.Model):
+    """Comprehensive log of all material check-ins with complete form data"""
+    lot = models.ForeignKey(Lot, on_delete=models.SET_NULL, related_name='check_in_logs', null=True, blank=True, help_text='Related lot (null if lot was deleted)')
+    lot_number = models.CharField(max_length=100, db_index=True, help_text='Lot number at time of check-in')
+    
+    # Item information
+    item_id = models.IntegerField(blank=True, null=True)
+    item_sku = models.CharField(max_length=255, db_index=True)
+    item_name = models.CharField(max_length=255)
+    item_type = models.CharField(max_length=50, choices=Item.ITEM_TYPE_CHOICES)
+    item_unit_of_measure = models.CharField(max_length=10, choices=Item.UNIT_CHOICES)
+    
+    # Purchase order information
+    po_number = models.CharField(max_length=100, blank=True, null=True, db_index=True)
+    vendor_name = models.CharField(max_length=255, blank=True, null=True)
+    
+    # Check-in form data
+    received_date = models.DateTimeField(help_text='Date material was received')
+    vendor_lot_number = models.CharField(max_length=100, blank=True, null=True)
+    quantity = models.FloatField(help_text='Quantity received in item native unit')
+    quantity_unit = models.CharField(max_length=10, choices=Item.UNIT_CHOICES, default='lbs', help_text='Unit of measure for quantity')
+    status = models.CharField(max_length=20, choices=Lot.STATUS_CHOICES, default='accepted')
+    short_reason = models.TextField(blank=True, null=True, help_text='Reason for short quantity if applicable')
+    
+    # Quality control fields
+    coa = models.BooleanField(default=False, help_text='Certificate of Analysis received')
+    prod_free_pests = models.BooleanField(default=False, help_text='Product free of pests')
+    carrier_free_pests = models.BooleanField(default=False, help_text='Carrier free of pests')
+    shipment_accepted = models.BooleanField(default=False, help_text='Shipment accepted')
+    initials = models.CharField(max_length=50, blank=True, null=True, help_text='Initials of person who checked in')
+    
+    # Additional information
+    carrier = models.CharField(max_length=255, blank=True, null=True)
+    freight_actual = models.FloatField(blank=True, null=True, help_text='Actual freight cost')
+    notes = models.TextField(blank=True, null=True, help_text='Additional notes from check-in')
+    
+    # Metadata
+    checked_in_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    checked_in_by = models.CharField(max_length=255, blank=True, null=True, help_text='User who performed check-in')
+    
+    class Meta:
+        ordering = ['-checked_in_at']
+        verbose_name = 'Check-In Log'
+        verbose_name_plural = 'Check-In Logs'
+        indexes = [
+            models.Index(fields=['-checked_in_at']),
+            models.Index(fields=['item_sku', '-checked_in_at']),
+            models.Index(fields=['po_number', '-checked_in_at']),
+            models.Index(fields=['lot_number', '-checked_in_at']),
+        ]
+    
+    def __str__(self):
+        return f"Check-in: {self.item_sku} - {self.quantity} {self.quantity_unit} on {self.checked_in_at.strftime('%Y-%m-%d %H:%M')}"
 
 
 class Formula(models.Model):

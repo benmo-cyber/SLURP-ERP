@@ -578,6 +578,13 @@ function CheckInForm({ onClose, onSuccess }: CheckInFormProps) {
           vendor_lot_number: row.vendor_lot_number && row.vendor_lot_number.trim() ? row.vendor_lot_number.trim() : null,
           status: row.status,
           short_reason: row.short_reason && row.short_reason.trim() ? row.short_reason.trim() : null,
+          // Include all check-in form fields
+          coa: row.coa || false,
+          prod_free_pests: row.prod_free_pests || false,
+          carrier_free_pests: row.carrier_free_pests || false,
+          shipment_accepted: row.shipment_accepted || false,
+          initials: row.initials || '',
+          carrier: row.carrier || '',
         }
         
         console.log('Submitting check-in data:', checkInData)

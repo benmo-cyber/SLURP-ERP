@@ -82,6 +82,14 @@ export const createLot = async (data: any) => {
   if (data.po_number) payload.po_number = data.po_number
   if (data.vendor_lot_number) payload.vendor_lot_number = data.vendor_lot_number
   if (data.short_reason && data.short_reason.trim()) payload.short_reason = data.short_reason.trim()
+  // Add check-in form fields
+  if (data.coa !== undefined) payload.coa = data.coa
+  if (data.prod_free_pests !== undefined) payload.prod_free_pests = data.prod_free_pests
+  if (data.carrier_free_pests !== undefined) payload.carrier_free_pests = data.carrier_free_pests
+  if (data.shipment_accepted !== undefined) payload.shipment_accepted = data.shipment_accepted
+  if (data.initials) payload.initials = data.initials
+  if (data.carrier) payload.carrier = data.carrier
+  if (data.notes) payload.notes = data.notes
   
   console.log('API payload:', payload)
   const response = await api.post('/lots/', payload)
@@ -122,6 +130,11 @@ export const createProductionBatch = async (data: any) => {
 
 export const reverseBatchTicket = async (batchId: number) => {
   const response = await api.post(`/production-batches/${batchId}/reverse/`)
+  return response.data
+}
+
+export const getPartialLots = async (finishedGoodItemId: number) => {
+  const response = await api.get(`/production-batches/partials/?finished_good_item_id=${finishedGoodItemId}`)
   return response.data
 }
 
@@ -384,6 +397,53 @@ export const getProductionLogs = async (filters?: {
   if (filters?.date_to) params.append('date_to', filters.date_to)
   
   const url = params.toString() ? `/production-logs/?${params}` : '/production-logs/'
+  const response = await api.get(url)
+  return response.data.results || response.data
+}
+
+// Check-In Logs API
+export interface CheckInLog {
+  id: number
+  lot?: number
+  lot_number: string
+  item_id?: number
+  item_sku: string
+  item_name: string
+  item_type: string
+  item_unit_of_measure: 'lbs' | 'kg' | 'ea'
+  po_number?: string
+  vendor_name?: string
+  received_date: string
+  vendor_lot_number?: string
+  quantity: number
+  quantity_unit: 'lbs' | 'kg' | 'ea'
+  status: 'accepted' | 'rejected' | 'on_hold'
+  short_reason?: string
+  coa: boolean
+  prod_free_pests: boolean
+  carrier_free_pests: boolean
+  shipment_accepted: boolean
+  initials?: string
+  carrier?: string
+  freight_actual?: number
+  notes?: string
+  checked_in_at: string
+  checked_in_by?: string
+}
+
+export const getCheckInLogs = async (filters?: {
+  item_sku?: string
+  po_number?: string
+  date_from?: string
+  date_to?: string
+}) => {
+  const params = new URLSearchParams()
+  if (filters?.item_sku) params.append('item_sku', filters.item_sku)
+  if (filters?.po_number) params.append('po_number', filters.po_number)
+  if (filters?.date_from) params.append('date_from', filters.date_from)
+  if (filters?.date_to) params.append('date_to', filters.date_to)
+  
+  const url = params.toString() ? `/check-in-logs/?${params}` : '/check-in-logs/'
   const response = await api.get(url)
   return response.data.results || response.data
 }

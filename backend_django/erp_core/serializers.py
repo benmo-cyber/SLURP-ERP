@@ -5,7 +5,7 @@ from .models import (
     InventoryTransaction, Vendor, VendorHistory, SupplierSurvey,
     SupplierDocument, TemporaryException, CostMaster, CostMasterHistory, Account,
     FinishedProductSpecification, Customer, CustomerPricing, VendorPricing, SalesOrderLot, Invoice, InvoiceItem,
-    ShipToLocation, CustomerContact, SalesCall, CustomerForecast, LotDepletionLog, LotTransactionLog, PurchaseOrderLog, ProductionLog,
+    ShipToLocation, CustomerContact, SalesCall, CustomerForecast, LotDepletionLog, LotTransactionLog, PurchaseOrderLog, ProductionLog, CheckInLog,
     Shipment, ShipmentItem, AccountsPayable, AccountsReceivable, Payment, FiscalPeriod, JournalEntry, JournalEntryLine, GeneralLedgerEntry, AccountBalance
 )
 
@@ -895,4 +895,17 @@ class ProductionLogSerializer(serializers.ModelSerializer):
         model = ProductionLog
         fields = '__all__'
         read_only_fields = ['logged_at']
+
+
+class CheckInLogSerializer(serializers.ModelSerializer):
+    item_display = serializers.SerializerMethodField()
+    lot_number_display = serializers.CharField(source='lot_number', read_only=True)
+    
+    class Meta:
+        model = CheckInLog
+        fields = '__all__'
+        read_only_fields = ['checked_in_at']
+    
+    def get_item_display(self, obj):
+        return f"{obj.item_sku} - {obj.item_name}"
 

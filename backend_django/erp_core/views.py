@@ -82,6 +82,7 @@ def log_lot_transaction(lot, quantity_before, quantity_change, transaction_type,
             quantity_before=quantity_before,
             quantity_change=quantity_change,
             quantity_after=quantity_after,
+            unit_of_measure=lot.item.unit_of_measure,
             reference_number=reference_number,
             reference_type=reference_type,
             transaction_id=transaction_id,
@@ -1011,6 +1012,7 @@ def log_production_batch_closure(batch, notes=None):
             variance=batch.variance,
             wastes=batch.wastes,
             spills=batch.spills,
+            unit_of_measure=batch.finished_good_item.unit_of_measure,
             production_date=batch.production_date,
             closed_date=batch.closed_date or timezone.now(),
             input_materials=json.dumps(input_materials),
@@ -2571,6 +2573,61 @@ class LotViewSet(viewsets.ModelViewSet):
                 except PurchaseOrder.DoesNotExist:
                     pass
         
+        # Log check-in to CheckInLog with all form data
+        try:
+            from .models import CheckInLog
+            
+            # Get all check-in form fields from request
+            coa = request.data.get('coa', False)
+            if isinstance(coa, str):
+                coa = coa.lower() in ('true', '1', 'yes')
+            
+            prod_free_pests = request.data.get('prod_free_pests', False)
+            if isinstance(prod_free_pests, str):
+                prod_free_pests = prod_free_pests.lower() in ('true', '1', 'yes')
+            
+            carrier_free_pests = request.data.get('carrier_free_pests', False)
+            if isinstance(carrier_free_pests, str):
+                carrier_free_pests = carrier_free_pests.lower() in ('true', '1', 'yes')
+            
+            shipment_accepted = request.data.get('shipment_accepted', False)
+            if isinstance(shipment_accepted, str):
+                shipment_accepted = shipment_accepted.lower() in ('true', '1', 'yes')
+            
+            CheckInLog.objects.create(
+                lot=lot,
+                lot_number=lot.lot_number or '',
+                item_id=lot.item.id,
+                item_sku=lot.item.sku,
+                item_name=lot.item.name,
+                item_type=lot.item.item_type,
+                item_unit_of_measure=lot.item.unit_of_measure,
+                po_number=lot.po_number,
+                vendor_name=lot.item.vendor if hasattr(lot.item, 'vendor') and lot.item.vendor else None,
+                received_date=lot.received_date,
+                vendor_lot_number=lot.vendor_lot_number,
+                quantity=lot.quantity,
+                quantity_unit=lot.item.unit_of_measure,  # Use item's native unit
+                status=lot_status,
+                short_reason=lot.short_reason,
+                coa=coa,
+                prod_free_pests=prod_free_pests,
+                carrier_free_pests=carrier_free_pests,
+                shipment_accepted=shipment_accepted,
+                initials=request.data.get('initials') or '',
+                carrier=request.data.get('carrier') or '',
+                freight_actual=lot.freight_actual,
+                notes=request.data.get('notes') or '',
+                checked_in_by=request.user.username if hasattr(request, 'user') and hasattr(request.user, 'username') else 'system'
+            )
+        except Exception as e:
+            # Log error but don't fail the check-in
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(f'Failed to log check-in for lot {lot.lot_number}: {str(e)}')
+            import traceback
+            logger.warning(traceback.format_exc())
+        
         headers = self.get_success_headers(serializer.data)
         return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
     
@@ -2812,6 +2869,7 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
         inputs_data = data.pop('inputs', [])
         outputs_data = data.pop('outputs', [])
         indirect_materials_data = data.pop('indirect_materials', [])  # Separate indirect materials
+        work_in_partials_data = data.pop('work_in_partials', [])  # Partial lots to work into this batch
         batch_type = data.get('batch_type', 'production')
         
         # Convert production_date from date string to datetime if needed
@@ -2958,6 +3016,15 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
                     status=status.HTTP_400_BAD_REQUEST
                 )
         
+        # Store work_in_partials in notes if provided (will be processed when closing)
+        if work_in_partials_data:
+            import json
+            partials_json = json.dumps(work_in_partials_data)
+            if data.get('notes'):
+                data['notes'] = f"{data['notes']}\n[WORK_IN_PARTIALS:{partials_json}]"
+            else:
+                data['notes'] = f"[WORK_IN_PARTIALS:{partials_json}]"
+        
         # Create the batch
         serializer = self.get_serializer(data=data)
         if not serializer.is_valid():
@@ -2970,6 +3037,9 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
         batch = serializer.save()
+        
+        # If batch is created as 'closed', work_in_partials will be processed in the update method
+        # when the status changes to closed. For now, we'll just ensure the batch gets saved with the notes.
         
         # Create inputs (second pass: actually create them - validation already done above)
         for input_data in inputs_data:
@@ -3225,6 +3295,9 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
         data = request.data.copy()
         new_status = data.get('status', old_status)
         
+        # Handle work_in_partials (partial lots to work into this batch)
+        work_in_partials_data = data.pop('work_in_partials', [])
+        
         # Handle inputs update if provided
         inputs_data = data.pop('inputs', None)
         if inputs_data is not None:
@@ -3238,6 +3311,23 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
                 # Restore the quantity that was used
                 lot.quantity_remaining = round(lot.quantity_remaining + existing_input.quantity_used, 2)
                 lot.save()
+                
+                # CRITICAL FIX: Delete or reverse the old inventory transaction
+                # Find and delete the old transaction for this batch input
+                old_transactions = InventoryTransaction.objects.filter(
+                    lot=lot,
+                    reference_number=instance.batch_number,
+                    transaction_type__in=['production_input', 'repack_input'],
+                    quantity__lt=0  # Negative quantity (consumption)
+                ).order_by('-transaction_date')
+                
+                # Delete the matching transaction(s) - should be one, but handle multiple
+                for old_txn in old_transactions:
+                    # Verify this transaction matches the input quantity (within rounding tolerance)
+                    if abs(abs(old_txn.quantity) - existing_input.quantity_used) < 0.01:
+                        old_txn.delete()
+                        break
+                
                 # Delete the old input
                 existing_input.delete()
             
@@ -3318,81 +3408,76 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
                 batch.closed_date = timezone.now()
                 batch.save()
             
+            # Extract work_in_partials from notes if they were stored there (from earlier update or creation)
+            work_in_partials_from_notes = []
+            if batch.notes:
+                import json
+                import re
+                # Look for [WORK_IN_PARTIALS:...] in notes
+                match = re.search(r'\[WORK_IN_PARTIALS:(.*?)\]', batch.notes)
+                if match:
+                    try:
+                        work_in_partials_from_notes = json.loads(match.group(1))
+                    except json.JSONDecodeError:
+                        pass
+            
+            # Use work_in_partials_data from request if provided, otherwise from notes
+            final_work_in_partials = work_in_partials_data if work_in_partials_data else work_in_partials_from_notes
+            
             # Log production batch closure
             log_production_batch_closure(batch, notes=f'Batch {batch.batch_number} closed')
             
             # Check if batch has outputs
-            if not batch.outputs.exists():
+            if batch.outputs.exists():
+                # Log that outputs already exist (batch may have been closed before)
+                import logging
+                logger = logging.getLogger(__name__)
+                existing_output = batch.outputs.first()
+                logger.info(f'Batch {batch.batch_number} already has output lot {existing_output.lot.lot_number if existing_output else "unknown"}')
+            else:
                 # Create output lot for production batches
                 if batch.batch_type == 'production':
-                    # Use quantity_actual if available, otherwise quantity_produced - round to 2 decimal places
-                    output_quantity = round(batch.quantity_actual if batch.quantity_actual and batch.quantity_actual > 0 else batch.quantity_produced, 2)
+                    # Use quantity_actual if available, otherwise quantity_produced
+                    # Subtract spills from the actual quantity to get the net sellable amount
+                    base_quantity = batch.quantity_actual if batch.quantity_actual and batch.quantity_actual > 0 else batch.quantity_produced
+                    spills_amount = batch.spills or 0
+                    # Calculate net output quantity (actual minus spills)
+                    output_quantity = round(max(0, base_quantity - spills_amount), 2)
                     item = batch.finished_good_item
+                    
+                    # Calculate total from partials worked in (if any)
+                    partial_quantities = []
+                    partial_lots_to_delete = []
+                    if final_work_in_partials:
+                        for partial_data in final_work_in_partials:
+                            partial_lot_id = partial_data.get('lot_id')
+                            if partial_lot_id:
+                                try:
+                                    partial_lot = Lot.objects.get(id=partial_lot_id, item=item, status='accepted')
+                                    if partial_lot.quantity_remaining > 0:
+                                        partial_qty = partial_lot.quantity_remaining
+                                        partial_quantities.append(partial_qty)
+                                        partial_lots_to_delete.append(partial_lot)
+                                except Lot.DoesNotExist:
+                                    pass
+                    
+                    # Add partial quantities to output quantity
+                    total_partial_qty = sum(partial_quantities)
+                    combined_output_quantity = round(output_quantity + total_partial_qty, 2)
                     
                     # Generate new lot number
                     lot_number = generate_lot_number()
                     
-                    # Create new lot
-                    new_lot = Lot.objects.create(
-                        lot_number=lot_number,
-                        item=item,
-                        quantity=output_quantity,
-                        quantity_remaining=output_quantity,
-                        received_date=timezone.now(),
-                        status='accepted'
-                    )
+                    # Get pack size for the lot (use default pack size for this item)
+                    pack_size = ItemPackSize.objects.filter(item=item, is_default=True, is_active=True).first()
                     
-                    # Create output record
-                    ProductionBatchOutput.objects.create(
-                        batch=batch,
-                        lot=new_lot,
-                        quantity_produced=output_quantity
-                    )
-                    
-                    # Create inventory transaction for output (add quantity)
-                    InventoryTransaction.objects.create(
-                        transaction_type='production_output',
-                        lot=new_lot,
-                        quantity=round(output_quantity, 2),
-                        notes=f'Production batch {batch.batch_number} output',
-                        reference_number=batch.batch_number
-                    )
-                    
-                    # Log the created lot for debugging
-                    import logging
-                    logger = logging.getLogger(__name__)
-                    logger.info(f'Created output lot {new_lot.lot_number} for batch {batch.batch_number}: item={item.sku}, quantity={output_quantity}, status={new_lot.status}')
-            
-            # For repack batches, create output lot when batch is closed (similar to production batches)
-            elif batch.batch_type == 'repack':
-                # Check if batch has outputs
-                if not batch.outputs.exists():
-                    # Calculate output quantity from inputs
-                    total_input_quantity = 0.0
-                    for input_item in batch.inputs.all():
-                        total_input_quantity += input_item.quantity_used
-                    
-                    output_quantity = round(total_input_quantity, 2)
-                    item = batch.finished_good_item
-                    
-                    # Get pack_size from first input or use default
-                    pack_size = None
-                    first_input = batch.inputs.first()
-                    if first_input and first_input.lot and first_input.lot.pack_size:
-                        pack_size = first_input.lot.pack_size
-                    else:
-                        pack_size = ItemPackSize.objects.filter(item=item, is_default=True, is_active=True).first()
-                    
-                    # Generate new lot number (ONLY on batch closure)
-                    lot_number = generate_lot_number()
-                    
-                    # Create new lot
+                    # Create new combined lot
                     new_lot = Lot.objects.create(
                         lot_number=lot_number,
                         item=item,
                         pack_size=pack_size,
-                        quantity=output_quantity,
-                        quantity_remaining=output_quantity,
+                        quantity=combined_output_quantity,
+                        quantity_remaining=combined_output_quantity,
                         received_date=timezone.now(),
                         status='accepted'
                     )
@@ -3401,33 +3486,168 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
                     ProductionBatchOutput.objects.create(
                         batch=batch,
                         lot=new_lot,
-                        quantity_produced=output_quantity
+                        quantity_produced=combined_output_quantity
                     )
                     
-                    # Create inventory transaction for output (add quantity)
-                    transaction = InventoryTransaction.objects.create(
-                        transaction_type='repack_output',
+                    # Create inventory transaction for new production output
+                    spills_note = f', spills: {spills_amount} lbs' if spills_amount > 0 else ''
+                    InventoryTransaction.objects.create(
+                        transaction_type='production_output',
                         lot=new_lot,
-                        quantity=output_quantity,
-                        notes=f'Repack batch {batch.batch_number} output',
+                        quantity=round(output_quantity, 2),  # New production quantity (after spills)
+                        notes=f'Production batch {batch.batch_number} output (actual: {base_quantity} lbs, net: {output_quantity} lbs{spills_note})',
                         reference_number=batch.batch_number
                     )
                     
-                    # Log the transaction
-                    log_lot_transaction(
-                        lot=new_lot,
-                        quantity_before=0.0,  # New lot
-                        quantity_change=output_quantity,
-                        transaction_type='repack_output',
-                        reference_number=batch.batch_number,
-                        reference_type='batch_number',
-                        transaction_id=transaction.id,
-                        batch_id=batch.id,
-                        notes=f'Repack batch {batch.batch_number} output - Distributed item relabeled/repacked'
-                    )
+                    # Create transactions for partials worked in and delete partial lots
+                    for partial_lot, partial_qty in zip(partial_lots_to_delete, partial_quantities):
+                        # Transaction for partial being worked in
+                        InventoryTransaction.objects.create(
+                            transaction_type='production_output',
+                            lot=new_lot,
+                            quantity=round(partial_qty, 2),
+                            notes=f'Production batch {batch.batch_number} - worked in partial from lot {partial_lot.lot_number}',
+                            reference_number=batch.batch_number
+                        )
+                        
+                        # Transaction to remove partial lot
+                        InventoryTransaction.objects.create(
+                            transaction_type='adjustment',
+                            lot=partial_lot,
+                            quantity=round(-partial_qty, 2),
+                            notes=f'Worked into batch {batch.batch_number}',
+                            reference_number=batch.batch_number
+                        )
+                        
+                        # Delete the partial lot
+                        partial_lot.delete()
+                    
+                    # Log the created lot for debugging
+                    import logging
+                    logger = logging.getLogger(__name__)
+                    work_in_note = f', worked in {total_partial_qty} lbs from partials' if total_partial_qty > 0 else ''
+                    spills_note = f' (actual: {base_quantity} lbs, spills: {spills_amount} lbs, net: {output_quantity} lbs)' if spills_amount > 0 else ''
+                    logger.info(f'Created output lot {new_lot.lot_number} for batch {batch.batch_number}: item={item.sku}, quantity={combined_output_quantity} lbs (new: {output_quantity}{work_in_note}{spills_note}), status={new_lot.status}')
+                
+                # For repack batches, create output lot when batch is closed (similar to production batches)
+                elif batch.batch_type == 'repack':
+                    # Check if batch has outputs
+                    if not batch.outputs.exists():
+                        # Calculate output quantity from inputs
+                        total_input_quantity = 0.0
+                        for input_item in batch.inputs.all():
+                            total_input_quantity += input_item.quantity_used
+                        
+                        output_quantity = round(total_input_quantity, 2)
+                        item = batch.finished_good_item
+                        
+                        # Get pack_size from first input or use default
+                        pack_size = None
+                        first_input = batch.inputs.first()
+                        if first_input and first_input.lot and first_input.lot.pack_size:
+                            pack_size = first_input.lot.pack_size
+                        else:
+                            pack_size = ItemPackSize.objects.filter(item=item, is_default=True, is_active=True).first()
+                        
+                        # Generate new lot number (ONLY on batch closure)
+                        lot_number = generate_lot_number()
+                        
+                        # Create new lot
+                        new_lot = Lot.objects.create(
+                            lot_number=lot_number,
+                            item=item,
+                            pack_size=pack_size,
+                            quantity=output_quantity,
+                            quantity_remaining=output_quantity,
+                            received_date=timezone.now(),
+                            status='accepted'
+                        )
+                        
+                        # Create output record
+                        ProductionBatchOutput.objects.create(
+                            batch=batch,
+                            lot=new_lot,
+                            quantity_produced=output_quantity
+                        )
+                        
+                        # Create inventory transaction for output (add quantity)
+                        transaction = InventoryTransaction.objects.create(
+                            transaction_type='repack_output',
+                            lot=new_lot,
+                            quantity=output_quantity,
+                            notes=f'Repack batch {batch.batch_number} output',
+                            reference_number=batch.batch_number
+                        )
+                        
+                        # Log the transaction
+                        log_lot_transaction(
+                            lot=new_lot,
+                            quantity_before=0.0,  # New lot
+                            quantity_change=output_quantity,
+                            transaction_type='repack_output',
+                            reference_number=batch.batch_number,
+                            reference_type='batch_number',
+                            transaction_id=transaction.id,
+                            batch_id=batch.id,
+                            notes=f'Repack batch {batch.batch_number} output - Distributed item relabeled/repacked'
+                        )
         
         # Return the updated batch
         serializer = self.get_serializer(batch)
+        return Response(serializer.data)
+    
+    @action(detail=False, methods=['get'], url_path='partials', url_name='partials')
+    def get_partial_lots(self, request):
+        """Get partial lots (finished good lots with quantity < pack size) for a specific finished good"""
+        finished_good_item_id = request.query_params.get('finished_good_item_id')
+        
+        if not finished_good_item_id:
+            return Response(
+                {'error': 'finished_good_item_id parameter is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            finished_good = Item.objects.get(id=finished_good_item_id, item_type='finished_good')
+        except Item.DoesNotExist:
+            return Response(
+                {'error': 'Finished good item not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Get all lots for this finished good that are accepted and have remaining quantity
+        lots = Lot.objects.filter(
+            item=finished_good,
+            status='accepted',
+            quantity_remaining__gt=0
+        ).select_related('item', 'pack_size').order_by('-received_date')
+        
+        # Filter to only include partials (quantity < pack size)
+        partial_lots = []
+        for lot in lots:
+            if lot.pack_size:
+                # Get pack size value in the same unit as lot quantity
+                pack_size_value = lot.pack_size.pack_size
+                pack_size_unit = lot.pack_size.pack_size_unit
+                
+                # Convert pack size to lbs if needed for comparison
+                if pack_size_unit == 'kg':
+                    pack_size_in_lbs = pack_size_value * 2.20462
+                elif pack_size_unit == 'lbs':
+                    pack_size_in_lbs = pack_size_value
+                else:
+                    # For 'ea' or other units, compare directly
+                    pack_size_in_lbs = pack_size_value
+                
+                # Check if lot quantity is less than pack size
+                if lot.quantity_remaining < pack_size_in_lbs:
+                    partial_lots.append(lot)
+            else:
+                # No pack size defined, skip (we need pack size to determine if it's a partial)
+                pass
+        
+        # Serialize the partial lots
+        serializer = LotSerializer(partial_lots, many=True)
         return Response(serializer.data)
     
     @action(detail=True, methods=['get'], url_path='pdf', url_name='pdf')
@@ -9886,6 +10106,37 @@ class FinancialReportsViewSet(viewsets.ViewSet):
             return f"{date.year}-Q{quarter}"
         else:  # monthly
             return f"{date.year}-{date.month:02d}"
+
+
+class CheckInLogViewSet(viewsets.ReadOnlyModelViewSet):
+    """ViewSet for CheckInLog - comprehensive check-in logs"""
+    from .models import CheckInLog
+    from .serializers import CheckInLogSerializer
+    queryset = CheckInLog.objects.select_related('lot', 'lot__item').all().order_by('-checked_in_at')
+    serializer_class = CheckInLogSerializer
+    
+    def get_queryset(self):
+        queryset = CheckInLog.objects.select_related('lot', 'lot__item').all().order_by('-checked_in_at')
+        
+        # Filter by item SKU
+        item_sku = self.request.query_params.get('item_sku')
+        if item_sku:
+            queryset = queryset.filter(item_sku=item_sku)
+        
+        # Filter by PO number
+        po_number = self.request.query_params.get('po_number')
+        if po_number:
+            queryset = queryset.filter(po_number=po_number)
+        
+        # Filter by date range
+        date_from = self.request.query_params.get('date_from')
+        date_to = self.request.query_params.get('date_to')
+        if date_from:
+            queryset = queryset.filter(checked_in_at__gte=date_from)
+        if date_to:
+            queryset = queryset.filter(checked_in_at__lte=date_to)
+        
+        return queryset
 
 
 class ProductionLogViewSet(viewsets.ReadOnlyModelViewSet):
