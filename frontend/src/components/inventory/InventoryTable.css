@@ -86,15 +86,40 @@
 }
 
 .table-wrapper {
-  overflow-x: auto;
+  overflow-x: visible;
+  width: 100%;
 }
 
 .inventory-table {
   width: 100%;
   border-collapse: separate;
   border-spacing: 0;
-  min-width: 1000px;
+  table-layout: fixed;
 }
+
+/* Column widths so all data fits without horizontal scroll */
+.inventory-table th:nth-child(1),
+.inventory-table td:nth-child(1) { width: 8%; }   /* SKU */
+.inventory-table th:nth-child(2),
+.inventory-table td:nth-child(2) { width: 16%; }  /* Description */
+.inventory-table th:nth-child(3),
+.inventory-table td:nth-child(3) { width: 10%; }  /* Vendor */
+.inventory-table th:nth-child(4),
+.inventory-table td:nth-child(4) { width: 6%; }   /* Pack Size */
+.inventory-table th:nth-child(5),
+.inventory-table td:nth-child(5) { width: 8%; }   /* Total */
+.inventory-table th:nth-child(6),
+.inventory-table td:nth-child(6) { width: 8%; }   /* Available */
+.inventory-table th:nth-child(7),
+.inventory-table td:nth-child(7) { width: 7%; }   /* On Order */
+.inventory-table th:nth-child(8),
+.inventory-table td:nth-child(8) { width: 9%; }   /* Alloc Sales */
+.inventory-table th:nth-child(9),
+.inventory-table td:nth-child(9) { width: 9%; }   /* Alloc Prod */
+.inventory-table th:nth-child(10),
+.inventory-table td:nth-child(10) { width: 6%; }   /* On Hold */
+.inventory-table th:nth-child(11),
+.inventory-table td:nth-child(11) { width: 5%; }  /* Lots */
 
 .inventory-table thead {
   background-color: #e0f2fe;
@@ -102,14 +127,16 @@
 }
 
 .inventory-table th {
-  padding: 0.875rem 1rem;
+  padding: 0.4rem 0.35rem;
   text-align: left;
   font-weight: 600;
-  font-size: 0.75rem;
+  font-size: 0.65rem;
   text-transform: uppercase;
-  letter-spacing: 0.5px;
+  letter-spacing: 0.03em;
   color: #6b7280;
-  white-space: nowrap;
+  white-space: normal;
+  line-height: 1.2;
+  word-break: break-word;
 }
 
 .sortable-header {
@@ -122,10 +149,13 @@
 }
 
 .inventory-table td {
-  padding: 1rem;
+  padding: 0.4rem 0.35rem;
   border-bottom: 1px solid #f3f4f6;
-  font-size: 0.875rem;
+  font-size: 0.75rem;
   color: #1f2937;
+  line-height: 1.2;
+  word-break: break-word;
+  overflow-wrap: break-word;
 }
 
 .inventory-table tbody tr {
@@ -324,6 +354,41 @@
   border: 1px solid #2196f3;
   border-radius: 3px;
   font-size: 0.9rem;
+}
+
+.committed-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.committed-badge {
+  display: inline-block;
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.committed-badge.committed-sales {
+  background-color: #dbeafe;
+  color: #1e40af;
+}
+
+.committed-badge.committed-production {
+  background-color: #fef3c7;
+  color: #92400e;
+}
+
+.committed-badge:not(.not-committed) {
+  background-color: #e0e7ff;
+  color: #3730a3;
+}
+
+.committed-badge.not-committed {
+  color: #9ca3af;
+  background-color: transparent;
 }
 
 .status-badge {

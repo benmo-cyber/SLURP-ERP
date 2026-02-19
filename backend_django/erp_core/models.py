@@ -555,6 +555,25 @@ class Formula(models.Model):
     )
     version = models.CharField(max_length=50, default='1.0')
     notes = models.TextField(blank=True, null=True)
+    
+    # Quality Control parameters
+    qc_parameter_name = models.CharField(
+        max_length=255, 
+        blank=True, 
+        null=True,
+        help_text='QC parameter name (e.g., norbixin, betanin, absorbance)'
+    )
+    qc_spec_min = models.FloatField(
+        blank=True, 
+        null=True,
+        help_text='Minimum acceptable value for QC parameter'
+    )
+    qc_spec_max = models.FloatField(
+        blank=True, 
+        null=True,
+        help_text='Maximum acceptable value for QC parameter'
+    )
+    
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     
@@ -755,6 +774,7 @@ class Vendor(models.Model):
     notes = models.TextField(blank=True, null=True)
     approved_date = models.DateTimeField(blank=True, null=True)
     approved_by = models.CharField(max_length=100, blank=True, null=True)
+    payment_terms = models.CharField(max_length=50, blank=True, null=True, help_text='Payment terms (e.g., "Net 30", "Net 60", "Due on Receipt")')
     
     # Compliance fields
     gfsi_certified = models.BooleanField(default=False)

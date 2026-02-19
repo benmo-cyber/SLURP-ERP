@@ -4,7 +4,7 @@ import './Calendar.css'
 
 interface CalendarEvent {
   id: string
-  type: 'shipment' | 'raw_material' | 'production'
+  type: 'shipment' | 'raw_material' | 'production' | 'receivable' | 'payable'
   title: string
   date: string
   sales_order_id?: number
@@ -19,6 +19,13 @@ interface CalendarEvent {
   batch_number?: string
   status?: string
   is_scheduled?: boolean
+  ar_id?: number
+  ap_id?: number
+  balance?: number
+  vendor_name?: string
+  invoice_id?: number
+  purchase_order_id?: number
+  is_overdue?: boolean
 }
 
 function Calendar() {
@@ -26,7 +33,7 @@ function Calendar() {
   const [loading, setLoading] = useState(true)
   const [currentDate, setCurrentDate] = useState(new Date())
   const [viewMode, setViewMode] = useState<'month' | 'week' | 'day'>('month')
-  const [selectedEventTypes, setSelectedEventTypes] = useState<string[]>(['shipments', 'raw_materials', 'production'])
+  const [selectedEventTypes, setSelectedEventTypes] = useState<string[]>(['shipments', 'raw_materials', 'production', 'receivables', 'payables'])
   const [selectedEvent, setSelectedEvent] = useState<CalendarEvent | null>(null)
   const [selectedDate, setSelectedDate] = useState<Date | null>(null)
 
@@ -97,6 +104,10 @@ function Calendar() {
         return '#27ae60' // Green
       case 'production':
         return '#f39c12' // Orange
+      case 'receivable':
+        return '#9b59b6' // Purple
+      case 'payable':
+        return '#e74c3c' // Red
       default:
         return '#95a5a6'
     }
@@ -110,6 +121,10 @@ function Calendar() {
         return 'Raw Material'
       case 'production':
         return 'Production'
+      case 'receivable':
+        return 'Receivable (AR)'
+      case 'payable':
+        return 'Payable (AP)'
       default:
         return type
     }
@@ -381,6 +396,18 @@ function Calendar() {
         >
           Production
         </button>
+        <button
+          className={selectedEventTypes.includes('receivables') ? 'active' : ''}
+          onClick={() => toggleEventType('receivables')}
+        >
+          Receivables (AR)
+        </button>
+        <button
+          className={selectedEventTypes.includes('payables') ? 'active' : ''}
+          onClick={() => toggleEventType('payables')}
+        >
+          Payables (AP)
+        </button>
       </div>
 
       {loading ? (
@@ -405,7 +432,7 @@ function Calendar() {
                 <div className="no-events">No events scheduled for this day</div>
               ) : (
                 <div className="events-by-type">
-                  {['shipment', 'raw_material', 'production'].map(type => {
+                  {['shipment', 'raw_material', 'production', 'receivable', 'payable'].map(type => {
                     const typeEvents = getEventsForSelectedDate().filter(e => e.type === type)
                     if (typeEvents.length === 0) return null
                     
@@ -452,6 +479,15 @@ function Calendar() {
                                 )}
                                 {event.is_actual && (
                                   <span className="actual-badge">Actual</span>
+                                )}
+                                {event.balance != null && (
+                                  <span>Balance: ${event.balance.toLocaleString('en-US', { minimumFractionDigits: 2 })}</span>
+                                )}
+                                {event.vendor_name && (
+                                  <span>Vendor: {event.vendor_name}</span>
+                                )}
+                                {event.is_overdue && (
+                                  <span className="overdue-badge">Overdue</span>
                                 )}
                               </div>
                             </div>
@@ -529,6 +565,23 @@ function Calendar() {
                 <div className="detail-row">
                   <strong>Status:</strong>
                   <span>{selectedEvent.status}</span>
+                </div>
+              )}
+              {selectedEvent.balance != null && (
+                <div className="detail-row">
+                  <strong>Balance:</strong>
+                  <span>${selectedEvent.balance.toLocaleString('en-US', { minimumFractionDigits: 2 })}</span>
+                </div>
+              )}
+              {selectedEvent.vendor_name && (
+                <div className="detail-row">
+                  <strong>Vendor:</strong>
+                  <span>{selectedEvent.vendor_name}</span>
+                </div>
+              )}
+              {selectedEvent.is_overdue && (
+                <div className="detail-row">
+                  <span className="overdue-badge">Overdue</span>
                 </div>
               )}
               {selectedEvent.is_scheduled && (

@@ -179,10 +179,21 @@ class LotSerializer(serializers.ModelSerializer):
 class ProductionBatchInputSerializer(serializers.ModelSerializer):
     lot = LotSerializer(read_only=True)
     lot_id = serializers.PrimaryKeyRelatedField(queryset=Lot.objects.all(), source='lot', write_only=True)
+    quantity_used = serializers.SerializerMethodField()
     
     class Meta:
         model = ProductionBatchInput
         fields = '__all__'
+    
+    def get_quantity_used(self, obj):
+        """Preserve exact integers when displaying quantity_used"""
+        qty = obj.quantity_used
+        # Check if it's effectively an integer (within floating point tolerance)
+        # Use tolerance of 0.01 to catch floating point errors (e.g., 615.99 -> 616)
+        rounded = round(qty)
+        if abs(qty - rounded) <= 0.01:
+            return float(rounded)  # Return as float but exact integer value
+        return round(qty, 2)  # Round to 2 decimal places for decimals
 
 
 class ProductionBatchOutputSerializer(serializers.ModelSerializer):

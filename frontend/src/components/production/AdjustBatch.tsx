@@ -52,6 +52,7 @@ function AdjustBatch({ batch, onClose, onSuccess }: AdjustBatchProps) {
   const [quantity, setQuantity] = useState('')
   const [quantityUnit, setQuantityUnit] = useState<'lbs' | 'kg'>('lbs')
   const [selectedLots, setSelectedLots] = useState<{ [key: number]: number }>({})
+  const [lotInputValues, setLotInputValues] = useState<{ [key: number]: string }>({})
   const [submitting, setSubmitting] = useState(false)
   const [loading, setLoading] = useState(true)
   const [batchDetails, setBatchDetails] = useState<any>(null)
@@ -65,6 +66,40 @@ function AdjustBatch({ batch, onClose, onSuccess }: AdjustBatchProps) {
       loadAvailableLots(selectedFormula)
     }
   }, [selectedFormula])
+
+  useEffect(() => {
+    // When quantityUnit changes, recalculate display values for all selected lots
+    if (Object.keys(selectedLots).length > 0 && batchDetails?.inputs) {
+      const newInputValues: { [key: number]: string } = {}
+      
+      batchDetails.inputs.forEach((input: any) => {
+        const lot = input.lot
+        const storedQty = selectedLots[lot.id]  // This is in lot's native unit
+        if (storedQty !== undefined) {
+          const lotUnit = lot.item.unit_of_measure
+          
+          // Convert from lot's native unit to display unit (quantityUnit)
+          let displayQty = storedQty
+          if (quantityUnit !== lotUnit) {
+            if (quantityUnit === 'kg' && lotUnit === 'lbs') {
+              displayQty = storedQty / 2.20462
+            } else if (quantityUnit === 'lbs' && lotUnit === 'kg') {
+              displayQty = storedQty * 2.20462
+            }
+          }
+          
+          // Preserve exact integers
+          const roundedToInt = Math.round(displayQty)
+          const isInteger = Math.abs(displayQty - roundedToInt) <= 0.01
+          const finalDisplayQty = isInteger ? roundedToInt : Math.round(displayQty * 100) / 100
+          
+          newInputValues[lot.id] = finalDisplayQty.toString()
+        }
+      })
+      
+      setLotInputValues(newInputValues)
+    }
+  }, [quantityUnit, selectedLots, batchDetails])
 
   const loadData = async () => {
     try {
@@ -80,13 +115,39 @@ function AdjustBatch({ batch, onClose, onSuccess }: AdjustBatchProps) {
         setQuantityUnit(batchData.finished_good_item.unit_of_measure === 'kg' ? 'kg' : 'lbs')
       }
 
-      // Load existing inputs - round quantities to 2 decimal places
+      // Load existing inputs - convert from lot's native unit to display unit
       if (batchData.inputs && batchData.inputs.length > 0) {
         const existingInputs: { [key: number]: number } = {}
+        const existingInputValues: { [key: number]: string } = {}
+        
         batchData.inputs.forEach((input: any) => {
-          existingInputs[input.lot.id] = Math.round(input.quantity_used * 100) / 100
+          const lot = input.lot
+          const storedQty = input.quantity_used  // This is in lot's native unit
+          const lotUnit = lot.item.unit_of_measure
+          
+          // Convert from lot's native unit to display unit (quantityUnit)
+          let displayQty = storedQty
+          if (quantityUnit !== lotUnit) {
+            if (quantityUnit === 'kg' && lotUnit === 'lbs') {
+              displayQty = storedQty / 2.20462
+            } else if (quantityUnit === 'lbs' && lotUnit === 'kg') {
+              displayQty = storedQty * 2.20462
+            }
+          }
+          
+          // Preserve exact integers
+          const roundedToInt = Math.round(displayQty)
+          const isInteger = Math.abs(displayQty - roundedToInt) <= 0.01
+          const finalDisplayQty = isInteger ? roundedToInt : Math.round(displayQty * 100) / 100
+          
+          // Store in lot's native unit for submission (storedQty)
+          existingInputs[lot.id] = storedQty
+          // Store display value for input field
+          existingInputValues[lot.id] = finalDisplayQty.toString()
         })
+        
         setSelectedLots(existingInputs)
+        setLotInputValues(existingInputValues)
       }
 
       const [formulasData, lotsData] = await Promise.all([
@@ -128,17 +189,50 @@ function AdjustBatch({ batch, onClose, onSuccess }: AdjustBatchProps) {
     setAvailableLots(available)
   }
 
-  const handleLotQuantityChange = (lotId: number, quantity: string) => {
-    const qty = parseFloat(quantity) || 0
-    // Round to 2 decimal places
-    const roundedQty = Math.round(qty * 100) / 100
-    if (roundedQty > 0) {
-      setSelectedLots({ ...selectedLots, [lotId]: roundedQty })
-    } else {
-      const newSelected = { ...selectedLots }
-      delete newSelected[lotId]
-      setSelectedLots(newSelected)
+  const convertWeight = (value: number, from: 'lbs' | 'kg', to: 'lbs' | 'kg'): number => {
+    if (from === to) return value
+    if (from === 'lbs' && to === 'kg') {
+      const converted = value / 2.20462
+      return Math.round(converted * 100) / 100
     }
+    if (from === 'kg' && to === 'lbs') {
+      const converted = value * 2.20462
+      return Math.round(converted * 100) / 100
+    }
+    return value
+  }
+
+  const handleLotQuantityChange = (lotId: number, quantity: string, lotUnitOfMeasure: string) => {
+    // Update the input value state
+    const newInputValues = { ...lotInputValues }
+    if (quantity === '') {
+      delete newInputValues[lotId]
+    } else {
+      newInputValues[lotId] = quantity
+    }
+    setLotInputValues(newInputValues)
+    
+    // Convert and store in lot's native unit
+    const newSelectedLots = { ...selectedLots }
+    if (quantity === '' || parseFloat(quantity) <= 0 || isNaN(parseFloat(quantity))) {
+      delete newSelectedLots[lotId]
+    } else {
+      const parsedQuantity = parseFloat(quantity)
+      
+      // User enters quantity in quantityUnit (display unit)
+      // Convert to lot's native unit for storage
+      if (quantityUnit === lotUnitOfMeasure) {
+        // Preserve exact integers
+        const roundedToInt = Math.round(parsedQuantity)
+        const isInteger = Math.abs(parsedQuantity - roundedToInt) <= 0.01
+        newSelectedLots[lotId] = isInteger ? roundedToInt : Math.round(parsedQuantity * 100) / 100
+      } else {
+        // Need to convert from display unit to lot's native unit
+        const quantityInLotUnit = convertWeight(parsedQuantity, quantityUnit, lotUnitOfMeasure as 'lbs' | 'kg')
+        newSelectedLots[lotId] = quantityInLotUnit
+      }
+    }
+    setSelectedLots(newSelectedLots)
   }
 
   const removeLot = (lotId: number) => {
@@ -289,7 +383,14 @@ function AdjustBatch({ batch, onClose, onSuccess }: AdjustBatchProps) {
               <div className="lots-selection">
                 {availableLots.map((lot) => {
                   const isSelected = selectedLots[lot.id] !== undefined
-                  const currentQty = selectedLots[lot.id] || 0
+                  const currentQty = lotInputValues[lot.id] || ''
+                  
+                  // Calculate max value in display unit
+                  const maxInDisplayUnit = quantityUnit === lot.unit_of_measure
+                    ? lot.quantity_remaining
+                    : (lot.unit_of_measure === 'lbs'
+                        ? convertWeight(lot.quantity_remaining, 'lbs', quantityUnit)
+                        : convertWeight(lot.quantity_remaining, 'kg', quantityUnit))
                   
                   return (
                     <div key={lot.id} className={`lot-selection-card ${isSelected ? 'selected' : ''}`}>
@@ -308,19 +409,30 @@ function AdjustBatch({ batch, onClose, onSuccess }: AdjustBatchProps) {
                       </div>
                       <div className="lot-input">
                         <label>Quantity to Use:</label>
-                        <input
-                          type="number"
-                          step="0.01"
-                          min="0"
-                          max={lot.quantity_remaining}
-                          value={isSelected ? currentQty : ''}
-                          onChange={(e) => handleLotQuantityChange(lot.id, e.target.value)}
-                          placeholder=""
-                        />
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            max={maxInDisplayUnit}
+                            value={currentQty}
+                            onChange={(e) => handleLotQuantityChange(lot.id, e.target.value, lot.unit_of_measure)}
+                            placeholder="0.00"
+                            style={{ flex: 1 }}
+                          />
+                          <span style={{ minWidth: '40px' }}>{quantityUnit}</span>
+                        </div>
                         {isSelected && (
                           <button
                             type="button"
-                            onClick={() => removeLot(lot.id)}
+                            onClick={() => {
+                              const newSelected = { ...selectedLots }
+                              const newInputValues = { ...lotInputValues }
+                              delete newSelected[lot.id]
+                              delete newInputValues[lot.id]
+                              setSelectedLots(newSelected)
+                              setLotInputValues(newInputValues)
+                            }}
                             className="btn-remove-lot"
                           >
                             Remove

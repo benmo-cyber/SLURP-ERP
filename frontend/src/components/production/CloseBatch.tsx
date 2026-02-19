@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { updateProductionBatch } from '../../api/inventory'
+import { useState, useEffect } from 'react'
+import { updateProductionBatch, getFormulas } from '../../api/inventory'
 import { formatNumber } from '../../utils/formatNumber'
 import './CloseBatch.css'
 
@@ -9,8 +9,22 @@ interface CloseBatchProps {
   onSuccess: () => void
 }
 
+interface Formula {
+  id: number
+  finished_good: {
+    id: number
+    sku: string
+    name: string
+  }
+  qc_parameter_name?: string
+  qc_spec_min?: number
+  qc_spec_max?: number
+}
+
 function CloseBatch({ batch, onClose, onSuccess }: CloseBatchProps) {
   const [unitDisplay, setUnitDisplay] = useState<'lbs' | 'kg'>('lbs')
+  const [formula, setFormula] = useState<Formula | null>(null)
+  const [loadingFormula, setLoadingFormula] = useState(true)
   const [formData, setFormData] = useState({
     quantity_actual: batch.quantity_actual || batch.quantity_produced || '',
     wastes: batch.wastes || '',
@@ -20,9 +34,40 @@ function CloseBatch({ batch, onClose, onSuccess }: CloseBatchProps) {
     qc_initials: '',
   })
   const [submitting, setSubmitting] = useState(false)
+  const [qcValidationError, setQcValidationError] = useState<string>('')
 
   // Get the unit of measure for the finished good (default to lbs)
   const finishedGoodUnit = batch.finished_good_item?.unit_of_measure || 'lbs'
+
+  // Load formula for the finished good
+  useEffect(() => {
+    const loadFormula = async () => {
+      try {
+        setLoadingFormula(true)
+        const formulas = await getFormulas()
+        const batchFormula = formulas.find((f: Formula) => 
+          f.finished_good.id === batch.finished_good_item.id
+        )
+        setFormula(batchFormula || null)
+        
+        // Pre-fill QC parameter name if formula has it
+        if (batchFormula?.qc_parameter_name) {
+          setFormData(prev => ({
+            ...prev,
+            qc_parameters: batchFormula.qc_parameter_name
+          }))
+        }
+      } catch (error) {
+        console.error('Failed to load formula:', error)
+      } finally {
+        setLoadingFormula(false)
+      }
+    }
+    
+    if (batch.finished_good_item?.id) {
+      loadFormula()
+    }
+  }, [batch.finished_good_item?.id])
 
   // Convert quantity based on unit display preference
   const convertQuantity = (quantity: number, fromUnit: string = finishedGoodUnit) => {
@@ -51,11 +96,50 @@ function CloseBatch({ batch, onClose, onSuccess }: CloseBatchProps) {
     return unitDisplay
   }
 
+  const validateQcResult = (): boolean => {
+    if (!formula || !formula.qc_parameter_name) {
+      // No QC parameter defined in formula - allow closure
+      return true
+    }
+
+    if (!formData.qc_actual) {
+      setQcValidationError('QC actual result is required')
+      return false
+    }
+
+    const actualValue = parseFloat(formData.qc_actual)
+    if (isNaN(actualValue)) {
+      setQcValidationError('QC actual result must be a valid number')
+      return false
+    }
+
+    // Check if spec range is defined
+    if (formula.qc_spec_min !== null && formula.qc_spec_min !== undefined &&
+        formula.qc_spec_max !== null && formula.qc_spec_max !== undefined) {
+      
+      if (actualValue < formula.qc_spec_min || actualValue > formula.qc_spec_max) {
+        setQcValidationError(
+          `QC result ${actualValue} is out of acceptable range (${formula.qc_spec_min} - ${formula.qc_spec_max}). ` +
+          `Please review before closing the batch.`
+        )
+        return false
+      }
+    }
+
+    setQcValidationError('')
+    return true
+  }
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
 
     if (!formData.qc_parameters || !formData.qc_actual || !formData.qc_initials) {
       alert('Please fill in all QC fields')
+      return
+    }
+
+    // Validate QC result against spec range
+    if (!validateQcResult()) {
       return
     }
 
@@ -253,27 +337,71 @@ function CloseBatch({ batch, onClose, onSuccess }: CloseBatchProps) {
 
           <div className="form-section">
             <h3>Quality Control</h3>
+            {loadingFormula ? (
+              <div>Loading QC specifications...</div>
+            ) : formula && formula.qc_parameter_name ? (
+              <div className="qc-info-banner" style={{ 
+                padding: '0.75rem', 
+                marginBottom: '1rem', 
+                backgroundColor: '#e0f2fe', 
+                borderRadius: '6px',
+                border: '1px solid #0284c7'
+              }}>
+                <strong>Required QC Parameter:</strong> {formula.qc_parameter_name}
+                {formula.qc_spec_min !== null && formula.qc_spec_min !== undefined &&
+                 formula.qc_spec_max !== null && formula.qc_spec_max !== undefined && (
+                  <div style={{ marginTop: '0.5rem' }}>
+                    <strong>Acceptable Range:</strong> {formula.qc_spec_min} - {formula.qc_spec_max}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="qc-info-banner" style={{ 
+                padding: '0.75rem', 
+                marginBottom: '1rem', 
+                backgroundColor: '#fef3c7', 
+                borderRadius: '6px',
+                border: '1px solid #f59e0b'
+              }}>
+                <strong>Note:</strong> No QC parameter defined in formula. You can still enter QC data manually.
+              </div>
+            )}
             <div className="form-grid">
               <div className="form-group full-width">
                 <label>QC Parameter *</label>
                 <input
                   type="text"
                   value={formData.qc_parameters}
-                  onChange={(e) => setFormData({ ...formData, qc_parameters: e.target.value })}
+                  onChange={(e) => {
+                    setFormData({ ...formData, qc_parameters: e.target.value })
+                    setQcValidationError('')
+                  }}
                   required
-                  placeholder="e.g., Color, pH, Moisture"
+                  placeholder={formula?.qc_parameter_name || "e.g., norbixin, betanin, absorbance"}
+                  disabled={!!formula?.qc_parameter_name}
+                  style={formula?.qc_parameter_name ? { backgroundColor: '#f3f4f6', cursor: 'not-allowed' } : {}}
                 />
               </div>
 
               <div className="form-group">
                 <label>Actual Result *</label>
                 <input
-                  type="text"
+                  type="number"
+                  step="0.01"
                   value={formData.qc_actual}
-                  onChange={(e) => setFormData({ ...formData, qc_actual: e.target.value })}
+                  onChange={(e) => {
+                    setFormData({ ...formData, qc_actual: e.target.value })
+                    setQcValidationError('')
+                  }}
                   required
                   placeholder="Enter actual result"
+                  className={qcValidationError ? 'error' : ''}
                 />
+                {qcValidationError && (
+                  <div style={{ color: '#dc2626', fontSize: '0.875rem', marginTop: '0.25rem' }}>
+                    {qcValidationError}
+                  </div>
+                )}
               </div>
 
               <div className="form-group">

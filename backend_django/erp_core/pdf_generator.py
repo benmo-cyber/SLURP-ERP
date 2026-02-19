@@ -15,17 +15,30 @@ import os
 
 
 def get_logo_path():
-    """Get the path to the Wildwood Ingredients logo"""
-    # Try Sensitive folder first (production)
-    sensitive_path = Path(__file__).resolve().parent.parent.parent / 'Sensitive' / 'Wildwood Ingredients Logo - Transparent Background.png'
-    if sensitive_path.exists():
-        return str(sensitive_path)
-    
-    # Fallback to frontend/public (development)
-    frontend_path = Path(__file__).resolve().parent.parent.parent / 'frontend' / 'public' / 'logo.png'
+    """Get the path to the Wildwood Ingredients logo.
+    Looks in: batch_ticket_template/, Sensitive/, then frontend/public/logo.png.
+    """
+    base = Path(__file__).resolve().parent.parent.parent  # WWI ERP project root
+    backend = Path(__file__).resolve().parent.parent  # backend_django
+    names = ['Wildwood Ingredients Logo - Transparent Background.png', 'logo.png', 'Logo.png']
+    # 1) batch_ticket_template (same folder as batch ticket template; often has logo next to it)
+    template_dir = backend / 'batch_ticket_template'
+    if template_dir.exists():
+        for name in names:
+            p = template_dir / name
+            if p.exists():
+                return str(p)
+    # 2) Sensitive (production)
+    sensitive = base / 'Sensitive'
+    if sensitive.exists():
+        for name in names:
+            p = sensitive / name
+            if p.exists():
+                return str(p)
+    # 3) frontend/public (development)
+    frontend_path = base / 'frontend' / 'public' / 'logo.png'
     if frontend_path.exists():
         return str(frontend_path)
-    
     return None
 
 

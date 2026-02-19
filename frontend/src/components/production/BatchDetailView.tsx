@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { getProductionBatch } from '../../api/inventory'
-import { formatNumber } from '../../utils/formatNumber'
+import { formatNumber, formatNumberFlexible } from '../../utils/formatNumber'
 import './BatchDetailView.css'
 
 interface Lot {
@@ -111,13 +111,30 @@ function BatchDetailView({ batchId, onClose }: BatchDetailViewProps) {
 
   // Convert quantity based on unit display preference
   const convertQuantity = (quantity: number, unit: string) => {
-    if (unit === 'ea') return formatNumber(quantity, 0)
-    if (unitDisplay === 'kg' && unit === 'lbs') {
-      return formatNumber(quantity * 0.453592)
-    } else if (unitDisplay === 'lbs' && unit === 'kg') {
-      return formatNumber(quantity * 2.20462)
+    // Preserve exact integers when displaying
+    let displayValue = quantity
+    
+    if (unit === 'ea') {
+      return formatNumber(quantity, 0)
     }
-    return formatNumber(quantity)
+    
+    if (unitDisplay === 'kg' && unit === 'lbs') {
+      displayValue = quantity * 0.453592
+    } else if (unitDisplay === 'lbs' && unit === 'kg') {
+      displayValue = quantity * 2.20462
+    }
+    
+    // Check if the result is effectively an integer (within floating point tolerance)
+    // Use tolerance of 0.01 to catch floating point errors (e.g., 615.99 -> 616)
+    const roundedToInteger = Math.round(displayValue)
+    const isInteger = Math.abs(displayValue - roundedToInteger) <= 0.01
+    
+    if (isInteger) {
+      // Use formatNumberFlexible to show integer without decimals
+      return formatNumberFlexible(roundedToInteger, 0, 0)
+    } else {
+      return formatNumber(displayValue)
+    }
   }
 
   const getDisplayUnit = (unit: string) => {

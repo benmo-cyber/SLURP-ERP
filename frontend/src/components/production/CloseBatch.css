@@ -1,3 +1,13 @@
+.error {
+  border-color: #dc2626 !important;
+}
+
+.qc-info-banner {
+  padding: 0.75rem;
+  margin-bottom: 1rem;
+  border-radius: 6px;
+}
+
 .close-batch-modal {
   background: white;
   border-radius: 8px;

@@ -233,8 +233,9 @@ def create_ap_entry_from_po(purchase_order, invoice_number=None, invoice_date=No
         purchase_order: PurchaseOrder instance
         invoice_number: Vendor invoice number (optional)
         invoice_date: Date of vendor invoice (defaults to today)
-        due_date: Payment due date (defaults to invoice_date + 30 days)
+        due_date: Payment due date (defaults to invoice_date + vendor payment_terms, or 30 days)
     """
+    import re
     from django.utils import timezone
     from datetime import timedelta
     
@@ -260,8 +261,17 @@ def create_ap_entry_from_po(purchase_order, invoice_number=None, invoice_date=No
         if not invoice_date:
             invoice_date = timezone.now().date()
         if not due_date:
-            # Default to 30 days from invoice date
-            due_date = invoice_date + timedelta(days=30)
+            # Use vendor payment terms from Quality > Vendor approval if available
+            days = 30
+            try:
+                vendor = Vendor.objects.filter(name=vendor_name).first()
+                if vendor and getattr(vendor, 'payment_terms', None):
+                    match = re.search(r'(\d+)', vendor.payment_terms)
+                    if match:
+                        days = int(match.group(1))
+            except Exception:
+                pass
+            due_date = invoice_date + timedelta(days=days)
         
         # Get or create AP account (typically account number 2000)
         ap_account = None
@@ -992,8 +1002,26 @@ def log_production_batch_closure(batch, notes=None):
             output_lot_number = output.lot.lot_number
             output_quantity = output.quantity_produced
         
-        # Get QC information if available (would need to be passed or retrieved)
-        # For now, we'll leave these as None and they can be added later if needed
+        # Extract QC information from batch notes
+        qc_parameters = None
+        qc_actual = None
+        qc_initials = None
+        if batch.notes:
+            import re
+            # Look for QC Parameters: ... pattern
+            qc_params_match = re.search(r'QC Parameters:\s*(.+?)(?:\n|$)', batch.notes)
+            if qc_params_match:
+                qc_parameters = qc_params_match.group(1).strip()
+            
+            # Look for QC Actual: ... pattern
+            qc_actual_match = re.search(r'QC Actual:\s*(.+?)(?:\n|$)', batch.notes)
+            if qc_actual_match:
+                qc_actual = qc_actual_match.group(1).strip()
+            
+            # Look for QC Initials: ... pattern
+            qc_initials_match = re.search(r'QC Initials:\s*(.+?)(?:\n|$)', batch.notes)
+            if qc_initials_match:
+                qc_initials = qc_initials_match.group(1).strip()
         
         # Create notes that clarify if this is a repack of a distributed item
         item_type_label = 'Distributed Item' if batch.batch_type == 'repack' and batch.finished_good_item.item_type == 'distributed_item' else 'Finished Good'
@@ -1019,6 +1047,9 @@ def log_production_batch_closure(batch, notes=None):
             input_lots=json.dumps(input_lots),
             output_lot_number=output_lot_number,
             output_quantity=output_quantity,
+            qc_parameters=qc_parameters,
+            qc_actual=qc_actual,
+            qc_initials=qc_initials,
             notes=closure_notes
         )
     except Exception as e:
@@ -1363,9 +1394,15 @@ class ItemViewSet(viewsets.ModelViewSet):
                 else:
                     # If Flexport lookup fails, use provided tariff or default to 0
                     tariff = float(data.get('tariff', 0)) if data.get('tariff') else 0.0
+                    # Update item tariff
+                    item.tariff = tariff
+                    item.save()
             else:
                 # No HTS/origin, use provided tariff or default to 0
                 tariff = float(data.get('tariff', 0)) if data.get('tariff') else 0.0
+                # Update item tariff
+                item.tariff = tariff
+                item.save()
             
             # Get vendor name - handle both Vendor object and string
             vendor_name = None
@@ -1403,7 +1440,9 @@ class ItemViewSet(viewsets.ModelViewSet):
                     cost_master.hts_code = data['hts_code']
                 if data.get('country_of_origin'):
                     cost_master.origin = data['country_of_origin']
-                # Landed cost will be recalculated automatically in save()
+                # Recalculate landed cost with the tariff
+                # Formula: (Price per kg * (1 + Tariff)) + Freight per kg
+                cost_master.calculate_landed_cost()
                 cost_master.save()
         
         headers = self.get_success_headers(serializer.data)
@@ -1663,6 +1702,7 @@ class ItemViewSet(viewsets.ModelViewSet):
                 cost_master.origin = data['country_of_origin']
             
             # Calculate tariff if HTS code and origin are provided
+            tariff_updated = False
             if data.get('hts_code') and data.get('country_of_origin'):
                 from .flexport_tariff import get_tariff_from_flexport
                 flexport_tariff = get_tariff_from_flexport(data['hts_code'], data['country_of_origin'])
@@ -1671,6 +1711,21 @@ class ItemViewSet(viewsets.ModelViewSet):
                     # Also update item tariff
                     item.tariff = flexport_tariff
                     item.save()
+                    tariff_updated = True
+                elif data.get('tariff') is not None:
+                    # If Flexport lookup fails, use provided tariff
+                    tariff = float(data.get('tariff', 0)) if data.get('tariff') else 0.0
+                    cost_master.tariff = tariff
+                    item.tariff = tariff
+                    item.save()
+                    tariff_updated = True
+            elif data.get('tariff') is not None:
+                # No HTS/origin, use provided tariff
+                tariff = float(data.get('tariff', 0)) if data.get('tariff') else 0.0
+                cost_master.tariff = tariff
+                item.tariff = tariff
+                item.save()
+                tariff_updated = True
             
             # Check if price changed
             price_changed = False
@@ -1728,10 +1783,21 @@ class ItemViewSet(viewsets.ModelViewSet):
                     # Also update item tariff
                     item.tariff = flexport_tariff
                     item.save()
+                elif data.get('tariff') is not None:
+                    # If Flexport lookup fails, use provided tariff
+                    tariff = float(data.get('tariff', 0)) if data.get('tariff') else 0.0
+                    cost_master.tariff = tariff
+                    item.tariff = tariff
+                    item.save()
+            elif data.get('tariff') is not None:
+                # No HTS/origin, use provided tariff
+                tariff = float(data.get('tariff', 0)) if data.get('tariff') else 0.0
+                cost_master.tariff = tariff
+                item.tariff = tariff
+                item.save()
             
             # Recalculate landed cost using Excel formula: (Price per kg * (1 + Tariff)) + Freight per kg
-            # The save() method will handle this automatically via calculate_landed_cost()
-            
+            cost_master.calculate_landed_cost()
             cost_master.save()
             
             # Create history record if price changed
@@ -1857,12 +1923,45 @@ class LotViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(lots, many=True)
         data = serializer.data
         
-        # Add PO tracking info to each lot
-        for lot_data in data:
-            if lot_data.get('po_number') and lot_data['po_number'] in po_tracking_map:
-                tracking_info = po_tracking_map[lot_data['po_number']]
+        # Add PO tracking info and commitment info to each lot
+        from .models import SalesOrderLot, ProductionBatchInput
+        from django.db.models import Sum
+        
+        for i, lot_data in enumerate(data):
+            lot = lots[i]  # Get the actual lot object
+            po_number = lot_data.get('po_number')
+            if po_number and po_number in po_tracking_map:
+                tracking_info = po_tracking_map[po_number]
                 lot_data['po_tracking_number'] = tracking_info['tracking_number']
                 lot_data['po_carrier'] = tracking_info['carrier']
+            
+            # Check if lot is committed to sales (allocated but not shipped)
+            committed_to_sales_qty = 0.0
+            try:
+                sales_allocations = SalesOrderLot.objects.filter(
+                    lot=lot,
+                    sales_order_item__sales_order__status__in=[
+                        'draft', 'allocated', 'issued', 'ready_for_shipment'
+                    ]
+                ).aggregate(total=Sum('quantity_allocated'))
+                committed_to_sales_qty = sales_allocations['total'] or 0.0
+            except Exception:
+                pass
+            
+            # Check if lot is committed to production (in_progress batches)
+            committed_to_production_qty = 0.0
+            try:
+                production_inputs = ProductionBatchInput.objects.filter(
+                    lot=lot,
+                    batch__status='in_progress'
+                ).aggregate(total=Sum('quantity_used'))
+                committed_to_production_qty = production_inputs['total'] or 0.0
+            except Exception:
+                pass
+            
+            # Add commitment quantities
+            lot_data['committed_to_sales_qty'] = committed_to_sales_qty
+            lot_data['committed_to_production_qty'] = committed_to_production_qty
         
         return Response(data)
     
@@ -2272,8 +2371,11 @@ class LotViewSet(viewsets.ModelViewSet):
                     for sku_item in sku_items:
                         allocated_to_sales += item_sales_allocations.get(sku_item.id, 0.0)
                 
-                # Available = quantity_remaining - production allocation - sales allocation - on_hold
-                available = max(0.0, quantity_remaining - allocated_to_production - allocated_to_sales - on_hold)
+                # Available = quantity_remaining - sales allocation - on_hold.
+                # Do NOT subtract allocated_to_production: lot.quantity_remaining is already reduced
+                # when inputs are added to a batch (at batch create), so production usage is already
+                # reflected in quantity_remaining; subtracting it again would double-count.
+                available = max(0.0, quantity_remaining - allocated_to_sales - on_hold)
                 
                 # Create vendor-level inventory entry (nested under SKU)
                 vendor_entry = {
@@ -2952,7 +3054,15 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
         # First pass: validate all inputs and calculate total
         for input_data in inputs_data:
             lot_id = input_data.get('lot_id')
-            quantity_used = round(float(input_data.get('quantity_used', 0)), 2)  # Round to 2 decimal places
+            # Preserve exact values - if it's a whole number, keep it exact; otherwise round to 2 decimals
+            raw_quantity = float(input_data.get('quantity_used', 0))
+            # Check if it's effectively a whole number (within floating point tolerance)
+            # Use tolerance of 0.01 to catch floating point errors (e.g., 615.99 -> 616)
+            rounded_to_int = round(raw_quantity)
+            if abs(raw_quantity - rounded_to_int) <= 0.01:
+                quantity_used = rounded_to_int  # Preserve exact whole numbers
+            else:
+                quantity_used = round(raw_quantity, 2)  # Round to 2 decimal places
             
             if not lot_id or quantity_used <= 0:
                 return Response(
@@ -3044,7 +3154,13 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
         # Create inputs (second pass: actually create them - validation already done above)
         for input_data in inputs_data:
             lot_id = input_data.get('lot_id')
-            quantity_used = round(float(input_data.get('quantity_used', 0)), 2)  # Round to 2 decimal places
+            # Preserve exact values - if it's a whole number, keep it exact; otherwise round to 2 decimals
+            raw_quantity = float(input_data.get('quantity_used', 0))
+            # Check if it's effectively a whole number (within floating point tolerance)
+            if abs(raw_quantity - round(raw_quantity)) < 0.001:
+                quantity_used = round(raw_quantity)  # Preserve exact whole numbers
+            else:
+                quantity_used = round(raw_quantity, 2)  # Round to 2 decimal places
             
             # Get lot (already validated in first pass)
             lot = Lot.objects.get(id=lot_id)
@@ -3060,14 +3176,21 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
             depletion_method = 'repack' if batch_type == 'repack' else 'production'
             batch_type_label = 'repack' if batch_type == 'repack' else 'production'
             
-            # Create inventory transaction for input (reduce quantity) - round to 2 decimal places
-            rounded_quantity = round(quantity_used, 2)
+            # Create inventory transaction for input (reduce quantity)
+            # Preserve exact integers, round decimals to 2 places
+            # Use tolerance of 0.01 to catch floating point errors (e.g., 615.99 -> 616)
+            rounded_to_int = round(quantity_used)
+            if abs(quantity_used - rounded_to_int) <= 0.01:
+                rounded_quantity = rounded_to_int  # Exact integer
+            else:
+                rounded_quantity = round(quantity_used, 2)  # Round to 2 decimal places
+            
             quantity_before = lot.quantity_remaining
             
             transaction = InventoryTransaction.objects.create(
                 transaction_type=input_transaction_type,
                 lot=lot,
-                quantity=round(-rounded_quantity, 2),
+                quantity=-rounded_quantity,
                 notes=f'{"Repack" if batch_type == "repack" else "Production"} batch {batch.batch_number} input',
                 reference_number=batch.batch_number
             )
@@ -3138,7 +3261,15 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
                 total_input_quantity = 0.0
                 for input_data in inputs_data:
                     lot_id = input_data.get('lot_id')
-                    quantity_used = round(float(input_data.get('quantity_used', 0)), 2)
+                    # Preserve exact values - if it's a whole number, keep it exact; otherwise round to 2 decimals
+                    raw_quantity = float(input_data.get('quantity_used', 0))
+                    # Check if it's effectively a whole number (within floating point tolerance)
+                    # Use tolerance of 0.01 to catch floating point errors (e.g., 615.99 -> 616)
+                    rounded_to_int = round(raw_quantity)
+                    if abs(raw_quantity - rounded_to_int) <= 0.01:
+                        quantity_used = rounded_to_int  # Preserve exact whole numbers
+                    else:
+                        quantity_used = round(raw_quantity, 2)  # Round to 2 decimal places
                     lot = Lot.objects.get(id=lot_id)
                     total_input_quantity += quantity_used  # quantity_used is already in lot's native unit
                 
@@ -3312,8 +3443,8 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
                 lot.quantity_remaining = round(lot.quantity_remaining + existing_input.quantity_used, 2)
                 lot.save()
                 
-                # CRITICAL FIX: Delete or reverse the old inventory transaction
-                # Find and delete the old transaction for this batch input
+                # CRITICAL FIX: Delete the old inventory transaction to prevent duplicates
+                # Find and delete ALL matching transactions for this batch input (should be only one, but handle duplicates)
                 old_transactions = InventoryTransaction.objects.filter(
                     lot=lot,
                     reference_number=instance.batch_number,
@@ -3321,12 +3452,20 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
                     quantity__lt=0  # Negative quantity (consumption)
                 ).order_by('-transaction_date')
                 
-                # Delete the matching transaction(s) - should be one, but handle multiple
+                # Delete ALL matching transactions (handles duplicates)
                 for old_txn in old_transactions:
                     # Verify this transaction matches the input quantity (within rounding tolerance)
                     if abs(abs(old_txn.quantity) - existing_input.quantity_used) < 0.01:
                         old_txn.delete()
-                        break
+                
+                # Also delete any associated lot transaction logs to prevent duplicates
+                from .models import LotTransactionLog
+                LotTransactionLog.objects.filter(
+                    lot=lot,
+                    reference_number=instance.batch_number,
+                    transaction_type__in=['production_input', 'repack_input'],
+                    batch_id=instance.id
+                ).delete()
                 
                 # Delete the old input
                 existing_input.delete()
@@ -3334,7 +3473,15 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
             # Create new inputs with rounded quantities
             for input_data in inputs_data:
                 lot_id = input_data.get('lot_id')
-                quantity_used = round(float(input_data.get('quantity_used', 0)), 2)
+                # Preserve exact values - if it's a whole number, keep it exact; otherwise round to 2 decimals
+                raw_quantity = float(input_data.get('quantity_used', 0))
+                # Check if it's effectively a whole number (within floating point tolerance)
+                # Use tolerance of 0.01 to catch floating point errors (e.g., 615.99 -> 616)
+                rounded_to_int = round(raw_quantity)
+                if abs(raw_quantity - rounded_to_int) <= 0.01:
+                    quantity_used = rounded_to_int  # Preserve exact whole numbers
+                else:
+                    quantity_used = round(raw_quantity, 2)  # Round to 2 decimal places
                 
                 if lot_id and quantity_used > 0:
                     try:
@@ -3352,12 +3499,20 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
                         )
                         
                         # Create inventory transaction for input (reduce quantity)
+                        # Preserve exact integers, round decimals to 2 places
+                        # Use tolerance of 0.01 to catch floating point errors (e.g., 615.99 -> 616)
+                        rounded_to_int = round(quantity_used)
+                        if abs(quantity_used - rounded_to_int) <= 0.01:
+                            rounded_qty = rounded_to_int  # Exact integer
+                        else:
+                            rounded_qty = round(quantity_used, 2)  # Round to 2 decimal places
+                        
                         quantity_before = lot.quantity_remaining
                         
                         transaction = InventoryTransaction.objects.create(
                             transaction_type='production_input',
                             lot=lot,
-                            quantity=round(-quantity_used, 2),
+                            quantity=-rounded_qty,
                             notes=f'Batch {instance.batch_number} input (adjusted)',
                             reference_number=instance.batch_number
                         )
@@ -3366,7 +3521,7 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
                         log_lot_transaction(
                             lot=lot,
                             quantity_before=quantity_before,
-                            quantity_change=-quantity_used,
+                            quantity_change=-rounded_qty,
                             transaction_type='production_input',
                             reference_number=instance.batch_number,
                             reference_type='batch_number',
@@ -3376,7 +3531,7 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
                         )
                         
                         # Update lot quantity_remaining
-                        lot.quantity_remaining = round(lot.quantity_remaining - quantity_used, 2)
+                        lot.quantity_remaining = round(lot.quantity_remaining - rounded_qty, 2)
                         lot.save()
                         
                         # Log depletion if lot reaches zero or below
@@ -3652,293 +3807,28 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
     
     @action(detail=True, methods=['get'], url_path='pdf', url_name='pdf')
     def generate_pdf(self, request, pk=None):
-        """Generate a PDF batch ticket for printing"""
-        from django.http import HttpResponse
-        from io import BytesIO
-        
+        """Generate a PDF batch ticket for printing. Uses template from Sensitive/Batch Ticket.pdf when present."""
+        from django.http import HttpResponse, JsonResponse
+
         batch = self.get_object()
-        
         try:
-            # Try to import reportlab
-            from reportlab.lib.pagesizes import letter
-            from reportlab.lib import colors
-            from reportlab.lib.units import inch
-            from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
-            from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-            from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
-        except ImportError:
-            from django.http import JsonResponse
+            from .batch_ticket_pdf import build_batch_ticket_pdf
+        except ImportError as e:
             return JsonResponse(
-                {'error': 'reportlab is not installed. Please install it with: pip install reportlab'},
+                {'error': 'Batch ticket PDF module not available: ' + str(e)},
                 status=500
             )
-        
-        # Create a BytesIO buffer for the PDF
-        buffer = BytesIO()
-        
-        # Create filename with status prefix for document title
-        status_prefix = batch.status.replace('_', '-')  # Convert in_progress to in-progress
-        filename = f"{status_prefix}({batch.batch_number}).pdf"
-        doc_title = f"{status_prefix.upper()}({batch.batch_number})"
-        
-        doc = SimpleDocTemplate(
-            buffer, 
-            pagesize=letter, 
-            topMargin=0.5*inch, 
-            bottomMargin=0.5*inch,
-            title=doc_title,
-            author="WWI ERP System"
-        )
-        
-        # Container for the 'Flowable' objects
-        elements = []
-        
-        # Define styles
-        styles = getSampleStyleSheet()
-        title_style = ParagraphStyle(
-            'CustomTitle',
-            parent=styles['Heading1'],
-            fontSize=18,
-            textColor=colors.HexColor('#000000'),
-            spaceAfter=12,
-            alignment=TA_CENTER
-        )
-        heading_style = ParagraphStyle(
-            'CustomHeading',
-            parent=styles['Heading2'],
-            fontSize=12,
-            textColor=colors.HexColor('#000000'),
-            spaceAfter=6,
-            alignment=TA_LEFT
-        )
-        normal_style = styles['Normal']
-        
-        # Title
-        elements.append(Paragraph("BATCH TICKET", title_style))
-        elements.append(Spacer(1, 0.2*inch))
-        
-        # Determine the base unit from finished good item (default to lbs)
-        # This is the unit that was selected for "quantity to produce"
-        base_unit = batch.finished_good_item.unit_of_measure or 'lbs'
-        
-        # Helper function to convert quantity from lbs (stored in DB) to base unit
-        # For production batches: quantity_produced, quantity_actual, variance, wastes, spills are stored in lbs
-        # For repack batches: quantity_produced is stored in the item's native unit (not lbs)
-        def convert_from_lbs_to_base(quantity_in_lbs):
-            if base_unit == 'lbs' or base_unit == 'ea':
-                return quantity_in_lbs
-            elif base_unit == 'kg':
-                # Convert from lbs to kg
-                return quantity_in_lbs / 2.20462
-            return quantity_in_lbs
-        
-        # Convert quantity_produced to base unit for display
-        # For repack batches, quantity_produced is already in base unit (not lbs)
-        # For production batches, quantity_produced is in lbs and needs conversion
-        if batch.batch_type == 'repack':
-            # For repack, quantity_produced is already in the item's native unit
-            quantity_produced_display = batch.quantity_produced
-        else:
-            # For production, quantity_produced is in lbs, convert to base unit
-            quantity_produced_display = convert_from_lbs_to_base(batch.quantity_produced)
-        
-        # Batch Information
-        batch_data = [
-            ['Batch Number:', batch.batch_number],
-            ['Type:', batch.get_batch_type_display()],
-            ['Finished Good:', f"{batch.finished_good_item.name} ({batch.finished_good_item.sku})"],
-            ['Quantity to Produce:', f"{quantity_produced_display:.2f} {base_unit}"],
-            ['Production Date:', batch.production_date.strftime('%m/%d/%Y') if batch.production_date else 'N/A'],
-            ['Status:', batch.get_status_display()],
-        ]
-        
-        # Add closed batch information if batch is closed (convert to base unit)
-        if batch.status == 'closed':
-            if batch.quantity_actual:
-                qty_actual = convert_from_lbs_to_base(batch.quantity_actual)
-                batch_data.append(['Quantity Actual:', f"{qty_actual:.2f} {base_unit}"])
-            if batch.variance is not None:
-                variance = convert_from_lbs_to_base(batch.variance)
-                variance_sign = '+' if variance >= 0 else ''
-                batch_data.append(['Variance:', f"{variance_sign}{variance:.2f} {base_unit}"])
-            if batch.wastes:
-                wastes = convert_from_lbs_to_base(batch.wastes)
-                batch_data.append(['Wastes:', f"{wastes:.2f} {base_unit}"])
-            if batch.spills:
-                spills = convert_from_lbs_to_base(batch.spills)
-                batch_data.append(['Spills:', f"{spills:.2f} {base_unit}"])
-            if batch.closed_date:
-                batch_data.append(['Closed Date:', batch.closed_date.strftime('%m/%d/%Y %I:%M %p') if batch.closed_date else 'N/A'])
-        
-        # Parse QC information from notes if present
-        qc_info = {}
-        if batch.notes:
-            import re
-            # Look for QC Parameters, QC Actual, and QC Initials in notes
-            # Handle both single line and multi-line formats
-            qc_params_match = re.search(r'QC Parameters:\s*(.+?)(?:\n|QC Actual:|$)', batch.notes, re.IGNORECASE | re.DOTALL)
-            qc_actual_match = re.search(r'QC Actual:\s*(.+?)(?:\n|QC Initials:|$)', batch.notes, re.IGNORECASE | re.DOTALL)
-            qc_initials_match = re.search(r'QC Initials:\s*(.+?)(?:\n|$)', batch.notes, re.IGNORECASE | re.DOTALL)
-            
-            if qc_params_match:
-                qc_info['parameters'] = qc_params_match.group(1).strip()
-            if qc_actual_match:
-                qc_info['actual'] = qc_actual_match.group(1).strip()
-            if qc_initials_match:
-                qc_info['initials'] = qc_initials_match.group(1).strip()
-            
-            # Only add notes if it's not just QC info (to avoid duplication)
-            # Check if notes contains other content besides QC info
-            notes_without_qc = batch.notes
-            if qc_info.get('parameters'):
-                notes_without_qc = re.sub(r'QC Parameters:.*?(?:\n|QC Actual:|$)', '', notes_without_qc, flags=re.IGNORECASE | re.DOTALL)
-            if qc_info.get('actual'):
-                notes_without_qc = re.sub(r'QC Actual:.*?(?:\n|QC Initials:|$)', '', notes_without_qc, flags=re.IGNORECASE | re.DOTALL)
-            if qc_info.get('initials'):
-                notes_without_qc = re.sub(r'QC Initials:.*?(?:\n|$)', '', notes_without_qc, flags=re.IGNORECASE | re.DOTALL)
-            
-            notes_without_qc = notes_without_qc.strip()
-            if notes_without_qc:
-                batch_data.append(['Notes:', notes_without_qc])
-        
-        batch_table = Table(batch_data, colWidths=[2*inch, 4.5*inch])
-        batch_table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (0, -1), colors.HexColor('#f0f0f0')),
-            ('TEXTCOLOR', (0, 0), (-1, -1), colors.black),
-            ('ALIGN', (0, 0), (0, -1), 'LEFT'),
-            ('ALIGN', (1, 0), (1, -1), 'LEFT'),
-            ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
-            ('FONTNAME', (1, 0), (1, -1), 'Helvetica'),
-            ('FONTSIZE', (0, 0), (-1, -1), 10),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
-            ('TOPPADDING', (0, 0), (-1, -1), 6),
-            ('GRID', (0, 0), (-1, -1), 1, colors.black),
-        ]))
-        elements.append(batch_table)
-        elements.append(Spacer(1, 0.3*inch))
-        
-        # Input Lots
-        elements.append(Paragraph("INPUT MATERIALS", heading_style))
-        if batch.inputs.exists():
-            input_data = [['Lot Number', 'Item', 'SKU', 'Vendor Lot', f'Quantity Used ({base_unit})']]
-            for batch_input in batch.inputs.select_related('lot__item').all():
-                lot = batch_input.lot
-                item = lot.item
-                vendor_lot = lot.vendor_lot_number or lot.lot_number
-                # Convert quantity to base unit
-                # quantity_used is stored in the item's native unit in the DB
-                # We need to convert it to lbs first, then to base unit
-                item_unit = item.unit_of_measure or 'lbs'
-                quantity_in_lbs = batch_input.quantity_used
-                if item_unit == 'kg':
-                    # Convert from kg to lbs
-                    quantity_in_lbs = batch_input.quantity_used * 2.20462
-                # Now convert from lbs to base unit
-                quantity_in_base = convert_from_lbs_to_base(quantity_in_lbs)
-                input_data.append([
-                    lot.lot_number,
-                    item.name,
-                    item.sku,
-                    vendor_lot,
-                    f"{quantity_in_base:.2f}"
-                ])
-            
-            input_table = Table(input_data, colWidths=[1*inch, 1.5*inch, 1*inch, 1*inch, 1.2*inch])
-            input_table.setStyle(TableStyle([
-                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#333333')),
-                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
-                ('FONTSIZE', (0, 0), (-1, -1), 9),
-                ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
-                ('TOPPADDING', (0, 0), (-1, -1), 6),
-                ('GRID', (0, 0), (-1, -1), 1, colors.black),
-                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f9f9f9')]),
-            ]))
-            elements.append(input_table)
-        else:
-            elements.append(Paragraph("No input materials", normal_style))
-        
-        elements.append(Spacer(1, 0.3*inch))
-        
-        # Output Lots (if any)
-        if batch.outputs.exists():
-            elements.append(Paragraph("OUTPUT LOTS", heading_style))
-            output_data = [['Lot Number', 'Item', 'SKU', f'Quantity Produced ({base_unit})']]
-            for batch_output in batch.outputs.select_related('lot__item').all():
-                lot = batch_output.lot
-                item = lot.item
-                # Convert quantity to base unit
-                # For repack batches, quantity_produced is already in the item's native unit
-                # For production batches, quantity_produced is in lbs
-                if batch.batch_type == 'repack':
-                    # For repack, quantity_produced is already in the item's native unit
-                    quantity_in_base = batch_output.quantity_produced
-                else:
-                    # For production, convert from lbs to base unit
-                    quantity_in_base = convert_from_lbs_to_base(batch_output.quantity_produced)
-                output_data.append([
-                    lot.lot_number,
-                    item.name,
-                    item.sku,
-                    f"{quantity_in_base:.2f}"
-                ])
-            
-            output_table = Table(output_data, colWidths=[1.5*inch, 2*inch, 1.5*inch, 1.5*inch])
-            output_table.setStyle(TableStyle([
-                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#333333')),
-                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
-                ('FONTSIZE', (0, 0), (-1, -1), 9),
-                ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
-                ('TOPPADDING', (0, 0), (-1, -1), 6),
-                ('GRID', (0, 0), (-1, -1), 1, colors.black),
-                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f9f9f9')]),
-            ]))
-            elements.append(output_table)
-        
-        # Add Quality Control section for closed batches
-        if batch.status == 'closed' and qc_info:
-            elements.append(Spacer(1, 0.3*inch))
-            elements.append(Paragraph("QUALITY CONTROL", heading_style))
-            qc_data = []
-            if qc_info.get('parameters'):
-                qc_data.append(['QC Parameters:', qc_info['parameters']])
-            if qc_info.get('actual'):
-                qc_data.append(['QC Actual:', qc_info['actual']])
-            if qc_info.get('initials'):
-                qc_data.append(['QC Initials:', qc_info['initials']])
-            
-            if qc_data:
-                qc_table = Table(qc_data, colWidths=[2*inch, 4.5*inch])
-                qc_table.setStyle(TableStyle([
-                    ('BACKGROUND', (0, 0), (0, -1), colors.HexColor('#f0f0f0')),
-                    ('TEXTCOLOR', (0, 0), (-1, -1), colors.black),
-                    ('ALIGN', (0, 0), (0, -1), 'LEFT'),
-                    ('ALIGN', (1, 0), (1, -1), 'LEFT'),
-                    ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
-                    ('FONTNAME', (1, 0), (1, -1), 'Helvetica'),
-                    ('FONTSIZE', (0, 0), (-1, -1), 10),
-                    ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
-                    ('TOPPADDING', (0, 0), (-1, -1), 6),
-                    ('GRID', (0, 0), (-1, -1), 1, colors.black),
-                ]))
-                elements.append(qc_table)
-        
-        # Build PDF
-        doc.build(elements)
-        
-        # Get the value of the BytesIO buffer and write it to the response
-        pdf = buffer.getvalue()
-        buffer.close()
-        
-        # Create HTTP response with PDF
-        response = HttpResponse(pdf, content_type='application/pdf')
+        try:
+            pdf_bytes, filename = build_batch_ticket_pdf(batch)
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return JsonResponse(
+                {'error': 'Failed to generate batch ticket PDF: ' + str(e)},
+                status=500
+            )
+        response = HttpResponse(pdf_bytes, content_type='application/pdf')
         response['Content-Disposition'] = f'inline; filename="{filename}"'
-        # Set the title for browser tab display
         response['X-Content-Type-Options'] = 'nosniff'
         return response
     
@@ -4063,17 +3953,18 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
             # Reverse all inventory transactions for this batch
             # Find transactions by looking at lots associated with batch inputs/outputs
             
-            # Find transactions for input lots that reference this batch in notes
+            # Find and reverse transactions for input lots using reference_number (more reliable than notes)
             # Note: output lots are already deleted, so we only need to reverse input lot transactions
             if input_lot_ids:
+                # Find transactions by reference_number and transaction type
                 transactions = InventoryTransaction.objects.filter(
                     lot_id__in=input_lot_ids,
-                    notes__icontains=f'batch {batch_number}'
+                    reference_number=batch_number,
+                    transaction_type__in=['production_input', 'repack_input']
                 )
                 
                 for transaction in transactions:
                     try:
-                        # Get lot_id directly from the transaction
                         lot_id = transaction.lot_id
                         if not lot_id:
                             continue
@@ -4081,11 +3972,28 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
                         # Check if lot still exists before creating reverse transaction
                         try:
                             lot = Lot.objects.get(id=lot_id)
-                            InventoryTransaction.objects.create(
+                            # Create reversal transaction - positive quantity to add back to inventory
+                            reverse_quantity = abs(transaction.quantity)  # Make it positive
+                            reverse_transaction = InventoryTransaction.objects.create(
                                 transaction_type='adjustment',
                                 lot=lot,
-                                quantity=-transaction.quantity,
-                                notes=f'Reverse batch {batch_number}',
+                                quantity=reverse_quantity,
+                                reference_number=batch_number,
+                                notes=f'UNFK: Reverse batch {batch_number} - Return input to inventory'
+                            )
+                            
+                            # Log the reversal transaction
+                            from .models import LotTransactionLog
+                            log_lot_transaction(
+                                lot=lot,
+                                quantity_before=lot.quantity_remaining - reverse_quantity,
+                                quantity_change=reverse_quantity,
+                                transaction_type='adjustment',
+                                reference_number=batch_number,
+                                reference_type='batch_number',
+                                transaction_id=reverse_transaction.id,
+                                batch_id=batch.id if hasattr(batch, 'id') else None,
+                                notes=f'UNFK: Reversed batch {batch_number} - Input returned to inventory'
                             )
                         except Lot.DoesNotExist:
                             # Lot doesn't exist anymore, skip
@@ -7435,7 +7343,7 @@ class CalendarEventsViewSet(viewsets.ViewSet):
         
         start_date_str = request.query_params.get('start_date')
         end_date_str = request.query_params.get('end_date')
-        event_types = request.query_params.get('event_types', 'shipments,raw_materials,production').split(',')
+        event_types = request.query_params.get('event_types', 'shipments,raw_materials,production,receivables,payables').split(',')
         
         # Parse dates
         start_date = None
@@ -7566,6 +7474,50 @@ class CalendarEventsViewSet(viewsets.ViewSet):
                     'batch_number': batch.batch_number,
                     'status': batch.status,
                     'is_scheduled': batch.status == 'scheduled',
+                })
+        
+        # Receivables (AR) - due dates from customer payment terms (CRM); open/partial only
+        if 'receivables' in event_types:
+            ar_queryset = AccountsReceivable.objects.filter(
+                status__in=['open', 'partial']
+            ).exclude(due_date__isnull=True)
+            if start_date:
+                ar_queryset = ar_queryset.filter(due_date__gte=start_date)
+            if end_date:
+                ar_queryset = ar_queryset.filter(due_date__lte=end_date)
+            for ar in ar_queryset:
+                events.append({
+                    'id': f'receivable_{ar.id}',
+                    'type': 'receivable',
+                    'title': f'AR due: {ar.customer_name} - ${ar.balance:,.2f}',
+                    'date': ar.due_date.isoformat(),
+                    'ar_id': ar.id,
+                    'customer_name': ar.customer_name,
+                    'balance': float(ar.balance),
+                    'invoice_id': ar.invoice_id,
+                    'is_overdue': ar.due_date < timezone.now().date(),
+                })
+        
+        # Payables (AP) - due dates from vendor payment terms (Quality > Vendor approval); open/partial only
+        if 'payables' in event_types:
+            ap_queryset = AccountsPayable.objects.filter(
+                status__in=['open', 'partial']
+            ).exclude(due_date__isnull=True)
+            if start_date:
+                ap_queryset = ap_queryset.filter(due_date__gte=start_date)
+            if end_date:
+                ap_queryset = ap_queryset.filter(due_date__lte=end_date)
+            for ap in ap_queryset:
+                events.append({
+                    'id': f'payable_{ap.id}',
+                    'type': 'payable',
+                    'title': f'AP due: {ap.vendor_name} - ${ap.balance:,.2f}',
+                    'date': ap.due_date.isoformat(),
+                    'ap_id': ap.id,
+                    'vendor_name': ap.vendor_name,
+                    'balance': float(ap.balance),
+                    'purchase_order_id': ap.purchase_order_id,
+                    'is_overdue': ap.due_date < timezone.now().date(),
                 })
         
         # Sort by date
@@ -8566,6 +8518,41 @@ class CostMasterViewSet(viewsets.ModelViewSet):
         history = CostMasterHistory.objects.filter(cost_master=cost_master).order_by('-effective_date')
         serializer = CostMasterHistorySerializer(history, many=True)
         return Response(serializer.data)
+    
+    @action(detail=False, methods=['post'])
+    def refresh_tariffs(self, request):
+        """Refresh tariff rates for all items with HTS codes and country of origin"""
+        from .flexport_tariff import update_tariffs
+        import logging
+        import traceback
+        
+        logger = logging.getLogger(__name__)
+        
+        try:
+            updated_count, error_count, error_details = update_tariffs()
+            
+            message = f'Successfully updated {updated_count} tariff(s).'
+            if error_count > 0:
+                message += f' {error_count} error(s) occurred.'
+                if error_details:
+                    message += f' Details: {"; ".join(error_details[:3])}'  # Show first 3 errors
+            
+            return Response({
+                'success': True,
+                'updated': updated_count,
+                'errors': error_count,
+                'error_details': error_details,
+                'message': message
+            }, status=status.HTTP_200_OK)
+        except Exception as e:
+            error_trace = traceback.format_exc()
+            logger.error(f'Error refreshing tariffs: {str(e)}\n{error_trace}')
+            return Response({
+                'success': False,
+                'error': str(e),
+                'error_trace': error_trace,
+                'message': f'Failed to refresh tariffs: {str(e)}'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 class AccountViewSet(viewsets.ModelViewSet):

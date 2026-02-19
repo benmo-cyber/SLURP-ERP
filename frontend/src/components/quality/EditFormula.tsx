@@ -25,6 +25,9 @@ function EditFormula({ finishedGoodId, finishedGoodSku, finishedGoodName, onClos
   const [formData, setFormData] = useState({
     formula_version: '1.0',
     formula_notes: '',
+    qc_parameter_name: '',
+    qc_spec_min: '',
+    qc_spec_max: '',
   })
   const [ingredients, setIngredients] = useState<FormulaIngredient[]>([
     { item_id: '', percentage: '', notes: '' }
@@ -72,6 +75,9 @@ function EditFormula({ finishedGoodId, finishedGoodSku, finishedGoodName, onClos
         setFormData({
           formula_version: foundFormula.version || '1.0',
           formula_notes: foundFormula.notes || '',
+          qc_parameter_name: foundFormula.qc_parameter_name || '',
+          qc_spec_min: foundFormula.qc_spec_min !== null && foundFormula.qc_spec_min !== undefined ? String(foundFormula.qc_spec_min) : '',
+          qc_spec_max: foundFormula.qc_spec_max !== null && foundFormula.qc_spec_max !== undefined ? String(foundFormula.qc_spec_max) : '',
         })
         
         // Load ingredients
@@ -137,6 +143,9 @@ function EditFormula({ finishedGoodId, finishedGoodSku, finishedGoodName, onClos
         finished_good_id: finishedGoodId,
         version: formData.formula_version,
         notes: formData.formula_notes || null,
+        qc_parameter_name: formData.qc_parameter_name.trim() || null,
+        qc_spec_min: formData.qc_spec_min.trim() ? parseFloat(formData.qc_spec_min) : null,
+        qc_spec_max: formData.qc_spec_max.trim() ? parseFloat(formData.qc_spec_max) : null,
         ingredients: validIngredients.map(ing => ({
           item_id: parseInt(ing.item_id),
           percentage: parseFloat(ing.percentage),
@@ -275,6 +284,56 @@ function EditFormula({ finishedGoodId, finishedGoodSku, finishedGoodName, onClos
                 </div>
               ))}
             </div>
+          </div>
+        </div>
+
+        <div className="form-section">
+          <h3>Quality Control Parameters</h3>
+          <div className="form-grid">
+            <div className="form-group full-width">
+              <label>QC Parameter Name</label>
+              <input
+                type="text"
+                value={formData.qc_parameter_name}
+                onChange={(e) => setFormData({ ...formData, qc_parameter_name: e.target.value })}
+                placeholder="e.g., norbixin, betanin, absorbance"
+              />
+              <small style={{ color: '#666', display: 'block', marginTop: '0.25rem' }}>
+                This parameter will be required when closing batches for this finished good
+              </small>
+            </div>
+            <div className="form-group">
+              <label>Spec Minimum</label>
+              <input
+                type="number"
+                step="0.01"
+                value={formData.qc_spec_min}
+                onChange={(e) => setFormData({ ...formData, qc_spec_min: e.target.value })}
+                placeholder="Min value"
+              />
+            </div>
+            <div className="form-group">
+              <label>Spec Maximum</label>
+              <input
+                type="number"
+                step="0.01"
+                value={formData.qc_spec_max}
+                onChange={(e) => setFormData({ ...formData, qc_spec_max: e.target.value })}
+                placeholder="Max value"
+              />
+            </div>
+          </div>
+          <div style={{ 
+            padding: '0.75rem', 
+            marginTop: '1rem', 
+            backgroundColor: '#f0f9ff', 
+            borderRadius: '6px',
+            border: '1px solid #0284c7',
+            fontSize: '0.875rem',
+            color: '#0369a1'
+          }}>
+            <strong>Note:</strong> If both min and max are specified, batch closure will validate that QC results fall within this range. 
+            Leave blank if no QC validation is required.
           </div>
         </div>
 

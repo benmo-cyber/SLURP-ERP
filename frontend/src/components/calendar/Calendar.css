@@ -375,6 +375,16 @@
   color: #155724;
 }
 
+.overdue-badge {
+  display: inline-block;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 0.75rem;
+  margin-left: 10px;
+  background: #f8d7da;
+  color: #721c24;
+}
+
 /* Event Detail Modal */
 .modal-overlay {
   position: fixed;

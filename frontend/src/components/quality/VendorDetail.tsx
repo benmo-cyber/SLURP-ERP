@@ -15,6 +15,7 @@ interface Vendor {
   phone?: string
   email?: string
   contact_name?: string
+  payment_terms?: string
   notes?: string
 }
 
@@ -42,6 +43,7 @@ function VendorDetail({ vendor: initialVendor, onClose }: VendorDetailProps) {
     phone: vendor.phone || '',
     email: vendor.email || '',
     contact_name: vendor.contact_name || '',
+    payment_terms: vendor.payment_terms || '',
     notes: vendor.notes || '',
   })
 
@@ -68,6 +70,7 @@ function VendorDetail({ vendor: initialVendor, onClose }: VendorDetailProps) {
         phone: data.phone || '',
         email: data.email || '',
         contact_name: data.contact_name || '',
+        payment_terms: data.payment_terms || '',
         notes: data.notes || '',
       })
     } catch (error) {
@@ -92,6 +95,7 @@ function VendorDetail({ vendor: initialVendor, onClose }: VendorDetailProps) {
         phone: formData.phone || null,
         email: formData.email || null,
         contact_name: formData.contact_name || null,
+        payment_terms: formData.payment_terms || null,
         notes: formData.notes || null,
       }
       await updateVendor(vendor.id, updateData)
@@ -119,6 +123,7 @@ function VendorDetail({ vendor: initialVendor, onClose }: VendorDetailProps) {
       phone: vendor.phone || '',
       email: vendor.email || '',
       contact_name: vendor.contact_name || '',
+      payment_terms: vendor.payment_terms || '',
       notes: vendor.notes || '',
     })
     setEditing(false)
@@ -331,6 +336,15 @@ function VendorDetail({ vendor: initialVendor, onClose }: VendorDetailProps) {
                   />
                 </div>
                 <div className="form-group">
+                  <label>Payment Terms</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. Net 30, Net 60, Due on Receipt"
+                    value={formData.payment_terms}
+                    onChange={(e) => setFormData({ ...formData, payment_terms: e.target.value })}
+                  />
+                </div>
+                <div className="form-group">
                   <label>Notes</label>
                   <textarea
                     value={formData.notes}
@@ -395,6 +409,10 @@ function VendorDetail({ vendor: initialVendor, onClose }: VendorDetailProps) {
                 <div className="info-item">
                   <label>Contact Name:</label>
                   <span>{vendor.contact_name || 'N/A'}</span>
+                </div>
+                <div className="info-item">
+                  <label>Payment Terms:</label>
+                  <span>{vendor.payment_terms || 'N/A'}</span>
                 </div>
                 {vendor.notes && (
                   <div className="info-item">

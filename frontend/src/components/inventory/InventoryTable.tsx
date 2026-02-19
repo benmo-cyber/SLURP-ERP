@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { getInventoryDetails, getLotsBySkuVendor, updateLot } from '../../api/inventory'
 import { getFinishedProductSpecification, getFpsPdfUrl } from '../../api/production'
-import { formatNumber } from '../../utils/formatNumber'
+import { formatNumber, formatNumberFlexible } from '../../utils/formatNumber'
 import './InventoryTable.css'
 
 interface InventoryDetail {
@@ -38,6 +38,8 @@ interface Lot {
   received_date: string
   expiration_date?: string
   status: string
+  committed_to_sales_qty?: number
+  committed_to_production_qty?: number
   pack_size_obj?: {
     id: number
     pack_size: number
@@ -159,12 +161,25 @@ function InventoryTable() {
 
   // Convert quantity based on unit display preference
   const convertQuantity = (quantity: number, unit: string) => {
+    let displayValue = quantity
+    
     if (unitDisplay === 'kg' && unit === 'lbs') {
-      return formatNumber(quantity * 0.453592)
+      displayValue = quantity * 0.453592
     } else if (unitDisplay === 'lbs' && unit === 'kg') {
-      return formatNumber(quantity * 2.20462)
+      displayValue = quantity * 2.20462
     }
-    return formatNumber(quantity)
+    
+    // Preserve exact integers when displaying
+    // Use tolerance of 0.01 to catch floating point errors (e.g., 615.99 -> 616)
+    const roundedToInteger = Math.round(displayValue)
+    const isInteger = Math.abs(displayValue - roundedToInteger) <= 0.01
+    
+    if (isInteger) {
+      // Use formatNumberFlexible to show integer without decimals
+      return formatNumberFlexible(roundedToInteger, 0, 0)
+    } else {
+      return formatNumber(displayValue)
+    }
   }
 
   const getDisplayUnit = (unit: string) => {
@@ -281,8 +296,8 @@ function InventoryTable() {
               <th>Total</th>
               <th>Available</th>
               <th>On Order</th>
-              <th>Allocated to Sales</th>
-              <th>Allocated to Production</th>
+              <th>Alloc. Sales</th>
+              <th>Alloc. Prod</th>
               <th>On Hold</th>
               <th>Lots</th>
             </tr>
@@ -432,6 +447,7 @@ function InventoryTable() {
                                             <th>Quantity</th>
                                             <th>Remaining</th>
                                             <th>Status</th>
+                                            <th>Committed</th>
                                           </tr>
                                         </thead>
                                         <tbody>
@@ -575,6 +591,44 @@ function InventoryTable() {
                                                   <span className={`status-badge status-${lot.status}`}>
                                                     {lot.status}
                                                   </span>
+                                                </td>
+                                                <td>
+                                                  {(() => {
+                                                    const salesQty = lot.committed_to_sales_qty || 0
+                                                    const prodQty = lot.committed_to_production_qty || 0
+                                                    const lotUnit = lot.item.unit_of_measure
+                                                    
+                                                    if (salesQty > 0 && prodQty > 0) {
+                                                      const displaySalesQty = lotUnit !== 'ea' ? convertQuantity(salesQty, lotUnit) : formatNumber(salesQty, 0)
+                                                      const displayProdQty = lotUnit !== 'ea' ? convertQuantity(prodQty, lotUnit) : formatNumber(prodQty, 0)
+                                                      return (
+                                                        <div className="committed-info">
+                                                          <span className="committed-badge committed-sales" title={`Committed to Sales: ${displaySalesQty} ${getDisplayUnit(lotUnit)}`}>
+                                                            Sales: {displaySalesQty} {getDisplayUnit(lotUnit)}
+                                                          </span>
+                                                          <span className="committed-badge committed-production" title={`Committed to Production: ${displayProdQty} ${getDisplayUnit(lotUnit)}`}>
+                                                            Prod: {displayProdQty} {getDisplayUnit(lotUnit)}
+                                                          </span>
+                                                        </div>
+                                                      )
+                                                    } else if (salesQty > 0) {
+                                                      const displayQty = lotUnit !== 'ea' ? convertQuantity(salesQty, lotUnit) : formatNumber(salesQty, 0)
+                                                      return (
+                                                        <span className="committed-badge committed-sales" title={`Committed to Sales: ${displayQty} ${getDisplayUnit(lotUnit)}`}>
+                                                          Sales: {displayQty} {getDisplayUnit(lotUnit)}
+                                                        </span>
+                                                      )
+                                                    } else if (prodQty > 0) {
+                                                      const displayQty = lotUnit !== 'ea' ? convertQuantity(prodQty, lotUnit) : formatNumber(prodQty, 0)
+                                                      return (
+                                                        <span className="committed-badge committed-production" title={`Committed to Production: ${displayQty} ${getDisplayUnit(lotUnit)}`}>
+                                                          Prod: {displayQty} {getDisplayUnit(lotUnit)}
+                                                        </span>
+                                                      )
+                                                    } else {
+                                                      return <span className="committed-badge not-committed">-</span>
+                                                    }
+                                                  })()}
                                                 </td>
                                               </tr>
                                             )

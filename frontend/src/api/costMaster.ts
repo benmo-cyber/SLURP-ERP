@@ -55,3 +55,8 @@ export const getCostMasterHistory = async (costMasterId: number) => {
   return response.data
 }
 
+
+export const refreshTariffs = async () => {
+  const response = await api.post('/cost-master/refresh_tariffs/')
+  return response.data
+}
