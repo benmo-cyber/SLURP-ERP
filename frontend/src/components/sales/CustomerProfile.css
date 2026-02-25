@@ -279,3 +279,65 @@
 .btn-danger:hover {
   background-color: #c0392b;
 }
+
+.customer-profile-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.customer-profile-edit {
+  padding: 1.5rem;
+}
+
+.customer-profile-edit h3 {
+  margin-top: 0;
+  margin-bottom: 1.25rem;
+  color: #2c3e50;
+}
+
+.customer-profile-edit-form .form-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.customer-profile-edit-form .form-group {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 1rem;
+}
+
+.customer-profile-edit-form .form-group label {
+  margin-bottom: 0.35rem;
+  font-weight: 500;
+  color: #555;
+}
+
+.customer-profile-edit-form .form-group input,
+.customer-profile-edit-form .form-group textarea {
+  padding: 0.5rem;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 14px;
+}
+
+.customer-profile-edit-form .form-actions {
+  display: flex;
+  gap: 1rem;
+  margin-top: 1.5rem;
+  padding-top: 1rem;
+  border-top: 1px solid #e0e0e0;
+}
+
+.address-display .address-street {
+  margin-bottom: 0.25rem;
+}
+.address-display .address-city-state {
+  color: #555;
+}
+.address-display .text-muted {
+  color: #888;
+  font-style: italic;
+}

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { getCustomer, getCustomerPricing, getShipToLocations, getCustomerContacts, getSalesCalls, getCustomerForecasts, getCustomerUsage, deleteShipToLocation, deleteCustomerContact, deleteSalesCall, deleteCustomerForecast, deleteCustomerPricing } from '../../api/customers'
+import { getCustomer, getCustomerPricing, getShipToLocations, getCustomerContacts, getSalesCalls, getCustomerForecasts, getCustomerUsage, updateCustomer, deleteShipToLocation, deleteCustomerContact, deleteSalesCall, deleteCustomerForecast, deleteCustomerPricing } from '../../api/customers'
 import { getItems } from '../../api/inventory'
 import { formatNumber, formatCurrency } from '../../utils/formatNumber'
 import CreateShipToLocation from './CreateShipToLocation'
@@ -54,6 +54,22 @@ function CustomerProfile({ customerId, onClose }: CustomerProfileProps) {
   const [editingSalesCall, setEditingSalesCall] = useState<any>(null)
   const [editingForecast, setEditingForecast] = useState<any>(null)
   const [editingPricing, setEditingPricing] = useState<any>(null)
+  const [showEditProfile, setShowEditProfile] = useState(false)
+  const [editFormData, setEditFormData] = useState({
+    name: '',
+    contact_name: '',
+    email: '',
+    phone: '',
+    address: '',
+    city: '',
+    state: '',
+    zip_code: '',
+    country: 'USA',
+    payment_terms: '',
+    notes: '',
+    is_active: true,
+  })
+  const [savingProfile, setSavingProfile] = useState(false)
 
   useEffect(() => {
     loadCustomerData()
@@ -111,6 +127,56 @@ function CustomerProfile({ customerId, onClose }: CustomerProfileProps) {
       loadCustomerData()
     } catch (error: any) {
       alert(error.response?.data?.detail || error.message || 'Failed to delete pricing')
+    }
+  }
+
+  const openEditProfile = () => {
+    if (!customer) return
+    setEditFormData({
+      name: customer.name,
+      contact_name: customer.contact_name || '',
+      email: customer.email || '',
+      phone: customer.phone || '',
+      address: customer.address || '',
+      city: customer.city || '',
+      state: customer.state || '',
+      zip_code: customer.zip_code || '',
+      country: customer.country || 'USA',
+      payment_terms: customer.payment_terms || '',
+      notes: customer.notes || '',
+      is_active: customer.is_active,
+    })
+    setShowEditProfile(true)
+  }
+
+  const getProfilePayload = () => ({
+    customer_id: customer!.customer_id,
+    name: editFormData.name,
+    contact_name: editFormData.contact_name || null,
+    email: editFormData.email || null,
+    phone: editFormData.phone || null,
+    address: editFormData.address || null,
+    city: editFormData.city || null,
+    state: editFormData.state || null,
+    zip_code: editFormData.zip_code || null,
+    country: editFormData.country || null,
+    payment_terms: editFormData.payment_terms || null,
+    notes: editFormData.notes || null,
+    is_active: editFormData.is_active,
+  })
+
+  const handleSaveProfile = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!customer) return
+    try {
+      setSavingProfile(true)
+      await updateCustomer(customer.id, getProfilePayload())
+      await loadCustomerData()
+      setShowEditProfile(false)
+    } catch (error: any) {
+      alert(error.response?.data?.detail || error.message || 'Failed to update customer')
+    } finally {
+      setSavingProfile(false)
     }
   }
 
@@ -172,9 +238,139 @@ function CustomerProfile({ customerId, onClose }: CustomerProfileProps) {
             <h2>{customer.name}</h2>
             <p className="customer-id">Customer ID: {customer.customer_id}</p>
           </div>
-          <button onClick={onClose} className="close-btn">×</button>
+          <div className="customer-profile-header-actions">
+            {!showEditProfile ? (
+              <button type="button" className="btn btn-secondary btn-sm" onClick={openEditProfile}>
+                Edit profile
+              </button>
+            ) : null}
+            <button onClick={onClose} className="close-btn">×</button>
+          </div>
         </div>
 
+        {showEditProfile ? (
+          <div className="customer-profile-edit">
+            <h3>Edit customer profile</h3>
+            <form onSubmit={handleSaveProfile} className="customer-profile-edit-form">
+              <div className="form-row">
+                <div className="form-group">
+                  <label>Name *</label>
+                  <input
+                    type="text"
+                    value={editFormData.name}
+                    onChange={(e) => setEditFormData({ ...editFormData, name: e.target.value })}
+                    required
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Contact name</label>
+                  <input
+                    type="text"
+                    value={editFormData.contact_name}
+                    onChange={(e) => setEditFormData({ ...editFormData, contact_name: e.target.value })}
+                  />
+                </div>
+              </div>
+              <div className="form-row">
+                <div className="form-group">
+                  <label>Email</label>
+                  <input
+                    type="email"
+                    value={editFormData.email}
+                    onChange={(e) => setEditFormData({ ...editFormData, email: e.target.value })}
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Phone</label>
+                  <input
+                    type="text"
+                    value={editFormData.phone}
+                    onChange={(e) => setEditFormData({ ...editFormData, phone: e.target.value })}
+                  />
+                </div>
+              </div>
+              <div className="form-group">
+                <label>Street address</label>
+                <textarea
+                  value={editFormData.address}
+                  onChange={(e) => setEditFormData({ ...editFormData, address: e.target.value })}
+                  rows={2}
+                  placeholder="Street, suite/unit, building (do not include city, state, or country—use the fields below)"
+                />
+              </div>
+              <div className="form-row">
+                <div className="form-group">
+                  <label>City</label>
+                  <input
+                    type="text"
+                    value={editFormData.city}
+                    onChange={(e) => setEditFormData({ ...editFormData, city: e.target.value })}
+                  />
+                </div>
+                <div className="form-group">
+                  <label>State</label>
+                  <input
+                    type="text"
+                    value={editFormData.state}
+                    onChange={(e) => setEditFormData({ ...editFormData, state: e.target.value })}
+                  />
+                </div>
+                <div className="form-group">
+                  <label>ZIP code</label>
+                  <input
+                    type="text"
+                    value={editFormData.zip_code}
+                    onChange={(e) => setEditFormData({ ...editFormData, zip_code: e.target.value })}
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Country</label>
+                  <input
+                    type="text"
+                    value={editFormData.country}
+                    onChange={(e) => setEditFormData({ ...editFormData, country: e.target.value })}
+                  />
+                </div>
+              </div>
+              <div className="form-group">
+                <label>Payment terms</label>
+                <input
+                  type="text"
+                  value={editFormData.payment_terms}
+                  onChange={(e) => setEditFormData({ ...editFormData, payment_terms: e.target.value })}
+                  placeholder="e.g., Net 30, Net 15, Due on Receipt"
+                />
+              </div>
+              <div className="form-group">
+                <label>Notes</label>
+                <textarea
+                  value={editFormData.notes}
+                  onChange={(e) => setEditFormData({ ...editFormData, notes: e.target.value })}
+                  rows={3}
+                />
+              </div>
+              <div className="form-group">
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={editFormData.is_active}
+                    onChange={(e) => setEditFormData({ ...editFormData, is_active: e.target.checked })}
+                  />
+                  Active
+                </label>
+              </div>
+              <div className="form-actions">
+                <button type="button" className="btn btn-secondary" onClick={() => setShowEditProfile(false)} disabled={savingProfile}>
+                  Cancel
+                </button>
+                <button type="submit" className="btn btn-primary" disabled={savingProfile}>
+                  {savingProfile ? 'Saving…' : 'Save changes'}
+                </button>
+              </div>
+            </form>
+          </div>
+        ) : (
+          <>
         <div className="customer-profile-tabs">
           <button className={activeTab === 'overview' ? 'active' : ''} onClick={() => setActiveTab('overview')}>
             Overview
@@ -214,10 +410,17 @@ function CustomerProfile({ customerId, onClose }: CustomerProfileProps) {
 
               <div className="info-section">
                 <h3>Address</h3>
-                <div>
-                  {customer.address && <div>{customer.address}</div>}
-                  <div>{customer.city}{customer.state ? `, ${customer.state}` : ''} {customer.zip_code}</div>
-                  <div>{customer.country || 'USA'}</div>
+                <div className="address-display">
+                  {customer.address && <div className="address-street">{customer.address}</div>}
+                  {(customer.city || customer.state || customer.zip_code || customer.country) && (
+                    <div className="address-city-state">
+                      {[customer.city, customer.state, customer.zip_code].filter(Boolean).join(', ')}
+                      {customer.country ? ` — ${customer.country}` : ''}
+                    </div>
+                  )}
+                  {!customer.address && !customer.city && !customer.state && !customer.zip_code && !customer.country && (
+                    <div className="text-muted">No address on file</div>
+                  )}
                 </div>
               </div>
 
@@ -597,6 +800,8 @@ function CustomerProfile({ customerId, onClose }: CustomerProfileProps) {
             </div>
           )}
         </div>
+          </>
+        )}
       </div>
 
       {/* Forms */}

@@ -71,6 +71,8 @@ function PurchaseOrderList() {
   const [trackingNumber, setTrackingNumber] = useState<string>('')
   const [carrier, setCarrier] = useState<string>('')
   const [unitDisplay, setUnitDisplay] = useState<'lbs' | 'kg'>('lbs')
+  type POSortKey = 'po_number' | 'vendor' | 'order_date' | 'required_date' | 'expected_delivery_date' | 'total' | 'status' | null
+  const [sort, setSort] = useState<{ key: POSortKey; dir: 'asc' | 'desc' }>({ key: 'order_date', dir: 'desc' })
 
   useEffect(() => {
     loadPOs()
@@ -111,6 +113,26 @@ function PurchaseOrderList() {
     } finally {
       setLoading(false)
     }
+  }
+
+  const sortedPos = [...pos].sort((a, b) => {
+    if (!sort.key) return 0
+    let cmp = 0
+    switch (sort.key) {
+      case 'po_number': cmp = (a.po_number || '').localeCompare(b.po_number || ''); break
+      case 'vendor': cmp = (a.vendor_name || '').localeCompare(b.vendor_name || ''); break
+      case 'order_date': cmp = new Date(a.order_date).getTime() - new Date(b.order_date).getTime(); break
+      case 'required_date': cmp = new Date(a.required_date || 0).getTime() - new Date(b.required_date || 0).getTime(); break
+      case 'expected_delivery_date': cmp = new Date(a.expected_delivery_date || 0).getTime() - new Date(b.expected_delivery_date || 0).getTime(); break
+      case 'total': cmp = (a.total ?? 0) - (b.total ?? 0); break
+      case 'status': cmp = (a.status || '').localeCompare(b.status || ''); break
+      default: return 0
+    }
+    return sort.dir === 'asc' ? cmp : -cmp
+  })
+
+  const handleSort = (key: NonNullable<POSortKey>) => {
+    setSort(prev => ({ key, dir: prev.key === key && prev.dir === 'asc' ? 'desc' : 'asc' }))
   }
 
   const handleView = async (id: number) => {
@@ -532,19 +554,19 @@ function PurchaseOrderList() {
         <table className="po-table">
           <thead>
             <tr>
-              <th>PO Number</th>
-              <th>Vendor</th>
-              <th>Issue Date</th>
-              <th>Required Date</th>
-              <th>Expected Delivery</th>
+              <th className="sortable" onClick={() => handleSort('po_number')}>PO Number {sort.key === 'po_number' && (sort.dir === 'asc' ? '↑' : '↓')}</th>
+              <th className="sortable" onClick={() => handleSort('vendor')}>Vendor {sort.key === 'vendor' && (sort.dir === 'asc' ? '↑' : '↓')}</th>
+              <th className="sortable" onClick={() => handleSort('order_date')}>Issue Date {sort.key === 'order_date' && (sort.dir === 'asc' ? '↑' : '↓')}</th>
+              <th className="sortable" onClick={() => handleSort('required_date')}>Required Date {sort.key === 'required_date' && (sort.dir === 'asc' ? '↑' : '↓')}</th>
+              <th className="sortable" onClick={() => handleSort('expected_delivery_date')}>Expected Delivery {sort.key === 'expected_delivery_date' && (sort.dir === 'asc' ? '↑' : '↓')}</th>
               <th>Quantity</th>
-              <th>Total</th>
-              <th>Status</th>
+              <th className="sortable" onClick={() => handleSort('total')}>Total {sort.key === 'total' && (sort.dir === 'asc' ? '↑' : '↓')}</th>
+              <th className="sortable" onClick={() => handleSort('status')}>Status {sort.key === 'status' && (sort.dir === 'asc' ? '↑' : '↓')}</th>
               <th>Actions</th>
             </tr>
           </thead>
           <tbody>
-            {pos.map((po) => {
+            {sortedPos.map((po) => {
               // Calculate total quantity with unit conversion
               const totalQuantity = calculateTotalQuantity(po)
               // Get unit from first item (assuming all items have same unit)

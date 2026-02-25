@@ -45,6 +45,14 @@
   font-size: 0.9rem;
 }
 
+.invoices-table th.sortable {
+  cursor: pointer;
+  user-select: none;
+}
+.invoices-table th.sortable:hover {
+  background-color: rgba(255, 255, 255, 0.15);
+}
+
 .invoices-table td {
   padding: 0.75rem 1rem;
   border-bottom: 1px solid #e0e0e0;

@@ -10,8 +10,17 @@ import IndirectMaterialCheckout from '../components/inventory/IndirectMaterialCh
 import Logs from '../components/inventory/Logs'
 import './Inventory.css'
 
+export type InventoryTabId = 'inventory' | 'items' | 'purchase-orders' | 'logs'
+
+const NAV_SECTIONS: { label: string; items: { id: InventoryTabId; label: string }[] }[] = [
+  { label: 'Stock', items: [{ id: 'inventory', label: 'Inventory Table' }] },
+  { label: 'Items', items: [{ id: 'items', label: 'Items Management' }] },
+  { label: 'Purchasing', items: [{ id: 'purchase-orders', label: 'Purchase Orders' }] },
+  { label: 'Activity', items: [{ id: 'logs', label: 'Logs' }] },
+]
+
 function Inventory() {
-  const [activeTab, setActiveTab] = useState<'inventory' | 'items' | 'purchase-orders' | 'logs'>('inventory')
+  const [activeTab, setActiveTab] = useState<InventoryTabId>('inventory')
   const [showCheckIn, setShowCheckIn] = useState(false)
   const [showCreateItem, setShowCreateItem] = useState(false)
   const [showReverseCheckIn, setShowReverseCheckIn] = useState(false)
@@ -36,38 +45,10 @@ function Inventory() {
 
   return (
     <div className="inventory-page">
-      <div className="inventory-header">
+      <header className="inventory-header">
         <h1>Inventory</h1>
-      </div>
-      <div className="inventory-tabs">
-        <button
-          className={`tab-button ${activeTab === 'inventory' ? 'active' : ''}`}
-          onClick={() => setActiveTab('inventory')}
-        >
-          Inventory Table
-        </button>
-        <button
-          className={`tab-button ${activeTab === 'items' ? 'active' : ''}`}
-          onClick={() => setActiveTab('items')}
-        >
-          Items Management
-        </button>
-        <button
-          className={`tab-button ${activeTab === 'purchase-orders' ? 'active' : ''}`}
-          onClick={() => setActiveTab('purchase-orders')}
-        >
-          Purchase Orders
-        </button>
-        <button
-          className={`tab-button ${activeTab === 'logs' ? 'active' : ''}`}
-          onClick={() => setActiveTab('logs')}
-        >
-          Logs
-        </button>
-      </div>
-      <div className="inventory-actions">
         {activeTab === 'inventory' && (
-          <>
+          <div className="inventory-header-actions">
             <button onClick={() => setShowCheckIn(true)} className="btn btn-primary">
               Check-In
             </button>
@@ -77,25 +58,52 @@ function Inventory() {
             <button onClick={() => setShowReverseCheckIn(true)} className="btn btn-danger">
               UNFK
             </button>
-          </>
+          </div>
         )}
         {activeTab === 'items' && (
-          <button onClick={() => setShowCreateItem(true)} className="btn btn-primary">
-            Create New Item
-          </button>
+          <div className="inventory-header-actions">
+            <button onClick={() => setShowCreateItem(true)} className="btn btn-primary">
+              Create New Item
+            </button>
+          </div>
         )}
         {activeTab === 'purchase-orders' && (
-          <button onClick={() => setShowCreatePO(true)} className="btn btn-primary">
-            Create Purchase Order
-          </button>
+          <div className="inventory-header-actions">
+            <button onClick={() => setShowCreatePO(true)} className="btn btn-primary">
+              Create Purchase Order
+            </button>
+          </div>
         )}
-      </div>
+      </header>
 
-      <div className="inventory-content">
-        {activeTab === 'inventory' && <InventoryTable key={refreshKey} />}
-        {activeTab === 'items' && <ItemsList />}
-        {activeTab === 'purchase-orders' && <PurchaseOrderList key={refreshKey} />}
-        {activeTab === 'logs' && <Logs />}
+      <div className="inventory-layout">
+        <nav className="inventory-sidebar">
+          {NAV_SECTIONS.map((section) => (
+            <div key={section.label} className="inventory-nav-section">
+              <div className="inventory-nav-section-label">{section.label}</div>
+              <ul className="inventory-nav-list">
+                {section.items.map((item) => (
+                  <li key={item.id}>
+                    <button
+                      type="button"
+                      className={`inventory-nav-item ${activeTab === item.id ? 'active' : ''}`}
+                      onClick={() => setActiveTab(item.id)}
+                    >
+                      {item.label}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </nav>
+
+        <main className="inventory-main">
+          {activeTab === 'inventory' && <InventoryTable key={refreshKey} />}
+          {activeTab === 'items' && <ItemsList />}
+          {activeTab === 'purchase-orders' && <PurchaseOrderList key={refreshKey} />}
+          {activeTab === 'logs' && <Logs />}
+        </main>
       </div>
 
       {showCheckIn && (
@@ -104,7 +112,6 @@ function Inventory() {
           onSuccess={handleCheckInSuccess}
         />
       )}
-
       {showCreateItem && (
         <CreateItemForm
           onClose={() => setShowCreateItem(false)}
@@ -140,4 +147,3 @@ function Inventory() {
 }
 
 export default Inventory
-

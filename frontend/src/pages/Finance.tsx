@@ -12,96 +12,100 @@ import PLActual from '../components/finance/PLActual'
 import PLProForma from '../components/finance/PLProForma'
 import './Finance.css'
 
+export type FinanceTabId =
+  | 'dashboard'
+  | 'ledger'
+  | 'journal'
+  | 'invoices'
+  | 'ar'
+  | 'ap'
+  | 'pricing'
+  | 'cost-master'
+  | 'reports'
+  | 'pl-actual'
+  | 'pl-proforma'
+
+const NAV_SECTIONS: { label: string; items: { id: FinanceTabId; label: string }[] }[] = [
+  { label: 'Overview', items: [{ id: 'dashboard', label: 'Dashboard' }] },
+  {
+    label: 'Accounting',
+    items: [
+      { id: 'ledger', label: 'General Ledger' },
+      { id: 'journal', label: 'Journal Entries' },
+    ],
+  },
+  {
+    label: 'Invoicing',
+    items: [
+      { id: 'invoices', label: 'Invoices' },
+      { id: 'ar', label: 'Accounts Receivable' },
+    ],
+  },
+  {
+    label: 'Payables',
+    items: [{ id: 'ap', label: 'Accounts Payable' }],
+  },
+  {
+    label: 'Pricing & cost',
+    items: [
+      { id: 'pricing', label: 'Pricing Management' },
+      { id: 'cost-master', label: 'Cost Master List' },
+    ],
+  },
+  {
+    label: 'Reports',
+    items: [
+      { id: 'reports', label: 'Financial Reports' },
+      { id: 'pl-actual', label: 'P&L Actual' },
+      { id: 'pl-proforma', label: 'P&L Pro-Forma' },
+    ],
+  },
+]
+
 function Finance() {
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'ledger' | 'invoices' | 'journal' | 'pricing' | 'reports' | 'cost-master' | 'ap' | 'ar' | 'pl-actual' | 'pl-proforma'>('dashboard')
+  const [activeTab, setActiveTab] = useState<FinanceTabId>('dashboard')
 
   return (
     <div className="finance-page">
-      <div className="page-header">
+      <header className="finance-header">
         <h1>Finance</h1>
-      </div>
+      </header>
 
-      <div className="finance-tabs">
-        <button
-          className={`tab-button ${activeTab === 'dashboard' ? 'active' : ''}`}
-          onClick={() => setActiveTab('dashboard')}
-        >
-          Dashboard
-        </button>
-        <button
-          className={`tab-button ${activeTab === 'ledger' ? 'active' : ''}`}
-          onClick={() => setActiveTab('ledger')}
-        >
-          General Ledger
-        </button>
-        <button
-          className={`tab-button ${activeTab === 'invoices' ? 'active' : ''}`}
-          onClick={() => setActiveTab('invoices')}
-        >
-          Invoices
-        </button>
-        <button
-          className={`tab-button ${activeTab === 'journal' ? 'active' : ''}`}
-          onClick={() => setActiveTab('journal')}
-        >
-          Journal Entries
-        </button>
-        <button
-          className={`tab-button ${activeTab === 'pricing' ? 'active' : ''}`}
-          onClick={() => setActiveTab('pricing')}
-        >
-          Pricing Management
-        </button>
-        <button
-          className={`tab-button ${activeTab === 'reports' ? 'active' : ''}`}
-          onClick={() => setActiveTab('reports')}
-        >
-          Financial Reports
-        </button>
-        <button
-          className={`tab-button ${activeTab === 'cost-master' ? 'active' : ''}`}
-          onClick={() => setActiveTab('cost-master')}
-        >
-          Cost Master List
-        </button>
-        <button
-          className={`tab-button ${activeTab === 'ap' ? 'active' : ''}`}
-          onClick={() => setActiveTab('ap')}
-        >
-          Accounts Payable
-        </button>
-        <button
-          className={`tab-button ${activeTab === 'ar' ? 'active' : ''}`}
-          onClick={() => setActiveTab('ar')}
-        >
-          Accounts Receivable
-        </button>
-        <button
-          className={`tab-button ${activeTab === 'pl-actual' ? 'active' : ''}`}
-          onClick={() => setActiveTab('pl-actual')}
-        >
-          P&L Actual
-        </button>
-        <button
-          className={`tab-button ${activeTab === 'pl-proforma' ? 'active' : ''}`}
-          onClick={() => setActiveTab('pl-proforma')}
-        >
-          P&L Pro-Forma
-        </button>
-      </div>
+      <div className="finance-layout">
+        <nav className="finance-sidebar">
+          {NAV_SECTIONS.map((section) => (
+            <div key={section.label} className="finance-nav-section">
+              <div className="finance-nav-section-label">{section.label}</div>
+              <ul className="finance-nav-list">
+                {section.items.map((item) => (
+                  <li key={item.id}>
+                    <button
+                      type="button"
+                      className={`finance-nav-item ${activeTab === item.id ? 'active' : ''}`}
+                      onClick={() => setActiveTab(item.id)}
+                    >
+                      {item.label}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </nav>
 
-      <div className="finance-content">
-        {activeTab === 'dashboard' && <FinancialDashboard />}
-        {activeTab === 'ledger' && <GeneralLedger />}
-        {activeTab === 'invoices' && <Invoices />}
-        {activeTab === 'journal' && <JournalEntries />}
-        {activeTab === 'pricing' && <PricingManagement />}
-        {activeTab === 'reports' && <FinancialReports />}
-        {activeTab === 'cost-master' && <CostMasterList />}
-        {activeTab === 'ap' && <AccountsPayable />}
-        {activeTab === 'ar' && <AccountsReceivable />}
-        {activeTab === 'pl-actual' && <PLActual />}
-        {activeTab === 'pl-proforma' && <PLProForma />}
+        <main className="finance-main">
+          {activeTab === 'dashboard' && <FinancialDashboard />}
+          {activeTab === 'ledger' && <GeneralLedger />}
+          {activeTab === 'invoices' && <Invoices />}
+          {activeTab === 'journal' && <JournalEntries />}
+          {activeTab === 'pricing' && <PricingManagement />}
+          {activeTab === 'reports' && <FinancialReports />}
+          {activeTab === 'cost-master' && <CostMasterList />}
+          {activeTab === 'ap' && <AccountsPayable />}
+          {activeTab === 'ar' && <AccountsReceivable />}
+          {activeTab === 'pl-actual' && <PLActual />}
+          {activeTab === 'pl-proforma' && <PLProForma />}
+        </main>
       </div>
     </div>
   )

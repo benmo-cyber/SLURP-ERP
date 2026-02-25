@@ -7,8 +7,16 @@ import Calendar from '../components/calendar/Calendar'
 import CRMDashboard from '../components/sales/CRMDashboard'
 import './Sales.css'
 
+export type SalesTabId = 'crm' | 'orders' | 'calendar'
+
+const NAV_SECTIONS: { label: string; items: { id: SalesTabId; label: string }[] }[] = [
+  { label: 'Overview', items: [{ id: 'crm', label: 'CRM' }] },
+  { label: 'Orders', items: [{ id: 'orders', label: 'Sales Orders' }] },
+  { label: 'Planning', items: [{ id: 'calendar', label: 'Calendar' }] },
+]
+
 function Sales() {
-  const [activeTab, setActiveTab] = useState<'orders' | 'calendar' | 'crm'>('crm')
+  const [activeTab, setActiveTab] = useState<SalesTabId>('crm')
   const [showCreateSO, setShowCreateSO] = useState(false)
   const [editingSalesOrder, setEditingSalesOrder] = useState<any>(null)
   const [showCustomerManagement, setShowCustomerManagement] = useState(false)
@@ -33,58 +41,57 @@ function Sales() {
 
   return (
     <div className="sales-page">
-      <div className="page-header">
+      <header className="sales-header">
         <h1>Sales</h1>
-        <div className="header-actions">
-          {activeTab === 'orders' && (
-            <>
-              <button onClick={() => setShowCustomerManagement(true)} className="btn btn-secondary">
-                Manage Customers
-              </button>
-              <button onClick={() => setShowCheckOut(true)} className="btn btn-primary">
-                Check Out
-              </button>
-              <button onClick={() => setShowCreateSO(true)} className="btn btn-primary">
-                Create Sales Order from Customer PO
-              </button>
-            </>
-          )}
-        </div>
-      </div>
-
-      <div className="sales-tabs">
-        <button
-          className={`tab-button ${activeTab === 'crm' ? 'active' : ''}`}
-          onClick={() => setActiveTab('crm')}
-        >
-          CRM
-        </button>
-        <button
-          className={`tab-button ${activeTab === 'orders' ? 'active' : ''}`}
-          onClick={() => setActiveTab('orders')}
-        >
-          Sales Orders
-        </button>
-        <button
-          className={`tab-button ${activeTab === 'calendar' ? 'active' : ''}`}
-          onClick={() => setActiveTab('calendar')}
-        >
-          Calendar
-        </button>
-      </div>
-
-      <div className="page-content">
-        {activeTab === 'crm' && <CRMDashboard />}
-        {activeTab === 'calendar' && <Calendar />}
         {activeTab === 'orders' && (
-          <SalesOrdersList 
-            refreshKey={refreshKey} 
-            onEditOrder={handleEditSalesOrder}
-          />
+          <div className="sales-header-actions">
+            <button onClick={() => setShowCustomerManagement(true)} className="btn btn-secondary">
+              Manage Customers
+            </button>
+            <button onClick={() => setShowCheckOut(true)} className="btn btn-primary">
+              Check Out
+            </button>
+            <button onClick={() => setShowCreateSO(true)} className="btn btn-primary">
+              Create Sales Order from Customer PO
+            </button>
+          </div>
         )}
+      </header>
+
+      <div className="sales-layout">
+        <nav className="sales-sidebar">
+          {NAV_SECTIONS.map((section) => (
+            <div key={section.label} className="sales-nav-section">
+              <div className="sales-nav-section-label">{section.label}</div>
+              <ul className="sales-nav-list">
+                {section.items.map((item) => (
+                  <li key={item.id}>
+                    <button
+                      type="button"
+                      className={`sales-nav-item ${activeTab === item.id ? 'active' : ''}`}
+                      onClick={() => setActiveTab(item.id)}
+                    >
+                      {item.label}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </nav>
+
+        <main className="sales-main">
+          {activeTab === 'crm' && <CRMDashboard />}
+          {activeTab === 'calendar' && <Calendar />}
+          {activeTab === 'orders' && (
+            <SalesOrdersList
+              refreshKey={refreshKey}
+              onEditOrder={handleEditSalesOrder}
+            />
+          )}
+        </main>
       </div>
 
-      {/* Modals - shown regardless of active tab */}
       {showCreateSO && (
         <CreateSalesOrder
           onClose={() => {

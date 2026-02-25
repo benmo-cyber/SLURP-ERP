@@ -198,6 +198,14 @@
   opacity: 0.8;
 }
 
+.calendar-event.draggable {
+  cursor: grab;
+}
+
+.calendar-event.draggable:active {
+  cursor: grabbing;
+}
+
 .more-events {
   font-size: 0.7rem;
   color: #666;
@@ -276,6 +284,14 @@
   transform: translateX(2px);
 }
 
+.week-event.draggable {
+  cursor: grab;
+}
+
+.week-event.draggable:active {
+  cursor: grabbing;
+}
+
 .event-time {
   font-size: 0.75rem;
   color: #666;
@@ -328,6 +344,14 @@
   border-radius: 4px;
   cursor: pointer;
   transition: all 0.2s;
+}
+
+.day-event-card.draggable {
+  cursor: grab;
+}
+
+.day-event-card.draggable:active {
+  cursor: grabbing;
 }
 
 .day-event-card:hover {

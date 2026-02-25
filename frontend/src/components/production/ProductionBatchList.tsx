@@ -30,11 +30,56 @@ interface ProductionBatchListProps {
   onAdjustBatch?: (batch: ProductionBatch) => void
 }
 
+type InProgressSortKey = 'batch_number' | 'finished_good' | 'quantity_produced' | 'production_date' | 'status' | null
+type ClosedSortKey = 'batch_number' | 'finished_good' | 'quantity_produced' | 'quantity_actual' | 'production_date' | 'closed_date' | 'status' | null
+
 function ProductionBatchList({ onCloseBatch, onUnfkBatch, onAdjustBatch }: ProductionBatchListProps) {
   const [batches, setBatches] = useState<ProductionBatch[]>([])
   const [loading, setLoading] = useState(true)
   const [selectedBatchId, setSelectedBatchId] = useState<number | null>(null)
   const [unitDisplay, setUnitDisplay] = useState<'lbs' | 'kg'>('lbs')
+  const [inProgressSort, setInProgressSort] = useState<{ key: InProgressSortKey; dir: 'asc' | 'desc' }>({ key: 'production_date', dir: 'desc' })
+  const [closedSort, setClosedSort] = useState<{ key: ClosedSortKey; dir: 'asc' | 'desc' }>({ key: 'closed_date', dir: 'desc' })
+
+  const sortInProgress = (list: ProductionBatch[]) => {
+    if (!inProgressSort.key) return list
+    return [...list].sort((a, b) => {
+      let cmp = 0
+      switch (inProgressSort.key) {
+        case 'batch_number': cmp = (a.batch_number || '').localeCompare(b.batch_number || ''); break
+        case 'finished_good': cmp = (a.finished_good_item?.name || '').localeCompare(b.finished_good_item?.name || ''); break
+        case 'quantity_produced': cmp = a.quantity_produced - b.quantity_produced; break
+        case 'production_date': cmp = new Date(a.production_date).getTime() - new Date(b.production_date).getTime(); break
+        case 'status': cmp = (a.status || '').localeCompare(b.status || ''); break
+        default: return 0
+      }
+      return inProgressSort.dir === 'asc' ? cmp : -cmp
+    })
+  }
+  const sortClosed = (list: ProductionBatch[]) => {
+    if (!closedSort.key) return list
+    return [...list].sort((a, b) => {
+      let cmp = 0
+      switch (closedSort.key) {
+        case 'batch_number': cmp = (a.batch_number || '').localeCompare(b.batch_number || ''); break
+        case 'finished_good': cmp = (a.finished_good_item?.name || '').localeCompare(b.finished_good_item?.name || ''); break
+        case 'quantity_produced': cmp = a.quantity_produced - b.quantity_produced; break
+        case 'quantity_actual': cmp = a.quantity_actual - b.quantity_actual; break
+        case 'production_date': cmp = new Date(a.production_date).getTime() - new Date(b.production_date).getTime(); break
+        case 'closed_date': cmp = new Date(a.closed_date || 0).getTime() - new Date(b.closed_date || 0).getTime(); break
+        case 'status': cmp = (a.status || '').localeCompare(b.status || ''); break
+        default: return 0
+      }
+      return closedSort.dir === 'asc' ? cmp : -cmp
+    })
+  }
+
+  const handleInProgressSort = (key: InProgressSortKey) => {
+    setInProgressSort(prev => ({ key, dir: prev.key === key && prev.dir === 'asc' ? 'desc' : 'asc' }))
+  }
+  const handleClosedSort = (key: ClosedSortKey) => {
+    setClosedSort(prev => ({ key, dir: prev.key === key && prev.dir === 'asc' ? 'desc' : 'asc' }))
+  }
 
   // Format production date to avoid timezone conversion issues
   const formatProductionDate = (dateString: string): string => {
@@ -61,7 +106,8 @@ function ProductionBatchList({ onCloseBatch, onUnfkBatch, onAdjustBatch }: Produ
     }
   }
 
-  const inProgressBatches = batches.filter(b => b.status === 'open' || b.status === 'in_progress')
+  // Include draft, scheduled, and in_progress so no batches go "missing" (backend never uses 'open')
+  const inProgressBatches = batches.filter(b => b.status !== 'closed')
   const closedBatches = batches.filter(b => b.status === 'closed')
 
   // Convert quantity based on unit display preference
@@ -118,16 +164,16 @@ function ProductionBatchList({ onCloseBatch, onUnfkBatch, onAdjustBatch }: Produ
           <table className="batch-table">
             <thead>
               <tr>
-                <th>BT Number</th>
-                <th>Finished Good</th>
-                <th>Quantity to Produce</th>
-                <th>Production Date</th>
-                <th>Status</th>
+                <th className="sortable" onClick={() => handleInProgressSort('batch_number')}>BT Number {inProgressSort.key === 'batch_number' && (inProgressSort.dir === 'asc' ? '↑' : '↓')}</th>
+                <th className="sortable" onClick={() => handleInProgressSort('finished_good')}>Finished Good {inProgressSort.key === 'finished_good' && (inProgressSort.dir === 'asc' ? '↑' : '↓')}</th>
+                <th className="sortable" onClick={() => handleInProgressSort('quantity_produced')}>Quantity to Produce {inProgressSort.key === 'quantity_produced' && (inProgressSort.dir === 'asc' ? '↑' : '↓')}</th>
+                <th className="sortable" onClick={() => handleInProgressSort('production_date')}>Production Date {inProgressSort.key === 'production_date' && (inProgressSort.dir === 'asc' ? '↑' : '↓')}</th>
+                <th className="sortable" onClick={() => handleInProgressSort('status')}>Status {inProgressSort.key === 'status' && (inProgressSort.dir === 'asc' ? '↑' : '↓')}</th>
                 <th>Actions</th>
               </tr>
             </thead>
             <tbody>
-              {inProgressBatches.map((batch) => (
+              {sortInProgress(inProgressBatches).map((batch) => (
                 <tr key={batch.id}>
                   <td className="batch-number">
                     {batch.status === 'in_progress' ? (
@@ -201,20 +247,20 @@ function ProductionBatchList({ onCloseBatch, onUnfkBatch, onAdjustBatch }: Produ
           <table className="batch-table">
             <thead>
               <tr>
-                <th>BT Number</th>
-                <th>Finished Good</th>
-                <th>Quantity Produced</th>
-                <th>Quantity Actual</th>
+                <th className="sortable" onClick={() => handleClosedSort('batch_number')}>BT Number {closedSort.key === 'batch_number' && (closedSort.dir === 'asc' ? '↑' : '↓')}</th>
+                <th className="sortable" onClick={() => handleClosedSort('finished_good')}>Finished Good {closedSort.key === 'finished_good' && (closedSort.dir === 'asc' ? '↑' : '↓')}</th>
+                <th className="sortable" onClick={() => handleClosedSort('quantity_produced')}>Qty Produced {closedSort.key === 'quantity_produced' && (closedSort.dir === 'asc' ? '↑' : '↓')}</th>
+                <th className="sortable" onClick={() => handleClosedSort('quantity_actual')}>Qty Actual {closedSort.key === 'quantity_actual' && (closedSort.dir === 'asc' ? '↑' : '↓')}</th>
                 <th>Variance</th>
                 <th>Wastes</th>
                 <th>Spills</th>
-                <th>Production Date</th>
-                <th>Closed Date</th>
+                <th className="sortable" onClick={() => handleClosedSort('production_date')}>Production Date {closedSort.key === 'production_date' && (closedSort.dir === 'asc' ? '↑' : '↓')}</th>
+                <th className="sortable" onClick={() => handleClosedSort('closed_date')}>Closed Date {closedSort.key === 'closed_date' && (closedSort.dir === 'asc' ? '↑' : '↓')}</th>
                 <th>Actions</th>
               </tr>
             </thead>
             <tbody>
-              {closedBatches.map((batch) => (
+              {sortClosed(closedBatches).map((batch) => (
                 <tr key={batch.id}>
                   <td className="batch-number">
                     <a

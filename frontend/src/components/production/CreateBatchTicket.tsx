@@ -62,6 +62,10 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
   const [indirectMaterialInputValues, setIndirectMaterialInputValues] = useState<{ [key: number]: string }>({})
   const [partialLots, setPartialLots] = useState<Lot[]>([])
   const [selectedPartials, setSelectedPartials] = useState<Set<number>>(new Set())
+  /** Per-formula-ingredient override: use formula item (default) or substitute with another raw material */
+  const [ingredientOverrides, setIngredientOverrides] = useState<Record<number, { useFormula: boolean; substituteItemId: number | null }>>({})
+  /** Per-ingredient percentage override for this batch (e.g. 75% instead of 50% when material has degraded) */
+  const [ingredientPercentageOverrides, setIngredientPercentageOverrides] = useState<Record<number, number | null>>({})
 
   useEffect(() => {
     loadData()
@@ -85,6 +89,8 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
         alert(`No formula found for ${selectedFinishedGood.sku}. Please create a formula first.`)
       }
       setSelectedFormula(formula || null)
+      setIngredientOverrides({})
+      setIngredientPercentageOverrides({})
       
       // Load partial lots for this finished good
       loadPartialLots(selectedFinishedGood.id)
@@ -418,19 +424,6 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
         alert('Please select at least one lot')
         return
       }
-
-      // Validate that selected lots match formula ingredients by SKU
-      const ingredientSkus = selectedFormula.ingredients.map(ing => ing.item.sku)
-      const selectedLotSkus = Object.keys(selectedLots).map(lotId => {
-        const lot = availableLots.find(l => l.id === parseInt(lotId))
-        return lot?.item.sku
-      })
-
-      const allMatch = selectedLotSkus.every(sku => ingredientSkus.includes(sku!))
-      if (!allMatch) {
-        alert('Selected lots must match formula ingredients')
-        return
-      }
     } else {
       // Repack batch
       if (!selectedRepackItem || !quantity) {
@@ -525,6 +518,38 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
           batchData.work_in_partials = Array.from(selectedPartials).map(lotId => ({
             lot_id: lotId
           }))
+        }
+        // Record ratio changes and substitutions for audit (batch and production logs)
+        if (selectedFormula?.ingredients?.length) {
+          const hasPctOverride = selectedFormula.ingredients.some(ing => ingredientPercentageOverrides[ing.id] != null)
+          const hasSubstitution = selectedFormula.ingredients.some(ing => {
+            const o = ingredientOverrides[ing.id]
+            return o && !o.useFormula && o.substituteItemId != null
+          })
+          if (hasPctOverride || hasSubstitution) {
+            batchData.recipe_snapshot = JSON.stringify({
+              formula_id: selectedFormula.id,
+              finished_good_sku: selectedFinishedGood?.sku ?? null,
+              finished_good_name: selectedFinishedGood?.name ?? null,
+              ingredients: selectedFormula.ingredients.map((ing: { id: number; item?: { sku?: string; name?: string }; percentage: number }) => {
+                const o = ingredientOverrides[ing.id]
+                const batchPct = ingredientPercentageOverrides[ing.id] ?? ing.percentage
+                const substituted = !!(o && !o.useFormula && o.substituteItemId != null)
+                const substituteItem = substituted && repackItems ? repackItems.find((i: { id: number }) => i.id === o!.substituteItemId) : null
+                return {
+                  formula_ingredient_id: ing.id,
+                  formula_item_sku: ing.item?.sku ?? null,
+                  formula_item_name: ing.item?.name ?? null,
+                  formula_pct: ing.percentage,
+                  batch_pct: batchPct,
+                  batch_pct_overridden: ingredientPercentageOverrides[ing.id] != null,
+                  substituted,
+                  substitute_item_sku: substituteItem?.sku ?? null,
+                  substitute_item_name: substituteItem?.name ?? null,
+                }
+              }),
+            })
+          }
         }
       } else {
         batchData.finished_good_item_id = selectedRepackItem!.id
@@ -681,7 +706,7 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
           {batchType === 'production' && selectedFormula && (
             <>
               <div className="formula-section">
-                <label className="section-label">Formula (Auto-populated, Read-only)</label>
+                <label className="section-label">Formula (base) – you can substitute raw materials per ingredient below</label>
                 <div className="formula-display">
                   <div className="formula-header">
                     <span className="formula-version">Version: {selectedFormula.version}</span>
@@ -814,36 +839,31 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
                 )}
                 
                 {selectedFormula.ingredients.map((ingredient) => {
-                  // Match by SKU to allow vendor interchangeability
-                  const ingredientLots = availableLots.filter(lot => lot.item.sku === ingredient.item.sku)
-                  // Calculate total selected - use input values directly when available to avoid precision issues
+                  const override = ingredientOverrides[ingredient.id]
+                  const useSubstitute = override && !override.useFormula && override.substituteItemId != null
+                  // Lots for this row: formula ingredient (by SKU) or substitute item (by id)
+                  const ingredientLots = useSubstitute
+                    ? allLots.filter((lot: Lot) => lot.item.id === override!.substituteItemId)
+                    : availableLots.filter(lot => lot.item.sku === ingredient.item.sku)
+                  const substituteItems = repackItems.filter(i => i.id !== ingredient.item.id)
+                  // Total selected for this row only (from lots in ingredientLots)
                   let totalSelected = 0
-                  
-                  Object.keys(selectedLots).forEach(lotId => {
-                    const lotIdNum = parseInt(lotId)
-                    const lot = availableLots.find(l => l.id === lotIdNum)
-                    if (lot && lot.item.sku === ingredient.item.sku) {
-                      // Prefer using the input value directly (as string) to avoid floating point errors
-                      const inputValue = lotInputValues[lotIdNum]
-                      
-                      if (inputValue && quantityUnit === lot.item.unit_of_measure) {
-                        // Units match - use input value directly
-                        // Check if it's an integer string (no decimal point)
-                        if (!inputValue.includes('.')) {
-                          // Pure integer - use exact integer
-                          totalSelected += parseInt(inputValue, 10)
-                        } else {
-                          // Has decimal - parse and add
-                          totalSelected += parseFloat(inputValue)
-                        }
+                  ingredientLots.forEach(lot => {
+                    const lotIdNum = lot.id
+                    if (!selectedLots[lotIdNum]) return
+                    const inputValue = lotInputValues[lotIdNum]
+                    if (inputValue && quantityUnit === lot.item.unit_of_measure) {
+                      if (!inputValue.includes('.')) {
+                        totalSelected += parseInt(inputValue, 10)
                       } else {
-                        // Need conversion or no input value - use stored value
-                        const storedQty = selectedLots[lotIdNum] || 0
-                        if (quantityUnit !== lot.item.unit_of_measure) {
-                          totalSelected += convertWeight(storedQty, lot.item.unit_of_measure as 'lbs' | 'kg', quantityUnit)
-                        } else {
-                          totalSelected += storedQty
-                        }
+                        totalSelected += parseFloat(inputValue)
+                      }
+                    } else {
+                      const storedQty = selectedLots[lotIdNum] || 0
+                      if (quantityUnit !== lot.item.unit_of_measure) {
+                        totalSelected += convertWeight(storedQty, lot.item.unit_of_measure as 'lbs' | 'kg', quantityUnit)
+                      } else {
+                        totalSelected += storedQty
                       }
                     }
                   })
@@ -863,32 +883,139 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
                     finalTotalSelected = Math.round(totalSelected * 100) / 100
                   }
                   
-                  // Calculate required quantity based on the finished good's unit
-                  // The quantity entered is in quantityUnit, and percentages are based on that
+                  // Effective % for this batch: override or formula default
+                  const effectivePct = ingredientPercentageOverrides[ingredient.id] ?? ingredient.percentage
                   const baseQuantity = quantity ? parseFloat(quantity) : 0
-                  const requiredQty = baseQuantity * (ingredient.percentage / 100)
+                  const requiredQty = baseQuantity * (effectivePct / 100)
                   const requiredQtyDisplay = formatNumber(requiredQty)
+                  const hasPctOverride = ingredientPercentageOverrides[ingredient.id] != null
 
                   return (
                     <div key={ingredient.id} className="ingredient-group">
                       <div className="ingredient-header">
                         <div className="ingredient-title">
                           <span className="ingredient-name">{ingredient.item.name}</span>
-                          <span className="ingredient-percentage">{ingredient.percentage}% of batch</span>
+                          <span className="ingredient-percentage">
+                            Formula: {ingredient.percentage}%
+                            {hasPctOverride && (
+                              <span className="batch-pct-override"> → Batch: {effectivePct}%</span>
+                            )}
+                          </span>
+                        </div>
+                        <div className="ingredient-batch-pct-row">
+                          <label className="batch-pct-label">Batch % for this ingredient:</label>
+                          <input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            max="100"
+                            className="batch-pct-input"
+                            value={hasPctOverride ? effectivePct : ''}
+                            placeholder={String(ingredient.percentage)}
+                            onChange={(e) => {
+                              const raw = e.target.value.trim()
+                              if (raw === '') {
+                                setIngredientPercentageOverrides(prev => { const n = { ...prev }; delete n[ingredient.id]; return n })
+                                return
+                              }
+                              const num = parseFloat(raw)
+                              if (!isNaN(num) && num >= 0 && num <= 100) {
+                                setIngredientPercentageOverrides(prev => ({ ...prev, [ingredient.id]: num }))
+                              }
+                            }}
+                          />
+                          <span className="batch-pct-suffix">%</span>
+                          {hasPctOverride && (
+                            <button
+                              type="button"
+                              className="btn-reset-pct"
+                              onClick={() => setIngredientPercentageOverrides(prev => { const n = { ...prev }; delete n[ingredient.id]; return n })}
+                            >
+                              Reset to formula
+                            </button>
+                          )}
                         </div>
                         <div className="ingredient-summary">
                           <span className="required-qty">
                             Required: {requiredQtyDisplay} {quantityUnit === 'kg' ? 'kg' : 'lbs'}
+                            {hasPctOverride && ' (from batch %)'}
                           </span>
                           <span className={`selected-qty ${finalTotalSelected > 0 ? 'has-selection' : ''}`}>
                             Selected: {formatNumber(finalTotalSelected)} {quantityUnit}
                           </span>
                         </div>
                       </div>
+                      <div className="ingredient-substitute-row">
+                        {!useSubstitute ? (
+                          <>
+                            <span className="ingredient-source">Using formula: {ingredient.item.name} ({ingredient.item.sku})</span>
+                            <button
+                              type="button"
+                              className="btn-link-substitute"
+                              onClick={() => {
+                                setIngredientOverrides(prev => ({ ...prev, [ingredient.id]: { useFormula: false, substituteItemId: null } }))
+                                const formulaLotIds = allLots.filter((l: Lot) => l.item.sku === ingredient.item.sku).map((l: Lot) => l.id)
+                                setSelectedLots(prev => { const next = { ...prev }; formulaLotIds.forEach(id => { delete next[id] }); return next })
+                                setLotInputValues(prev => { const next = { ...prev }; formulaLotIds.forEach(id => { delete next[id] }); return next })
+                              }}
+                            >
+                              Substitute with different raw material
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            <label className="substitute-label">Substitute raw material:</label>
+                            <select
+                              value={override?.substituteItemId ?? ''}
+                              onChange={(e) => {
+                                const id = e.target.value ? parseInt(e.target.value) : null
+                                const prevSubId = override?.substituteItemId
+                                setIngredientOverrides(prev => ({ ...prev, [ingredient.id]: { useFormula: false, substituteItemId: id } }))
+                                if (prevSubId != null) {
+                                  const prevLotIds = allLots.filter((l: Lot) => l.item.id === prevSubId).map((l: Lot) => l.id)
+                                  setSelectedLots(prev => { const next = { ...prev }; prevLotIds.forEach(lid => { delete next[lid] }); return next })
+                                  setLotInputValues(prev => { const next = { ...prev }; prevLotIds.forEach(lid => { delete next[lid] }); return next })
+                                }
+                              }}
+                              className="substitute-select"
+                            >
+                              <option value="">Select item…</option>
+                              {substituteItems.map(item => (
+                                <option key={item.id} value={item.id}>{item.sku} – {item.name}</option>
+                              ))}
+                            </select>
+                            <button
+                              type="button"
+                              className="btn-link-use-formula"
+                              onClick={() => {
+                                setIngredientOverrides(prev => ({ ...prev, [ingredient.id]: { useFormula: true, substituteItemId: null } }))
+                                if (override?.substituteItemId != null) {
+                                  const substituteLotIds = allLots.filter((l: Lot) => l.item.id === override.substituteItemId).map((l: Lot) => l.id)
+                                  setSelectedLots(prev => { const next = { ...prev }; substituteLotIds.forEach(id => { delete next[id] }); return next })
+                                  setLotInputValues(prev => { const next = { ...prev }; substituteLotIds.forEach(id => { delete next[id] }); return next })
+                                }
+                              }}
+                            >
+                              Use formula ingredient instead
+                            </button>
+                          </>
+                        )}
+                      </div>
+                      {useSubstitute && (
+                        <p className="substitute-hint">This batch uses {requiredQtyDisplay} {quantityUnit} ({effectivePct}%). Enter quantity to use for this substitute (adjust if different strength, e.g. 1% vs 0.8%).</p>
+                      )}
                       
                       {ingredientLots.length === 0 ? (
                         <div className="no-lots-available">
-                          ⚠️ No available lots for {ingredient.item.name}
+                          {useSubstitute ? (
+                            override?.substituteItemId ? (
+                              <>⚠️ No available lots for {substituteItems.find(i => i.id === override.substituteItemId)?.name ?? 'selected item'}. Check in inventory or choose another substitute.</>
+                            ) : (
+                              <>Select a raw material above to see available lots.</>
+                            )
+                          ) : (
+                            <>⚠️ No available lots for {ingredient.item.name}</>
+                          )}
                         </div>
                       ) : (
                         <div className="lots-grid">
@@ -946,6 +1073,25 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
                     </div>
                   )
                 })}
+                {selectedFormula && (() => {
+                  const totalBatchPct = selectedFormula.ingredients.reduce(
+                    (sum, ing) => sum + (ingredientPercentageOverrides[ing.id] ?? ing.percentage),
+                    0
+                  )
+                  const hasAnyPctOverride = selectedFormula.ingredients.some(ing => ingredientPercentageOverrides[ing.id] != null)
+                  if (!hasAnyPctOverride) return null
+                  return (
+                    <div className="batch-pct-total-row">
+                      <span className="batch-pct-total-label">Total batch %:</span>
+                      <span className={`batch-pct-total-value ${Math.abs(totalBatchPct - 100) < 0.01 ? '' : 'batch-pct-warning'}`}>
+                        {formatNumber(totalBatchPct)}%
+                      </span>
+                      {Math.abs(totalBatchPct - 100) >= 0.01 && (
+                        <span className="batch-pct-total-hint"> (ideally 100%)</span>
+                      )}
+                    </div>
+                  )
+                })()}
               </div>
           )}
 

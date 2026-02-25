@@ -1,6 +1,9 @@
 import { useState, useEffect } from 'react'
 import { getCalendarEvents } from '../../api/calendar'
+import { updateProductionBatch } from '../../api/inventory'
 import './Calendar.css'
+
+const DRAG_TYPE_BATCH = 'application/x-production-batch'
 
 interface CalendarEvent {
   id: string
@@ -26,6 +29,7 @@ interface CalendarEvent {
   invoice_id?: number
   purchase_order_id?: number
   is_overdue?: boolean
+  quantity_produced?: number
 }
 
 function Calendar() {
@@ -174,6 +178,35 @@ function Calendar() {
     })
   }
 
+  const handleDragOver = (e: React.DragEvent) => {
+    if (e.dataTransfer.types.includes(DRAG_TYPE_BATCH)) {
+      e.preventDefault()
+      e.dataTransfer.dropEffect = 'move'
+    }
+  }
+
+  const handleDrop = async (e: React.DragEvent, dateStr: string) => {
+    e.preventDefault()
+    e.stopPropagation()
+    const batchIdStr = e.dataTransfer.getData(DRAG_TYPE_BATCH)
+    if (!batchIdStr || !dateStr) return
+    const batchId = parseInt(batchIdStr, 10)
+    if (Number.isNaN(batchId)) return
+    try {
+      await updateProductionBatch(batchId, { production_date: dateStr })
+      await loadEvents()
+    } catch (err) {
+      console.error('Failed to move batch:', err)
+      alert('Failed to move batch to this date')
+    }
+  }
+
+  const handleProductionDragStart = (e: React.DragEvent, event: CalendarEvent) => {
+    if (event.type !== 'production' || event.batch_id == null) return
+    e.dataTransfer.setData(DRAG_TYPE_BATCH, String(event.batch_id))
+    e.dataTransfer.effectAllowed = 'move'
+  }
+
   const renderMonthView = () => {
     const startDate = getStartDate()
     const endDate = getEndDate()
@@ -204,21 +237,27 @@ function Calendar() {
               const isToday = day.toDateString() === new Date().toDateString()
               const isCurrentMonth = day.getMonth() === currentDate.getMonth()
 
+              const dayDateStr = day.toISOString().split('T')[0]
               return (
                 <div
                   key={dayIndex}
                   className={`calendar-day ${!isCurrentMonth ? 'other-month' : ''} ${isToday ? 'today' : ''} ${dayEvents.length > 0 ? 'has-events' : ''}`}
                   onClick={() => handleDateClick(day)}
+                  data-date={dayDateStr}
+                  onDragOver={handleDragOver}
+                  onDrop={(e) => handleDrop(e, dayDateStr)}
                 >
                   <div className="day-number">{day.getDate()}</div>
                   <div className="day-events" onClick={(e) => e.stopPropagation()}>
                     {dayEvents.slice(0, 3).map(event => (
                       <div
                         key={event.id}
-                        className="calendar-event"
+                        className={`calendar-event ${event.type === 'production' ? 'draggable' : ''}`}
                         style={{ backgroundColor: getEventTypeColor(event.type) }}
                         onClick={() => setSelectedEvent(event)}
                         title={event.title}
+                        draggable={event.type === 'production'}
+                        onDragStart={(e) => handleProductionDragStart(e, event)}
                       >
                         {event.title}
                       </div>
@@ -253,11 +292,15 @@ function Calendar() {
             const dayEvents = getEventsForDate(day)
             const isToday = day.toDateString() === new Date().toDateString()
 
+            const dayDateStr = day.toISOString().split('T')[0]
             return (
               <div 
                 key={index} 
                 className={`week-day-column ${isToday ? 'today' : ''} ${dayEvents.length > 0 ? 'has-events' : ''}`}
                 onClick={() => handleDateClick(day)}
+                data-date={dayDateStr}
+                onDragOver={handleDragOver}
+                onDrop={(e) => handleDrop(e, dayDateStr)}
               >
                 <div className="week-day-header">
                   <div className="week-day-name">
@@ -269,9 +312,11 @@ function Calendar() {
                   {dayEvents.map(event => (
                     <div
                       key={event.id}
-                      className="week-event"
+                      className={`week-event ${event.type === 'production' ? 'draggable' : ''}`}
                       style={{ borderLeftColor: getEventTypeColor(event.type) }}
                       onClick={() => setSelectedEvent(event)}
+                      draggable={event.type === 'production'}
+                      onDragStart={(e) => handleProductionDragStart(e, event)}
                     >
                       <div className="event-time">{event.type}</div>
                       <div className="event-title">{event.title}</div>
@@ -289,22 +334,30 @@ function Calendar() {
   const renderDayView = () => {
     const dayEvents = getEventsForDate(currentDate)
     const isToday = currentDate.toDateString() === new Date().toDateString()
+    const dayDateStr = currentDate.toISOString().split('T')[0]
 
     return (
       <div className="calendar-day-view">
         <div className={`day-header ${isToday ? 'today' : ''}`}>
           <h3>{currentDate.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</h3>
         </div>
-        <div className="day-events-list">
+        <div
+          className="day-events-list"
+          data-date={dayDateStr}
+          onDragOver={handleDragOver}
+          onDrop={(e) => handleDrop(e, dayDateStr)}
+        >
           {dayEvents.length === 0 ? (
             <div className="no-events">No events scheduled for this day</div>
           ) : (
             dayEvents.map(event => (
               <div
                 key={event.id}
-                className="day-event-card"
+                className={`day-event-card ${event.type === 'production' ? 'draggable' : ''}`}
                 style={{ borderLeftColor: getEventTypeColor(event.type) }}
                 onClick={() => setSelectedEvent(event)}
+                draggable={event.type === 'production'}
+                onDragStart={(e) => handleProductionDragStart(e, event)}
               >
                 <div className="event-type-badge" style={{ backgroundColor: getEventTypeColor(event.type) }}>
                   {getEventTypeLabel(event.type)}
@@ -512,89 +565,128 @@ function Calendar() {
             </div>
             <div className="event-detail-content">
               <div className="detail-row">
-                <strong>Type:</strong>
+                <strong>Type</strong>
                 <span className="event-type-badge" style={{ backgroundColor: getEventTypeColor(selectedEvent.type) }}>
                   {getEventTypeLabel(selectedEvent.type)}
                 </span>
               </div>
               <div className="detail-row">
-                <strong>Title:</strong>
+                <strong>Title</strong>
                 <span>{selectedEvent.title}</span>
               </div>
               <div className="detail-row">
-                <strong>Date:</strong>
+                <strong>Date</strong>
                 <span>{new Date(selectedEvent.date).toLocaleDateString()}</span>
               </div>
-              {selectedEvent.sales_order_number && (
-                <div className="detail-row">
-                  <strong>Sales Order:</strong>
-                  <span>{selectedEvent.sales_order_number}</span>
-                </div>
+              {selectedEvent.type === 'production' && (
+                <>
+                  {selectedEvent.batch_number != null && (
+                    <div className="detail-row">
+                      <strong>Batch number</strong>
+                      <span>{selectedEvent.batch_number}</span>
+                    </div>
+                  )}
+                  {selectedEvent.status != null && (
+                    <div className="detail-row">
+                      <strong>Status</strong>
+                      <span>{selectedEvent.status}</span>
+                    </div>
+                  )}
+                  {selectedEvent.quantity_produced != null && (
+                    <div className="detail-row">
+                      <strong>Quantity produced</strong>
+                      <span>{Number(selectedEvent.quantity_produced).toLocaleString()}</span>
+                    </div>
+                  )}
+                </>
               )}
-              {selectedEvent.customer_name && (
-                <div className="detail-row">
-                  <strong>Customer:</strong>
-                  <span>{selectedEvent.customer_name}</span>
-                </div>
+              {selectedEvent.type === 'shipment' && (
+                <>
+                  {selectedEvent.sales_order_number != null && (
+                    <div className="detail-row">
+                      <strong>Sales order</strong>
+                      <span>{selectedEvent.sales_order_number}</span>
+                    </div>
+                  )}
+                  {selectedEvent.customer_name != null && (
+                    <div className="detail-row">
+                      <strong>Customer</strong>
+                      <span>{selectedEvent.customer_name}</span>
+                    </div>
+                  )}
+                  {selectedEvent.status != null && (
+                    <div className="detail-row">
+                      <strong>Status</strong>
+                      <span>{selectedEvent.status}</span>
+                    </div>
+                  )}
+                </>
               )}
-              {selectedEvent.lot_number && (
-                <div className="detail-row">
-                  <strong>Lot Number:</strong>
-                  <span>{selectedEvent.lot_number}</span>
-                </div>
+              {selectedEvent.type === 'raw_material' && (
+                <>
+                  {selectedEvent.lot_number != null && (
+                    <div className="detail-row">
+                      <strong>Lot number</strong>
+                      <span>{selectedEvent.lot_number}</span>
+                    </div>
+                  )}
+                  {selectedEvent.item_name != null && (
+                    <div className="detail-row">
+                      <strong>Item</strong>
+                      <span>{selectedEvent.item_name}</span>
+                    </div>
+                  )}
+                  {selectedEvent.po_number != null && (
+                    <div className="detail-row">
+                      <strong>PO number</strong>
+                      <span>{selectedEvent.po_number}</span>
+                    </div>
+                  )}
+                </>
               )}
-              {selectedEvent.item_name && (
-                <div className="detail-row">
-                  <strong>Item:</strong>
-                  <span>{selectedEvent.item_name}</span>
-                </div>
+              {selectedEvent.type === 'receivable' && (
+                <>
+                  {selectedEvent.customer_name != null && (
+                    <div className="detail-row">
+                      <strong>Customer</strong>
+                      <span>{selectedEvent.customer_name}</span>
+                    </div>
+                  )}
+                  {selectedEvent.balance != null && (
+                    <div className="detail-row">
+                      <strong>Balance</strong>
+                      <span>${selectedEvent.balance.toLocaleString('en-US', { minimumFractionDigits: 2 })}</span>
+                    </div>
+                  )}
+                  {selectedEvent.is_overdue && (
+                    <div className="detail-row">
+                      <strong></strong>
+                      <span className="overdue-badge">Overdue</span>
+                    </div>
+                  )}
+                </>
               )}
-              {selectedEvent.po_number && (
-                <div className="detail-row">
-                  <strong>PO Number:</strong>
-                  <span>{selectedEvent.po_number}</span>
-                </div>
-              )}
-              {selectedEvent.batch_number && (
-                <div className="detail-row">
-                  <strong>Batch Number:</strong>
-                  <span>{selectedEvent.batch_number}</span>
-                </div>
-              )}
-              {selectedEvent.status && (
-                <div className="detail-row">
-                  <strong>Status:</strong>
-                  <span>{selectedEvent.status}</span>
-                </div>
-              )}
-              {selectedEvent.balance != null && (
-                <div className="detail-row">
-                  <strong>Balance:</strong>
-                  <span>${selectedEvent.balance.toLocaleString('en-US', { minimumFractionDigits: 2 })}</span>
-                </div>
-              )}
-              {selectedEvent.vendor_name && (
-                <div className="detail-row">
-                  <strong>Vendor:</strong>
-                  <span>{selectedEvent.vendor_name}</span>
-                </div>
-              )}
-              {selectedEvent.is_overdue && (
-                <div className="detail-row">
-                  <span className="overdue-badge">Overdue</span>
-                </div>
-              )}
-              {selectedEvent.is_scheduled && (
-                <div className="detail-row">
-                  <strong>Type:</strong>
-                  <span className="scheduled-badge">Scheduled</span>
-                </div>
-              )}
-              {selectedEvent.is_actual && (
-                <div className="detail-row">
-                  <strong>Type:</strong>
-                  <span className="actual-badge">Actual</span>
-                </div>
+              {selectedEvent.type === 'payable' && (
+                <>
+                  {selectedEvent.vendor_name != null && (
+                    <div className="detail-row">
+                      <strong>Vendor</strong>
+                      <span>{selectedEvent.vendor_name}</span>
+                    </div>
+                  )}
+                  {selectedEvent.balance != null && (
+                    <div className="detail-row">
+                      <strong>Balance</strong>
+                      <span>${selectedEvent.balance.toLocaleString('en-US', { minimumFractionDigits: 2 })}</span>
+                    </div>
+                  )}
+                  {selectedEvent.is_overdue && (
+                    <div className="detail-row">
+                      <strong></strong>
+                      <span className="overdue-badge">Overdue</span>
+                    </div>
+                  )}
+                </>
               )}
             </div>
           </div>

@@ -1,2 +1,8 @@
-/* Shared styles in Lots.css */
+.formulas-table th.sortable {
+  cursor: pointer;
+  user-select: none;
+}
+.formulas-table th.sortable:hover {
+  background-color: rgba(0, 0, 0, 0.05);
+}
 

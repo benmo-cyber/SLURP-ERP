@@ -41,6 +41,8 @@ function Invoices() {
   const [editingStatus, setEditingStatus] = useState<number | null>(null)
   const [newStatus, setNewStatus] = useState<string>('')
   const [viewingInvoice, setViewingInvoice] = useState<number | null>(null)
+  type InvoiceSortKey = 'invoice_number' | 'customer' | 'invoice_date' | 'due_date' | 'grand_total' | 'status' | null
+  const [sort, setSort] = useState<{ key: InvoiceSortKey; dir: 'asc' | 'desc' }>({ key: 'invoice_date', dir: 'desc' })
 
   useEffect(() => {
     loadInvoices()
@@ -64,13 +66,7 @@ function Invoices() {
       // Ensure data is an array
       const invoiceArray = Array.isArray(data) ? data : (data?.results || [])
       
-      // Sort invoices: draft first, then by date descending
-      const sorted = [...invoiceArray].sort((a: Invoice, b: Invoice) => {
-        if (a.status === 'draft' && b.status !== 'draft') return -1
-        if (a.status !== 'draft' && b.status === 'draft') return 1
-        return new Date(b.invoice_date).getTime() - new Date(a.invoice_date).getTime()
-      })
-      setInvoices(sorted)
+      setInvoices(invoiceArray)
     } catch (error) {
       console.error('Failed to load invoices:', error)
       alert('Failed to load invoices')
@@ -114,6 +110,29 @@ function Invoices() {
     if (days <= 60) return `${days} days`
     if (days <= 90) return `${days} days`
     return `${days}+ days`
+  }
+
+  const sortedInvoices = [...invoices].sort((a: Invoice, b: Invoice) => {
+    if (!sort.key) {
+      if (a.status === 'draft' && b.status !== 'draft') return -1
+      if (a.status !== 'draft' && b.status === 'draft') return 1
+      return new Date(b.invoice_date).getTime() - new Date(a.invoice_date).getTime()
+    }
+    let cmp = 0
+    switch (sort.key) {
+      case 'invoice_number': cmp = (a.invoice_number || '').localeCompare(b.invoice_number || ''); break
+      case 'customer': cmp = (a.customer_name || a.sales_order?.customer_name || '').localeCompare(b.customer_name || b.sales_order?.customer_name || ''); break
+      case 'invoice_date': cmp = new Date(a.invoice_date).getTime() - new Date(b.invoice_date).getTime(); break
+      case 'due_date': cmp = new Date(a.due_date).getTime() - new Date(b.due_date).getTime(); break
+      case 'grand_total': cmp = (a.grand_total ?? 0) - (b.grand_total ?? 0); break
+      case 'status': cmp = (a.status || '').localeCompare(b.status || ''); break
+      default: return 0
+    }
+    return sort.dir === 'asc' ? cmp : -cmp
+  })
+
+  const handleSort = (key: NonNullable<InvoiceSortKey>) => {
+    setSort(prev => ({ key, dir: prev.key === key && prev.dir === 'asc' ? 'desc' : 'asc' }))
   }
 
   const handleCreateSuccess = () => {
@@ -210,28 +229,28 @@ function Invoices() {
         <table className="invoices-table">
           <thead>
             <tr>
-              <th>Invoice Number</th>
+              <th className="sortable" onClick={() => handleSort('invoice_number')}>Invoice Number {sort.key === 'invoice_number' && (sort.dir === 'asc' ? '↑' : '↓')}</th>
               <th>Sales Order</th>
-              <th>Customer</th>
+              <th className="sortable" onClick={() => handleSort('customer')}>Customer {sort.key === 'customer' && (sort.dir === 'asc' ? '↑' : '↓')}</th>
               <th>Tracking Number</th>
-              <th>Invoice Date</th>
-              <th>Due Date</th>
+              <th className="sortable" onClick={() => handleSort('invoice_date')}>Invoice Date {sort.key === 'invoice_date' && (sort.dir === 'asc' ? '↑' : '↓')}</th>
+              <th className="sortable" onClick={() => handleSort('due_date')}>Due Date {sort.key === 'due_date' && (sort.dir === 'asc' ? '↑' : '↓')}</th>
               <th>Payment Terms</th>
               <th>Days Aging</th>
-              <th>Grand Total</th>
-              <th>Status</th>
+              <th className="sortable" onClick={() => handleSort('grand_total')}>Grand Total {sort.key === 'grand_total' && (sort.dir === 'asc' ? '↑' : '↓')}</th>
+              <th className="sortable" onClick={() => handleSort('status')}>Status {sort.key === 'status' && (sort.dir === 'asc' ? '↑' : '↓')}</th>
               <th>Packing List</th>
             </tr>
           </thead>
           <tbody>
-            {invoices.length === 0 ? (
+            {sortedInvoices.length === 0 ? (
               <tr>
                 <td colSpan={11} className="empty-state">
                   No invoices found.
                 </td>
               </tr>
             ) : (
-              invoices.map((invoice) => (
+              sortedInvoices.map((invoice) => (
                 <tr 
                   key={invoice.id}
                   className={invoice.status === 'draft' ? 'draft-invoice' : ''}

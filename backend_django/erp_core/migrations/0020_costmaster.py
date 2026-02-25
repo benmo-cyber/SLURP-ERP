@@ -6,7 +6,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('erp_core', '0019_remove_account_parent_account_and_more'),
+        ('erp_core', '0019_recreate_invoice_state'),
     ]
 
     operations = [

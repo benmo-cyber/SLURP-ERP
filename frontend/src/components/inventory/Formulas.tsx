@@ -2,10 +2,13 @@ import { useState, useEffect } from 'react'
 import { getFormulas, getItems } from '../../api/inventory'
 import './Formulas.css'
 
+type FormulaSortKey = 'finished_good' | 'version' | 'created' | null
+
 function Formulas() {
   const [formulas, setFormulas] = useState<any[]>([])
   const [items, setItems] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
+  const [sort, setSort] = useState<{ key: FormulaSortKey; dir: 'asc' | 'desc' }>({ key: 'finished_good', dir: 'asc' })
 
   useEffect(() => {
     loadData()
@@ -24,6 +27,29 @@ function Formulas() {
     }
   }
 
+  const sortedFormulas = [...formulas].sort((a, b) => {
+    if (!sort.key) return 0
+    let cmp = 0
+    switch (sort.key) {
+      case 'finished_good':
+        cmp = (a.finished_good?.name || '').localeCompare(b.finished_good?.name || '')
+        break
+      case 'version':
+        cmp = (a.version ?? 0) - (b.version ?? 0)
+        break
+      case 'created':
+        cmp = new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime()
+        break
+      default:
+        return 0
+    }
+    return sort.dir === 'asc' ? cmp : -cmp
+  })
+
+  const handleSort = (key: FormulaSortKey) => {
+    setSort(prev => ({ key: key!, dir: prev.key === key && prev.dir === 'asc' ? 'desc' : 'asc' }))
+  }
+
   if (loading) {
     return <div className="loading">Loading formulas...</div>
   }
@@ -39,21 +65,21 @@ function Formulas() {
         <table className="formulas-table">
           <thead>
             <tr>
-              <th>Finished Good</th>
-              <th>Version</th>
+              <th className="sortable" onClick={() => handleSort('finished_good')}>Finished Good {sort.key === 'finished_good' && (sort.dir === 'asc' ? '↑' : '↓')}</th>
+              <th className="sortable" onClick={() => handleSort('version')}>Version {sort.key === 'version' && (sort.dir === 'asc' ? '↑' : '↓')}</th>
               <th>Ingredients</th>
-              <th>Created</th>
+              <th className="sortable" onClick={() => handleSort('created')}>Created {sort.key === 'created' && (sort.dir === 'asc' ? '↑' : '↓')}</th>
             </tr>
           </thead>
           <tbody>
-            {formulas.length === 0 ? (
+            {sortedFormulas.length === 0 ? (
               <tr>
                 <td colSpan={4} className="empty-state">
                   No formulas found.
                 </td>
               </tr>
             ) : (
-              formulas.map((formula) => (
+              sortedFormulas.map((formula) => (
                 <tr key={formula.id}>
                   <td>{formula.finished_good?.name || '-'}</td>
                   <td>{formula.version}</td>

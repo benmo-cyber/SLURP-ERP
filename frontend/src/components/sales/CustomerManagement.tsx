@@ -44,10 +44,29 @@ function CustomerManagement({ onClose, onSelect }: CustomerManagementProps) {
     notes: '',
     is_active: true,
   })
+  type CustomerSortKey = 'customer_id' | 'name' | 'contact_name' | 'city' | 'is_active' | null
+  const [sort, setSort] = useState<{ key: CustomerSortKey; dir: 'asc' | 'desc' }>({ key: 'name', dir: 'asc' })
 
   useEffect(() => {
     loadCustomers()
   }, [])
+
+  const sortedCustomers = [...customers].sort((a, b) => {
+    if (!sort.key) return 0
+    let cmp = 0
+    switch (sort.key) {
+      case 'customer_id': cmp = (a.customer_id || '').localeCompare(b.customer_id || ''); break
+      case 'name': cmp = (a.name || '').localeCompare(b.name || ''); break
+      case 'contact_name': cmp = (a.contact_name || '').localeCompare(b.contact_name || ''); break
+      case 'city': cmp = (a.city || '').localeCompare(b.city || ''); break
+      case 'is_active': cmp = (a.is_active ? 1 : 0) - (b.is_active ? 1 : 0); break
+      default: return 0
+    }
+    return sort.dir === 'asc' ? cmp : -cmp
+  })
+  const handleSort = (key: NonNullable<CustomerSortKey>) => {
+    setSort(prev => ({ key, dir: prev.key === key && prev.dir === 'asc' ? 'desc' : 'asc' }))
+  }
 
   const loadCustomers = async () => {
     try {
@@ -331,22 +350,22 @@ function CustomerManagement({ onClose, onSelect }: CustomerManagementProps) {
               <table className="customer-table">
                 <thead>
                   <tr>
-                    <th>Customer ID</th>
-                    <th>Name</th>
-                    <th>Contact</th>
+                    <th className="sortable" onClick={() => handleSort('customer_id')}>Customer ID {sort.key === 'customer_id' && (sort.dir === 'asc' ? '↑' : '↓')}</th>
+                    <th className="sortable" onClick={() => handleSort('name')}>Name {sort.key === 'name' && (sort.dir === 'asc' ? '↑' : '↓')}</th>
+                    <th className="sortable" onClick={() => handleSort('contact_name')}>Contact {sort.key === 'contact_name' && (sort.dir === 'asc' ? '↑' : '↓')}</th>
                     <th>Phone</th>
-                    <th>City, State</th>
-                    <th>Status</th>
+                    <th className="sortable" onClick={() => handleSort('city')}>City, State {sort.key === 'city' && (sort.dir === 'asc' ? '↑' : '↓')}</th>
+                    <th className="sortable" onClick={() => handleSort('is_active')}>Status {sort.key === 'is_active' && (sort.dir === 'asc' ? '↑' : '↓')}</th>
                     <th>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {customers.length === 0 ? (
+                  {sortedCustomers.length === 0 ? (
                     <tr>
                       <td colSpan={7} className="no-data">No customers found</td>
                     </tr>
                   ) : (
-                    customers.map((customer) => (
+                    sortedCustomers.map((customer) => (
                       <tr key={customer.id} className={!customer.is_active ? 'inactive' : ''}>
                         <td>{customer.customer_id}</td>
                         <td>{customer.name}</td>

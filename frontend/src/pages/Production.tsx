@@ -70,22 +70,37 @@ function Production() {
 
   return (
     <div className="production-page">
-      <div className="page-header">
+      <header className="production-header">
         <h1>Production</h1>
-        <div className="header-actions">
+        <div className="production-header-actions">
           <button onClick={() => setShowCreateBatch(true)} className="btn btn-primary">
             Create Batch Ticket
           </button>
         </div>
-      </div>
+      </header>
 
-      <div className="page-content">
-        <ProductionBatchList 
-          key={refreshKey}
-          onCloseBatch={handleCloseBatch}
-          onUnfkBatch={handleUnfkBatch}
-          onAdjustBatch={handleAdjustBatch}
-        />
+      <div className="production-layout">
+        <nav className="production-sidebar">
+          <div className="production-nav-section">
+            <div className="production-nav-section-label">Production</div>
+            <ul className="production-nav-list">
+              <li>
+                <button type="button" className="production-nav-item active">
+                  Batch Tickets
+                </button>
+              </li>
+            </ul>
+          </div>
+        </nav>
+
+        <main className="production-main">
+          <ProductionBatchList
+            key={refreshKey}
+            onCloseBatch={handleCloseBatch}
+            onUnfkBatch={handleUnfkBatch}
+            onAdjustBatch={handleAdjustBatch}
+          />
+        </main>
       </div>
 
       {showCreateBatch && (

@@ -177,6 +177,14 @@
   font-weight: 600;
 }
 
+.customer-table th.sortable {
+  cursor: pointer;
+  user-select: none;
+}
+.customer-table th.sortable:hover {
+  background-color: #e8e8e8;
+}
+
 .customer-table tr:hover {
   background-color: #f9f9f9;
 }

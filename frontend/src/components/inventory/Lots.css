@@ -61,6 +61,16 @@
   border-bottom: 2px solid #e0e0e0;
 }
 
+.lots-table th.sortable,
+.formulas-table th.sortable {
+  cursor: pointer;
+  user-select: none;
+}
+.lots-table th.sortable:hover,
+.formulas-table th.sortable:hover {
+  background-color: rgba(0, 0, 0, 0.05);
+}
+
 .lots-table td,
 .batches-table td,
 .formulas-table td,

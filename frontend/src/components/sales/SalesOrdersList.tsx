@@ -46,10 +46,32 @@ function SalesOrdersList({ refreshKey = 0, onSelectOrder, onEditOrder }: SalesOr
   const [editingShipDate, setEditingShipDate] = useState<string>('')
   const [issuingId, setIssuingId] = useState<number | null>(null)
   const [allocatingSOId, setAllocatingSOId] = useState<number | null>(null)
+  type SOSortKey = 'so_number' | 'customer_name' | 'status' | 'order_date' | 'expected_ship_date' | 'grand_total' | null
+  const [sort, setSort] = useState<{ key: SOSortKey; dir: 'asc' | 'desc' }>({ key: 'order_date', dir: 'desc' })
 
   useEffect(() => {
     loadOrders()
   }, [refreshKey])
+
+  const sortOrderList = (list: SalesOrder[]) => {
+    if (!sort.key) return list
+    return [...list].sort((a, b) => {
+      let cmp = 0
+      switch (sort.key) {
+        case 'so_number': cmp = (a.so_number || '').localeCompare(b.so_number || ''); break
+        case 'customer_name': cmp = (a.customer_name || '').localeCompare(b.customer_name || ''); break
+        case 'status': cmp = (a.status || '').localeCompare(b.status || ''); break
+        case 'order_date': cmp = new Date(a.order_date).getTime() - new Date(b.order_date).getTime(); break
+        case 'expected_ship_date': cmp = new Date(a.expected_ship_date || 0).getTime() - new Date(b.expected_ship_date || 0).getTime(); break
+        case 'grand_total': cmp = (a.grand_total ?? 0) - (b.grand_total ?? 0); break
+        default: return 0
+      }
+      return sort.dir === 'asc' ? cmp : -cmp
+    })
+  }
+  const handleSort = (key: NonNullable<SOSortKey>) => {
+    setSort(prev => ({ key, dir: prev.key === key && prev.dir === 'asc' ? 'desc' : 'asc' }))
+  }
 
   const loadOrders = async () => {
     try {
@@ -58,11 +80,7 @@ function SalesOrdersList({ refreshKey = 0, onSelectOrder, onEditOrder }: SalesOr
       const data = await getSalesOrders()
       // Handle paginated response
       const ordersList = Array.isArray(data) ? data : (data.results || [])
-      // Sort by order date descending (newest first)
-      ordersList.sort((a: SalesOrder, b: SalesOrder) => 
-        new Date(b.order_date).getTime() - new Date(a.order_date).getTime()
-      )
-      // Separate active and completed orders
+      // Separate active and completed orders (sort applied in render)
       const active = ordersList.filter((so: SalesOrder) => so.status !== 'completed')
       const completed = ordersList.filter((so: SalesOrder) => so.status === 'completed')
       setOrders(active)
@@ -227,13 +245,13 @@ function SalesOrdersList({ refreshKey = 0, onSelectOrder, onEditOrder }: SalesOr
         <table className="orders-table">
           <thead>
             <tr>
-              <th>SO Number</th>
-              <th>Customer</th>
-              <th>Status</th>
-              <th>Order Date</th>
-              <th>Expected Ship Date</th>
+              <th className="sortable" onClick={() => handleSort('so_number')}>SO Number {sort.key === 'so_number' && (sort.dir === 'asc' ? '↑' : '↓')}</th>
+              <th className="sortable" onClick={() => handleSort('customer_name')}>Customer {sort.key === 'customer_name' && (sort.dir === 'asc' ? '↑' : '↓')}</th>
+              <th className="sortable" onClick={() => handleSort('status')}>Status {sort.key === 'status' && (sort.dir === 'asc' ? '↑' : '↓')}</th>
+              <th className="sortable" onClick={() => handleSort('order_date')}>Order Date {sort.key === 'order_date' && (sort.dir === 'asc' ? '↑' : '↓')}</th>
+              <th className="sortable" onClick={() => handleSort('expected_ship_date')}>Expected Ship Date {sort.key === 'expected_ship_date' && (sort.dir === 'asc' ? '↑' : '↓')}</th>
               <th>Items</th>
-              <th>Total</th>
+              <th className="sortable" onClick={() => handleSort('grand_total')}>Total {sort.key === 'grand_total' && (sort.dir === 'asc' ? '↑' : '↓')}</th>
               <th>Actions</th>
             </tr>
           </thead>
@@ -245,7 +263,7 @@ function SalesOrdersList({ refreshKey = 0, onSelectOrder, onEditOrder }: SalesOr
                 </td>
               </tr>
             ) : (
-              orders.map((order) => (
+              sortOrderList(orders).map((order) => (
                 <tr 
                   key={order.id} 
                   className={onSelectOrder ? 'clickable-row' : ''}
@@ -421,16 +439,16 @@ function SalesOrdersList({ refreshKey = 0, onSelectOrder, onEditOrder }: SalesOr
             <table className="orders-table">
               <thead>
                 <tr>
-                  <th>SO Number</th>
-                  <th>Customer</th>
-                  <th>Order Date</th>
+                  <th className="sortable" onClick={() => handleSort('so_number')}>SO Number {sort.key === 'so_number' && (sort.dir === 'asc' ? '↑' : '↓')}</th>
+                  <th className="sortable" onClick={() => handleSort('customer_name')}>Customer {sort.key === 'customer_name' && (sort.dir === 'asc' ? '↑' : '↓')}</th>
+                  <th className="sortable" onClick={() => handleSort('order_date')}>Order Date {sort.key === 'order_date' && (sort.dir === 'asc' ? '↑' : '↓')}</th>
                   <th>Ship Dates</th>
                   <th>Items</th>
-                  <th>Total</th>
+                  <th className="sortable" onClick={() => handleSort('grand_total')}>Total {sort.key === 'grand_total' && (sort.dir === 'asc' ? '↑' : '↓')}</th>
                 </tr>
               </thead>
               <tbody>
-                {completedOrders.map((order) => (
+                {sortOrderList(completedOrders).map((order) => (
                   <tr key={order.id}>
                     <td className="so-number">
                       <div className="so-number-cell">

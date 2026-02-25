@@ -302,16 +302,30 @@ class SalesOrderSerializer(serializers.ModelSerializer):
     customer_detail = serializers.SerializerMethodField()
     customer = serializers.SerializerMethodField()  # Add customer field for frontend compatibility
     shipments = ShipmentSerializer(many=True, read_only=True)
-    
+    customer_po_pdf_url = serializers.SerializerMethodField()
+
     class Meta:
         model = SalesOrder
         fields = '__all__'
-    
+
+    def get_customer_po_pdf_url(self, obj):
+        if not obj.pk or not obj.customer_po_pdf:
+            return None
+        request = self.context.get('request')
+        if request:
+            return request.build_absolute_uri(f'/api/sales-orders/{obj.pk}/customer-po/')
+        return f'/api/sales-orders/{obj.pk}/customer-po/'
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data['customer_po_pdf_url'] = self.get_customer_po_pdf_url(instance)
+        return data
+
     def get_customer_detail(self, obj):
         if obj.customer:
             return CustomerSerializer(obj.customer).data
         return None
-    
+
     def get_customer(self, obj):
         """Get customer data including payment_terms"""
         if obj.customer:

@@ -67,3 +67,48 @@ export const getAvailableSalesOrders = async () => {
   })
 }
 
+/** Parsed customer PO result for auto-filling Create Sales Order form */
+export interface ParsedCustomerPO {
+  customer_po_number: string
+  customer_name: string
+  customer_address: string
+  customer_city: string
+  customer_state: string
+  customer_zip: string
+  customer_country: string
+  customer_phone: string
+  requested_ship_date: string | null
+  items: Array<{
+    description: string
+    quantity_ordered: number
+    unit: string
+    unit_price: number
+    vendor_part_number?: string
+    notes?: string
+  }>
+  warning?: string
+  extracted_preview?: string
+}
+
+export const parseCustomerPo = async (file: File): Promise<ParsedCustomerPO> => {
+  const formData = new FormData()
+  formData.append('file', file)
+  const response = await axios.post(`${API_BASE_URL}/sales-orders/parse-customer-po/`, formData, {
+    headers: { Accept: 'application/json' },
+    maxBodyLength: 50 * 1024 * 1024,
+    maxContentLength: 50 * 1024 * 1024,
+  })
+  return response.data
+}
+
+/** Upload customer PO PDF for an existing sales order */
+export const uploadCustomerPo = async (salesOrderId: number, file: File): Promise<void> => {
+  const formData = new FormData()
+  formData.append('file', file)
+  await axios.post(`${API_BASE_URL}/sales-orders/${salesOrderId}/customer-po/`, formData, {
+    headers: { Accept: 'application/json' },
+    maxBodyLength: 50 * 1024 * 1024,
+    maxContentLength: 50 * 1024 * 1024,
+  })
+}
+

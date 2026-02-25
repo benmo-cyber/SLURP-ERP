@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react'
-import { createSalesOrder, updateSalesOrder, getSalesOrder } from '../../api/salesOrders'
+import { useState, useEffect, useCallback, useRef } from 'react'
+import { createSalesOrder, updateSalesOrder, getSalesOrder, parseCustomerPo, uploadCustomerPo, type ParsedCustomerPO } from '../../api/salesOrders'
 import { getItems } from '../../api/inventory'
 import { getCustomers, getShipToLocations, getCustomerPricing } from '../../api/customers'
 import { formatNumber, formatCurrency } from '../../utils/formatNumber'
@@ -70,6 +70,14 @@ function CreateSalesOrder({ onClose, onSuccess, salesOrder }: CreateSalesOrderPr
   const [selectedCustomerId, setSelectedCustomerId] = useState<number | null>(null)
   const [selectedShipToId, setSelectedShipToId] = useState<number | null>(null)
   const [loading, setLoading] = useState(false)
+  const [poUploadDragOver, setPoUploadDragOver] = useState(false)
+  const [poParseLoading, setPoParseLoading] = useState(false)
+  const [poParseWarning, setPoParseWarning] = useState<string | null>(null)
+  const [poParseSuccess, setPoParseSuccess] = useState<string | null>(null)
+  const [poExtractedPreview, setPoExtractedPreview] = useState<string | null>(null)
+  const [pendingPoFile, setPendingPoFile] = useState<File | null>(null)
+  const [customerPoPdfUrl, setCustomerPoPdfUrl] = useState<string | null>(null)
+  const poFileInputRef = useRef<HTMLInputElement>(null)
   
   const [formData, setFormData] = useState({
     customer_reference_number: '',
@@ -134,6 +142,94 @@ function CreateSalesOrder({ onClose, onSuccess, salesOrder }: CreateSalesOrderPr
   useEffect(() => {
     calculateTotals()
   }, [soItems, formData.freight, formData.misc, formData.prepaid, formData.discount])
+
+  // When customer pricing loads, try to match parsed line item descriptions to items and auto-select
+  useEffect(() => {
+    if (!selectedCustomerId || customerPricing.length === 0) return
+    setSoItems(prev => prev.map(row => {
+      if (row.item_id != null) return row
+      const desc = (row.description || '').toLowerCase().trim()
+      if (!desc) return row
+      const match = customerPricing.find(p => {
+        const name = (p.item?.name || '').toLowerCase()
+        const sku = (p.item?.sku || '').toLowerCase()
+        return name && (desc.includes(name) || name.includes(desc) || (sku && (desc.includes(sku) || sku.includes(desc))))
+      })
+      if (match) return { ...row, item_id: match.item_id, unit: row.unit || match.unit_of_measure, unit_price: row.unit_price || match.unit_price }
+      return row
+    }))
+  }, [selectedCustomerId, customerPricing])
+
+  const applyParsedPo = useCallback((parsed: ParsedCustomerPO) => {
+    setFormData(prev => ({
+      ...prev,
+      customer_id: parsed.customer_po_number || prev.customer_id,
+      customer_reference_number: parsed.customer_po_number ? (prev.customer_reference_number || parsed.customer_po_number) : prev.customer_reference_number,
+      customer_name: parsed.customer_name || prev.customer_name,
+      customer_address: parsed.customer_address || prev.customer_address,
+      customer_city: parsed.customer_city || prev.customer_city,
+      customer_state: parsed.customer_state || prev.customer_state,
+      customer_zip: parsed.customer_zip || prev.customer_zip,
+      customer_country: parsed.customer_country || prev.customer_country,
+      customer_phone: parsed.customer_phone || prev.customer_phone,
+      requested_ship_date: parsed.requested_ship_date || prev.requested_ship_date,
+    }))
+    if (parsed.customer_name && customers.length > 0) {
+      const want = parsed.customer_name.toLowerCase().replace(/\s+/g, ' ').trim()
+      const match = customers.find(c => {
+        const n = c.name.toLowerCase()
+        return n === want || n.includes(want) || want.includes(n) ||
+          n.replace(/\b(inc|llc|corp|co|ltd|company)\b\.?/gi, '').trim().includes(want.split(/\s+/)[0] || '')
+      })
+      if (match) setSelectedCustomerId(match.id)
+    }
+    if (parsed.items && parsed.items.length > 0) {
+      const newItems: SOItem[] = parsed.items.map(it => ({
+        item_id: null,
+        vendor_part_number: it.vendor_part_number || '',
+        description: it.description || '',
+        quantity_ordered: it.quantity_ordered,
+        unit: it.unit || 'lbs',
+        unit_price: it.unit_price,
+        notes: it.notes || '',
+      }))
+      setSoItems(newItems)
+    }
+  }, [customers])
+
+  const handlePoFile = useCallback(async (file: File | null) => {
+    if (!file) return
+    const allowed = ['application/pdf', 'text/plain', 'text/csv']
+    const ok = allowed.includes(file.type) || file.name.toLowerCase().endsWith('.pdf') || file.name.toLowerCase().endsWith('.txt')
+    if (!ok) {
+      alert('Please upload a PDF or text file.')
+      return
+    }
+    setPoParseLoading(true)
+    setPoParseWarning(null)
+    setPoParseSuccess(null)
+    setPoExtractedPreview(null)
+    setPendingPoFile(file)
+    try {
+      const parsed = await parseCustomerPo(file)
+      setPoParseWarning(parsed.warning || null)
+      setPoExtractedPreview(parsed.extracted_preview || null)
+      applyParsedPo(parsed)
+      const filled: string[] = []
+      if (parsed.customer_po_number) filled.push('PO number')
+      if (parsed.customer_name) filled.push('customer name')
+      if (parsed.customer_address || parsed.customer_city) filled.push('address')
+      if (parsed.requested_ship_date) filled.push('ship date')
+      if (parsed.items?.length) filled.push(`${parsed.items.length} line item(s)`)
+      setPoParseSuccess(filled.length ? `Filled: ${filled.join(', ')}. Review and select Customer / Item where needed.` : (parsed.extracted_preview ? 'Text was extracted but no fields matched. Check "Extracted text" below and enter manually.' : null))
+    } catch (err: any) {
+      setPendingPoFile(null)
+      const msg = err.response?.data?.error || err.response?.data?.detail || err.message || 'Failed to parse document'
+      alert(msg)
+    } finally {
+      setPoParseLoading(false)
+    }
+  }, [applyParsedPo])
 
   const loadItems = async () => {
     try {
@@ -204,6 +300,7 @@ function CreateSalesOrder({ onClose, onSuccess, salesOrder }: CreateSalesOrderPr
         }))
         setSoItems(formattedItems)
       }
+      setCustomerPoPdfUrl(orderData.customer_po_pdf_url || null)
     } catch (error) {
       console.error('Failed to load sales order data:', error)
       alert('Failed to load sales order data')
@@ -453,6 +550,15 @@ function CreateSalesOrder({ onClose, onSuccess, salesOrder }: CreateSalesOrderPr
         // Create new sales order
         const response = await createSalesOrder(payload)
         console.log('Sales order created successfully:', response)
+        const newId = response?.id
+        if (newId && pendingPoFile) {
+          try {
+            await uploadCustomerPo(newId, pendingPoFile)
+          } catch (upErr: any) {
+            console.error('Failed to attach customer PO PDF:', upErr)
+            alert('Sales order was created but the customer PO document could not be attached. You can attach it later when editing the order.')
+          }
+        }
       }
       onSuccess()
       onClose()
@@ -473,8 +579,69 @@ function CreateSalesOrder({ onClose, onSuccess, salesOrder }: CreateSalesOrderPr
         </div>
 
         <form onSubmit={handleSubmit}>
+          {!salesOrder && (
+            <div
+              role="button"
+              tabIndex={0}
+              className={`po-upload-zone ${poUploadDragOver ? 'po-upload-zone--drag-over' : ''} ${poParseLoading ? 'po-upload-zone--loading' : ''}`}
+              onDragOver={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                e.dataTransfer.dropEffect = 'copy'
+                setPoUploadDragOver(true)
+              }}
+              onDragLeave={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                setPoUploadDragOver(false)
+              }}
+              onDrop={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                setPoUploadDragOver(false)
+                const file = e.dataTransfer.files?.[0]
+                if (file) handlePoFile(file)
+              }}
+              onClick={() => { if (!poParseLoading && poFileInputRef.current) poFileInputRef.current.click() }}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); if (!poParseLoading && poFileInputRef.current) poFileInputRef.current.click() } }}
+            >
+              <input
+                ref={poFileInputRef}
+                type="file"
+                accept=".pdf,.txt,application/pdf,text/plain"
+                className="po-upload-input"
+                onChange={(e) => { const f = e.target.files?.[0]; if (f) handlePoFile(f); e.target.value = '' }}
+                disabled={poParseLoading}
+                aria-hidden
+              />
+              {poParseLoading ? (
+                <span className="po-upload-text">Parsing PO document…</span>
+              ) : (
+                <>
+                  <span className="po-upload-text">Drop customer PO here (PDF or text) or click to upload</span>
+                  <span className="po-upload-hint">Auto-fills PO number, customer, address, ship date, and line items</span>
+                </>
+              )}
+              {poParseSuccess && <div className="po-upload-success">{poParseSuccess}</div>}
+              {poParseWarning && <div className="po-upload-warning">{poParseWarning}</div>}
+              {poExtractedPreview && <details className="po-upload-details"><summary>Extracted text (preview)</summary><pre className="po-upload-pre">{poExtractedPreview}</pre></details>}
+              {pendingPoFile && <div className="po-upload-attached">Attached: {pendingPoFile.name} — will be saved with the sales order.</div>}
+            </div>
+          )}
+          {!salesOrder && (
+            <div className="so-autofill-help">
+              Customer and Item dropdowns only show records already in the system. If the PO customer or products aren’t set up yet, add them in Customers and Customer Pricing first, then create the order (or re-upload the PO). Description, quantity, and unit price from the PO are filled when the parser finds them; select the matching Customer and Item if they don’t auto-select.
+            </div>
+          )}
           <div className="so-form-section">
-            <h3>Customer Information</h3>
+            <div className="section-header">
+              <h3>Customer Information</h3>
+              {salesOrder && customerPoPdfUrl && (
+                <a href={customerPoPdfUrl} target="_blank" rel="noopener noreferrer" className="view-customer-po-link">
+                  View customer PO (PDF)
+                </a>
+              )}
+            </div>
             <div className="form-row">
               <div className="form-group">
                 <label>Customer Reference Number (Optional)</label>

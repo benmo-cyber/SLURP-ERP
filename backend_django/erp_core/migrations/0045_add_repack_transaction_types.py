@@ -5,7 +5,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('erp_core', '0044_add_shipment_models'),
+        ('erp_core', '0044_recreate_lottransactionlog_state'),
     ]
 
     operations = [

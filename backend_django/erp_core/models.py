@@ -408,6 +408,7 @@ class ProductionBatch(models.Model):
     wastes = models.FloatField(default=0.0)
     spills = models.FloatField(default=0.0)
     notes = models.TextField(blank=True, null=True)
+    recipe_snapshot = models.TextField(blank=True, null=True, help_text='JSON: formula overrides used (batch %, substitutions) for audit')
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     
@@ -474,6 +475,7 @@ class ProductionLog(models.Model):
     qc_initials = models.CharField(max_length=255, blank=True, null=True)
     
     notes = models.TextField(blank=True, null=True)
+    recipe_snapshot = models.TextField(blank=True, null=True, help_text='JSON: batch recipe overrides (%, substitutions) at time of closure')
     closed_by = models.CharField(max_length=255, blank=True, null=True, help_text='User who closed the batch')
     logged_at = models.DateTimeField(auto_now_add=True, db_index=True)
     
@@ -702,10 +704,11 @@ class SalesOrder(models.Model):
     notes = models.TextField(blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    
+    customer_po_pdf = models.FileField(upload_to='customer_pos/%Y/%m/', blank=True, null=True, help_text='Uploaded customer PO document (PDF)')
+
     class Meta:
         ordering = ['-created_at']
-    
+
     def __str__(self):
         return self.so_number
 

@@ -91,6 +91,14 @@
   border-bottom: 2px solid #ddd;
 }
 
+.po-table th.sortable {
+  cursor: pointer;
+  user-select: none;
+}
+.po-table th.sortable:hover {
+  background: #e8e8e8;
+}
+
 .po-table td {
   padding: 0.75rem;
   border-bottom: 1px solid #eee;

@@ -213,7 +213,7 @@
 .ingredient-header {
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  align-items: flex-start;
   margin-bottom: 1.5rem;
   padding-bottom: 1rem;
   border-bottom: 2px solid #ddd;
@@ -225,6 +225,79 @@
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
+}
+
+.ingredient-batch-pct-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-top: 0.5rem;
+}
+.batch-pct-label {
+  font-size: 0.9rem;
+  color: #555;
+  margin: 0;
+}
+.batch-pct-input {
+  width: 5rem;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 0.9rem;
+}
+.batch-pct-input[type="number"] {
+  -moz-appearance: textfield;
+}
+.batch-pct-input[type="number"]::-webkit-outer-spin-button,
+.batch-pct-input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.batch-pct-suffix {
+  font-size: 0.9rem;
+  color: #666;
+}
+.btn-reset-pct {
+  padding: 0.25rem 0.5rem;
+  font-size: 0.8rem;
+  color: #3498db;
+  background: none;
+  border: 1px solid #3498db;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.btn-reset-pct:hover {
+  background: #3498db;
+  color: white;
+}
+.ingredient-percentage .batch-pct-override {
+  color: #e67e22;
+  margin-left: 0.25rem;
+}
+.batch-pct-total-row {
+  margin-top: 0.75rem;
+  padding: 0.5rem 0;
+  font-size: 0.95rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.batch-pct-total-label {
+  font-weight: 600;
+  color: #2c3e50;
+}
+.batch-pct-total-value {
+  font-weight: 600;
+  color: #27ae60;
+}
+.batch-pct-total-value.batch-pct-warning {
+  color: #e67e22;
+}
+.batch-pct-total-hint {
+  font-size: 0.85rem;
+  color: #7f8c8d;
 }
 
 .ingredient-name {
@@ -262,6 +335,50 @@
 .selected-qty.has-selection {
   color: #27ae60;
   font-weight: 600;
+}
+
+.ingredient-substitute-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1rem;
+  margin-top: 0.5rem;
+  margin-bottom: 0.5rem;
+  font-size: 0.9rem;
+}
+.ingredient-source {
+  color: #666;
+}
+.btn-link-substitute,
+.btn-link-use-formula {
+  background: none;
+  border: none;
+  padding: 0;
+  color: #3498db;
+  cursor: pointer;
+  text-decoration: underline;
+  font-size: inherit;
+}
+.btn-link-substitute:hover,
+.btn-link-use-formula:hover {
+  color: #2980b9;
+}
+.substitute-label {
+  margin: 0;
+  font-weight: 500;
+  color: #555;
+}
+.substitute-select {
+  max-width: 320px;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 0.9rem;
+}
+.substitute-hint {
+  margin: 0.25rem 0 0.75rem 0;
+  font-size: 0.85rem;
+  color: #666;
 }
 
 .no-lots-available {

@@ -40,6 +40,14 @@
   font-size: 0.9rem;
 }
 
+.entries-table th.sortable {
+  cursor: pointer;
+  user-select: none;
+}
+.entries-table th.sortable:hover {
+  background-color: rgba(255, 255, 255, 0.15);
+}
+
 .entries-table td {
   padding: 0.75rem 1rem;
   border-bottom: 1px solid #e0e0e0;

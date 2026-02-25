@@ -1050,7 +1050,8 @@ def log_production_batch_closure(batch, notes=None):
             qc_parameters=qc_parameters,
             qc_actual=qc_actual,
             qc_initials=qc_initials,
-            notes=closure_notes
+            notes=closure_notes,
+            recipe_snapshot=getattr(batch, 'recipe_snapshot', None) or None
         )
     except Exception as e:
         import logging
@@ -3892,6 +3893,7 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
                     output_lot_number=output_lot_number,
                     output_quantity=output_quantity,
                     notes=f"BATCH UNCLOSED/REVERSED - {batch.notes or ''}",
+                    recipe_snapshot=getattr(batch, 'recipe_snapshot', None) or None,
                     closed_by=None,  # Clear closed_by since it's being unclosed
                     logged_at=timezone.now()
                 )
@@ -4642,6 +4644,79 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_201_CREATED
             )
     
+    @action(detail=False, methods=['post'], url_path='parse-customer-po')
+    def parse_customer_po(self, request):
+        """
+        Accept an uploaded customer PO document (PDF or text) and return structured data
+        for auto-filling the Create Sales Order form.
+        """
+        from .customer_po_parser import parse_customer_po as do_parse
+        file_obj = request.FILES.get('file') or request.data.get('file')
+        if not file_obj:
+            return Response(
+                {'error': 'No file provided. Upload a PDF or text file (field name: file).'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        try:
+            file_bytes = file_obj.read()
+            filename = getattr(file_obj, 'name', '') or 'document.pdf'
+            result = do_parse(file_bytes, filename=filename)
+            return Response(result)
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.exception('parse_customer_po failed')
+            return Response(
+                {'error': f'Failed to parse document: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    @action(detail=True, methods=['get', 'post'], url_path='customer-po')
+    def customer_po(self, request, pk=None):
+        """GET: serve the uploaded customer PO PDF. POST: upload and attach a customer PO PDF."""
+        from django.http import FileResponse, Http404
+        from io import BytesIO
+        sales_order = self.get_object()
+        if request.method == 'GET':
+            if not sales_order.customer_po_pdf:
+                raise Http404('No customer PO document attached.')
+            try:
+                with sales_order.customer_po_pdf.open('rb') as fh:
+                    buf = BytesIO(fh.read())
+                buf.seek(0)
+                return FileResponse(
+                    buf,
+                    as_attachment=False,
+                    filename=(sales_order.customer_po_pdf.name or 'customer_po.pdf').split('/')[-1],
+                    content_type='application/pdf',
+                )
+            except Exception as e:
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.exception('Failed to serve customer PO PDF')
+                return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        else:
+            file_obj = request.FILES.get('file') or request.data.get('file')
+            if not file_obj:
+                return Response(
+                    {'error': 'No file provided. Send multipart/form-data with field "file".'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            if not getattr(file_obj, 'name', '').lower().endswith('.pdf'):
+                return Response(
+                    {'error': 'Only PDF files are accepted for customer PO.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            try:
+                sales_order.customer_po_pdf = file_obj
+                sales_order.save(update_fields=['customer_po_pdf'])
+                return Response({'ok': True, 'message': 'Customer PO document saved.'})
+            except Exception as e:
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.exception('Failed to save customer PO PDF')
+                return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
     @action(detail=True, methods=['post'])
     def allocate(self, request, pk=None):
         """Allocate lots to sales order items. Creates distributed item lots if raw materials are checked in."""
@@ -7450,7 +7525,7 @@ class CalendarEventsViewSet(viewsets.ViewSet):
         if 'production' in event_types:
             batches = ProductionBatch.objects.filter(
                 status__in=['scheduled', 'in_progress', 'closed']
-            )
+            ).select_related('finished_good_item')
             
             if start_date:
                 batches = batches.filter(production_date__gte=timezone.make_aware(datetime.combine(start_date, datetime.min.time())))
@@ -7458,12 +7533,8 @@ class CalendarEventsViewSet(viewsets.ViewSet):
                 batches = batches.filter(production_date__lte=timezone.make_aware(datetime.combine(end_date, datetime.max.time())))
             
             for batch in batches:
-                if batch.status == 'scheduled':
-                    title = f'Make Batch: {batch.batch_number}'
-                elif batch.status == 'in_progress':
-                    title = f'In Progress: {batch.batch_number}'
-                else:
-                    title = f'Batch: {batch.batch_number}'
+                fg_name = batch.finished_good_item.name if batch.finished_good_item else ''
+                title = f'{fg_name}: {batch.batch_number}' if fg_name else batch.batch_number
                 
                 events.append({
                     'id': f'production_{batch.id}',
@@ -7473,6 +7544,7 @@ class CalendarEventsViewSet(viewsets.ViewSet):
                     'batch_id': batch.id,
                     'batch_number': batch.batch_number,
                     'status': batch.status,
+                    'quantity_produced': float(batch.quantity_produced),
                     'is_scheduled': batch.status == 'scheduled',
                 })
         

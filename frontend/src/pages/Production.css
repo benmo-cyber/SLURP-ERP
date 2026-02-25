@@ -1,62 +1,161 @@
+/* Production page – sidebar layout (matches Finance/Sales style) */
+
 .production-page {
   min-height: 100vh;
-  background-color: #f5f5f5;
+  background: var(--production-bg, #f0f2f5);
+  display: flex;
+  flex-direction: column;
 }
 
-.page-header {
-  background-color: white;
-  padding: 1.5rem 2rem;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+.production-header {
+  flex-shrink: 0;
+  background: var(--production-header-bg, #fff);
+  padding: 1rem 1.5rem;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
   display: flex;
   justify-content: space-between;
   align-items: center;
-}
-
-.page-header h1 {
-  margin: 0;
-  font-size: 1.75rem;
-  font-weight: 600;
-  color: #2c3e50;
-}
-
-.header-actions {
-  display: flex;
   gap: 1rem;
+  flex-wrap: wrap;
 }
 
-.production-tabs {
-  background: white;
-  padding: 0 2rem;
-  border-bottom: 1px solid #e0e0e0;
+.production-header h1 {
+  margin: 0;
+  font-size: 1.5rem;
+  font-weight: 600;
+  color: var(--production-header-color, #1a1d21);
+  letter-spacing: -0.02em;
+}
+
+.production-header-actions {
   display: flex;
-  gap: 0;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
 }
 
-.tab-button {
-  padding: 1rem 2rem;
+.production-layout {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
+.production-sidebar {
+  flex-shrink: 0;
+  width: 240px;
+  background: var(--production-sidebar-bg, #fff);
+  border-right: 1px solid var(--production-sidebar-border, #e8eaed);
+  padding: 1rem 0;
+  overflow-y: auto;
+}
+
+.production-nav-section {
+  margin-bottom: 1.25rem;
+}
+
+.production-nav-section:last-child {
+  margin-bottom: 0;
+}
+
+.production-nav-section-label {
+  padding: 0 1rem 0.5rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--production-nav-label-color, #6b7280);
+}
+
+.production-nav-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.production-nav-list li {
+  margin: 0;
+}
+
+.production-nav-item {
+  display: block;
+  width: 100%;
+  padding: 0.5rem 1rem;
+  text-align: left;
+  background: none;
   border: none;
-  background: transparent;
-  cursor: pointer;
-  font-size: 1rem;
-  color: #666;
-  border-bottom: 3px solid transparent;
-  transition: all 0.2s;
-}
-
-.tab-button:hover {
-  background: #f8f9fa;
-  color: #333;
-}
-
-.tab-button.active {
-  color: #007bff;
-  border-bottom-color: #007bff;
+  border-left: 3px solid transparent;
+  color: var(--production-nav-color, #374151);
+  font-size: 0.9rem;
   font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
 }
 
-.page-content {
-  padding: 2rem;
-  max-width: 100%;
-  margin: 0 auto;
+.production-nav-item:hover {
+  background: var(--production-nav-hover-bg, #f3f4f6);
+  color: var(--production-nav-hover-color, #111827);
 }
 
+.production-nav-item.active {
+  background: var(--production-nav-active-bg, #eff6ff);
+  color: var(--production-nav-active-color, #1d4ed8);
+  border-left-color: var(--production-nav-active-accent, #2563eb);
+  font-weight: 600;
+}
+
+.production-main {
+  flex: 1;
+  min-width: 0;
+  padding: 1.5rem 2rem;
+  overflow-y: auto;
+}
+
+@media (max-width: 768px) {
+  .production-layout {
+    flex-direction: column;
+  }
+  .production-sidebar {
+    width: 100%;
+    border-right: none;
+    border-bottom: 1px solid var(--production-sidebar-border, #e8eaed);
+    padding: 0.75rem;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    align-items: center;
+  }
+  .production-nav-section {
+    margin-bottom: 0;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.25rem;
+  }
+  .production-nav-section-label {
+    width: 100%;
+    padding: 0.25rem 0 0;
+    margin-top: 0.5rem;
+    border-top: 1px solid #eee;
+  }
+  .production-nav-section:first-child .production-nav-section-label {
+    border-top: none;
+    margin-top: 0;
+  }
+  .production-nav-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem;
+  }
+  .production-nav-item {
+    padding: 0.4rem 0.75rem;
+    border-left: none;
+    border-radius: 6px;
+  }
+  .production-nav-item.active {
+    border-left: none;
+    border-radius: 6px;
+  }
+  .production-main {
+    padding: 1rem;
+  }
+}

@@ -48,6 +48,14 @@
   border-bottom: 2px solid #ddd;
 }
 
+.orders-table th.sortable {
+  cursor: pointer;
+  user-select: none;
+}
+.orders-table th.sortable:hover {
+  background-color: rgba(0, 0, 0, 0.05);
+}
+
 .orders-table td {
   padding: 12px;
   border-bottom: 1px solid #eee;
