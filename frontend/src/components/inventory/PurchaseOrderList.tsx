@@ -42,6 +42,8 @@ interface PurchaseOrder {
   status: string
   total?: number
   subtotal?: number
+  discount?: number
+  shipping_cost?: number
   tracking_number?: string
   carrier?: string
   items: PurchaseOrderItem[]
@@ -78,11 +80,17 @@ function PurchaseOrderList() {
     loadPOs()
   }, [filter])
 
+  const [discountValue, setDiscountValue] = useState<string>('')
+  const [shippingCostValue, setShippingCostValue] = useState<string>('')
+  const [savingTotals, setSavingTotals] = useState(false)
+
   useEffect(() => {
     if (selectedPO) {
       setTrackingNumber(selectedPO.tracking_number || '')
       setCarrier(selectedPO.carrier || '')
       setRequiredDateValue(selectedPO.required_date || '')
+      setDiscountValue(selectedPO.discount != null ? String(selectedPO.discount) : '')
+      setShippingCostValue(selectedPO.shipping_cost != null ? String(selectedPO.shipping_cost) : '')
     }
   }, [selectedPO])
 
@@ -271,6 +279,32 @@ function PurchaseOrderList() {
     setRequiredDateValue(selectedPO?.required_date || '')
   }
 
+  const handleSaveDiscountAndShipping = async () => {
+    if (!selectedPO) return
+    const discount = discountValue === '' ? 0 : parseFloat(discountValue)
+    const shippingCost = shippingCostValue === '' ? 0 : parseFloat(shippingCostValue)
+    if (isNaN(discount) || isNaN(shippingCost)) {
+      alert('Please enter valid numbers for discount and shipping.')
+      return
+    }
+    try {
+      setSavingTotals(true)
+      await updatePurchaseOrder(selectedPO.id, {
+        discount: discount,
+        shipping_cost: shippingCost,
+      })
+      alert('Discount and shipping updated.')
+      await loadPOs()
+      const updated = await getPurchaseOrder(selectedPO.id)
+      setSelectedPO(updated)
+    } catch (error: any) {
+      console.error('Failed to update discount/shipping:', error)
+      alert(error.response?.data?.detail || error.response?.data?.message || 'Failed to update')
+    } finally {
+      setSavingTotals(false)
+    }
+  }
+
   const isLate = (expectedDate?: string, requiredDate?: string) => {
     if (!expectedDate || !requiredDate) return false
     return new Date(expectedDate) > new Date(requiredDate)
@@ -373,14 +407,61 @@ function PurchaseOrderList() {
                 <label>Vendor:</label>
                 <span>{selectedPO.vendor_name || `ID: ${selectedPO.vendor_id}`}</span>
               </div>
-              {selectedPO.total && (
+              {selectedPO.total != null && (
                 <div className="info-item">
                   <label>Total:</label>
                   <span>{formatCurrency(selectedPO.total)}</span>
                 </div>
               )}
+              {(selectedPO.discount != null && selectedPO.discount !== 0) && (
+                <div className="info-item">
+                  <label>Discount:</label>
+                  <span>{formatCurrency(selectedPO.discount)}</span>
+                </div>
+              )}
+              {(selectedPO.shipping_cost != null && selectedPO.shipping_cost !== 0) && (
+                <div className="info-item">
+                  <label>Shipping:</label>
+                  <span>{formatCurrency(selectedPO.shipping_cost)}</span>
+                </div>
+              )}
             </div>
           </div>
+
+          {selectedPO.status === 'draft' && (
+            <div className="po-tracking-section" style={{ marginTop: '1rem' }}>
+              <h3>Discount & Shipping (editable for draft)</h3>
+              <div className="tracking-form">
+                <div className="form-group">
+                  <label>Discount ($)</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={discountValue}
+                    onChange={(e) => setDiscountValue(e.target.value)}
+                    placeholder="0"
+                    className="number-input"
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Shipping cost ($)</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={shippingCostValue}
+                    onChange={(e) => setShippingCostValue(e.target.value)}
+                    placeholder="0"
+                    className="number-input"
+                  />
+                </div>
+                <button onClick={handleSaveDiscountAndShipping} className="btn btn-primary" disabled={savingTotals}>
+                  {savingTotals ? 'Saving...' : 'Save Discount & Shipping'}
+                </button>
+              </div>
+            </div>
+          )}
 
           <div className="po-items-section">
             <h3>Items</h3>

@@ -24,8 +24,9 @@ export const createPurchaseOrder = async (data: any) => {
   return response.data
 }
 
-export const updatePurchaseOrder = async (id: number, data: any) => {
-  const response = await api.put(`/purchase-orders/${id}/`, data)
+export const updatePurchaseOrder = async (id: number, data: any, partial = true) => {
+  const method = partial ? 'patch' : 'put'
+  const response = await api.request({ method, url: `/purchase-orders/${id}/`, data })
   return response.data
 }
 
