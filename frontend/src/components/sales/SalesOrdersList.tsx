@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { getSalesOrders, deleteSalesOrder, updateSalesOrder, issueSalesOrder } from '../../api/salesOrders'
+import { getSalesOrders, deleteSalesOrder, updateSalesOrder, patchSalesOrder, issueSalesOrder } from '../../api/salesOrders'
 import { formatNumber } from '../../utils/formatNumber'
 import AllocateModal from './AllocateModal'
 import './SalesOrdersList.css'
@@ -128,7 +128,7 @@ function SalesOrdersList({ refreshKey = 0, onSelectOrder, onEditOrder }: SalesOr
 
   const handleShipDateSave = async (orderId: number) => {
     try {
-      await updateSalesOrder(orderId, { expected_ship_date: editingShipDate || null })
+      await patchSalesOrder(orderId, { expected_ship_date: editingShipDate || null })
       setEditingShipDateId(null)
       await loadOrders()
     } catch (err: any) {
@@ -372,16 +372,25 @@ function SalesOrdersList({ refreshKey = 0, onSelectOrder, onEditOrder }: SalesOr
                   <td className="actions-column">
                     <div className="action-buttons">
                       {order.status === 'draft' && (
-                        <button
-                          className="btn-icon btn-issue"
-                          onClick={(e) => handleIssue(e, order)}
-                          disabled={issuingId === order.id}
-                          title="Issue"
-                        >
-                          {issuingId === order.id ? '⏳' : '📋'}
-                        </button>
+                        <>
+                          <button
+                            className="btn-action btn-allocate"
+                            onClick={(e) => handleAllocate(e, order)}
+                            title={isFullyAllocated(order) ? 'Re-allocate' : 'Allocate'}
+                          >
+                            {isFullyAllocated(order) ? 'Re-allocate' : 'Allocate'}
+                          </button>
+                          <button
+                            className="btn-icon btn-issue"
+                            onClick={(e) => handleIssue(e, order)}
+                            disabled={issuingId === order.id}
+                            title="Issue"
+                          >
+                            {issuingId === order.id ? '⏳' : '📋'}
+                          </button>
+                        </>
                       )}
-                      {order.status === 'issued' && (
+                      {(order.status === 'allocated' || order.status === 'issued' || order.status === 'ready_for_shipment') && (
                         <button
                           className="btn-action btn-allocate"
                           onClick={(e) => handleAllocate(e, order)}

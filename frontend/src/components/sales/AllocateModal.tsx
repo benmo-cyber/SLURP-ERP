@@ -179,13 +179,28 @@ function AllocateModal({ salesOrderId, onClose, onSuccess }: AllocateModalProps)
     return alloc.allocations.reduce((sum, a) => sum + a.quantity, 0)
   }
 
+  /** Convert quantity from given unit to current display unit (for showing in UI). */
   const convertQuantity = (quantity: number, unit: string): number => {
-    if (unitDisplay === 'kg' && unit === 'lbs') {
-      return quantity * 0.453592
-    } else if (unitDisplay === 'lbs' && unit === 'kg') {
-      return quantity * 2.20462
+    const u = (unit || '').toLowerCase()
+    if (unitDisplay === 'kg' && u === 'lbs') {
+      return quantity * 0.453592  // lbs → kg
+    }
+    if (unitDisplay === 'lbs' && u === 'kg') {
+      return quantity * 2.20462  // kg → lbs
     }
     return quantity
+  }
+
+  /** Convert value entered in display unit back to lot/item unit for storage and API. */
+  const convertDisplayToUnit = (value: number, lotUnit: string): number => {
+    const u = (lotUnit || '').toLowerCase()
+    if (unitDisplay === 'lbs' && u === 'kg') {
+      return value / 2.20462  // user entered lbs → store kg
+    }
+    if (unitDisplay === 'kg' && u === 'lbs') {
+      return value / 0.453592  // user entered kg → store lbs (1/0.453592 = 2.20462)
+    }
+    return value
   }
 
   const isFullyAllocated = (item: SalesOrderItem): boolean => {
@@ -326,16 +341,15 @@ function AllocateModal({ salesOrderId, onClose, onSuccess }: AllocateModalProps)
                                   <input
                                     type="number"
                                     min="0"
-                                    max={maxAllocatable}
+                                    max={convertQuantity(maxAllocatable, lot.item.unit_of_measure)}
                                     step="0.01"
-                                    value={allocatedQty}
+                                    value={(() => {
+                                      const v = convertQuantity(allocatedQty, lot.item.unit_of_measure)
+                                      return v === 0 ? 0 : Math.round(v * 100) / 100
+                                    })()}
                                     onChange={(e) => {
                                       const val = parseFloat(e.target.value) || 0
-                                      const unitQty = unitDisplay === 'kg' && lot.item.unit_of_measure === 'lbs' 
-                                        ? val / 0.453592 
-                                        : unitDisplay === 'lbs' && lot.item.unit_of_measure === 'kg'
-                                        ? val / 2.20462
-                                        : val
+                                      const unitQty = convertDisplayToUnit(val, lot.item.unit_of_measure)
                                       updateAllocation(item.id, lot.id, unitQty)
                                     }}
                                     className="allocation-input"
@@ -345,14 +359,7 @@ function AllocateModal({ salesOrderId, onClose, onSuccess }: AllocateModalProps)
                                 <td>
                                   <button
                                     className="btn-allocate-full"
-                                    onClick={() => {
-                                      const unitQty = unitDisplay === 'kg' && lot.item.unit_of_measure === 'lbs' 
-                                        ? maxAllocatable / 0.453592 
-                                        : unitDisplay === 'lbs' && lot.item.unit_of_measure === 'kg'
-                                        ? maxAllocatable / 2.20462
-                                        : maxAllocatable
-                                      updateAllocation(item.id, lot.id, maxAllocatable)
-                                    }}
+                                    onClick={() => updateAllocation(item.id, lot.id, maxAllocatable)}
                                     disabled={maxAllocatable <= 0}
                                   >
                                     Allocate All

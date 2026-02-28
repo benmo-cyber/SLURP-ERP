@@ -104,6 +104,44 @@
   margin-bottom: 1rem;
 }
 
+.so-items-section-header .section-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.unit-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.unit-toggle-label {
+  font-weight: 500;
+  color: #555;
+  font-size: 0.9rem;
+}
+
+.unit-toggle .toggle-btn {
+  padding: 6px 12px;
+  border: 1px solid #ddd;
+  background: white;
+  cursor: pointer;
+  border-radius: 4px;
+  font-size: 0.9rem;
+  transition: background 0.2s, border-color 0.2s, color 0.2s;
+}
+
+.unit-toggle .toggle-btn.active {
+  background: #3498db;
+  color: white;
+  border-color: #3498db;
+}
+
+.unit-toggle .toggle-btn:hover:not(.active) {
+  background: #f0f0f0;
+}
+
 .view-customer-po-link {
   font-size: 0.9rem;
   color: #3498db;

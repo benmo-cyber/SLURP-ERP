@@ -1259,6 +1259,8 @@ class Shipment(models.Model):
     ship_date = models.DateTimeField(help_text='Date the shipment was shipped')
     tracking_number = models.CharField(max_length=255, help_text='Tracking number for this shipment')
     notes = models.TextField(blank=True, null=True)
+    dimensions = models.CharField(max_length=255, blank=True, null=True, help_text='Pallet/box dimensions (e.g. 48x40x60)')
+    pieces = models.PositiveIntegerField(blank=True, null=True, help_text='Number of boxes (ground) or pallets (FTL/LTL)')
     created_at = models.DateTimeField(auto_now_add=True)
     
     class Meta:
@@ -1290,8 +1292,14 @@ class Invoice(models.Model):
         ('overdue', 'Overdue'),
         ('cancelled', 'Cancelled'),
     ]
+    INVOICE_TYPE_CHOICES = [
+        ('customer', 'Customer Invoice'),
+        ('vendor', 'Vendor Bill'),
+    ]
     
     invoice_number = models.CharField(max_length=100, unique=True, db_index=True)
+    invoice_type = models.CharField(max_length=20, choices=INVOICE_TYPE_CHOICES, default='customer')
+    customer_vendor_name = models.CharField(max_length=255, blank=True, default='')
     sales_order = models.ForeignKey(SalesOrder, on_delete=models.CASCADE, related_name='invoices', blank=True, null=True, db_column='sales_order_id')
     invoice_date = models.DateField()
     due_date = models.DateField(help_text='Calculated from invoice_date + payment_terms')
@@ -1299,8 +1307,11 @@ class Invoice(models.Model):
     subtotal = models.FloatField(default=0.0)
     freight = models.FloatField(default=0.0)
     tax = models.FloatField(default=0.0)
+    tax_amount = models.FloatField(default=0.0)  # DB column from migrations; same as tax for customer invoices
     discount = models.FloatField(default=0.0)
     grand_total = models.FloatField(default=0.0)
+    total_amount = models.FloatField(default=0.0)  # DB column from migrations; same as grand_total
+    paid_amount = models.FloatField(default=0.0)  # DB column from migrations
     notes = models.TextField(blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -1324,13 +1335,17 @@ class Invoice(models.Model):
 
 
 class InvoiceItem(models.Model):
-    """Line items for invoices"""
+    """Line items for invoices."""
     invoice = models.ForeignKey(Invoice, on_delete=models.CASCADE, related_name='items')
-    sales_order_item = models.ForeignKey(SalesOrderItem, on_delete=models.CASCADE, related_name='invoice_items')
+    item = models.ForeignKey('Item', on_delete=models.SET_NULL, related_name='invoice_items', blank=True, null=True)
+    sales_order_item = models.ForeignKey(
+        SalesOrderItem, on_delete=models.CASCADE, related_name='invoice_items', blank=True, null=True
+    )
     description = models.CharField(max_length=255)
     quantity = models.FloatField()
     unit_price = models.FloatField()
     total = models.FloatField()
+    notes = models.TextField(blank=True, null=True)
     
     class Meta:
         ordering = ['id']

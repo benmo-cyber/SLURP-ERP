@@ -102,6 +102,7 @@ function CreateSalesOrder({ onClose, onSuccess, salesOrder }: CreateSalesOrderPr
   const [soItems, setSoItems] = useState<SOItem[]>([
     { item_id: null, vendor_part_number: '', description: '', quantity_ordered: '', unit: '', unit_price: '', notes: '' }
   ])
+  const [unitDisplay, setUnitDisplay] = useState<'lbs' | 'kg'>('lbs')
 
   useEffect(() => {
     loadItems()
@@ -460,6 +461,72 @@ function CreateSalesOrder({ onClose, onSuccess, salesOrder }: CreateSalesOrderPr
     return quantity // Same unit or unknown conversion
   }
 
+  /** Convert price-per-unit from one UoM to another (e.g. $/lb → $/kg). Used so quantity and unit_price are always in the same unit. */
+  const convertPricePerUnit = (price: number, fromUnit: string, toUnit: string): number => {
+    const f = (fromUnit || '').toLowerCase()
+    const t = (toUnit || '').toLowerCase()
+    if (f === 'lbs' && t === 'kg') return price * 2.20462  // $/lb → $/kg
+    if (f === 'kg' && t === 'lbs') return price / 2.20462   // $/kg → $/lb
+    return price
+  }
+
+  /** Quantity in row's stored unit → value to show in input when unitDisplay is active */
+  const quantityForDisplay = (row: SOItem): string | number => {
+    const qty = typeof row.quantity_ordered === 'string' ? parseFloat(row.quantity_ordered) : row.quantity_ordered
+    if (qty === '' || (typeof qty === 'number' && isNaN(qty))) return ''
+    const u = (row.unit || '').toLowerCase()
+    if ((u === 'lbs' || u === 'kg') && u !== unitDisplay) {
+      const converted = convertUnit(Number(qty), row.unit, unitDisplay)
+      return converted === Math.round(converted) ? converted : Math.round(converted * 100) / 100
+    }
+    return qty
+  }
+
+  /** User edited value in display unit → stored value in row.unit */
+  const handleQuantityChange = (index: number, inputValue: string) => {
+    const row = soItems[index]
+    if (inputValue === '') {
+      handleItemChange(index, 'quantity_ordered', '')
+      return
+    }
+    const parsed = parseFloat(inputValue)
+    if (isNaN(parsed)) return
+    const u = (row.unit || '').toLowerCase()
+    const stored = (u === 'lbs' || u === 'kg') && u !== unitDisplay
+      ? convertUnit(parsed, unitDisplay, row.unit)
+      : parsed
+    const storedRounded = stored === Math.round(stored) ? stored : Math.round(stored * 100) / 100
+    handleItemChange(index, 'quantity_ordered', storedRounded)
+  }
+
+  /** Unit price in row's stored unit ($/lb or $/kg) → value to show when unitDisplay differs */
+  const unitPriceForDisplay = (row: SOItem): string | number => {
+    const price = typeof row.unit_price === 'string' ? parseFloat(row.unit_price) : row.unit_price
+    if (price === '' || (typeof price === 'number' && isNaN(price))) return ''
+    const u = (row.unit || '').toLowerCase()
+    if (u === 'lbs' && unitDisplay === 'kg') return Math.round(price * 2.20462 * 100) / 100  // $/lb → $/kg
+    if (u === 'kg' && unitDisplay === 'lbs') return Math.round((price / 2.20462) * 100) / 100  // $/kg → $/lb
+    return price
+  }
+
+  /** User edited unit price in display unit → stored value in row.unit */
+  const handleUnitPriceChange = (index: number, inputValue: string) => {
+    const row = soItems[index]
+    if (inputValue === '') {
+      handleItemChange(index, 'unit_price', '')
+      return
+    }
+    const parsed = parseFloat(inputValue)
+    if (isNaN(parsed)) return
+    const u = (row.unit || '').toLowerCase()
+    let stored: number
+    if (u === 'lbs' && unitDisplay === 'kg') stored = parsed / 2.20462   // user entered $/kg → store $/lb
+    else if (u === 'kg' && unitDisplay === 'lbs') stored = parsed * 2.20462  // user entered $/lb → store $/kg
+    else stored = parsed
+    const storedRounded = stored === Math.round(stored) ? stored : Math.round(stored * 100) / 100
+    handleItemChange(index, 'unit_price', storedRounded)
+  }
+
   const calculateTotals = () => {
     const subtotal = soItems.reduce((sum, item) => {
       const price = typeof item.unit_price === 'string' ? parseFloat(item.unit_price) || 0 : item.unit_price
@@ -521,21 +588,25 @@ function CreateSalesOrder({ onClose, onSuccess, salesOrder }: CreateSalesOrderPr
         grand_total: formData.grand_total,
         notes: formData.notes || null,
         items: soItems.map(item => {
-          // Convert quantity if needed
+          // Quantity and unit_price must both be in the item's unit_of_measure (backend has no per-line unit).
           const itemObj = items.find(i => i.id === item.item_id)
+          const itemUom = (itemObj?.unit_of_measure || 'lbs').toLowerCase()
+          const lineUnit = (item.unit || 'lbs').toLowerCase()
           let finalQuantity = typeof item.quantity_ordered === 'string' ? parseFloat(item.quantity_ordered) || 0 : item.quantity_ordered
-          const unitPrice = typeof item.unit_price === 'string' ? parseFloat(item.unit_price) || 0 : item.unit_price
-          
-          if (itemObj && item.unit && item.unit !== itemObj.unit_of_measure) {
-            finalQuantity = convertUnit(finalQuantity, item.unit, itemObj.unit_of_measure)
+          let finalUnitPrice = typeof item.unit_price === 'string' ? parseFloat(item.unit_price) || 0 : item.unit_price
+
+          if (itemObj && lineUnit && lineUnit !== itemUom && (lineUnit === 'lbs' || lineUnit === 'kg') && (itemUom === 'lbs' || itemUom === 'kg')) {
+            finalQuantity = convertUnit(finalQuantity, lineUnit, itemUom)
+            finalUnitPrice = convertPricePerUnit(finalUnitPrice, lineUnit, itemUom)
+            finalUnitPrice = Math.round(finalUnitPrice * 100) / 100
           }
-          
+
           return {
             item_id: item.item_id,
             vendor_part_number: item.vendor_part_number || '',
             description: item.description,
             quantity_ordered: finalQuantity,
-            unit_price: unitPrice,
+            unit_price: finalUnitPrice,
             notes: item.notes || '',
           }
         }),
@@ -765,9 +836,28 @@ function CreateSalesOrder({ onClose, onSuccess, salesOrder }: CreateSalesOrderPr
           </div>
 
           <div className="so-form-section">
-            <div className="section-header">
+            <div className="section-header so-items-section-header">
               <h3>Items</h3>
-              <button type="button" onClick={addItem} className="btn btn-secondary">+ Add Item</button>
+              <div className="section-header-actions">
+                <div className="unit-toggle">
+                  <span className="unit-toggle-label">Quantity in:</span>
+                  <button
+                    type="button"
+                    className={`toggle-btn ${unitDisplay === 'lbs' ? 'active' : ''}`}
+                    onClick={() => setUnitDisplay('lbs')}
+                  >
+                    lbs
+                  </button>
+                  <button
+                    type="button"
+                    className={`toggle-btn ${unitDisplay === 'kg' ? 'active' : ''}`}
+                    onClick={() => setUnitDisplay('kg')}
+                  >
+                    kg
+                  </button>
+                </div>
+                <button type="button" onClick={addItem} className="btn btn-secondary">+ Add Item</button>
+              </div>
             </div>
             
             <table className="so-items-table">
@@ -824,27 +914,31 @@ function CreateSalesOrder({ onClose, onSuccess, salesOrder }: CreateSalesOrderPr
                         type="number"
                         step="0.01"
                         min="0"
-                        value={item.quantity_ordered === '' ? '' : item.quantity_ordered}
-                        onChange={(e) => handleItemChange(index, 'quantity_ordered', e.target.value)}
+                        value={quantityForDisplay(item)}
+                        onChange={(e) => handleQuantityChange(index, e.target.value)}
                         className="number-input"
                         required
                       />
                     </td>
                     <td>
-                      <input
-                        type="text"
-                        value={item.unit}
-                        onChange={(e) => handleItemChange(index, 'unit', e.target.value)}
-                        placeholder="lbs/kg"
-                      />
+                      {(item.unit || '').toLowerCase() === 'lbs' || (item.unit || '').toLowerCase() === 'kg'
+                        ? unitDisplay
+                        : (
+                            <input
+                              type="text"
+                              value={item.unit}
+                              onChange={(e) => handleItemChange(index, 'unit', e.target.value)}
+                              placeholder="e.g. EA"
+                            />
+                          )}
                     </td>
                     <td>
                       <input
                         type="number"
                         step="0.01"
                         min="0"
-                        value={item.unit_price === '' ? '' : item.unit_price}
-                        onChange={(e) => handleItemChange(index, 'unit_price', e.target.value)}
+                        value={(item.unit || '').toLowerCase() === 'lbs' || (item.unit || '').toLowerCase() === 'kg' ? unitPriceForDisplay(item) : (item.unit_price === '' ? '' : item.unit_price)}
+                        onChange={(e) => ((item.unit || '').toLowerCase() === 'lbs' || (item.unit || '').toLowerCase() === 'kg') ? handleUnitPriceChange(index, e.target.value) : handleItemChange(index, 'unit_price', e.target.value)}
                         className="number-input"
                         required
                       />

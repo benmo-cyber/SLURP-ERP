@@ -113,11 +113,11 @@ function ViewInvoice({ invoiceId, onClose, onSuccess }: ViewInvoiceProps) {
     if (!invoice?.sales_order?.id) return
 
     try {
-      const url = `http://localhost:8000/api/sales-orders/${invoice.sales_order.id}/packing-list/`
-      window.open(url, '_blank', 'noopener,noreferrer')
+      const { openPackingList } = await import('../../api/salesOrders')
+      await openPackingList(invoice.sales_order.id)
     } catch (error: any) {
       console.error('Failed to open packing list:', error)
-      alert('Failed to open packing list')
+      alert(error?.message || 'Failed to open packing list')
     }
   }
 

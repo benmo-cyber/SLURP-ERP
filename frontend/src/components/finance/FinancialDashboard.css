@@ -92,6 +92,30 @@
   border-left: 4px solid #bd10e0;
 }
 
+/* Performance KPI cards on dashboard */
+.dashboard-kpis-section {
+  margin-bottom: 32px;
+}
+
+.dashboard-kpis-title {
+  margin: 0 0 16px 0;
+  font-size: 18px;
+  color: #333;
+  font-weight: 600;
+}
+
+.metrics-cards-kpis .metric-card.kpi-on-time.kpi-good {
+  border-left-color: #50c878;
+}
+
+.metrics-cards-kpis .metric-card.kpi-on-time.kpi-medium {
+  border-left-color: #f5a623;
+}
+
+.metrics-cards-kpis .metric-card.kpi-late {
+  border-left-color: #d0021b;
+}
+
 .metric-label {
   font-size: 14px;
   color: #666;

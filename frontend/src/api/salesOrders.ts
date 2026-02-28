@@ -29,6 +29,12 @@ export const updateSalesOrder = async (id: number, data: any) => {
   return response.data
 }
 
+/** Partial update (e.g. ship date only). Use this when updating a single field to avoid 400 from PUT. */
+export const patchSalesOrder = async (id: number, data: Record<string, unknown>) => {
+  const response = await api.patch(`/sales-orders/${id}/`, data)
+  return response.data
+}
+
 export const deleteSalesOrder = async (id: number) => {
   const response = await api.delete(`/sales-orders/${id}/`)
   return response.data
@@ -39,7 +45,15 @@ export const allocateSalesOrder = async (id: number, data: any) => {
   return response.data
 }
 
-export const shipSalesOrder = async (id: number, data: { ship_date: string; items: Array<{ item_id: number; quantity: number }> }) => {
+export const shipSalesOrder = async (
+  id: number,
+  data: {
+    ship_date: string
+    items: Array<{ item_id: number; quantity: number }>
+    dimensions?: string
+    pieces?: number
+  }
+) => {
   const response = await api.post(`/sales-orders/${id}/ship/`, data)
   return response.data
 }
@@ -54,13 +68,22 @@ export const issueSalesOrder = async (id: number) => {
   return response.data
 }
 
+/** Packing list URL for a sales order (open in new tab; same pattern as invoice PDF). */
+export const getPackingListUrl = (salesOrderId: number) =>
+  `${API_BASE_URL.replace(/\/$/, '')}/sales-orders/${salesOrderId}/packing-list/`
+
+/** Open packing list for a sales order in a new tab (same pattern as invoice PDF). */
+export const openPackingList = async (salesOrderId: number): Promise<void> => {
+  window.open(getPackingListUrl(salesOrderId), '_blank', 'noopener,noreferrer')
+}
+
 export const getAvailableSalesOrders = async () => {
-  // Get all sales orders and filter for issued orders with allocations
+  // Get all sales orders and filter for issued or ready_for_shipment with allocations
   const response = await api.get('/sales-orders/')
   const allOrders = response.data.results || response.data
   return allOrders.filter((so: any) => {
-    // Must be issued
-    if (so.status !== 'issued') return false
+    // Must be issued or ready for shipment (backend sets ready_for_shipment when fully allocated)
+    if (so.status !== 'issued' && so.status !== 'ready_for_shipment') return false
     // Must have at least one item with allocation
     if (!so.items || so.items.length === 0) return false
     return so.items.some((item: any) => item.quantity_allocated > 0)

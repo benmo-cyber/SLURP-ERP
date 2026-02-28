@@ -12,10 +12,12 @@ import PLActual from '../components/finance/PLActual'
 import PLProForma from '../components/finance/PLProForma'
 import BankReconciliation from '../components/finance/BankReconciliation'
 import FiscalPeriods from '../components/finance/FiscalPeriods'
+import KPIs from '../components/finance/KPIs'
 import './Finance.css'
 
 export type FinanceTabId =
   | 'dashboard'
+  | 'kpis'
   | 'ledger'
   | 'journal'
   | 'invoices'
@@ -30,7 +32,7 @@ export type FinanceTabId =
   | 'pl-proforma'
 
 const NAV_SECTIONS: { label: string; items: { id: FinanceTabId; label: string }[] }[] = [
-  { label: 'Overview', items: [{ id: 'dashboard', label: 'Dashboard' }] },
+  { label: 'Overview', items: [{ id: 'dashboard', label: 'Dashboard' }, { id: 'kpis', label: 'KPIs' }] },
   {
     label: 'Accounting',
     items: [
@@ -101,6 +103,7 @@ function Finance() {
 
         <main className="finance-main">
           {activeTab === 'dashboard' && <FinancialDashboard />}
+          {activeTab === 'kpis' && <KPIs />}
           {activeTab === 'ledger' && <GeneralLedger />}
           {activeTab === 'invoices' && <Invoices />}
           {activeTab === 'journal' && <JournalEntries />}

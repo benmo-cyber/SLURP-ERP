@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { getInvoices, updateInvoice, getAgingReport, getInvoicePdfUrl } from '../../api/invoices'
+import { openPackingList } from '../../api/salesOrders'
 import { formatCurrency } from '../../utils/formatNumber'
 import CreateInvoice from './CreateInvoice'
 import ViewInvoice from './ViewInvoice'
@@ -334,10 +335,13 @@ function Invoices() {
                   <td>
                     {invoice.sales_order?.id ? (
                       <button
-                        onClick={(e) => {
+                        onClick={async (e) => {
                           e.stopPropagation()
-                          const url = `http://localhost:8000/api/sales-orders/${invoice.sales_order!.id}/packing-list/`
-                          window.open(url, '_blank', 'noopener,noreferrer')
+                          try {
+                            await openPackingList(invoice.sales_order!.id)
+                          } catch (err: any) {
+                            alert(err?.message || 'Failed to open packing list')
+                          }
                         }}
                         className="btn btn-small btn-secondary"
                         title="View Packing List in new window"

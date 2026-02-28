@@ -2320,11 +2320,12 @@ class LotViewSet(viewsets.ModelViewSet):
                     for sku_item in sku_items:
                         allocated_to_sales += item_sales_allocations.get(sku_item.id, 0.0)
                 
-                # Available = quantity_remaining - sales allocation - on_hold.
+                # Available = quantity_remaining - on_hold only.
+                # quantity_remaining above is already (lot.quantity_remaining - lot_sales_allocations) per lot,
+                # so sales allocation is already subtracted; do NOT subtract allocated_to_sales again.
                 # Do NOT subtract allocated_to_production: lot.quantity_remaining is already reduced
-                # when inputs are added to a batch (at batch create), so production usage is already
-                # reflected in quantity_remaining; subtracting it again would double-count.
-                available = max(0.0, quantity_remaining - allocated_to_sales - on_hold)
+                # when inputs are added to a batch (at batch create).
+                available = max(0.0, quantity_remaining - on_hold)
                 
                 # Create vendor-level inventory entry (nested under SKU)
                 vendor_entry = {
@@ -4872,10 +4873,10 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
         tracking_number = request.data.get('tracking_number', '').strip()
         items_to_ship = request.data.get('items', [])  # List of {item_id, quantity} for partial shipments
         
-        # Validate order is issued and has allocations
-        if sales_order.status != 'issued':
+        # Validate order is issued or ready_for_shipment and has allocations
+        if sales_order.status not in ('issued', 'ready_for_shipment'):
             return Response(
-                {'error': f'Sales order must be issued to checkout. Current status: {sales_order.status}'},
+                {'error': f'Sales order must be issued or ready for shipment to checkout. Current status: {sales_order.status}'},
                 status=status.HTTP_400_BAD_REQUEST
             )
         
@@ -4913,468 +4914,445 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
         # Otherwise, ship all allocated quantities
         use_partial = bool(items_to_ship)
         
-        with transaction.atomic():
-            # Create shipment record (tracking number can be added later)
-            shipment = Shipment.objects.create(
-                sales_order=sales_order,
-                ship_date=timezone.make_aware(datetime.combine(ship_date, datetime.min.time())),
-                tracking_number=tracking_number or '',
-                notes=request.data.get('notes', '')
-            )
-            
-            # Process items to ship
-            items_shipped_map = {}
-            if use_partial:
-                # Partial shipment - use provided quantities
-                for item_data in items_to_ship:
-                    item_id = item_data.get('item_id') or item_data.get('sales_order_item_id')
-                    quantity_to_ship = float(item_data.get('quantity', 0))
-                    if item_id and quantity_to_ship > 0:
-                        items_shipped_map[item_id] = quantity_to_ship
-            else:
-                # Ship all allocated quantities
+        try:
+            with transaction.atomic():
+                # Create shipment record (tracking number, dimensions, pieces can be set at checkout)
+                shipment = Shipment.objects.create(
+                    sales_order=sales_order,
+                    ship_date=timezone.make_aware(datetime.combine(ship_date, datetime.min.time())),
+                    tracking_number=tracking_number or '',
+                    notes=request.data.get('notes', ''),
+                    dimensions=(request.data.get('dimensions') or '').strip() or None,
+                    pieces=request.data.get('pieces') if request.data.get('pieces') is not None else None,
+                )
+                
+                # Process items to ship - normalize item_id to int for dict lookup (JSON may send string)
+                items_shipped_map = {}
+                if use_partial:
+                    for item_data in items_to_ship:
+                        raw_id = item_data.get('item_id') or item_data.get('sales_order_item_id')
+                        item_id = int(raw_id) if raw_id is not None else None
+                        quantity_to_ship = float(item_data.get('quantity', 0))
+                        if item_id is not None and quantity_to_ship > 0:
+                            items_shipped_map[item_id] = quantity_to_ship
+                else:
+                    for so_item in sales_order.items.all():
+                        if so_item.quantity_allocated > 0:
+                            items_shipped_map[so_item.id] = so_item.quantity_allocated
+                
+                # Reduce lot quantities and create inventory transactions
                 for so_item in sales_order.items.all():
-                    if so_item.quantity_allocated > 0:
-                        items_shipped_map[so_item.id] = so_item.quantity_allocated
-            
-            # Reduce lot quantities and create inventory transactions
-            for so_item in sales_order.items.all():
-                quantity_to_ship = items_shipped_map.get(so_item.id, 0)
-                if quantity_to_ship <= 0:
-                    continue
-                
-                # Validate quantity doesn't exceed allocated
-                if quantity_to_ship > so_item.quantity_allocated:
-                    return Response(
-                        {'error': f'Cannot ship {quantity_to_ship} of {so_item.item.name}. Only {so_item.quantity_allocated} is allocated.'},
-                        status=status.HTTP_400_BAD_REQUEST
-                    )
-                
-                # Ship from allocated lots proportionally or FIFO
-                remaining_to_ship = quantity_to_ship
-                allocations = SalesOrderLot.objects.filter(sales_order_item=so_item).order_by('created_at')
-                
-                for allocation in allocations:
-                    if remaining_to_ship <= 0:
-                        break
+                    quantity_to_ship = items_shipped_map.get(so_item.id, 0)
+                    if quantity_to_ship <= 0:
+                        continue
                     
-                    lot = allocation.lot
-                    # Ship from this allocation (up to the allocated amount)
-                    quantity_from_allocation = min(remaining_to_ship, allocation.quantity_allocated)
-                    
-                    if lot.quantity_remaining < quantity_from_allocation:
+                    # Validate quantity doesn't exceed allocated
+                    if quantity_to_ship > so_item.quantity_allocated:
                         return Response(
-                            {'error': f'Insufficient quantity in lot {lot.lot_number}. Available: {lot.quantity_remaining}, Required: {quantity_from_allocation}'},
+                            {'error': f'Cannot ship {quantity_to_ship} of {so_item.item.name}. Only {so_item.quantity_allocated} is allocated.'},
                             status=status.HTTP_400_BAD_REQUEST
                         )
                     
-                    quantity_before = lot.quantity_remaining
+                    # Ship from allocated lots proportionally or FIFO
+                    remaining_to_ship = quantity_to_ship
+                    allocations = SalesOrderLot.objects.filter(sales_order_item=so_item).order_by('created_at')
                     
-                    transaction = InventoryTransaction.objects.create(
-                        transaction_type='adjustment',
-                        lot=lot,
-                        quantity=-quantity_from_allocation,
-                        reference_number=sales_order.so_number,
-                        notes=f'Shipped for sales order {sales_order.so_number} - Shipment {shipment.id}'
-                    )
-                    
-                    # Log the transaction
-                    log_lot_transaction(
-                        lot=lot,
-                        quantity_before=quantity_before,
-                        quantity_change=-quantity_from_allocation,
-                        transaction_type='sale',
-                        reference_number=sales_order.so_number,
-                        reference_type='so_number',
-                        transaction_id=transaction.id,
-                        sales_order_id=sales_order.id,
-                        notes=f'Shipped for sales order {sales_order.so_number} - Shipment {shipment.id}'
-                    )
-                    
-                    lot.quantity_remaining -= quantity_from_allocation
-                    lot.save()
-                    
-                    # Reduce the allocation by the shipped quantity
-                    allocation.quantity_allocated -= quantity_from_allocation
-                    if allocation.quantity_allocated <= 0:
-                        allocation.delete()
-                    else:
-                        allocation.save()
-                    
-                    # Log depletion if lot reaches zero or below
-                    log_lot_depletion(
-                        lot=lot,
-                        quantity_before=quantity_before,
-                        quantity_used=quantity_from_allocation,
-                        depletion_method='sales',
-                        reference_number=sales_order.so_number,
-                        reference_type='so_number',
-                        sales_order_id=sales_order.id,
-                        transaction_id=transaction.id,
-                        notes=f'Shipped for sales order {sales_order.so_number} - Shipment {shipment.id}'
-                    )
-                    
-                    remaining_to_ship -= quantity_from_allocation
-                
-                # Update quantity_shipped on sales order item
-                so_item.quantity_shipped += quantity_to_ship
-                so_item.quantity_allocated -= quantity_to_ship  # Reduce allocated by shipped amount
-                so_item.save()
-                
-                # Create shipment item record
-                ShipmentItem.objects.create(
-                    shipment=shipment,
-                    sales_order_item=so_item,
-                    quantity_shipped=quantity_to_ship
-                )
-            
-            # Update sales order status and tracking
-            sales_order.actual_ship_date = timezone.make_aware(datetime.combine(ship_date, datetime.min.time()))
-            if not sales_order.tracking_number:
-                sales_order.tracking_number = tracking_number
-            
-            # Check if order is fully shipped
-            all_fully_shipped = all(
-                item.quantity_shipped >= item.quantity_ordered 
-                for item in sales_order.items.all()
-            )
-            
-            if all_fully_shipped:
-                sales_order.status = 'completed'
-            else:
-                # Still has outstanding balance - keep as issued or ready_for_shipment
-                # Check if there are still allocations
-                total_remaining_allocated = sum(item.quantity_allocated for item in sales_order.items.all())
-                if total_remaining_allocated > 0:
-                    sales_order.status = 'ready_for_shipment'
-                else:
-                    sales_order.status = 'issued'  # Can allocate more if needed
-            
-            sales_order.save()
-            
-            # Create invoice for this shipment
-            invoice_number = generate_invoice_number()
-            
-            # Calculate due date from payment terms
-            due_date = invoice_date
-            if sales_order.customer and sales_order.customer.payment_terms:
-                payment_terms = sales_order.customer.payment_terms
-                # Parse payment terms (e.g., "Net 30" -> 30 days)
-                match = re.search(r'(\d+)', payment_terms)
-                if match:
-                    days = int(match.group(1))
-                    due_date = invoice_date + timedelta(days=days)
-            
-            # Calculate totals from shipped quantities in this shipment
-            subtotal = sum(
-                item.sales_order_item.unit_price * item.quantity_shipped 
-                for item in shipment.items.all() 
-                if item.sales_order_item.unit_price
-            )
-            # Get freight, discount, tax from sales order if available, otherwise 0
-            freight = getattr(sales_order, 'freight', 0.0) or 0.0
-            discount = getattr(sales_order, 'discount', 0.0) or 0.0
-            tax = 0.0  # Calculate tax if needed
-            grand_total = subtotal + freight + tax - discount
-            
-            # Check what columns actually exist in Invoice table and which are NOT NULL
-            from django.db import connection
-            available_columns = set()
-            not_null_columns = set()
-            try:
-                with connection.cursor() as cursor:
-                    cursor.execute("PRAGMA table_info(erp_core_invoice)")
-                    for row in cursor.fetchall():
-                        col_name = row[1]
-                        is_not_null = row[3]  # 1 if NOT NULL, 0 if nullable
-                        available_columns.add(col_name)
-                        if is_not_null and col_name != 'id':  # id is auto-generated
-                            not_null_columns.add(col_name)
-            except Exception:
-                # If we can't check, use minimal set
-                available_columns = {'id', 'invoice_number', 'invoice_date', 'created_at', 'updated_at'}
-                not_null_columns = {'invoice_number', 'invoice_date'}
-            
-            # If sales_order_id column doesn't exist, use raw SQL to avoid Django ORM trying to set it
-            if 'sales_order_id' not in available_columns:
-                # Use raw SQL to insert invoice without sales_order_id
-                # Build column list and values dynamically based on what exists
-                now = timezone.now()
-                columns = ['invoice_number']
-                values = [invoice_number]
-                placeholders = ['?']
-                
-                # Required fields that must be included if they exist
-                # invoice_type is required (NOT NULL) - always include if column exists
-                if 'invoice_type' in available_columns:
-                    columns.append('invoice_type')
-                    values.append('customer')  # Default to customer invoice
-                    placeholders.append('?')
-                # customer_vendor_name is required (NOT NULL) - always include if column exists
-                if 'customer_vendor_name' in available_columns:
-                    columns.append('customer_vendor_name')
-                    customer_name = sales_order.customer_name
-                    if not customer_name and sales_order.customer:
-                        customer_name = sales_order.customer.name
-                    if not customer_name:
-                        customer_name = 'Unknown Customer'
-                    values.append(customer_name)
-                    placeholders.append('?')
-                # customer_vendor_id is optional
-                if 'customer_vendor_id' in available_columns:
-                    columns.append('customer_vendor_id')
-                    customer_id = sales_order.customer_legacy_id
-                    if not customer_id and sales_order.customer:
-                        customer_id = str(sales_order.customer.id)
-                    values.append(customer_id)
-                    placeholders.append('?')
-                
-                # Optional fields
-                if 'invoice_date' in available_columns:
-                    columns.append('invoice_date')
-                    values.append(invoice_date)
-                    placeholders.append('?')
-                if 'due_date' in available_columns:
-                    columns.append('due_date')
-                    values.append(due_date)
-                    placeholders.append('?')
-                if 'status' in available_columns:
-                    columns.append('status')
-                    values.append('draft')
-                    placeholders.append('?')
-                if 'subtotal' in available_columns:
-                    columns.append('subtotal')
-                    values.append(subtotal)
-                    placeholders.append('?')
-                if 'freight' in available_columns:
-                    columns.append('freight')
-                    values.append(freight)
-                    placeholders.append('?')
-                if 'tax' in available_columns:
-                    columns.append('tax')
-                    values.append(tax)
-                    placeholders.append('?')
-                if 'tax_amount' in available_columns:
-                    columns.append('tax_amount')
-                    values.append(tax)
-                    placeholders.append('?')
-                if 'discount' in available_columns:
-                    columns.append('discount')
-                    values.append(discount)
-                    placeholders.append('?')
-                if 'grand_total' in available_columns:
-                    columns.append('grand_total')
-                    values.append(grand_total)
-                    placeholders.append('?')
-                if 'total_amount' in available_columns:
-                    columns.append('total_amount')
-                    values.append(grand_total)
-                    placeholders.append('?')
-                if 'paid_amount' in available_columns:
-                    columns.append('paid_amount')
-                    values.append(0.0)
-                    placeholders.append('?')
-                if 'notes' in available_columns:
-                    columns.append('notes')
-                    # Escape % characters to avoid issues with Django's query logging
-                    notes_text = f'Auto-generated from sales order {sales_order.so_number} - Shipment {shipment.id}'
-                    # Replace % with %% to escape it (SQLite doesn't need this, but Django's logging does)
-                    notes_text = notes_text.replace('%', '%%')
-                    values.append(notes_text)
-                    placeholders.append('?')
-                if 'created_at' in available_columns:
-                    columns.append('created_at')
-                    values.append(now)
-                    placeholders.append('?')
-                if 'updated_at' in available_columns:
-                    columns.append('updated_at')
-                    values.append(now)
-                    placeholders.append('?')
-                
-                # Ensure all NOT NULL columns are included
-                for col in not_null_columns:
-                    if col not in columns and col != 'id':  # Skip id (auto-generated)
-                        # Add default values for required columns we haven't handled
-                        if col == 'invoice_type' and 'invoice_type' in available_columns:
-                            columns.append('invoice_type')
-                            values.append('customer')
-                            placeholders.append('?')
-                        elif col == 'customer_vendor_name' and 'customer_vendor_name' in available_columns:
-                            columns.append('customer_vendor_name')
-                            customer_name = sales_order.customer_name or (sales_order.customer.name if sales_order.customer else 'Unknown Customer')
-                            values.append(customer_name)
-                            placeholders.append('?')
-                        elif col == 'invoice_date' and 'invoice_date' in available_columns:
-                            columns.append('invoice_date')
-                            values.append(invoice_date)
-                            placeholders.append('?')
-                        elif col == 'status' and 'status' in available_columns:
-                            columns.append('status')
-                            values.append('draft')
-                            placeholders.append('?')
-                        elif col == 'subtotal' and 'subtotal' in available_columns:
-                            columns.append('subtotal')
-                            values.append(subtotal)
-                            placeholders.append('?')
-                        elif col == 'tax_amount' and 'tax_amount' in available_columns:
-                            columns.append('tax_amount')
-                            values.append(tax)
-                            placeholders.append('?')
-                        elif col == 'total_amount' and 'total_amount' in available_columns:
-                            columns.append('total_amount')
-                            values.append(grand_total)
-                            placeholders.append('?')
-                        elif col == 'paid_amount' and 'paid_amount' in available_columns:
-                            columns.append('paid_amount')
-                            values.append(0.0)
-                            placeholders.append('?')
-                
-                # Ensure we have the same number of placeholders as values
-                if len(placeholders) != len(values):
-                    raise ValueError(f"Placeholder count ({len(placeholders)}) doesn't match value count ({len(values)}). Columns: {columns}")
-                
-                # Build SQL with proper parameterization
-                # Use string concatenation to build SQL to avoid f-string % formatting issues
-                columns_str = ', '.join(columns)
-                placeholders_str = ', '.join(placeholders)
-                sql = "INSERT INTO erp_core_invoice (" + columns_str + ") VALUES (" + placeholders_str + ")"
-                
-                # Execute using Django's cursor with proper parameterization
-                # The issue is Django's debug SQL formatter tries to do sql % params for logging
-                # This fails when the SQL string itself contains % characters in the notes field
-                # Solution: Disable query logging temporarily and use execute with proper parameterization
-                from django.conf import settings
-                import logging
-                logger = logging.getLogger(__name__)
-                
-                invoice_id = None
-                
-                # Temporarily disable Django's query logging to avoid % formatting issues
-                # Use raw sqlite3 to avoid Django's query logging issues
-                import sqlite3
-                from django.conf import settings
-                db_path = settings.DATABASES['default']['NAME']
-                raw_conn = sqlite3.connect(db_path)
-                raw_cursor = raw_conn.cursor()
-                try:
-                    # Execute the SQL with proper parameterization
-                    raw_cursor.execute(sql, tuple(values))
-                    invoice_id = raw_cursor.lastrowid
-                    raw_conn.commit()
-                except Exception as e:
-                    # Log error with details (but truncate SQL to avoid % issues in logging)
-                    logger.error(f"Error executing invoice insert: {str(e)}")
-                    logger.error(f"SQL length: {len(sql)}")
-                    logger.error(f"Values count: {len(values)}")
-                    logger.error(f"Columns count: {len(columns)}")
-                    # Log column names but not values (values might have % chars)
-                    logger.error(f"Column names: {columns[:10]}...")  # First 10 columns
-                    import traceback
-                    logger.error(traceback.format_exc())
-                    raise
-                finally:
-                    raw_conn.close()
-                
-                if not invoice_id:
-                    raise ValueError("Failed to create invoice - no ID returned")
-                
-                # After creating with raw SQL, update sales_order_id if column exists
-                with connection.cursor() as check_cursor:
-                    check_cursor.execute("PRAGMA table_info(erp_core_invoice)")
-                    columns = [row[1] for row in check_cursor.fetchall()]
-                    if 'sales_order_id' in columns:
-                        # Update the invoice with sales_order_id
-                        check_cursor.execute(
-                            "UPDATE erp_core_invoice SET sales_order_id = ? WHERE id = ?",
-                            [sales_order.id, invoice_id]
+                    for allocation in allocations:
+                        if remaining_to_ship <= 0:
+                            break
+                        
+                        lot = allocation.lot
+                        # Ship from this allocation (up to the allocated amount)
+                        quantity_from_allocation = min(remaining_to_ship, allocation.quantity_allocated)
+                        
+                        if lot.quantity_remaining < quantity_from_allocation:
+                            return Response(
+                                {'error': f'Insufficient quantity in lot {lot.lot_number}. Available: {lot.quantity_remaining}, Required: {quantity_from_allocation}'},
+                                status=status.HTTP_400_BAD_REQUEST
+                            )
+                        
+                        quantity_before = lot.quantity_remaining
+                        
+                        inv_txn = InventoryTransaction.objects.create(
+                            transaction_type='adjustment',
+                            lot=lot,
+                            quantity=-quantity_from_allocation,
+                            reference_number=sales_order.so_number,
+                            notes=f'Shipped for sales order {sales_order.so_number} - Shipment {shipment.id}'
                         )
+                        
+                        # Log the transaction
+                        log_lot_transaction(
+                            lot=lot,
+                            quantity_before=quantity_before,
+                            quantity_change=-quantity_from_allocation,
+                            transaction_type='sale',
+                            reference_number=sales_order.so_number,
+                            reference_type='so_number',
+                            transaction_id=inv_txn.id,
+                            sales_order_id=sales_order.id,
+                            notes=f'Shipped for sales order {sales_order.so_number} - Shipment {shipment.id}'
+                        )
+                        
+                        lot.quantity_remaining -= quantity_from_allocation
+                        lot.save()
+                        
+                        # Reduce the allocation by the shipped quantity
+                        allocation.quantity_allocated -= quantity_from_allocation
+                        if allocation.quantity_allocated <= 0:
+                            allocation.delete()
+                        else:
+                            allocation.save()
+                        
+                        # Log depletion if lot reaches zero or below
+                        log_lot_depletion(
+                            lot=lot,
+                            quantity_before=quantity_before,
+                            quantity_used=quantity_from_allocation,
+                            depletion_method='sales',
+                            reference_number=sales_order.so_number,
+                            reference_type='so_number',
+                            sales_order_id=sales_order.id,
+                            transaction_id=inv_txn.id,
+                            notes=f'Shipped for sales order {sales_order.so_number} - Shipment {shipment.id}'
+                        )
+                        
+                        remaining_to_ship -= quantity_from_allocation
+                    
+                    # Update quantity_shipped on sales order item
+                    so_item.quantity_shipped += quantity_to_ship
+                    so_item.quantity_allocated -= quantity_to_ship  # Reduce allocated by shipped amount
+                    so_item.save()
+                    
+                    # Create shipment item record
+                    ShipmentItem.objects.create(
+                        shipment=shipment,
+                        sales_order_item=so_item,
+                        quantity_shipped=quantity_to_ship
+                    )
                 
-                invoice = Invoice.objects.get(id=invoice_id)
+                # Update sales order status and tracking
+                sales_order.actual_ship_date = timezone.make_aware(datetime.combine(ship_date, datetime.min.time()))
+                if not sales_order.tracking_number:
+                    sales_order.tracking_number = tracking_number
                 
-                # Create AR entry when invoice is created
-                create_ar_entry_from_invoice(invoice)
-            else:
-                # Use ORM if sales_order_id column exists
-                # But handle field name mismatches (tax_amount vs tax, total_amount vs grand_total)
-                invoice_data = {
-                    'invoice_number': invoice_number,
-                    'sales_order': sales_order,
-                }
+                # Check if order is fully shipped
+                all_fully_shipped = all(
+                    item.quantity_shipped >= item.quantity_ordered 
+                    for item in sales_order.items.all()
+                )
                 
-                if 'invoice_date' in available_columns:
-                    invoice_data['invoice_date'] = invoice_date
-                if 'due_date' in available_columns:
-                    invoice_data['due_date'] = due_date
-                if 'status' in available_columns:
-                    invoice_data['status'] = 'draft'
-                if 'subtotal' in available_columns:
-                    invoice_data['subtotal'] = subtotal
+                if all_fully_shipped:
+                    sales_order.status = 'completed'
+                else:
+                    # Still has outstanding balance - keep as issued or ready_for_shipment
+                    # Check if there are still allocations
+                    total_remaining_allocated = sum(item.quantity_allocated for item in sales_order.items.all())
+                    if total_remaining_allocated > 0:
+                        sales_order.status = 'ready_for_shipment'
+                    else:
+                        sales_order.status = 'issued'  # Can allocate more if needed
                 
-                # Handle field name mismatches
-                if 'freight' in available_columns:
-                    invoice_data['freight'] = freight
-                if 'tax' in available_columns:
-                    invoice_data['tax'] = tax
-                elif 'tax_amount' in available_columns:
-                    invoice_data['tax_amount'] = tax
-                if 'discount' in available_columns:
-                    invoice_data['discount'] = discount
-                if 'grand_total' in available_columns:
-                    invoice_data['grand_total'] = grand_total
-                elif 'total_amount' in available_columns:
-                    invoice_data['total_amount'] = grand_total
-                if 'paid_amount' in available_columns:
-                    invoice_data['paid_amount'] = 0.0
-                if 'notes' in available_columns:
-                    invoice_data['notes'] = f'Auto-generated from sales order {sales_order.so_number} - Shipment {shipment.id}'
+                sales_order.save()
                 
+                # Create invoice for this shipment
+                invoice_number = generate_invoice_number()
+                
+                # Calculate due date from payment terms
+                due_date = invoice_date
+                if sales_order.customer and sales_order.customer.payment_terms:
+                    payment_terms = sales_order.customer.payment_terms
+                    # Parse payment terms (e.g., "Net 30" -> 30 days)
+                    match = re.search(r'(\d+)', payment_terms)
+                    if match:
+                        days = int(match.group(1))
+                        due_date = invoice_date + timedelta(days=days)
+                
+                # Calculate totals from shipped quantities in this shipment
+                subtotal = sum(
+                    item.sales_order_item.unit_price * item.quantity_shipped 
+                    for item in shipment.items.all() 
+                    if item.sales_order_item.unit_price
+                )
+                # Get freight, discount, tax from sales order if available, otherwise 0
+                freight = getattr(sales_order, 'freight', 0.0) or 0.0
+                discount = getattr(sales_order, 'discount', 0.0) or 0.0
+                tax = 0.0  # Calculate tax if needed
+                grand_total = subtotal + freight + tax - discount
+                
+                # Check what columns actually exist in Invoice table and which are NOT NULL
+                from django.db import connection
+                available_columns = set()
+                not_null_columns = set()
                 try:
-                    invoice = Invoice.objects.create(**invoice_data)
-                except Exception as e:
+                    with connection.cursor() as cursor:
+                        cursor.execute("PRAGMA table_info(erp_core_invoice)")
+                        for row in cursor.fetchall():
+                            col_name = row[1]
+                            is_not_null = row[3]  # 1 if NOT NULL, 0 if nullable
+                            available_columns.add(col_name)
+                            if is_not_null and col_name != 'id':  # id is auto-generated
+                                not_null_columns.add(col_name)
+                except Exception:
+                    # If we can't check, use minimal set
+                    available_columns = {'id', 'invoice_number', 'invoice_date', 'created_at', 'updated_at'}
+                    not_null_columns = {'invoice_number', 'invoice_date'}
+                
+                # If sales_order_id column doesn't exist, use raw SQL to avoid Django ORM trying to set it
+                if 'sales_order_id' not in available_columns:
+                    # Use raw SQL to insert invoice without sales_order_id
+                    # Build column list and values dynamically based on what exists
+                    now = timezone.now()
+                    columns = ['invoice_number']
+                    values = [invoice_number]
+                    placeholders = ['?']
+                    
+                    # Required fields that must be included if they exist
+                    # invoice_type is required (NOT NULL) - always include if column exists
+                    if 'invoice_type' in available_columns:
+                        columns.append('invoice_type')
+                        values.append('customer')  # Default to customer invoice
+                        placeholders.append('?')
+                    # customer_vendor_name is required (NOT NULL) - always include if column exists
+                    if 'customer_vendor_name' in available_columns:
+                        columns.append('customer_vendor_name')
+                        customer_name = sales_order.customer_name
+                        if not customer_name and sales_order.customer:
+                            customer_name = sales_order.customer.name
+                        if not customer_name:
+                            customer_name = 'Unknown Customer'
+                        values.append(customer_name)
+                        placeholders.append('?')
+                    # customer_vendor_id is optional
+                    if 'customer_vendor_id' in available_columns:
+                        columns.append('customer_vendor_id')
+                        customer_id = sales_order.customer_legacy_id
+                        if not customer_id and sales_order.customer:
+                            customer_id = str(sales_order.customer.id)
+                        values.append(customer_id)
+                        placeholders.append('?')
+                    
+                    # Optional fields
+                    if 'invoice_date' in available_columns:
+                        columns.append('invoice_date')
+                        values.append(invoice_date)
+                        placeholders.append('?')
+                    if 'due_date' in available_columns:
+                        columns.append('due_date')
+                        values.append(due_date)
+                        placeholders.append('?')
+                    if 'status' in available_columns:
+                        columns.append('status')
+                        values.append('draft')
+                        placeholders.append('?')
+                    if 'subtotal' in available_columns:
+                        columns.append('subtotal')
+                        values.append(subtotal)
+                        placeholders.append('?')
+                    if 'freight' in available_columns:
+                        columns.append('freight')
+                        values.append(freight)
+                        placeholders.append('?')
+                    if 'tax' in available_columns:
+                        columns.append('tax')
+                        values.append(tax)
+                        placeholders.append('?')
+                    if 'tax_amount' in available_columns:
+                        columns.append('tax_amount')
+                        values.append(tax)
+                        placeholders.append('?')
+                    if 'discount' in available_columns:
+                        columns.append('discount')
+                        values.append(discount)
+                        placeholders.append('?')
+                    if 'grand_total' in available_columns:
+                        columns.append('grand_total')
+                        values.append(grand_total)
+                        placeholders.append('?')
+                    if 'total_amount' in available_columns:
+                        columns.append('total_amount')
+                        values.append(grand_total)
+                        placeholders.append('?')
+                    if 'paid_amount' in available_columns:
+                        columns.append('paid_amount')
+                        values.append(0.0)
+                        placeholders.append('?')
+                    if 'notes' in available_columns:
+                        columns.append('notes')
+                        # Escape % characters to avoid issues with Django's query logging
+                        notes_text = f'Auto-generated from sales order {sales_order.so_number} - Shipment {shipment.id}'
+                        # Replace % with %% to escape it (SQLite doesn't need this, but Django's logging does)
+                        notes_text = notes_text.replace('%', '%%')
+                        values.append(notes_text)
+                        placeholders.append('?')
+                    if 'created_at' in available_columns:
+                        columns.append('created_at')
+                        values.append(now)
+                        placeholders.append('?')
+                    if 'updated_at' in available_columns:
+                        columns.append('updated_at')
+                        values.append(now)
+                        placeholders.append('?')
+                    
+                    # Ensure all NOT NULL columns are included
+                    for col in not_null_columns:
+                        if col not in columns and col != 'id':  # Skip id (auto-generated)
+                            # Add default values for required columns we haven't handled
+                            if col == 'invoice_type' and 'invoice_type' in available_columns:
+                                columns.append('invoice_type')
+                                values.append('customer')
+                                placeholders.append('?')
+                            elif col == 'customer_vendor_name' and 'customer_vendor_name' in available_columns:
+                                columns.append('customer_vendor_name')
+                                customer_name = sales_order.customer_name or (sales_order.customer.name if sales_order.customer else 'Unknown Customer')
+                                values.append(customer_name)
+                                placeholders.append('?')
+                            elif col == 'invoice_date' and 'invoice_date' in available_columns:
+                                columns.append('invoice_date')
+                                values.append(invoice_date)
+                                placeholders.append('?')
+                            elif col == 'status' and 'status' in available_columns:
+                                columns.append('status')
+                                values.append('draft')
+                                placeholders.append('?')
+                            elif col == 'subtotal' and 'subtotal' in available_columns:
+                                columns.append('subtotal')
+                                values.append(subtotal)
+                                placeholders.append('?')
+                            elif col == 'tax_amount' and 'tax_amount' in available_columns:
+                                columns.append('tax_amount')
+                                values.append(tax)
+                                placeholders.append('?')
+                            elif col == 'total_amount' and 'total_amount' in available_columns:
+                                columns.append('total_amount')
+                                values.append(grand_total)
+                                placeholders.append('?')
+                            elif col == 'paid_amount' and 'paid_amount' in available_columns:
+                                columns.append('paid_amount')
+                                values.append(0.0)
+                                placeholders.append('?')
+                    
+                    # Ensure we have the same number of placeholders as values
+                    if len(placeholders) != len(values):
+                        raise ValueError(f"Placeholder count ({len(placeholders)}) doesn't match value count ({len(values)}). Columns: {columns}")
+                    
+                    # Build SQL with proper parameterization
+                    # Use string concatenation to build SQL to avoid f-string % formatting issues
+                    columns_str = ', '.join(columns)
+                    placeholders_str = ', '.join(placeholders)
+                    sql = "INSERT INTO erp_core_invoice (" + columns_str + ") VALUES (" + placeholders_str + ")"
+                    
+                    # Execute using Django's cursor with proper parameterization
+                    # The issue is Django's debug SQL formatter tries to do sql % params for logging
+                    # This fails when the SQL string itself contains % characters in the notes field
+                    # Solution: Disable query logging temporarily and use execute with proper parameterization
+                    from django.conf import settings
                     import logging
                     logger = logging.getLogger(__name__)
-                    logger.error(f"Error creating invoice with ORM: {e}")
-                    logger.error(f"Invoice data keys: {list(invoice_data.keys())}")
-                    raise
-                
-                # Create AR entry when invoice is created
-                create_ar_entry_from_invoice(invoice)
-                
-                # Send invoice email if status is 'sent' (auto-send when created from shipment)
-                if invoice.status == 'sent':
+                    
+                    invoice_id = None
+                    
+                    # Use Django's connection so we stay in the same transaction (avoids "database is locked")
+                    with connection.cursor() as raw_cursor:
+                        raw_cursor.execute(sql, tuple(values))
+                        invoice_id = raw_cursor.lastrowid
+                    
+                    if not invoice_id:
+                        raise ValueError("Failed to create invoice - no ID returned")
+                    
+                    # After creating with raw SQL, update sales_order_id if column exists
+                    with connection.cursor() as check_cursor:
+                        check_cursor.execute("PRAGMA table_info(erp_core_invoice)")
+                        columns = [row[1] for row in check_cursor.fetchall()]
+                        if 'sales_order_id' in columns:
+                            # Update the invoice with sales_order_id
+                            check_cursor.execute(
+                                "UPDATE erp_core_invoice SET sales_order_id = ? WHERE id = ?",
+                                [sales_order.id, invoice_id]
+                            )
+                    
+                    invoice = Invoice.objects.get(id=invoice_id)
+                    
+                    # Create AR entry when invoice is created
+                    create_ar_entry_from_invoice(invoice)
+                else:
+                    # Use ORM - pass fields that exist on the Invoice model and any required DB columns (e.g. invoice_type from migrations)
+                    invoice_data = {
+                        'invoice_number': invoice_number,
+                        'sales_order': sales_order,
+                        'invoice_date': invoice_date,
+                        'due_date': due_date,
+                        'status': 'draft',
+                        'subtotal': subtotal,
+                        'freight': freight,
+                        'tax': tax,
+                        'discount': discount,
+                        'grand_total': grand_total,
+                        'notes': f'Auto-generated from sales order {sales_order.so_number} - Shipment {shipment.id}',
+                    }
+                    invoice_data['invoice_type'] = 'customer'
+                    customer_name = getattr(sales_order, 'customer_name', None) or (sales_order.customer.name if sales_order.customer else None) or 'Unknown Customer'
+                    invoice_data['customer_vendor_name'] = customer_name or 'Unknown Customer'
+                    invoice_data['tax_amount'] = tax
+                    invoice_data['total_amount'] = grand_total
+                    invoice_data['paid_amount'] = 0.0
                     try:
-                        pdf_content = generate_invoice_pdf(invoice)
-                        send_invoice_email(invoice, pdf_content)
+                        invoice = Invoice.objects.create(**invoice_data)
                     except Exception as e:
                         import logging
                         logger = logging.getLogger(__name__)
-                        logger.error(f"Failed to send invoice email: {str(e)}")
-                        # Don't fail the request if email fails
+                        logger.error(f"Error creating invoice with ORM: {e}")
+                        logger.error(f"Invoice data keys: {list(invoice_data.keys())}")
+                        raise
+                    
+                    # Create AR entry when invoice is created
+                    create_ar_entry_from_invoice(invoice)
+                    
+                    # Send invoice email if status is 'sent' (auto-send when created from shipment)
+                    if invoice.status == 'sent':
+                        try:
+                            pdf_content = generate_invoice_pdf(invoice)
+                            send_invoice_email(invoice, pdf_content)
+                        except Exception as e:
+                            import logging
+                            logger = logging.getLogger(__name__)
+                            logger.error(f"Failed to send invoice email: {str(e)}")
+                            # Don't fail the request if email fails
+                
+                # Create invoice items from shipped quantities in this shipment
+                for shipment_item in shipment.items.all():
+                    if shipment_item.quantity_shipped > 0:
+                        so_item = shipment_item.sales_order_item
+                        line_total = (so_item.unit_price or 0.0) * shipment_item.quantity_shipped
+                        InvoiceItem.objects.create(
+                            invoice=invoice,
+                            item=so_item.item,
+                            sales_order_item=so_item,
+                            description=so_item.item.name,
+                            quantity=shipment_item.quantity_shipped,
+                            unit_price=so_item.unit_price or 0.0,
+                            total=line_total,
+                            notes=''
+                        )
             
-            # Create invoice items from shipped quantities in this shipment
-            for shipment_item in shipment.items.all():
-                if shipment_item.quantity_shipped > 0:
-                    InvoiceItem.objects.create(
-                        invoice=invoice,
-                        sales_order_item=shipment_item.sales_order_item,
-                        description=shipment_item.sales_order_item.item.name,
-                        quantity=shipment_item.quantity_shipped,
-                        unit_price=shipment_item.sales_order_item.unit_price or 0.0,
-                        total=(shipment_item.sales_order_item.unit_price or 0.0) * shipment_item.quantity_shipped
-                    )
-        
-        invoice_serializer = InvoiceSerializer(invoice)
-        
-        serializer = self.get_serializer(sales_order)
-        return Response({
-            'sales_order': serializer.data,
-            'invoice': invoice_serializer.data,
-            'shipment': {
-                'id': shipment.id,
-                'ship_date': shipment.ship_date.isoformat(),
-                'tracking_number': shipment.tracking_number
-            }
-        }, status=status.HTTP_200_OK)
+            invoice_serializer = InvoiceSerializer(invoice)
+            
+            serializer = self.get_serializer(sales_order)
+            return Response({
+                'sales_order': serializer.data,
+                'invoice': invoice_serializer.data,
+                'shipment': {
+                    'id': shipment.id,
+                    'ship_date': shipment.ship_date.isoformat(),
+                    'tracking_number': shipment.tracking_number
+                }
+            }, status=status.HTTP_200_OK)
+        except Exception as e:
+            import traceback
+            return Response({
+                'error': str(e),
+                'detail': traceback.format_exc()
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     
     @action(detail=True, methods=['post'])
     def issue(self, request, pk=None):
@@ -5604,33 +5582,215 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
     
+    def _get_packing_list_template_path(self):
+        """Return path to Packing List template. Prefer PDF in project root (WWI ERP), then Sensitive, then backend_django; then docx."""
+        project_root = Path(__file__).resolve().parent.parent.parent  # WWI ERP
+        backend = Path(__file__).resolve().parent.parent  # backend_django
+        pdf_names = ['Packing list template.pdf', 'Packing list template.PDF']
+        docx_names = ['Packing list template.docx']
+        for name in pdf_names:
+            if (project_root / name).exists():
+                return project_root / name, 'pdf'
+        for name in pdf_names:
+            if (project_root / 'Sensitive' / name).exists():
+                return project_root / 'Sensitive' / name, 'pdf'
+        for name in pdf_names:
+            if (backend / name).exists():
+                return backend / name, 'pdf'
+        for name in docx_names:
+            if (project_root / 'Sensitive' / name).exists():
+                return project_root / 'Sensitive' / name, 'docx'
+            if (project_root / name).exists():
+                return project_root / name, 'docx'
+        return None, None
+
     @action(detail=True, methods=['get'], url_path='packing-list', url_name='packing-list')
     def packing_list(self, request, pk=None):
-        """Generate packing list document from template"""
+        """Generate packing list document from template (PDF in WWI ERP or docx in Sensitive)."""
         from django.http import HttpResponse
         from pathlib import Path
         import os
         import tempfile
         
-        sales_order = self.get_object()
+        # Load with relations needed for ship to / bill to and shipments (dimensions, pieces)
+        sales_order = SalesOrder.objects.select_related(
+            'ship_to_location', 'customer'
+        ).prefetch_related('items__item', 'shipments').get(pk=self.get_object().pk)
         
-        try:
-            from docx import Document
-            
-            # Get template path from Sensitive folder
-            PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-            template_path = PROJECT_ROOT / 'Sensitive' / 'Packing list template.docx'
-            
-            if not template_path.exists():
+        template_path, template_type = self._get_packing_list_template_path()
+        if not template_path or not template_path.exists():
+            return Response(
+                {'error': 'Packing list template not found. Add "Packing list template.pdf" to the WWI ERP folder.'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+        # Build data used by both PDF and docx
+        ship_to_lines = []
+        if getattr(sales_order, 'ship_to_location', None) and sales_order.ship_to_location:
+            loc = sales_order.ship_to_location
+            if loc.location_name:
+                ship_to_lines.append(loc.location_name)
+            if loc.contact_name:
+                ship_to_lines.append(loc.contact_name)
+            if loc.address:
+                ship_to_lines.append(loc.address)
+            csz = [x for x in [loc.city, loc.state, loc.zip_code] if x]
+            if csz:
+                ship_to_lines.append(', '.join(csz))
+            if loc.country:
+                ship_to_lines.append(loc.country)
+        else:
+            if sales_order.customer_name:
+                ship_to_lines.append(sales_order.customer_name)
+            if sales_order.customer_address:
+                ship_to_lines.append(sales_order.customer_address)
+            csz = [x for x in [sales_order.customer_city, sales_order.customer_state, sales_order.customer_zip] if x]
+            if csz:
+                ship_to_lines.append(', '.join(csz))
+            if sales_order.customer_country:
+                ship_to_lines.append(sales_order.customer_country)
+        ship_to_text = '\n'.join(ship_to_lines) if ship_to_lines else (sales_order.customer_name or '')
+
+        bill_to_lines = []
+        if getattr(sales_order, 'customer', None) and sales_order.customer:
+            c = sales_order.customer
+            if c.name:
+                bill_to_lines.append(c.name)
+            if c.address:
+                bill_to_lines.append(c.address)
+            csz = [x for x in [c.city, c.state, c.zip_code] if x]
+            if csz:
+                bill_to_lines.append(', '.join(csz))
+            if c.country:
+                bill_to_lines.append(c.country)
+        else:
+            bill_to_lines.append(sales_order.customer_name or '')
+            if sales_order.customer_address:
+                bill_to_lines.append(sales_order.customer_address)
+            csz = [x for x in [sales_order.customer_city, sales_order.customer_state, sales_order.customer_zip] if x]
+            if csz:
+                bill_to_lines.append(', '.join(csz))
+            if sales_order.customer_country:
+                bill_to_lines.append(sales_order.customer_country)
+        bill_to_text = '\n'.join(bill_to_lines) if bill_to_lines else (sales_order.customer_name or '')
+
+        from django.utils import timezone
+        pack_date = timezone.now().date()
+        date_str = pack_date.strftime('%Y-%m-%d')
+        order_date_str = sales_order.order_date.strftime('%Y-%m-%d') if sales_order.order_date else ''
+        ship_date_dt = sales_order.actual_ship_date or sales_order.expected_ship_date
+        ship_date_str = ship_date_dt.strftime('%Y-%m-%d') if ship_date_dt else ''
+        po_ref = (sales_order.customer_reference_number or '').strip()
+        po_so_str = f"{po_ref} / {sales_order.so_number}" if po_ref and sales_order.so_number else (sales_order.so_number or po_ref or '')
+        latest_shipment = sales_order.shipments.order_by('-created_at').first()
+        if latest_shipment:
+            dims = (latest_shipment.dimensions or '').strip()
+            pcs = latest_shipment.pieces
+            pallet_line = []
+            if dims:
+                pallet_line.append(f"Dimensions: {dims}")
+            if pcs is not None:
+                pallet_line.append(f"Pieces: {pcs}")
+            pallet_text = ', '.join(pallet_line) if pallet_line else ''
+        else:
+            pallet_text = ''
+
+        if template_type == 'pdf':
+            try:
+                import fitz
+                from erp_core.batch_ticket_pdf import _find_text_bbox
+            except ImportError:
                 return Response(
-                    {'error': 'Packing list template not found'},
+                    {'error': 'PyMuPDF (fitz) is required for PDF packing list. Install with: pip install pymupdf'},
                     status=status.HTTP_500_INTERNAL_SERVER_ERROR
                 )
-            
-            # Load template
+            try:
+                doc = fitz.open(str(template_path))
+                if len(doc) < 1:
+                    doc.close()
+                    return Response({'error': 'Packing list template PDF has no pages.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+                page = doc[0]
+                fontname = 'helv'
+                fontsize = 10
+                color = (0, 0, 0)
+                gap = 8
+                line_height = 12
+
+                def insert_after(page, label, value, max_len=120):
+                    if value is None:
+                        return
+                    pos = _find_text_bbox(page, label)
+                    if pos:
+                        x, y, fs = pos
+                        x = x + gap
+                        val = str(value).replace('\r', '')[:max_len]
+                        if '\n' in val:
+                            for i, line in enumerate(val.split('\n')):
+                                page.insert_text((x, y + fs * 0.8 + i * line_height), line[:max_len], fontsize=min(fs, fontsize), fontname=fontname, color=color)
+                        else:
+                            page.insert_text((x, y + fs * 0.8), val, fontsize=min(fs, fontsize), fontname=fontname, color=color)
+
+                insert_after(page, 'Ship to:', ship_to_text)
+                insert_after(page, 'Ship To:', ship_to_text)
+                insert_after(page, 'Bill to:', bill_to_text)
+                insert_after(page, 'Bill To:', bill_to_text)
+                insert_after(page, 'Date:', date_str)
+                insert_after(page, 'Order date:', order_date_str)
+                insert_after(page, 'Order Date:', order_date_str)
+                insert_after(page, 'Ship date:', ship_date_str)
+                insert_after(page, 'Ship Date:', ship_date_str)
+                insert_after(page, 'Purchase order/Sales order #', po_so_str)
+                insert_after(page, 'PO/SO #', po_so_str)
+                insert_after(page, 'PO #', po_ref)
+                insert_after(page, 'SO #', sales_order.so_number or '')
+                if pallet_text:
+                    insert_after(page, 'Pallet 1 dimensions', pallet_text)
+                    insert_after(page, 'pallet 1 dimensions', pallet_text)
+                    insert_after(page, 'Dimensions', pallet_text)
+
+                # Items: find table header row (e.g. "Description" or "Quantity") and add item rows below
+                items = list(sales_order.items.all())
+                if items:
+                    anchor_pos = _find_text_bbox(page, 'Quantity') or _find_text_bbox(page, 'Description') or _find_text_bbox(page, 'Customer Item')
+                    if anchor_pos:
+                        ax, ay, afs = anchor_pos
+                        row_y = ay + afs * 1.8
+                        col_sku = ax - 180 if ax > 180 else 72
+                        col_desc = col_sku + 80
+                        col_qty = ax - 40
+                        for item in items[:20]:
+                            qty = getattr(item, 'quantity_ordered', 0) or 0
+                            qty_display = f"{round(qty, 2):.2f}".rstrip('0').rstrip('.') if isinstance(qty, (int, float)) else str(qty)
+                            uom = (item.item.unit_of_measure if getattr(item, 'item', None) and item.item else '') or ''
+                            qty_with_uom = f"{qty_display} {uom}".strip() if uom else qty_display
+                            sku = (item.item.sku if getattr(item, 'item', None) and item.item else '') or ''
+                            name = (item.item.name if getattr(item, 'item', None) and item.item else '') or ''
+                            page.insert_text((col_sku, row_y), (sku or name)[:30], fontsize=min(afs, 9), fontname=fontname, color=color)
+                            page.insert_text((col_desc, row_y), name[:40] if name else sku[:40], fontsize=min(afs, 9), fontname=fontname, color=color)
+                            page.insert_text((col_qty, row_y), qty_with_uom[:20], fontsize=min(afs, 9), fontname=fontname, color=color)
+                            row_y += line_height + 2
+
+                pdf_content = doc.tobytes()
+                doc.close()
+                response = HttpResponse(pdf_content, content_type='application/pdf')
+                response['Content-Disposition'] = f'inline; filename="Packing_List_{sales_order.so_number}.pdf"'
+                response['X-Content-Type-Options'] = 'nosniff'
+                return response
+            except Exception as e:
+                import traceback
+                logger.error('Packing list PDF generation failed: %s', str(e))
+                logger.error(traceback.format_exc())
+                return Response(
+                    {'error': f'Failed to generate packing list PDF: {str(e)}'},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
+
+        # DOCX path (legacy)
+        try:
+            from docx import Document
             doc = Document(str(template_path))
             
-            # Replace placeholders in the document
+            # Replace placeholders (ship_to_text, bill_to_text, date_str, etc. already built above)
             replacements = {
                 '{so_number}': sales_order.so_number,
                 '{SO_NUMBER}': sales_order.so_number,
@@ -5648,25 +5808,174 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
                 '{CUSTOMER_COUNTRY}': sales_order.customer_country or '',
                 '{customer_phone}': sales_order.customer_phone or '',
                 '{CUSTOMER_PHONE}': sales_order.customer_phone or '',
-                '{ship_date}': sales_order.expected_ship_date.strftime('%Y-%m-%d') if sales_order.expected_ship_date else '',
-                '{SHIP_DATE}': sales_order.expected_ship_date.strftime('%Y-%m-%d') if sales_order.expected_ship_date else '',
-                '{order_date}': sales_order.order_date.strftime('%Y-%m-%d') if sales_order.order_date else '',
-                '{ORDER_DATE}': sales_order.order_date.strftime('%Y-%m-%d') if sales_order.order_date else '',
+                '{ship_to}': ship_to_text,
+                '{SHIP_TO}': ship_to_text,
+                '{bill_to}': bill_to_text,
+                '{BILL_TO}': bill_to_text,
+                '{date}': date_str,
+                '{DATE}': date_str,
+                '{order_date}': order_date_str,
+                '{ORDER_DATE}': order_date_str,
+                '{ship_date}': ship_date_str,
+                '{SHIP_DATE}': ship_date_str,
+                '{purchase_order}': po_so_str,
+                '{PURCHASE_ORDER}': po_so_str,
+                '{sales_order_number}': sales_order.so_number,
+                '{SALES_ORDER_NUMBER}': sales_order.so_number,
+                '{po_number}': (sales_order.customer_reference_number or '').strip(),
+                '{PO_NUMBER}': (sales_order.customer_reference_number or '').strip(),
+                '{customer_po}': (sales_order.customer_reference_number or '').strip(),
+                '{CUSTOMER_PO}': (sales_order.customer_reference_number or '').strip(),
             }
+            replacements['{pallet_dimensions}'] = pallet_text
+            replacements['{PALLET_DIMENSIONS}'] = pallet_text
+            replacements['{dimensions}'] = (latest_shipment.dimensions or '').strip() if latest_shipment else ''
+            replacements['{DIMENSIONS}'] = replacements['{dimensions}']
+            replacements['{pieces}'] = str(latest_shipment.pieces) if latest_shipment and latest_shipment.pieces is not None else ''
+            replacements['{PIECES}'] = replacements['{pieces}']
+            # Replace literal "pallet 1 dimensions" (or similar) with the filled value
+            replacements['pallet 1 dimensions'] = pallet_text
+            replacements['Pallet 1 dimensions'] = pallet_text
+            replacements['Pallet 1 Dimensions'] = pallet_text
             
-            # Replace text in paragraphs
-            for paragraph in doc.paragraphs:
+            def get_cell_text(cell):
+                """Full text of a table cell (all paragraphs)."""
+                return '\n'.join(p.text for p in cell.paragraphs).strip()
+            
+            def set_cell_text(cell, value):
+                """Set entire cell content to value (clears all paragraphs, sets first)."""
+                str_val = str(value) if value else ''
+                for idx, p in enumerate(cell.paragraphs):
+                    p.clear()
+                    p.add_run(str_val if idx == 0 else '')
+                if not cell.paragraphs:
+                    cell.add_paragraph(str_val)
+            
+            def apply_replacements_to_paragraph(paragraph):
+                text = paragraph.text
+                if not text:
+                    return
+                new_text = text
                 for key, value in replacements.items():
-                    if key in paragraph.text:
-                        paragraph.text = paragraph.text.replace(key, value)
+                    new_text = new_text.replace(key, str(value))
+                if new_text != text:
+                    paragraph.clear()
+                    paragraph.add_run(new_text)
             
-            # Replace text in tables
+            for paragraph in doc.paragraphs:
+                apply_replacements_to_paragraph(paragraph)
+            
             for table in doc.tables:
                 for row in table.rows:
                     for cell in row.cells:
-                        for key, value in replacements.items():
-                            if key in cell.text:
-                                cell.text = cell.text.replace(key, value)
+                        for paragraph in cell.paragraphs:
+                            apply_replacements_to_paragraph(paragraph)
+            
+            # Headers and footers (e.g. template may put date/PO in header)
+            for section in doc.sections:
+                try:
+                    for p in section.header.paragraphs:
+                        apply_replacements_to_paragraph(p)
+                except Exception:
+                    pass
+                try:
+                    for p in section.footer.paragraphs:
+                        apply_replacements_to_paragraph(p)
+                except Exception:
+                    pass
+            
+            # Label-based fill: template may have "Ship to:", "Bill to:", etc. with value in next cell or same paragraph
+            # Map label (normalized, no colon) -> value to fill
+            po_ref = (sales_order.customer_reference_number or '').strip()
+            label_values = {
+                'ship to': ship_to_text,
+                'bill to': bill_to_text,
+                'date': date_str,
+                'order date': order_date_str,
+                'ship date': ship_date_str,
+                'purchase order/sales order #': po_so_str,
+                'po/so #': po_so_str,
+                'purchase order': po_so_str,
+                'sales order #': sales_order.so_number,
+                'so #': sales_order.so_number,
+                'po #': po_ref,
+                'so #': sales_order.so_number,
+                'order #': po_so_str,
+                'purchase order #': po_ref,
+            }
+            
+            def normalize_label(s):
+                return (s or '').strip().lower().replace(':', '').replace('#', '').strip()
+            
+            def cell_matches_label(cell_text, label_key):
+                """True if cell text is exactly or starts with the label (allowing trailing space/underscores)."""
+                if not cell_text or not label_key:
+                    return False
+                norm = normalize_label(cell_text)
+                norm_no_spaces = label_key.replace(' ', '')
+                if norm == label_key or norm == norm_no_spaces:
+                    return True
+                # Also match "Ship to:" or "Ship to: ________" - normalized start
+                norm_prefix = norm.split()[0] if norm else ''
+                label_first = label_key.split()[0] if label_key else ''
+                if norm.startswith(label_key) or norm.startswith(norm_no_spaces):
+                    return True
+                if label_first and norm.startswith(label_first):
+                    return True
+                return False
+            
+            # Table: when a cell contains only or starts with a label (e.g. "Ship to:"), fill the NEXT cell with the value
+            for table in doc.tables:
+                for row in table.rows:
+                    cells = row.cells
+                    for i, cell in enumerate(cells):
+                        if i + 1 >= len(cells):
+                            continue
+                        cell_text = get_cell_text(cell)
+                        for label_key, value in label_values.items():
+                            if cell_matches_label(cell_text, label_key):
+                                set_cell_text(cells[i + 1], value)
+                                break
+            
+            # Body paragraphs: if a paragraph is exactly a label or starts with one, replace with "Label:\n\n" + value
+            label_display = {
+                'ship to': 'Ship to', 'bill to': 'Bill to', 'date': 'Date', 'order date': 'Order date',
+                'ship date': 'Ship date', 'purchase order/sales order #': 'PO/SO #', 'po/so #': 'PO/SO #',
+                'purchase order': 'PO/SO #', 'sales order #': 'SO #', 'so #': 'SO #', 'po #': 'PO #', 'order #': 'PO/SO #', 'purchase order #': 'PO #',
+            }
+            def fill_paragraph_if_label(paragraph, *, only_exact=False):
+                t = paragraph.text.strip()
+                norm = normalize_label(t)
+                for label_key, value in label_values.items():
+                    if only_exact:
+                        if norm != label_key and norm != label_key.replace(' ', ''):
+                            continue
+                    else:
+                        if not (norm == label_key or norm == label_key.replace(' ', '') or
+                                norm.startswith(label_key) or (label_key.split()[0] and norm.startswith(label_key.split()[0]))):
+                            continue
+                    display = label_display.get(label_key, (t.split(':')[0] if ':' in t else t))
+                    paragraph.clear()
+                    paragraph.add_run(f"{display}:\n\n{value}" if value else f"{display}:")
+                    return True
+                return False
+            for paragraph in doc.paragraphs:
+                fill_paragraph_if_label(paragraph, only_exact=False)
+            
+            # Table cell: if a cell's text is exactly/starts with a label and there's no next cell (single-column), put value in same cell
+            for table in doc.tables:
+                for row in table.rows:
+                    cells = row.cells
+                    for i, cell in enumerate(cells):
+                        if i + 1 < len(cells):
+                            continue  # next-cell case already handled above
+                        cell_text = get_cell_text(cell)
+                        for label_key, value in label_values.items():
+                            if not cell_matches_label(cell_text, label_key):
+                                continue
+                            display = label_display.get(label_key, (cell_text.split(':')[0] if ':' in cell_text else cell_text))
+                            set_cell_text(cell, f"{display}:\n\n{value}" if value else f"{display}:")
+                            break
             
             # Add items to packing list (if there's a table for items)
             items_added = False
@@ -5678,16 +5987,20 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
                         while len(table.rows) > start_row:
                             table._element.remove(table.rows[start_row]._element)
                         
-                        # Add items
+                        # Add items: quantity rounded to 2 decimals and include UoM in quantity column (e.g. "500 kg")
                         for item in sales_order.items.all():
                             new_row = table.add_row()
                             cells = new_row.cells
+                            qty = item.quantity_ordered
+                            qty_display = f"{round(qty, 2):.2f}".rstrip('0').rstrip('.') if isinstance(qty, (int, float)) else str(qty)
+                            uom = (item.item.unit_of_measure if item.item else '') or ''
+                            qty_with_uom = f"{qty_display} {uom}".strip() if uom else qty_display
                             if len(cells) >= 1:
                                 cells[0].text = item.item.sku if item.item else ''
                             if len(cells) >= 2:
                                 cells[1].text = item.item.name if item.item else ''
                             if len(cells) >= 3:
-                                cells[2].text = str(item.quantity_ordered)
+                                cells[2].text = qty_with_uom
                             if len(cells) >= 4:
                                 cells[3].text = item.item.unit_of_measure if item.item else ''
                             if len(cells) >= 5:
@@ -6303,6 +6616,12 @@ class InvoiceViewSet(viewsets.ModelViewSet):
                                     item.unit_price = item_dict['unit_price']
                                 if 'total' in item_dict:
                                     item.total = item_dict['total']
+                                elif 'line_total' in item_dict:
+                                    item.total = item_dict['line_total']
+                                if 'item_id' in item_dict:
+                                    item.item_id = item_dict['item_id']
+                                if 'sales_order_item_id' in item_dict:
+                                    item.sales_order_item_id = item_dict['sales_order_item_id']
                                 item._state.adding = False
                                 item._state.db = connection
                                 items.append(item)
@@ -6514,13 +6833,17 @@ class InvoiceViewSet(viewsets.ModelViewSet):
                 line_total = float(item_data.get('line_total', quantity * unit_price))
                 description = item_data.get('description', '')
                 
-                InvoiceItem.objects.create(
+                inv_item_kw = dict(
                     invoice_id=invoice_id,
                     description=description,
                     quantity=quantity,
                     unit_price=unit_price,
-                    total=line_total
+                    total=line_total,
+                    notes=''
                 )
+                if item_id:
+                    inv_item_kw['item_id'] = item_id
+                InvoiceItem.objects.create(**inv_item_kw)
             
             # Return created invoice
             invoice = Invoice.objects.get(id=invoice_id)
@@ -6764,6 +7087,12 @@ class InvoiceViewSet(viewsets.ModelViewSet):
                                     item.unit_price = item_dict['unit_price']
                                 if 'total' in item_dict:
                                     item.total = item_dict['total']
+                                elif 'line_total' in item_dict:
+                                    item.total = item_dict['line_total']
+                                if 'item_id' in item_dict:
+                                    item.item_id = item_dict['item_id']
+                                if 'sales_order_item_id' in item_dict:
+                                    item.sales_order_item_id = item_dict['sales_order_item_id']
                                 item._state.adding = False
                                 item._state.db = connection
                                 items.append(item)
@@ -6982,7 +7311,11 @@ class InvoiceViewSet(viewsets.ModelViewSet):
                                 item.description = item_dict.get('description', '')
                                 item.quantity = item_dict.get('quantity', 0.0)
                                 item.unit_price = item_dict.get('unit_price', 0.0)
-                                item.total = item_dict.get('total', 0.0)
+                                item.total = item_dict.get('total', item_dict.get('line_total', 0.0))
+                                if 'item_id' in item_dict:
+                                    item.item_id = item_dict.get('item_id')
+                                if 'sales_order_item_id' in item_dict:
+                                    item.sales_order_item_id = item_dict.get('sales_order_item_id')
                                 items.append(item)
                         finally:
                             raw_conn.close()
@@ -7024,7 +7357,11 @@ class InvoiceViewSet(viewsets.ModelViewSet):
                                     item.description = item_dict.get('description', '')
                                     item.quantity = item_dict.get('quantity', 0.0)
                                     item.unit_price = item_dict.get('unit_price', 0.0)
-                                    item.total = item_dict.get('total', 0.0)
+                                    item.total = item_dict.get('total', item_dict.get('line_total', 0.0))
+                                    if 'item_id' in item_dict:
+                                        item.item_id = item_dict.get('item_id')
+                                    if 'sales_order_item_id' in item_dict:
+                                        item.sales_order_item_id = item_dict.get('sales_order_item_id')
                                     items.append(item)
                             finally:
                                 raw_conn.close()
@@ -7382,22 +7719,20 @@ class CalendarEventsViewSet(viewsets.ViewSet):
         
         events = []
         
-        # Shipment events - include all statuses that need attention
+        # Shipment events - expected ship dates from sales orders (all non-cancelled statuses)
         if 'shipments' in event_types:
-            # Get orders that need to be shipped (have expected_ship_date)
+            start_dt = timezone.make_aware(datetime.combine(start_date, datetime.min.time())) if start_date else None
+            end_dt = timezone.make_aware(datetime.combine(end_date, datetime.max.time())) if end_date else None
             shipments = SalesOrder.objects.filter(
-                status__in=['draft', 'allocated', 'ready_for_shipment', 'shipped', 'completed']
+                status__in=['draft', 'allocated', 'ready_for_shipment', 'issued', 'shipped', 'received', 'completed']
             ).exclude(status='cancelled').exclude(expected_ship_date__isnull=True)
-            
-            if start_date:
+            if start_dt:
                 shipments = shipments.filter(
-                    models.Q(actual_ship_date__gte=timezone.make_aware(datetime.combine(start_date, datetime.min.time()))) | 
-                    models.Q(expected_ship_date__gte=timezone.make_aware(datetime.combine(start_date, datetime.min.time())))
+                    models.Q(actual_ship_date__gte=start_dt) | models.Q(expected_ship_date__gte=start_dt)
                 )
-            if end_date:
+            if end_dt:
                 shipments = shipments.filter(
-                    models.Q(actual_ship_date__lte=timezone.make_aware(datetime.combine(end_date, datetime.max.time()))) | 
-                    models.Q(expected_ship_date__lte=timezone.make_aware(datetime.combine(end_date, datetime.max.time())))
+                    models.Q(actual_ship_date__lte=end_dt) | models.Q(expected_ship_date__lte=end_dt)
                 )
             
             for so in shipments:
@@ -10104,7 +10439,49 @@ class FinancialReportsViewSet(viewsets.ViewSet):
             'ap_total': ap_total,
             'cash_balance': cash_balance
         })
-    
+
+    @action(detail=False, methods=['get'], url_path='kpis', url_name='kpis')
+    def kpis(self, request):
+        """Get performance KPIs (on-time shipping, etc.) for Finance dashboard and KPIs page."""
+        from datetime import timedelta
+
+        months_back = int(request.query_params.get('months_back', 12))
+        end_date = timezone.now().date()
+        start_date = end_date - timedelta(days=months_back * 30)
+
+        # Shipped orders in range with both expected and actual ship date
+        shipped = list(SalesOrder.objects.filter(
+            status__in=['shipped', 'completed', 'received'],
+            actual_ship_date__isnull=False,
+            expected_ship_date__isnull=False,
+            actual_ship_date__date__gte=start_date,
+            actual_ship_date__date__lte=end_date,
+        ).values_list('id', 'expected_ship_date', 'actual_ship_date'))
+        total_shipped = len(shipped)
+        on_time = 0
+        days_late_list = []
+        for _id, exp_dt, act_dt in shipped:
+            exp = exp_dt.date() if hasattr(exp_dt, 'date') else exp_dt
+            act = act_dt.date() if hasattr(act_dt, 'date') else act_dt
+            if act <= exp:
+                on_time += 1
+            else:
+                days_late_list.append((act - exp).days)
+        late_count = total_shipped - on_time
+        on_time_pct = round((on_time / total_shipped * 100.0), 1) if total_shipped else None
+        avg_days_late = round(sum(days_late_list) / len(days_late_list), 1) if days_late_list else None
+
+        return Response({
+            'period': {'start_date': start_date.isoformat(), 'end_date': end_date.isoformat(), 'months_back': months_back},
+            'shipping': {
+                'on_time_shipment_pct': on_time_pct,
+                'on_time_count': on_time,
+                'late_count': late_count,
+                'total_shipped': total_shipped,
+                'avg_days_late': avg_days_late,
+            },
+        })
+
     def _get_period_key(self, date, period_type):
         """Get period key for grouping (e.g., '2025-01' for monthly, '2025-Q1' for quarterly)"""
         if period_type == 'quarterly':

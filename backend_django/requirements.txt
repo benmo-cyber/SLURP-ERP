@@ -1,0 +1,2 @@
+# Packing list generation (GET /api/sales-orders/<id>/packing-list/)
+python-docx>=1.1.0

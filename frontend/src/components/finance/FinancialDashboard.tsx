@@ -4,7 +4,7 @@ import {
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
   PieChart, Pie, Cell
 } from 'recharts'
-import { getDashboardMetrics, getAccountsReceivableAging, getAccountsPayableAging, getIncomeStatement } from '../../api/finance'
+import { getDashboardMetrics, getAccountsReceivableAging, getAccountsPayableAging, getKpis } from '../../api/finance'
 import { formatCurrency } from '../../utils/formatNumber'
 import './FinancialDashboard.css'
 
@@ -16,6 +16,7 @@ function FinancialDashboard() {
   const [metrics, setMetrics] = useState<any>(null)
   const [arAging, setArAging] = useState<any>(null)
   const [apAging, setApAging] = useState<any>(null)
+  const [kpis, setKpis] = useState<any>(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -25,14 +26,16 @@ function FinancialDashboard() {
   const loadDashboardData = async () => {
     try {
       setLoading(true)
-      const [metricsData, arData, apData] = await Promise.all([
+      const [metricsData, arData, apData, kpisData] = await Promise.all([
         getDashboardMetrics({ period_type: periodType, months_back: monthsBack }),
         getAccountsReceivableAging(),
-        getAccountsPayableAging()
+        getAccountsPayableAging(),
+        getKpis({ months_back: monthsBack }).catch(() => null)
       ])
       setMetrics(metricsData)
       setArAging(arData)
       setApAging(apData)
+      setKpis(kpisData)
     } catch (error) {
       console.error('Failed to load dashboard data:', error)
       alert('Failed to load dashboard data')
@@ -153,6 +156,33 @@ function FinancialDashboard() {
           <div className="metric-period">Current {periodType === 'monthly' ? 'Month' : 'Quarter'}</div>
         </div>
       </div>
+
+      {/* Performance KPIs */}
+      {kpis?.shipping != null && (
+        <div className="dashboard-kpis-section">
+          <h3 className="dashboard-kpis-title">Performance</h3>
+          <div className="metrics-cards metrics-cards-kpis">
+            <div className={`metric-card kpi-on-time ${(kpis.shipping.on_time_shipment_pct ?? 0) >= 95 ? 'kpi-good' : (kpis.shipping.on_time_shipment_pct ?? 0) >= 80 ? 'kpi-medium' : ''}`}>
+              <div className="metric-label">On-time shipment</div>
+              <div className="metric-value">
+                {kpis.shipping.total_shipped > 0 && kpis.shipping.on_time_shipment_pct != null
+                  ? `${kpis.shipping.on_time_shipment_pct}%`
+                  : '—'}
+              </div>
+              <div className="metric-period">
+                {kpis.shipping.on_time_count} of {kpis.shipping.total_shipped} shipped (last {monthsBack} mo)
+              </div>
+            </div>
+            <div className="metric-card kpi-late">
+              <div className="metric-label">Shipped late</div>
+              <div className="metric-value">{kpis.shipping.late_count ?? 0}</div>
+              <div className="metric-period">
+                {kpis.shipping.avg_days_late != null ? `Avg ${kpis.shipping.avg_days_late} days late` : 'Orders past expected date'}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Charts Grid */}
       <div className="charts-grid">

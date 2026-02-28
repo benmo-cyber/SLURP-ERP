@@ -199,9 +199,9 @@ def generate_invoice_pdf(invoice):
     items_data = [['Description', 'Quantity', 'Unit Price', 'Total']]
     for item in invoice.items.all():
         description = item.description or 'N/A'
-        if not item.description and hasattr(item, 'sales_order_item') and item.sales_order_item:
-            if hasattr(item.sales_order_item, 'item') and item.sales_order_item.item:
-                description = item.sales_order_item.item.name
+        if not description or description == 'N/A':
+            if getattr(item, 'item', None):
+                description = item.item.name
         
         items_data.append([
             description,

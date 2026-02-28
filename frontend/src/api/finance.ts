@@ -233,6 +233,12 @@ export const getDashboardMetrics = async (params?: { period_type?: 'monthly' | '
   return response.data
 }
 
+// KPIs (performance metrics) API
+export const getKpis = async (params?: { months_back?: number }) => {
+  const response = await api.get('/financial-reports/kpis/', { params })
+  return response.data
+}
+
 // Customer Forecasts API (for forecast vs actual)
 export const getCustomerForecasts = async (params?: { customer_id?: number, forecast_period?: string }) => {
   const response = await api.get('/customer-forecasts/', { params })
