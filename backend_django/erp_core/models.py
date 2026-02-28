@@ -656,6 +656,22 @@ class PurchaseOrder(models.Model):
     def __str__(self):
         return self.po_number
 
+    def calculate_totals(self):
+        """Recalculate subtotal from line items and total = subtotal - discount + shipping_cost. Saves the instance."""
+        subtotal = sum(
+            (item.quantity_ordered * (item.unit_price or 0))
+            for item in self.items.all()
+        )
+        discount = float(self.discount or 0)
+        shipping_cost = float(self.shipping_cost or 0)
+        self.subtotal = round(subtotal, 2)
+        self.total = round(self.subtotal - discount + shipping_cost, 2)
+        self.save(update_fields=['subtotal', 'total'])
+
+    def recalculate_totals(self):
+        """Alias for calculate_totals for clarity."""
+        return self.calculate_totals()
+
 
 class PurchaseOrderItem(models.Model):
     purchase_order = models.ForeignKey(PurchaseOrder, on_delete=models.CASCADE, related_name='items')
@@ -1628,6 +1644,25 @@ class Payment(models.Model):
         elif self.ar_entry:
             return f"AR Payment - {self.ar_entry.customer_name} - ${self.amount}"
         return f"Payment - ${self.amount}"
+
+
+class BankReconciliation(models.Model):
+    """Bank account reconciliation: statement date and balance for comparison to GL."""
+    account = models.ForeignKey(Account, on_delete=models.CASCADE, related_name='bank_reconciliations')
+    statement_date = models.DateField(help_text='Bank statement date')
+    statement_balance = models.FloatField(help_text='Ending balance per bank statement')
+    reconciled_at = models.DateTimeField(blank=True, null=True, help_text='When reconciliation was completed')
+    notes = models.TextField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-statement_date']
+        verbose_name_plural = 'Bank Reconciliations'
+        indexes = [models.Index(fields=['account', 'statement_date'])]
+
+    def __str__(self):
+        return f"{self.account.account_number} - {self.statement_date} - ${self.statement_balance}"
 
 
 class OrphanedInventory(models.Model):

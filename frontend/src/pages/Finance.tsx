@@ -10,6 +10,8 @@ import AccountsPayable from '../components/finance/AccountsPayable'
 import AccountsReceivable from '../components/finance/AccountsReceivable'
 import PLActual from '../components/finance/PLActual'
 import PLProForma from '../components/finance/PLProForma'
+import BankReconciliation from '../components/finance/BankReconciliation'
+import FiscalPeriods from '../components/finance/FiscalPeriods'
 import './Finance.css'
 
 export type FinanceTabId =
@@ -19,6 +21,8 @@ export type FinanceTabId =
   | 'invoices'
   | 'ar'
   | 'ap'
+  | 'bank-recon'
+  | 'periods'
   | 'pricing'
   | 'cost-master'
   | 'reports'
@@ -32,6 +36,8 @@ const NAV_SECTIONS: { label: string; items: { id: FinanceTabId; label: string }[
     items: [
       { id: 'ledger', label: 'General Ledger' },
       { id: 'journal', label: 'Journal Entries' },
+      { id: 'periods', label: 'Fiscal Periods' },
+      { id: 'bank-recon', label: 'Bank Reconciliation' },
     ],
   },
   {
@@ -103,6 +109,8 @@ function Finance() {
           {activeTab === 'cost-master' && <CostMasterList />}
           {activeTab === 'ap' && <AccountsPayable />}
           {activeTab === 'ar' && <AccountsReceivable />}
+          {activeTab === 'bank-recon' && <BankReconciliation />}
+          {activeTab === 'periods' && <FiscalPeriods />}
           {activeTab === 'pl-actual' && <PLActual />}
           {activeTab === 'pl-proforma' && <PLProForma />}
         </main>

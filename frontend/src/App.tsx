@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import { BrowserRouter as Router, Routes, Route, Link, useLocation } from 'react-router-dom'
 import Inventory from './pages/Inventory'
 import Finance from './pages/Finance'
@@ -5,6 +6,20 @@ import Production from './pages/Production'
 import Quality from './pages/Quality'
 import Sales from './pages/Sales'
 import './App.css'
+
+/** Prevent mouse wheel from changing number inputs when hovering (stops accidental scroll-to-increment). */
+function usePreventWheelOnNumberInputs() {
+  useEffect(() => {
+    const handler = (e: WheelEvent) => {
+      const target = e.target as HTMLElement
+      if (target.tagName === 'INPUT' && (target as HTMLInputElement).type === 'number') {
+        e.preventDefault()
+      }
+    }
+    document.addEventListener('wheel', handler, { passive: false, capture: true })
+    return () => document.removeEventListener('wheel', handler, { capture: true })
+  }, [])
+}
 
 function Navigation() {
   const location = useLocation()
@@ -34,6 +49,7 @@ function Navigation() {
 }
 
 function App() {
+  usePreventWheelOnNumberInputs()
   return (
     <Router>
       <div className="App">

@@ -11,7 +11,7 @@ from .views import (
     CustomerForecastViewSet, CustomerUsageViewSet, LotDepletionLogViewSet, LotTransactionLogViewSet,
     PurchaseOrderLogViewSet, ProductionLogViewSet, CheckInLogViewSet, FiscalPeriodViewSet, JournalEntryViewSet,
     GeneralLedgerViewSet, AccountBalanceViewSet, FinancialReportsViewSet,
-    AccountsPayableViewSet, AccountsReceivableViewSet, PaymentViewSet
+    AccountsPayableViewSet, AccountsReceivableViewSet, PaymentViewSet, BankReconciliationViewSet
 )
 
 router = DefaultRouter()
@@ -53,6 +53,7 @@ router.register(r'financial-reports', FinancialReportsViewSet, basename='financi
 router.register(r'accounts-payable', AccountsPayableViewSet, basename='accounts-payable')
 router.register(r'accounts-receivable', AccountsReceivableViewSet, basename='accounts-receivable')
 router.register(r'payments', PaymentViewSet, basename='payments')
+router.register(r'bank-reconciliations', BankReconciliationViewSet, basename='bank-reconciliations')
 
 urlpatterns = [
     path('', include(router.urls)),

@@ -1,0 +1,10 @@
+.bank-reconciliation { padding: 0; }
+.bank-recon-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; }
+.bank-recon-form { max-width: 400px; margin-bottom: 1.5rem; }
+.bank-recon-form label { display: block; margin-top: 0.5rem; }
+.bank-recon-form select, .bank-recon-form input { width: 100%; padding: 0.4rem; margin-top: 0.25rem; }
+.form-actions { margin-top: 1rem; display: flex; gap: 0.5rem; }
+.bank-recon-table { width: 100%; border-collapse: collapse; }
+.bank-recon-table th, .bank-recon-table td { padding: 0.5rem; text-align: left; border-bottom: 1px solid #eee; }
+.bank-recon-table th { font-weight: 600; }
+.empty-state { color: #666; margin-top: 1rem; }

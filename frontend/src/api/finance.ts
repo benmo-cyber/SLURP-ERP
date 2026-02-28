@@ -130,6 +130,27 @@ export const getFiscalPeriods = async () => {
   return response.data.results || response.data
 }
 
+export const closeFiscalPeriod = async (id: number) => {
+  const response = await api.post(`/fiscal-periods/${id}/close/`)
+  return response.data
+}
+
+// Bank Reconciliations API
+export const getBankReconciliations = async (params?: { account_id?: number }) => {
+  const response = await api.get('/bank-reconciliations/', { params })
+  return response.data.results || response.data
+}
+
+export const createBankReconciliation = async (data: { account: number; statement_date: string; statement_balance: number; notes?: string }) => {
+  const response = await api.post('/bank-reconciliations/', data)
+  return response.data
+}
+
+export const updateBankReconciliation = async (id: number, data: any) => {
+  const response = await api.patch(`/bank-reconciliations/${id}/`, data)
+  return response.data
+}
+
 // General Ledger API
 export const getGeneralLedger = async (params?: { account_id?: number, start_date?: string, end_date?: string, fiscal_period_id?: number }) => {
   const response = await api.get('/general-ledger/', { params })

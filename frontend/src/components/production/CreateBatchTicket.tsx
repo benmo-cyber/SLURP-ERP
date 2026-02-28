@@ -473,8 +473,8 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
       // Round to avoid floating point precision issues
       totalQuantityUsedInLbs = Math.round(totalQuantityUsedInLbs * 100) / 100
 
-      // Validate that total quantity used equals quantity to produce (with tolerance for floating point precision)
-      const tolerance = 0.01  // Small tolerance for floating point precision
+      // Validate that total quantity used equals quantity to produce (with tolerance for conversion rounding)
+      const tolerance = 0.02  // Allow for kg/lbs conversion and floating point (e.g. 700.01 vs 700.00)
       if (Math.abs(totalQuantityUsedInLbs - roundedQuantityInLbs) > tolerance) {
         alert(`Quantity mismatch: Total quantity used (${formatNumber(totalQuantityUsedInLbs)} lbs) must equal quantity to produce (${formatNumber(roundedQuantityInLbs)} lbs)`)
         setSubmitting(false)

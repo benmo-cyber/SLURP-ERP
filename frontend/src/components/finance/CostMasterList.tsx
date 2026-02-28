@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { getCostMasters, deleteCostMaster, updateCostMaster, refreshTariffs } from '../../api/costMaster'
+import { getCostMasters, deleteCostMaster, updateCostMaster } from '../../api/costMaster'
 import './CostMasterList.css'
 
 interface CostMaster {
@@ -33,7 +33,6 @@ function CostMasterList() {
   const [unitToggle, setUnitToggle] = useState<'lbs' | 'kg'>('lbs')
   const [editingId, setEditingId] = useState<number | null>(null)
   const [editForm, setEditForm] = useState<Partial<CostMaster>>({})
-  const [refreshingTariffs, setRefreshingTariffs] = useState(false)
 
   useEffect(() => {
     loadCostMasters()
@@ -88,55 +87,6 @@ function CostMasterList() {
     setEditForm({})
   }
 
-  const handleRefreshTariffs = async () => {
-    if (!confirm('This will refresh tariff rates for all items with HTS codes and country of origin using Flexport. Continue?')) {
-      return
-    }
-
-    try {
-      setRefreshingTariffs(true)
-      const result = await refreshTariffs()
-      
-      // Build detailed message
-      let message = result.message || `Successfully updated ${result.updated} tariff(s). ${result.errors} error(s) occurred.`
-      
-      // Add error details if available
-      if (result.error_details && result.error_details.length > 0) {
-        message += '\n\nError details:\n' + result.error_details.slice(0, 5).join('\n')
-        if (result.error_details.length > 5) {
-          message += `\n... and ${result.error_details.length - 5} more errors`
-        }
-      }
-      
-      // Show error trace if available (for debugging)
-      if (result.error_trace) {
-        console.error('Tariff refresh error trace:', result.error_trace)
-      }
-      
-      alert(message)
-      // Reload cost masters to show updated tariffs
-      loadCostMasters()
-    } catch (error: any) {
-      console.error('Failed to refresh tariffs:', error)
-      const errorMessage = error.response?.data?.message || error.response?.data?.error || 'Failed to refresh tariffs'
-      const errorDetails = error.response?.data?.error_details || []
-      const errorTrace = error.response?.data?.error_trace
-      
-      if (errorTrace) {
-        console.error('Error trace:', errorTrace)
-      }
-      
-      let fullMessage = errorMessage
-      if (errorDetails.length > 0) {
-        fullMessage += '\n\nError details:\n' + errorDetails.slice(0, 5).join('\n')
-      }
-      
-      alert(fullMessage)
-    } finally {
-      setRefreshingTariffs(false)
-    }
-  }
-
   const filteredCostMasters = costMasters.filter(cm =>
     cm.vendor_material.toLowerCase().includes(searchTerm.toLowerCase()) ||
     (cm.wwi_product_code && cm.wwi_product_code.toLowerCase().includes(searchTerm.toLowerCase())) ||
@@ -166,24 +116,6 @@ function CostMasterList() {
               Price per kg
             </button>
           </div>
-          <button
-            onClick={handleRefreshTariffs}
-            disabled={refreshingTariffs}
-            className="btn btn-primary"
-            style={{ 
-              marginRight: '1rem',
-              padding: '0.5rem 1rem',
-              backgroundColor: refreshingTariffs ? '#94a3b8' : '#3b82f6',
-              color: 'white',
-              border: 'none',
-              borderRadius: '6px',
-              cursor: refreshingTariffs ? 'not-allowed' : 'pointer',
-              fontWeight: '500'
-            }}
-            title="Refresh tariff rates from Flexport for all items with HTS codes and country of origin"
-          >
-            {refreshingTariffs ? 'Refreshing...' : '🔄 Refresh Tariffs'}
-          </button>
           <input
             type="text"
             placeholder="Search by material, product code, or vendor..."

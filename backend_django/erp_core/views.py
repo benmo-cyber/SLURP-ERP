@@ -14,11 +14,11 @@ from .models import (
     ShipToLocation, CustomerContact, SalesCall, CustomerForecast, BatchNumberSequence, LotDepletionLog,
     PurchaseOrderLog, ProductionLog, Shipment, ShipmentItem, LotTransactionLog, ItemPackSize,
     FiscalPeriod, JournalEntry, JournalEntryLine, GeneralLedgerEntry, AccountBalance,
-    AccountsPayable, AccountsReceivable, Payment
+    AccountsPayable, AccountsReceivable, Payment, BankReconciliation
 )
 from .serializers import (
     ItemSerializer, LotSerializer, ProductionBatchSerializer,
-    AccountsPayableSerializer, AccountsReceivableSerializer, PaymentSerializer,
+    AccountsPayableSerializer, AccountsReceivableSerializer, PaymentSerializer, BankReconciliationSerializer,
     FormulaSerializer, FormulaItemSerializer,
     PurchaseOrderSerializer, PurchaseOrderItemSerializer,
     SalesOrderSerializer, SalesOrderItemSerializer,
@@ -344,14 +344,14 @@ def create_ap_journal_entry(ap_entry):
             from datetime import date
             year = today.year
             fiscal_period, _ = FiscalPeriod.objects.get_or_create(
-                name=f"{year}-01",
+                period_name=f"{year}-01",
                 defaults={
                     'start_date': date(year, 1, 1),
                     'end_date': date(year, 12, 31),
-                    'period_type': 'year'
                 }
             )
-        
+        if fiscal_period.is_closed:
+            return None
         # Generate journal entry number
         last_entry = JournalEntry.objects.filter(entry_date=today).order_by('-entry_number').first()
         if last_entry:
@@ -480,14 +480,14 @@ def create_ar_journal_entry(ar_entry):
             from datetime import date
             year = today.year
             fiscal_period, _ = FiscalPeriod.objects.get_or_create(
-                name=f"{year}-01",
+                period_name=f"{year}-01",
                 defaults={
                     'start_date': date(year, 1, 1),
                     'end_date': date(year, 12, 31),
-                    'period_type': 'year'
                 }
             )
-        
+        if fiscal_period.is_closed:
+            return None
         # Generate journal entry number
         last_entry = JournalEntry.objects.filter(entry_date=today).order_by('-entry_number').first()
         if last_entry:
@@ -616,14 +616,14 @@ def create_ap_payment_journal_entry(payment, ap_entry):
             from datetime import date
             year = today.year
             fiscal_period, _ = FiscalPeriod.objects.get_or_create(
-                name=f"{year}-01",
+                period_name=f"{year}-01",
                 defaults={
                     'start_date': date(year, 1, 1),
                     'end_date': date(year, 12, 31),
-                    'period_type': 'year'
                 }
             )
-        
+        if fiscal_period.is_closed:
+            return None
         # Generate journal entry number
         last_entry = JournalEntry.objects.filter(entry_date=today).order_by('-entry_number').first()
         if last_entry:
@@ -739,14 +739,14 @@ def create_ar_payment_journal_entry(payment, ar_entry):
             from datetime import date
             year = today.year
             fiscal_period, _ = FiscalPeriod.objects.get_or_create(
-                name=f"{year}-01",
+                period_name=f"{year}-01",
                 defaults={
                     'start_date': date(year, 1, 1),
                     'end_date': date(year, 12, 31),
-                    'period_type': 'year'
                 }
             )
-        
+        if fiscal_period.is_closed:
+            return None
         # Generate journal entry number
         last_entry = JournalEntry.objects.filter(entry_date=today).order_by('-entry_number').first()
         if last_entry:
@@ -1381,29 +1381,10 @@ class ItemViewSet(viewsets.ModelViewSet):
                 landed_cost_per_lb = (price_per_lb * (1 + tariff)) + (freight_per_kg / 2.20462)
             
             # Get or create CostMaster entry (one per SKU + vendor combination)
-            # Calculate tariff from Flexport if HTS code and country of origin are provided
-            tariff = 0.0
-            if data.get('hts_code') and data.get('country_of_origin'):
-                # Import tariff calculation function
-                from .flexport_tariff import get_tariff_from_flexport
-                flexport_tariff = get_tariff_from_flexport(data['hts_code'], data['country_of_origin'])
-                if flexport_tariff is not None:
-                    tariff = flexport_tariff
-                    # Also update item tariff
-                    item.tariff = tariff
-                    item.save()
-                else:
-                    # If Flexport lookup fails, use provided tariff or default to 0
-                    tariff = float(data.get('tariff', 0)) if data.get('tariff') else 0.0
-                    # Update item tariff
-                    item.tariff = tariff
-                    item.save()
-            else:
-                # No HTS/origin, use provided tariff or default to 0
-                tariff = float(data.get('tariff', 0)) if data.get('tariff') else 0.0
-                # Update item tariff
-                item.tariff = tariff
-                item.save()
+            # Tariff is manual only (HTS/country of origin kept for reference; no external API)
+            tariff = float(data.get('tariff', 0)) if data.get('tariff') else 0.0
+            item.tariff = tariff
+            item.save()
             
             # Get vendor name - handle both Vendor object and string
             vendor_name = None
@@ -1702,26 +1683,9 @@ class ItemViewSet(viewsets.ModelViewSet):
             if data.get('country_of_origin'):
                 cost_master.origin = data['country_of_origin']
             
-            # Calculate tariff if HTS code and origin are provided
+            # Tariff is manual only (no external API)
             tariff_updated = False
-            if data.get('hts_code') and data.get('country_of_origin'):
-                from .flexport_tariff import get_tariff_from_flexport
-                flexport_tariff = get_tariff_from_flexport(data['hts_code'], data['country_of_origin'])
-                if flexport_tariff is not None:
-                    cost_master.tariff = flexport_tariff
-                    # Also update item tariff
-                    item.tariff = flexport_tariff
-                    item.save()
-                    tariff_updated = True
-                elif data.get('tariff') is not None:
-                    # If Flexport lookup fails, use provided tariff
-                    tariff = float(data.get('tariff', 0)) if data.get('tariff') else 0.0
-                    cost_master.tariff = tariff
-                    item.tariff = tariff
-                    item.save()
-                    tariff_updated = True
-            elif data.get('tariff') is not None:
-                # No HTS/origin, use provided tariff
+            if data.get('tariff') is not None:
                 tariff = float(data.get('tariff', 0)) if data.get('tariff') else 0.0
                 cost_master.tariff = tariff
                 item.tariff = tariff
@@ -1774,24 +1738,8 @@ class ItemViewSet(viewsets.ModelViewSet):
             if data.get('country_of_origin') is not None:
                 cost_master.origin = data['country_of_origin']
             
-            # Calculate tariff if HTS code and origin are provided
-            # Check if we need to recalculate tariff (if HTS or origin changed)
-            if data.get('hts_code') and data.get('country_of_origin'):
-                from .flexport_tariff import get_tariff_from_flexport
-                flexport_tariff = get_tariff_from_flexport(data['hts_code'], data['country_of_origin'])
-                if flexport_tariff is not None:
-                    cost_master.tariff = flexport_tariff
-                    # Also update item tariff
-                    item.tariff = flexport_tariff
-                    item.save()
-                elif data.get('tariff') is not None:
-                    # If Flexport lookup fails, use provided tariff
-                    tariff = float(data.get('tariff', 0)) if data.get('tariff') else 0.0
-                    cost_master.tariff = tariff
-                    item.tariff = tariff
-                    item.save()
-            elif data.get('tariff') is not None:
-                # No HTS/origin, use provided tariff
+            # Tariff is manual only (no external API)
+            if data.get('tariff') is not None:
                 tariff = float(data.get('tariff', 0)) if data.get('tariff') else 0.0
                 cost_master.tariff = tariff
                 item.tariff = tariff
@@ -3098,34 +3046,28 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
         
         # For repack batches, quantity_produced should be in the item's native unit (not lbs)
         # For production batches, quantity_produced is in lbs
+        tolerance = 0.02  # Allow for kg/lbs conversion rounding (e.g. 700.01 vs 700.00)
         if batch_type == 'repack':
-            # Use total input quantity in native unit for repack batches
             quantity_produced = round(total_input_quantity_native, 2)
+            if abs(total_input_quantity_native - quantity_produced_from_request) > tolerance:
+                return Response(
+                    {
+                        'error': f'Quantity mismatch: Total quantity used ({total_input_quantity_native:.2f} {lot.item.unit_of_measure}) must equal quantity to produce ({quantity_produced_from_request:.2f} {lot.item.unit_of_measure})'
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
+                )
         else:
-            # For production batches, use the value from request (already in lbs)
-            quantity_produced = quantity_produced_from_request
-        
+            # Use actual total input (rounded) as quantity_produced so inventory never drifts from conversion rounding
+            total_rounded = round(total_input_quantity_in_lbs, 2)
+            if abs(total_input_quantity_in_lbs - quantity_produced_from_request) > tolerance:
+                return Response(
+                    {
+                        'error': f'Quantity mismatch: Total quantity used ({total_input_quantity_in_lbs:.2f} lbs) must equal quantity to produce ({quantity_produced_from_request:.2f} lbs)'
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            quantity_produced = total_rounded  # Store exact sum of inputs so no drift over time
         data['quantity_produced'] = quantity_produced
-        
-        # Validate that total input quantity equals quantity to produce (with tolerance for floating point precision)
-        # For repack, compare in native units; for production, compare in lbs
-        tolerance = 0.1  # Increased tolerance to account for conversion rounding differences
-        if batch_type == 'repack':
-            if abs(total_input_quantity_native - quantity_produced) > tolerance:
-                return Response(
-                    {
-                        'error': f'Quantity mismatch: Total quantity used ({total_input_quantity_native:.2f} {lot.item.unit_of_measure}) must equal quantity to produce ({quantity_produced:.2f} {lot.item.unit_of_measure})'
-                    },
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-        else:
-            if abs(total_input_quantity_in_lbs - quantity_produced) > tolerance:
-                return Response(
-                    {
-                        'error': f'Quantity mismatch: Total quantity used ({total_input_quantity_in_lbs:.2f} lbs) must equal quantity to produce ({quantity_produced:.2f} lbs)'
-                    },
-                    status=status.HTTP_400_BAD_REQUEST
-                )
         
         # Store work_in_partials in notes if provided (will be processed when closing)
         if work_in_partials_data:
@@ -3225,9 +3167,9 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
                 notes=f'Used in {batch_type_label} batch {batch.batch_number}' + (' - Distributed item repack/relabel' if batch_type == 'repack' else '')
             )
         
-        # Validate that total input quantity equals quantity to produce (with tolerance for floating point)
+        # Validate that total input quantity equals quantity to produce (with tolerance for conversion rounding)
         # This is a second validation check after batch creation
-        tolerance = 0.01
+        tolerance = 0.02  # Allow for kg/lbs conversion and floating point (e.g. 700.01 vs 700.00)
         if batch_type == 'repack':
             # For repack, we need to get the item to know the unit
             if inputs_data:
@@ -4336,6 +4278,10 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
         
         # Reload instance to get updated values
         instance.refresh_from_db()
+        # Recalculate subtotal and total from items (and discount/shipping_cost)
+        if hasattr(instance, 'calculate_totals'):
+            instance.calculate_totals()
+            instance.refresh_from_db()
         
         # Log the update
         notes = []
@@ -8593,38 +8539,13 @@ class CostMasterViewSet(viewsets.ModelViewSet):
     
     @action(detail=False, methods=['post'])
     def refresh_tariffs(self, request):
-        """Refresh tariff rates for all items with HTS codes and country of origin"""
-        from .flexport_tariff import update_tariffs
-        import logging
-        import traceback
-        
-        logger = logging.getLogger(__name__)
-        
-        try:
-            updated_count, error_count, error_details = update_tariffs()
-            
-            message = f'Successfully updated {updated_count} tariff(s).'
-            if error_count > 0:
-                message += f' {error_count} error(s) occurred.'
-                if error_details:
-                    message += f' Details: {"; ".join(error_details[:3])}'  # Show first 3 errors
-            
-            return Response({
-                'success': True,
-                'updated': updated_count,
-                'errors': error_count,
-                'error_details': error_details,
-                'message': message
-            }, status=status.HTTP_200_OK)
-        except Exception as e:
-            error_trace = traceback.format_exc()
-            logger.error(f'Error refreshing tariffs: {str(e)}\n{error_trace}')
-            return Response({
-                'success': False,
-                'error': str(e),
-                'error_trace': error_trace,
-                'message': f'Failed to refresh tariffs: {str(e)}'
-            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        """No-op: Flexport HTS integration was removed. Tariffs are entered manually in Cost Master."""
+        return Response({
+            'success': True,
+            'updated': 0,
+            'errors': 0,
+            'message': 'Tariffs are entered manually. Flexport HTS integration has been removed.'
+        }, status=status.HTTP_200_OK)
 
 
 class AccountViewSet(viewsets.ModelViewSet):
@@ -9257,6 +9178,21 @@ class FiscalPeriodViewSet(viewsets.ModelViewSet):
     queryset = FiscalPeriod.objects.all()
     serializer_class = FiscalPeriodSerializer
     
+    @action(detail=True, methods=['post'], url_path='close', url_name='close')
+    def close_period(self, request, pk=None):
+        """Mark the fiscal period as closed so no further posting is allowed."""
+        period = self.get_object()
+        if period.is_closed:
+            return Response(
+                {'detail': 'Period is already closed.', 'is_closed': True},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        period.is_closed = True
+        period.closed_date = timezone.now()
+        period.closed_by = getattr(request.user, 'username', None) or 'system'
+        period.save()
+        return Response(self.get_serializer(period).data)
+    
     def get_queryset(self):
         queryset = FiscalPeriod.objects.all()
         is_closed = self.request.query_params.get('is_closed', None)
@@ -9360,6 +9296,11 @@ class JournalEntryViewSet(viewsets.ModelViewSet):
                     end_date__gte=entry_date
                 ).first()
                 if fiscal_period:
+                    if fiscal_period.is_closed:
+                        return Response(
+                            {'error': 'Cannot create journal entry in a closed fiscal period.'},
+                            status=status.HTTP_400_BAD_REQUEST
+                        )
                     request.data['fiscal_period'] = fiscal_period.id
             except Exception:
                 pass
@@ -9397,6 +9338,12 @@ class JournalEntryViewSet(viewsets.ModelViewSet):
         if not journal_entry.validate_balanced():
             return Response(
                 {'error': 'Journal entry is not balanced. Cannot post.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        # Block posting to a closed period
+        if journal_entry.fiscal_period and journal_entry.fiscal_period.is_closed:
+            return Response(
+                {'error': 'Cannot post to a closed fiscal period.'},
                 status=status.HTTP_400_BAD_REQUEST
             )
         
@@ -10474,3 +10421,16 @@ class PaymentViewSet(viewsets.ModelViewSet):
             ar_entry.save()
         
         return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+
+class BankReconciliationViewSet(viewsets.ModelViewSet):
+    """ViewSet for bank reconciliations (statement date/balance vs GL)."""
+    queryset = BankReconciliation.objects.select_related('account').all()
+    serializer_class = BankReconciliationSerializer
+
+    def get_queryset(self):
+        queryset = BankReconciliation.objects.select_related('account').all()
+        account_id = self.request.query_params.get('account_id', None)
+        if account_id:
+            queryset = queryset.filter(account_id=account_id)
+        return queryset.order_by('-statement_date')

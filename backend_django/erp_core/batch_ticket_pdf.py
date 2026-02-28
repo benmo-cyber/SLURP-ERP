@@ -33,20 +33,104 @@ CONFIDENTIALITY_FOOTER = (
 )
 
 
+def _is_indirect_material(item):
+    """Return True if item is an indirect material (packaging, etc.). Handles DB value variants."""
+    if item is None:
+        return False
+    t = (getattr(item, 'item_type', None) or '').strip().lower()
+    return t == 'indirect_material' or 'indirect' in t
+
+
+def get_indirect_materials_for_batch(batch):
+    """
+    Return list of dicts for indirect materials consumed by this batch: {packaging, lot, qty, uom}.
+    Merges all sources (LotTransactionLog, batch.inputs, InventoryTransaction) and dedupes so we
+    never miss data regardless of which path recorded it.
+    """
+    out = []
+    seen = set()
+
+    def add_row(packaging, lot_number, qty_used, key=None):
+        q = float(qty_used)
+        key = key or (str(lot_number), round(q, 4))
+        if key in seen:
+            return
+        seen.add(key)
+        qty_str = f"{int(q)}" if q == int(q) else f"{q:.2f}"
+        out.append({
+            'packaging': (packaging or '').strip(),
+            'lot': (lot_number or '—').strip(),
+            'qty': qty_str,
+            'uom': 'EA',
+        })
+
+    # 1) LotTransactionLog by batch_id (same as "consumed in inventory")
+    try:
+        from .models import LotTransactionLog
+        for log in LotTransactionLog.objects.filter(
+            batch_id=batch.id,
+            transaction_type='indirect_material_consumption',
+        ).select_related('lot__item').order_by('logged_at'):
+            if not log.lot:
+                continue
+            item = log.lot.item
+            qty_used = abs(float(log.quantity_change))
+            packaging = (getattr(item, 'description', None) or getattr(item, 'name', None) or getattr(item, 'sku', None) or '')
+            add_row(packaging, log.lot.lot_number, qty_used, (log.lot_id, round(qty_used, 4)))
+    except Exception as e:
+        logger.warning("get_indirect_materials_for_batch: LotTransactionLog failed for batch %s: %s", getattr(batch, 'batch_number', batch.id), e)
+
+    # 2) batch.inputs where item is indirect (same as view), or UoM is EA (packaging)
+    try:
+        for batch_input in batch.inputs.select_related('lot__item').all():
+            item = getattr(batch_input.lot, 'item', None)
+            if not item:
+                continue
+            uom = (getattr(item, 'unit_of_measure', None) or '').strip().lower()
+            if not _is_indirect_material(item) and uom not in ('ea', 'e.a.', 'each'):
+                continue
+            packaging = (getattr(item, 'description', None) or getattr(item, 'name', None) or getattr(item, 'sku', None) or '')
+            add_row(packaging, batch_input.lot.lot_number, batch_input.quantity_used, (batch_input.lot_id, round(float(batch_input.quantity_used), 4)))
+    except Exception as e:
+        logger.warning("get_indirect_materials_for_batch: batch.inputs failed for batch %s: %s", getattr(batch, 'batch_number', batch.id), e)
+
+    # 3) InventoryTransaction by reference_number
+    try:
+        from .models import InventoryTransaction
+        for tx in InventoryTransaction.objects.filter(
+            transaction_type='indirect_material_consumption',
+            reference_number=batch.batch_number,
+        ).select_related('lot__item'):
+            if not tx.lot or not _is_indirect_material(tx.lot.item):
+                continue
+            item = tx.lot.item
+            qty_used = abs(float(tx.quantity))
+            packaging = (getattr(item, 'description', None) or getattr(item, 'name', None) or getattr(item, 'sku', None) or '')
+            add_row(packaging, tx.lot.lot_number, qty_used, (tx.lot_id, round(qty_used, 4)))
+    except Exception as e:
+        logger.warning("get_indirect_materials_for_batch: InventoryTransaction failed for batch %s: %s", getattr(batch, 'batch_number', batch.id), e)
+
+    if out:
+        logger.info("get_indirect_materials_for_batch: batch %s has %s indirect row(s)", getattr(batch, 'batch_number', batch.id), len(out))
+    return out
+
+
 def get_batch_ticket_template_path():
     """
     Return the path to the Batch Ticket template file, or None.
     Search order:
     1. BATCH_TICKET_TEMPLATE_PATH env var (path to a specific file, or to a folder to search)
-    2. backend_django/batch_ticket_template/ (project folder — put template here to avoid Sensitive/gitignore)
-    3. Sensitive/ at project root (parent of backend_django)
+    2. Project root (WWI ERP folder) — Batch ticket template.pdf lives here
+    3. backend_django/batch_ticket_template/
+    4. Sensitive/ at project root
     """
-    base = Path(__file__).resolve().parent.parent.parent  # WWI ERP
+    base = Path(__file__).resolve().parent.parent.parent  # WWI ERP (project root)
     backend = Path(__file__).resolve().parent.parent  # backend_django
     # Prefer PDF so our filler runs on the template; avoid using .docx (conversion can look different)
     names = [
         'Batch_ticket_template.pdf',
         'Batch Ticket template.pdf',
+        'Batch ticket template.pdf',
         'Batch Ticket (BP-13).pdf',
         'Batch Ticket.pdf',
         'batch_ticket.pdf',
@@ -54,6 +138,7 @@ def get_batch_ticket_template_path():
         'Batch_ticket_template.docx',
         'Batch_ticket_template.doc',
         'Batch Ticket template.docx',
+        'Batch ticket template.docx',
         'Batch Ticket template.doc',
         'Batch Ticket (BP-13).docx',
         'Batch Ticket (BP-13).doc',
@@ -71,10 +156,23 @@ def get_batch_ticket_template_path():
                 if candidate.exists():
                     return str(candidate)
             for f in sorted(p.glob('*'), key=lambda x: (0 if x.suffix.lower() == '.pdf' else 1, x.name)):
+                if f.name.startswith('~$'):
+                    continue  # skip Word/Excel lock files
                 if f.suffix.lower() in ('.pdf', '.docx', '.doc') and 'batch' in f.name.lower():
                     return str(f)
 
-    # 2) Project folder: backend_django/batch_ticket_template/ (no gitignore; easy to use)
+    # 2) Project root (WWI ERP folder) — canonical template location
+    for name in names:
+        path = base / name
+        if path.exists():
+            return str(path)
+    for f in sorted(base.glob('*'), key=lambda p: (0 if p.suffix.lower() == '.pdf' else 1, p.name)):
+        if f.name.startswith('~$'):
+            continue
+        if f.suffix.lower() in ('.pdf', '.docx', '.doc') and 'batch' in f.name.lower():
+            return str(f)
+
+    # 3) backend_django/batch_ticket_template/
     template_dir = backend / 'batch_ticket_template'
     if template_dir.is_dir():
         for name in names:
@@ -82,10 +180,12 @@ def get_batch_ticket_template_path():
             if path.exists():
                 return str(path)
         for f in sorted(template_dir.glob('*'), key=lambda p: (0 if p.suffix.lower() == '.pdf' else 1, p.name)):
+            if f.name.startswith('~$'):
+                continue  # skip Word/Excel lock files
             if f.suffix.lower() in ('.pdf', '.docx', '.doc'):
                 return str(f)
 
-    # 3) Sensitive folder at project root
+    # 4) Sensitive folder at project root
     sensitive = base / 'Sensitive'
     if sensitive.is_dir():
         for name in names:
@@ -466,6 +566,139 @@ def _get_header_layout(page):
         return None
 
 
+def _wrap_text_to_width(font, text, fontsize, max_width_pt):
+    """Split text into lines that fit within max_width_pt. Long single words are truncated with … to fit."""
+    if not (text and max_width_pt > 0):
+        return [text] if text else []
+    text = (text or "").replace("\n", " ").replace("\r", "").strip()
+    if not text:
+        return []
+    space_w = font.text_length(" ", fontsize=fontsize)
+
+    def truncate_to_fit(s, max_pt):
+        if font.text_length(s, fontsize=fontsize) <= max_pt:
+            return s
+        out = ""
+        for c in s:
+            if font.text_length(out + c + "…", fontsize=fontsize) > max_pt:
+                return out + "…" if out else "…"
+            out += c
+        return out
+
+    words = text.split()
+    lines = []
+    current = []
+    current_width = 0
+    for word in words:
+        w = font.text_length(word, fontsize=fontsize)
+        if w > max_width_pt:
+            if current:
+                lines.append(" ".join(current))
+                current = []
+                current_width = 0
+            lines.append(truncate_to_fit(word, max_width_pt))
+            continue
+        if current and current_width + space_w + w > max_width_pt:
+            lines.append(" ".join(current))
+            current = [word]
+            current_width = w
+        else:
+            if current:
+                current_width += space_w + w
+            else:
+                current_width = w
+            current.append(word)
+    if current:
+        lines.append(" ".join(current))
+    return lines
+
+
+def _get_pack_off_table_layout(page):
+    """Detect Pack off table position on page 2 from template. Returns dict with start_y, row_height_pt, cols [(left, right), ...] for Packaging, Lot, Qty; or None."""
+    try:
+        blocks = page.get_text("dict").get("blocks", [])
+        pack_header_y = None
+        col_packaging = col_lot = col_qty = None
+        for block in blocks:
+            for line in block.get("lines", []):
+                for span in line.get("spans", []):
+                    t = (span.get("text") or "").strip().lower()
+                    bbox = span.get("bbox")
+                    if not bbox or len(bbox) < 4:
+                        continue
+                    x0, y0, x1, y1 = bbox
+                    if "pack off" in t or "packaging" in t or "lot" in t or ("quan" in t and "ty" in t):
+                        pack_header_y = max(pack_header_y or 0, y1)
+                    if "packaging" in t:
+                        col_packaging = x0
+                    if t == "lot":
+                        col_lot = x0
+                    if "quan" in t and "ty" in t and "pick" not in t:
+                        col_qty = x0
+        if pack_header_y is None or not all([col_packaging is not None, col_lot is not None, col_qty is not None]):
+            return None
+        # Next column right edges: use next column left or page width
+        # From analyzer: Packaging 41.6, Lot 132.6, Qty 223.7; next is Pick Initial ~314.6
+        try:
+            pick_initial_x = None
+            for block in blocks:
+                for line in block.get("lines", []):
+                    for span in line.get("spans", []):
+                        t = (span.get("text") or "").strip().lower()
+                        bbox = span.get("bbox")
+                        if bbox and "pick" in t and ("initial" in t or "ini" in t) and "pack" not in t:
+                            pick_initial_x = bbox[0]
+                            break
+        except Exception:
+            pick_initial_x = None
+        right_qty = pick_initial_x if pick_initial_x is not None else (col_qty + 91)
+        cols = [
+            (float(col_packaging), float(col_lot)),
+            (float(col_lot), float(col_qty)),
+            (float(col_qty), float(right_qty)),
+        ]
+        # First data row: template has "(Indirect materials)" at y~493.6, first row ~506. Cap so we don't draw below visible table.
+        start_y = pack_header_y + 14
+        if start_y < 500:
+            start_y = 506.0  # ensure we hit the first visible data row
+        row_height_pt = 18
+        return {"start_y": start_y, "row_height_pt": row_height_pt, "cols": cols}
+    except Exception:
+        return None
+
+
+def _find_indirect_materials_section_y(page):
+    """Find 'Indirect Materials' or 'Indirect' (e.g. under Packaging in pack off table); return y for first data row below it, or None."""
+    try:
+        blocks = page.get_text("dict").get("blocks", [])
+        # 1) Scan every span for "indirect" (handles split text / encoding)
+        for block in blocks:
+            for line in block.get("lines", []):
+                for span in line.get("spans", []):
+                    t = (span.get("text") or "").strip().lower()
+                    if "indirect" in t:
+                        bbox = span.get("bbox")
+                        if bbox and len(bbox) >= 4:
+                            return bbox[3] + 14
+        # 2) Line-level: combine spans in case "Indirect" and "materials" are separate
+        for block in blocks:
+            for line in block.get("lines", []):
+                line_text = ""
+                line_y1 = None
+                for span in line.get("spans", []):
+                    t = (span.get("text") or "").strip()
+                    bbox = span.get("bbox")
+                    if bbox and len(bbox) >= 4:
+                        line_y1 = bbox[3] if line_y1 is None else max(line_y1, bbox[3])
+                    line_text += " " + t
+                line_text = line_text.strip().lower()
+                if "indirect" in line_text and line_y1 is not None:
+                    return line_y1 + 14
+        return None
+    except Exception:
+        return None
+
+
 def _get_pick_list_column_xs(page):
     """Detect pick list column x positions from template headers so Quantity shows qty, not vendor."""
     try:
@@ -531,13 +764,18 @@ def _fill_batch_ticket_template_pymupdf(
     prod_date_str,
     pick_rows,
     pack_rows,
-    qc_info,
-    yield_val,
-    loss_val,
-    spill_val,
-    waste_val,
-    logo_path,
+    indirect_materials_rows=None,
+    qc_info=None,
+    yield_val=None,
+    loss_val=None,
+    spill_val=None,
+    waste_val=None,
+    logo_path=None,
 ):
+    if indirect_materials_rows is None:
+        indirect_materials_rows = []
+    if qc_info is None:
+        qc_info = {}
     """
     Open the template PDF and insert variable data at positions found from the template text.
     Returns PDF bytes so the output is an exact copy of the template with data filled in.
@@ -564,6 +802,13 @@ def _fill_batch_ticket_template_pymupdf(
         color = (0, 0, 0)
         # Spacing: place value 8 pt right of label to avoid overlap
         label_value_gap = 8
+        # Format batch size: show as integer when effectively whole (e.g. 700.01 -> 700)
+        q = quantity_produced_display
+        if abs(q - round(q)) <= 0.02:
+            batch_size_str = f"{int(round(q))} {base_unit}"
+        else:
+            batch_size_str = f"{q:.2f} {base_unit}"
+        batch_size_str = batch_size_str[:20]
 
         def insert_after(page, label, value, max_len=40):
             if not value:
@@ -606,7 +851,7 @@ def _fill_batch_ticket_template_pymupdf(
             page0.insert_text((layout["value_x"], vy(layout["y_sku"])), (fg.sku or "")[:30], fontsize=min(layout["fs"], 10), fontname=fontname, color=color)
             page0.insert_text((layout["value_x"], vy(layout["y_batch_number"])), (batch_number or "")[:24], fontsize=min(layout["fs"], 10), fontname=fontname, color=color)
             # Batch Size on line 1; Pack Size on line 2 — use template header font so Pack Size matches lines above
-            page0.insert_text((layout["batch_size_x"], vy(layout["y_batch_size"])), f"{quantity_produced_display:.2f} {base_unit}"[:20], fontsize=min(layout["fs"], 10), fontname=fontname, color=color)
+            page0.insert_text((layout["batch_size_x"], vy(layout["y_batch_size"])), batch_size_str, fontsize=min(layout["fs"], 10), fontname=fontname, color=color)
             _draw_pack_size_line(page0, layout["header_left_x"], vy(layout["y_pack_size"]), pack_size_str, color)
         else:
             insert_after(page0, "Product ID:", str(fg.id), 20)
@@ -616,103 +861,104 @@ def _fill_batch_ticket_template_pymupdf(
             if header_pos:
                 y_bs = header_pos["batch_size_y"] + header_pos["fs"] * 0.8
                 y_ps = header_pos["pack_size_y"] + header_pos["fs"] * 0.8
-                page0.insert_text((header_pos["batch_size_x"], y_bs), f"{quantity_produced_display:.2f} {base_unit}"[:20], fontsize=min(header_pos["fs"], 10), fontname=fontname, color=color)
+                page0.insert_text((header_pos["batch_size_x"], y_bs), batch_size_str, fontsize=min(header_pos["fs"], 10), fontname=fontname, color=color)
                 page0.insert_text((header_pos["pack_size_x"], y_ps), (pack_size_str or "")[:20], fontsize=min(header_pos["fs"], 10), fontname=fontname, color=color)
             else:
-                insert_after(page0, "Batch Size:", f"{quantity_produced_display:.2f} {base_unit}"[:20], 20)
+                insert_after(page0, "Batch Size:", batch_size_str, 20)
                 insert_after(page0, "Pack Size:", (pack_size_str or "")[:20], 20)
         insert_after(page0, "Production Date:", (prod_date_str or "")[:16], 16)
 
-        # Pick list: one value per cell, centered horizontally and vertically in each cell
+        # Pick list: use measured template positions; draw each cell with insert_text (insert_textbox hides text on this template)
         # 7 columns: raw_material, sku, vendor, vendor_lot (combined), qty, pick_init, prod_init
-        pick_col_xs, pick_start_y = _get_pick_list_column_xs(page0)
-        if not pick_col_xs or len(pick_col_xs) < 7:
-            pick_col_xs = (43, 100, 176, 233, 289, 335, 382)
+        try:
+            pick_fontsize = 8
+            row_height_pt = _P1_PICK_ROW_HEIGHT_PT
+            _pick_col_widths = (57, 76, 57, 56, 46, 47, 50)
+            pick_col_xs = list(_P1_PICK_COLS_PT)
+            pick_start_y = _P1_PICK_FIRST_ROW_TOP_PT
+
+            pick_col_right = []
+            for j in range(7):
+                if j < 6:
+                    pick_col_right.append(float(pick_col_xs[j + 1]))
+                else:
+                    pick_col_right.append(float(pick_col_xs[j]) + _pick_col_widths[j])
+
             try:
-                blocks = page0.get_text("dict").get("blocks", [])
-                pick_header_y = None
-                for block in blocks:
-                    for line in block.get("lines", []):
-                        for span in line.get("spans", []):
-                            t = span.get("text", "")
-                            if "Raw Material" in t or ("Vendor" in t and "Lot" in t):
-                                bbox = span.get("bbox")
-                                if bbox:
-                                    pick_header_y = bbox[3]
-                                    break
-                        if pick_header_y is not None:
-                            break
-                    if pick_header_y is not None:
-                        break
-                pick_start_y = (pick_header_y or 380) + 22
+                pick_font = fitz.Font(fontname)
             except Exception:
-                pick_start_y = 402
-        # Column right edges so each cell is bounded
-        _pick_col_widths = (57, 76, 57, 56, 46, 47, 50)
-        pick_col_right = list(pick_col_xs[:7])
-        for j in range(7):
-            if j < 6 and len(pick_col_xs) > j + 1:
-                pick_col_right[j] = pick_col_xs[j + 1]
-            else:
-                pick_col_right[j] = pick_col_xs[j] + _pick_col_widths[j]
-        row_height = 18
-        pick_fontsize = 8
-        for i, row in enumerate(pick_rows[:15]):
-            y_top = pick_start_y + i * row_height
-            y_bottom = y_top + row_height
-            cell_center_y = (y_top + y_bottom) / 2.0
-            # Use full row height so textbox is large enough for text to appear
-            text_rect_height = min(row_height, pick_fontsize * 1.4)
-            text_rect_y_top = cell_center_y - text_rect_height / 2.0
-            text_rect_y_bottom = cell_center_y + text_rect_height / 2.0
-            vl = (row.get("vendor_lot") or "").strip()
-            wl = (row.get("wildwood_lot") or "").strip()
-            combined_lot = (vl + (" / " + wl if wl else ""))[:20]
-            cells = [
-                (row.get("raw_material") or "").strip()[:24],
-                (row.get("sku") or "").strip()[:16],
-                (row.get("vendor") or "").strip()[:12],
-                combined_lot,
-                (row.get("qty") or "").strip()[:8],
-                (row.get("pick_init") or "").strip()[:6],
-                (row.get("prod_init") or "").strip()[:6],
-            ]
-            for j, text in enumerate(cells):
-                if j >= len(pick_col_xs):
-                    break
-                if not text:
-                    continue
-                cell_left = pick_col_xs[j]
-                cell_right = pick_col_right[j] if j < len(pick_col_right) else cell_left + _pick_col_widths[j]
-                cell_width = max(1, cell_right - cell_left)
-                center_x = cell_left + cell_width / 2.0
-                cell_rect = fitz.Rect(
-                    cell_left,
-                    text_rect_y_top,
-                    cell_right,
-                    text_rect_y_bottom,
-                )
-                try:
-                    page0.insert_textbox(
-                        cell_rect,
-                        text,
-                        fontsize=pick_fontsize,
-                        fontname=fontname,
-                        color=color,
-                        align=fitz.TEXT_ALIGN_CENTER,
-                    )
-                except Exception:
-                    baseline_y = cell_center_y + (pick_fontsize * 0.3)
-                    pick_font = fitz.Font(fontname)
-                    text_width = pick_font.text_length(text, fontsize=pick_fontsize)
-                    x = max(cell_left, min(center_x - text_width / 2.0, cell_right - text_width))
-                    page0.insert_text(
-                        (x, baseline_y),
-                        text,
-                        fontsize=pick_fontsize,
-                        fontname=fontname,
-                        color=color,
-                    )
+                pick_font = fitz.Font("helv")
+            row_tops_pt = _P1_PICK_ROW_TOPS_PT
+            for i, row in enumerate(pick_rows[:15]):
+                if i < len(row_tops_pt):
+                    y_top = row_tops_pt[i]
+                    row_h = (row_tops_pt[i + 1] - row_tops_pt[i]) if (i + 1) < len(row_tops_pt) else _P1_PICK_ROW_HEIGHT_PT
+                else:
+                    y_top = pick_start_y + i * row_height_pt
+                    row_h = row_height_pt
+                cell_center_y = y_top + row_h / 2.0
+                # insert_text point = bottom-left of first char; place so text sits roughly in cell (small offset from center)
+                baseline_y = cell_center_y + pick_fontsize * 0.35
+                vl = (row.get("vendor_lot") or "").strip()
+                wl = (row.get("wildwood_lot") or "").strip()
+                combined_lot = (vl + (" / " + wl if wl else ""))[:20]
+
+                def _cell(s, max_len=24):
+                    return (s or "").replace("\n", " ").replace("\r", "").strip()[:max_len]
+                qty_val = _cell(row.get("qty"), 8)
+                qty_with_uom = f"{qty_val} {base_unit}".strip() if qty_val else ""
+                cells = [
+                    _cell(row.get("raw_material"), 48),
+                    _cell(row.get("sku"), 16),
+                    _cell(row.get("vendor"), 12),
+                    _cell(combined_lot, 20),
+                    qty_with_uom,
+                    _cell(row.get("pick_init"), 6),
+                    _cell(row.get("prod_init"), 6),
+                ]
+                line_height_pt = pick_fontsize * 1.25
+                cell_pad_pt = 2.0
+                for j in range(7):
+                    if j >= len(pick_col_xs) or j >= len(pick_col_right):
+                        break
+                    text = cells[j] if j < len(cells) else ""
+                    if not text:
+                        continue
+                    try:
+                        cell_left = float(pick_col_xs[j])
+                        cell_right = pick_col_right[j]
+                        cell_width_pt = max(1, cell_right - cell_left - cell_pad_pt * 2)
+                        lines = _wrap_text_to_width(pick_font, text, pick_fontsize, cell_width_pt)
+                        if not lines:
+                            continue
+                        max_lines = max(1, int(row_h / line_height_pt))
+                        lines = lines[:max_lines]
+                        n_lines = len(lines)
+                        start_baseline_y = baseline_y - (n_lines - 1) * line_height_pt / 2.0
+                        for line_idx, line in enumerate(lines):
+                            if not line:
+                                continue
+                            text_width = pick_font.text_length(line, fontsize=pick_fontsize)
+                            if text_width > cell_width_pt:
+                                while line and pick_font.text_length(line + "…", fontsize=pick_fontsize) > cell_width_pt:
+                                    line = line[:-1]
+                                line = (line + "…") if line else ""
+                            if not line:
+                                continue
+                            line_y = start_baseline_y + line_idx * line_height_pt
+                            if line_y + pick_fontsize > y_top + row_h - 2:
+                                continue
+                            text_width = pick_font.text_length(line, fontsize=pick_fontsize)
+                            if text_width > cell_width_pt:
+                                continue
+                            center_x = (cell_left + cell_right) / 2.0
+                            x = center_x - text_width / 2.0
+                            x = max(cell_left + cell_pad_pt, min(x, cell_right - cell_pad_pt - text_width))
+                            page0.insert_text((x, line_y), line, fontsize=pick_fontsize, fontname=fontname, color=color)
+                    except Exception as cell_err:
+                        logger.warning("Pick list cell (%d,%d) failed: %s", i, j, cell_err)
+        except Exception as pick_err:
+            logger.warning("Pick list block failed (template fill continues): %s", pick_err)
 
         # Page 2: header (same fixed layout as page 1)
         page1 = doc[1]
@@ -722,7 +968,7 @@ def _fill_batch_ticket_template_pymupdf(
             page1.insert_text((layout_p2["value_x"], vy(layout_p2["y_product_id"])), str(fg.id)[:20], fontsize=min(layout_p2["fs"], 10), fontname=fontname, color=color)
             page1.insert_text((layout_p2["value_x"], vy(layout_p2["y_sku"])), (fg.sku or "")[:30], fontsize=min(layout_p2["fs"], 10), fontname=fontname, color=color)
             page1.insert_text((layout_p2["value_x"], vy(layout_p2["y_batch_number"])), (batch_number or "")[:24], fontsize=min(layout_p2["fs"], 10), fontname=fontname, color=color)
-            page1.insert_text((layout_p2["batch_size_x"], vy(layout_p2["y_batch_size"])), f"{quantity_produced_display:.2f} {base_unit}"[:20], fontsize=min(layout_p2["fs"], 10), fontname=fontname, color=color)
+            page1.insert_text((layout_p2["batch_size_x"], vy(layout_p2["y_batch_size"])), batch_size_str, fontsize=min(layout_p2["fs"], 10), fontname=fontname, color=color)
             _draw_pack_size_line(page1, layout_p2["header_left_x"], vy(layout_p2["y_pack_size"]), pack_size_str, color)
         else:
             insert_after(page1, "Product ID:", str(fg.id), 20)
@@ -732,19 +978,84 @@ def _fill_batch_ticket_template_pymupdf(
             if header_pos_p2:
                 y_bs = header_pos_p2["batch_size_y"] + header_pos_p2["fs"] * 0.8
                 y_ps = header_pos_p2["pack_size_y"] + header_pos_p2["fs"] * 0.8
-                page1.insert_text((header_pos_p2["batch_size_x"], y_bs), f"{quantity_produced_display:.2f} {base_unit}"[:20], fontsize=min(header_pos_p2["fs"], 10), fontname=fontname, color=color)
+                page1.insert_text((header_pos_p2["batch_size_x"], y_bs), batch_size_str, fontsize=min(header_pos_p2["fs"], 10), fontname=fontname, color=color)
                 page1.insert_text((header_pos_p2["pack_size_x"], y_ps), (pack_size_str or "")[:20], fontsize=min(header_pos_p2["fs"], 10), fontname=fontname, color=color)
             else:
-                insert_after(page1, "Batch Size:", f"{quantity_produced_display:.2f} {base_unit}"[:20], 20)
+                insert_after(page1, "Batch Size:", batch_size_str, 20)
                 insert_after(page1, "Pack Size:", (pack_size_str or "")[:20], 20)
-        # Pack off table: fixed start so it doesn't overlap Yield/Loss below (user-friendly spacing)
-        start_y = 400
-        pack_row_height = 14
-        for i, row in enumerate(pack_rows[:10]):
-            y = start_y + i * pack_row_height
-            page1.insert_text((72, y), (row.get("packaging") or "")[:22], fontsize=8, fontname=fontname, color=color)
-            page1.insert_text((220, y), (row.get("lot") or "")[:14], fontsize=8, fontname=fontname, color=color)
-            page1.insert_text((320, y), (row.get("qty") or "")[:8], fontsize=8, fontname=fontname, color=color)
+        # Pack off table: use fixed first data row y=506 to match template (header ends ~493, first row at 506)
+        pack_layout = _get_pack_off_table_layout(page1)
+        if pack_layout:
+            pack_row_height = pack_layout["row_height_pt"]
+            pack_cols = pack_layout["cols"]
+            start_y = 506.0  # force first data row so content appears in the visible table
+        else:
+            start_y = 506.0
+            pack_row_height = 18
+            pack_cols = [(41.6, 132.6), (132.6, 223.7), (223.7, 314.6)]  # Packaging, Lot, Qty from template page 2
+        pack_fontsize = 8
+        pack_pad_pt = 2.0
+        try:
+            pack_font = fitz.Font(fontname)
+        except Exception:
+            pack_font = fitz.Font("helv")
+        pack_baseline_offset = pack_fontsize * 0.35
+
+        # Build one list: indirect first, then outputs. Always draw at start_y (first data row of pack off table).
+        all_pack_rows = []
+        for r in (indirect_materials_rows or [])[:10]:
+            qty = (r.get("qty") or "").strip()
+            qty_display = f"{qty} EA".strip() if qty else ""
+            all_pack_rows.append([
+                (r.get("packaging") or "").strip(),
+                (r.get("lot") or "").strip(),
+                qty_display,
+            ])
+        for r in pack_rows[:10]:
+            qty = (r.get("qty") or "").strip()
+            qty_display = f"{qty} {base_unit}".strip() if qty else ""
+            all_pack_rows.append([
+                (r.get("packaging") or "").strip(),
+                (r.get("lot") or "").strip(),
+                qty_display,
+            ])
+
+        # Pack off: draw text in each cell. Baseline at cell bottom so text is visible (insert_text y = baseline).
+        n_indirect = len(indirect_materials_rows or [])
+        if all_pack_rows:
+            print("[Batch ticket] Pack off: drawing %s row(s) (indirect=%s) at start_y=%s" % (len(all_pack_rows), n_indirect, start_y))
+        line_h = pack_fontsize * 1.25
+        def _draw_pack_off_rows(rows_data, base_y):
+            for i, row_cells in enumerate(rows_data[:15]):
+                y_top = base_y + i * pack_row_height
+                cell_bottom = y_top + pack_row_height - 2
+                for col_idx, (c_left, c_right) in enumerate(pack_cols):
+                    if col_idx >= 3:
+                        break
+                    text = (row_cells[col_idx] if col_idx < len(row_cells) else "").strip()
+                    if not text:
+                        continue
+                    cell_w = max(1, c_right - c_left - pack_pad_pt * 2)
+                    lines = _wrap_text_to_width(pack_font, text, pack_fontsize, cell_w)
+                    if not lines:
+                        continue
+                    max_lines = max(1, int(pack_row_height / line_h))
+                    lines = lines[:max_lines]
+                    for line_idx, line in enumerate(lines):
+                        if not line:
+                            continue
+                        baseline_y = cell_bottom - 1 - (len(lines) - 1 - line_idx) * line_h
+                        text_width = pack_font.text_length(line, fontsize=pack_fontsize)
+                        if text_width > cell_w:
+                            continue
+                        center_x = (c_left + c_right) / 2.0
+                        x = center_x - text_width / 2.0
+                        x = max(c_left + pack_pad_pt, min(x, c_right - pack_pad_pt - text_width))
+                        try:
+                            page1.insert_text((x, baseline_y), line, fontsize=pack_fontsize, fontname=fontname, color=color)
+                        except Exception as draw_err:
+                            logger.warning("Pack off cell (%s,%s) draw failed: %s", i, col_idx, draw_err)
+        _draw_pack_off_rows(all_pack_rows, start_y + 7)
         if yield_val:
             insert_after(page1, "Yield:", yield_val[:20], 20)
         if loss_val:
@@ -814,7 +1125,14 @@ _P1_PROD_DATE = (1.5, 7.25)
 # Pick list table: first data row y, then row height; column x positions (inch)
 _P1_PICK_Y_START = 4.35
 _P1_PICK_ROW_HEIGHT = 0.2
-_P1_PICK_COLS = (0.6, 1.65, 2.45, 3.25, 4.0, 4.65, 5.35)  # SKU, Vendor, Vendor Lot, Qty, Pick Init, Prod Init, Wildwood Lot
+# Pick list from actual "Batch ticket template.pdf" (analyze_batch_template.py)
+# Column left edges (pt): Raw Material, SKU, Vendor, Vendor Lot, Qty, Pick Initials, Production Initials
+_P1_PICK_COLS_PT = (41.6, 118.7, 195.6, 272.6, 350.8, 427.7, 504.6)
+_P1_PICK_COLS = tuple(x / 72 for x in _P1_PICK_COLS_PT)  # inches for ReportLab
+# Row positions from revised template horizontal lines (y from top). First row 171-208, then 208-254, 254-300, ...
+_P1_PICK_ROW_TOPS_PT = (171.0, 208.0, 253.9, 299.9, 345.8, 391.9)
+_P1_PICK_FIRST_ROW_TOP_PT = _P1_PICK_ROW_TOPS_PT[0]
+_P1_PICK_ROW_HEIGHT_PT = 37.0  # fallback when row index >= len(row_tops)
 _P1_PAGE_NUM_Y = 0.5
 # Logo: top-left of page 1
 _P1_LOGO_X, _P1_LOGO_Y = 0.5, 10.5
@@ -1019,6 +1337,11 @@ def build_batch_ticket_pdf(batch):
 
     # Prefer: copy the template EXACTLY by filling it with our data (PyMuPDF)
     template_path = get_batch_ticket_template_path()
+    if not template_path:
+        logger.info(
+            "Batch ticket template not found; using flowable PDF. "
+            "For the canonical template design, add 'Batch Ticket template.pdf' (or .docx) to backend_django/batch_ticket_template/"
+        )
     if template_path:
         pdf_path, temp_dir = _get_template_pdf_path(template_path)
         if pdf_path and Path(pdf_path).suffix.lower() == '.pdf':
@@ -1027,10 +1350,21 @@ def build_batch_ticket_pdf(batch):
                 logo_path = get_logo_path()
             except Exception:
                 logo_path = None
+            # Same relationship as pick list: one loop over batch.inputs. Raw -> pick list, indirect -> pack off.
             pick_rows = []
+            indirect_materials_rows = []
             for batch_input in batch.inputs.select_related('lot__item').all():
                 lot = batch_input.lot
                 item = lot.item
+                if _is_indirect_material(item):
+                    qty_str = f"{int(batch_input.quantity_used)}" if batch_input.quantity_used == int(batch_input.quantity_used) else f"{batch_input.quantity_used:.2f}"
+                    indirect_materials_rows.append({
+                        'packaging': (getattr(item, 'description', None) or item.name or item.sku or '').strip(),
+                        'lot': lot.lot_number or '—',
+                        'qty': qty_str,
+                        'uom': 'EA',
+                    })
+                    continue
                 vendor = (getattr(item, 'vendor', None) or '').strip() or '—'
                 vendor_lot = (lot.vendor_lot_number or lot.lot_number or '—').strip()
                 qty = batch_input.quantity_used
@@ -1039,12 +1373,14 @@ def build_batch_ticket_pdf(batch):
                 qty_base = convert_from_lbs_to_base(qty)
                 qty_str = f"{int(round(qty_base))}" if abs(qty_base - round(qty_base)) <= 0.01 else f"{qty_base:.2f}"
                 raw_material = (getattr(item, 'description', None) or item.name or item.sku or '').strip()
+                uom = (getattr(item, 'unit_of_measure', None) or 'lbs').strip() or 'lbs'
                 pick_rows.append({
                     'raw_material': raw_material,
                     'sku': item.sku,
                     'vendor': vendor,
                     'vendor_lot': vendor_lot,
                     'qty': qty_str,
+                    'uom': uom,
                     'wildwood_lot': lot.lot_number or '',
                 })
             pack_rows = []
@@ -1055,7 +1391,8 @@ def build_batch_ticket_pdf(batch):
                 if batch.batch_type != 'repack':
                     qty = convert_from_lbs_to_base(qty)
                 qty_str = f"{qty:.2f}" if qty != int(qty) else str(int(qty))
-                pack_rows.append({'packaging': item.name or item.sku, 'lot': lot.lot_number, 'qty': qty_str})
+                packaging_desc = (getattr(item, 'description', None) or item.name or item.sku or '').strip() or (item.name or item.sku or '')
+                pack_rows.append({'packaging': packaging_desc, 'lot': lot.lot_number, 'qty': qty_str})
             yield_val = ''
             if batch.status == 'closed' and getattr(batch, 'quantity_actual', None):
                 yield_val = f"{convert_from_lbs_to_base(batch.quantity_actual):.2f} {base_unit}"
@@ -1074,6 +1411,7 @@ def build_batch_ticket_pdf(batch):
                 prod_date_str,
                 pick_rows,
                 pack_rows,
+                indirect_materials_rows,
                 qc_info,
                 yield_val,
                 loss_val,
@@ -1085,6 +1423,10 @@ def build_batch_ticket_pdf(batch):
                 _cleanup_temp_dir(temp_dir)
             if filled:
                 return filled, filename
+            logger.warning(
+                "Batch ticket template fill failed (PyMuPDF); using flowable PDF. "
+                "Ensure pymupdf is installed: pip install pymupdf"
+            )
         if temp_dir:
             _cleanup_temp_dir(temp_dir)
 
@@ -1176,7 +1518,7 @@ def build_batch_ticket_pdf(batch):
         ['Product ID:', str(fg.id)],
         ['SKU:', fg.sku or ''],
         ['Batch Number:', batch.batch_number or ''],
-        ['Batch Size:', f"{quantity_produced_display:.2f} {base_unit}"],
+        ['Batch Size:', f"{int(round(quantity_produced_display))} {base_unit}" if abs(quantity_produced_display - round(quantity_produced_display)) <= 0.02 else f"{quantity_produced_display:.2f} {base_unit}"],
         ['Pack Size:', pack_size_str or ''],
     ]
     header_right_tbl = Table(header_right_data, colWidths=[0.9 * inch, 2.2 * inch])
@@ -1216,6 +1558,8 @@ def build_batch_ticket_pdf(batch):
     for batch_input in batch.inputs.select_related('lot__item').all():
         lot = batch_input.lot
         item = lot.item
+        if _is_indirect_material(item):
+            continue
         vendor = (getattr(item, 'vendor', None) or '').strip() or '—'
         vendor_lot = (lot.vendor_lot_number or lot.lot_number or '—').strip()
         qty = batch_input.quantity_used
@@ -1337,6 +1681,15 @@ def build_batch_ticket_pdf(batch):
     # Line 15: Packaging 	Lot 	Quantity 	Pick Initial 	Pack Initial 	Amount Unused & Returned to Inventory
     pack_headers = ['Packaging', 'Lot', 'Quantity', 'Pick Initial', 'Pack Initial', 'Amount Unused & Returned to Inventory']
     pack_rows = [pack_headers]
+    # Same relationship as pick list: batch.inputs. Indirect -> pack off (first), then outputs.
+    for batch_input in batch.inputs.select_related('lot__item').all():
+        if not _is_indirect_material(batch_input.lot.item):
+            continue
+        item = batch_input.lot.item
+        lot = batch_input.lot
+        qty_str = f"{int(batch_input.quantity_used)}" if batch_input.quantity_used == int(batch_input.quantity_used) else f"{batch_input.quantity_used:.2f}"
+        packaging_desc = (getattr(item, 'description', None) or item.name or item.sku or '').strip() or (item.name or item.sku or '')
+        pack_rows.append([packaging_desc, lot.lot_number or '', f"{qty_str} EA", '', '', ''])
     for batch_output in batch.outputs.select_related('lot__item').all():
         lot = batch_output.lot
         item = lot.item
@@ -1344,7 +1697,8 @@ def build_batch_ticket_pdf(batch):
         if batch.batch_type != 'repack':
             qty = convert_from_lbs_to_base(qty)
         qty_str = f"{qty:.2f}" if qty != int(qty) else str(int(qty))
-        pack_rows.append([item.name or item.sku, lot.lot_number or '', qty_str, '', '', ''])
+        packaging_desc = (getattr(item, 'description', None) or item.name or item.sku or '').strip() or (item.name or item.sku or '')
+        pack_rows.append([packaging_desc, lot.lot_number or '', qty_str, '', '', ''])
     if len(pack_rows) == 1:
         pack_rows.append(['', '', '', '', '', ''])
     pack_tbl = Table(pack_rows, colWidths=[1.1 * inch, 0.9 * inch, 0.55 * inch, 0.7 * inch, 0.7 * inch, 1.5 * inch])

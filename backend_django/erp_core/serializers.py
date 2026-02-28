@@ -6,7 +6,7 @@ from .models import (
     SupplierDocument, TemporaryException, CostMaster, CostMasterHistory, Account,
     FinishedProductSpecification, Customer, CustomerPricing, VendorPricing, SalesOrderLot, Invoice, InvoiceItem,
     ShipToLocation, CustomerContact, SalesCall, CustomerForecast, LotDepletionLog, LotTransactionLog, PurchaseOrderLog, ProductionLog, CheckInLog,
-    Shipment, ShipmentItem, AccountsPayable, AccountsReceivable, Payment, FiscalPeriod, JournalEntry, JournalEntryLine, GeneralLedgerEntry, AccountBalance
+    Shipment, ShipmentItem, AccountsPayable, AccountsReceivable, Payment, BankReconciliation, FiscalPeriod, JournalEntry, JournalEntryLine, GeneralLedgerEntry, AccountBalance
 )
 
 
@@ -910,6 +910,16 @@ class PaymentSerializer(serializers.ModelSerializer):
         if obj.ar_entry:
             return f"{obj.ar_entry.customer_name} - ${obj.ar_entry.balance}"
         return None
+
+
+class BankReconciliationSerializer(serializers.ModelSerializer):
+    account_number = serializers.CharField(source='account.account_number', read_only=True)
+    account_name = serializers.CharField(source='account.name', read_only=True)
+    
+    class Meta:
+        model = BankReconciliation
+        fields = '__all__'
+        read_only_fields = ['created_at', 'updated_at']
 
 
 class ProductionLogSerializer(serializers.ModelSerializer):
