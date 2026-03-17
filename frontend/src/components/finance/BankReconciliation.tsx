@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import { getBankReconciliations, createBankReconciliation, getAccounts } from '../../api/finance'
+import { useBackdatedEntry } from '../../context/BackdatedEntryContext'
 import './BankReconciliation.css'
 
 interface BankReconRecord {
@@ -78,7 +79,7 @@ const BankReconciliation: React.FC = () => {
             {accounts.map(a => <option key={a.id} value={a.id}>{a.account_number} – {a.name}</option>)}
           </select>
           <label>Statement date</label>
-          <input type="date" value={form.statement_date} onChange={e => setForm(f => ({ ...f, statement_date: e.target.value }))} required />
+          <input type="date" value={form.statement_date} onChange={e => setForm(f => ({ ...f, statement_date: e.target.value }))} max={maxDateForEntry} required />
           <label>Statement balance</label>
           <input type="number" step="0.01" value={form.statement_balance} onChange={e => setForm(f => ({ ...f, statement_balance: e.target.value }))} required />
           <label>Notes (optional)</label>

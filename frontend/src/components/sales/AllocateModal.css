@@ -74,10 +74,35 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  margin-bottom: 20px;
+  margin-bottom: 10px;
   padding: 10px;
   background: #f8f9fa;
   border-radius: 4px;
+}
+
+.include-on-hold-toggle {
+  margin-bottom: 20px;
+  padding: 10px;
+  background: #fef3c7;
+  border-radius: 4px;
+  border: 1px solid #fcd34d;
+}
+
+.include-on-hold-toggle label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+
+.lots-table tr.lot-on-hold {
+  background: #fffbeb;
+}
+
+.lots-table tr.lot-on-hold td:first-child {
+  font-style: italic;
+  color: #92400e;
 }
 
 .unit-toggle label {

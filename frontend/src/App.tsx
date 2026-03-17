@@ -1,10 +1,16 @@
 import { useEffect } from 'react'
-import { BrowserRouter as Router, Routes, Route, Link, useLocation } from 'react-router-dom'
+import { BrowserRouter as Router, Routes, Route, Link, useLocation, useNavigate } from 'react-router-dom'
+import { useAuth, AuthProvider } from './context/AuthContext'
+import { BackdatedEntryProvider, useBackdatedEntry } from './context/BackdatedEntryContext'
+import ProtectedRoute from './components/ProtectedRoute'
 import Inventory from './pages/Inventory'
 import Finance from './pages/Finance'
 import Production from './pages/Production'
 import Quality from './pages/Quality'
 import Sales from './pages/Sales'
+import Login from './pages/Login'
+import ForgotPassword from './pages/ForgotPassword'
+import ResetPassword from './pages/ResetPassword'
 import './App.css'
 
 /** Prevent mouse wheel from changing number inputs when hovering (stops accidental scroll-to-increment). */
@@ -48,31 +54,81 @@ function Navigation() {
   )
 }
 
+function HeaderBackdatedToggle() {
+  const { canUseBackdatedEntry, backdatedEntryOn, setBackdatedEntryOn } = useBackdatedEntry()
+  if (!canUseBackdatedEntry) return null
+  return (
+    <label className="header-backdated-toggle">
+      <input
+        type="checkbox"
+        checked={backdatedEntryOn}
+        onChange={(e) => setBackdatedEntryOn(e.target.checked)}
+        title="Allow entering past dates (e.g. received, production, ship)"
+      />
+      <span>Backdated entry</span>
+    </label>
+  )
+}
+
+function HeaderUser() {
+  const { user, logout } = useAuth()
+  const navigate = useNavigate()
+  if (!user) return null
+  const handleLogout = async () => {
+    await logout()
+    navigate('/login', { replace: true })
+  }
+  return (
+    <div className="header-user">
+      <HeaderBackdatedToggle />
+      <span className="header-username">{user.username}</span>
+      <span className="header-role">({user.role})</span>
+      <button type="button" className="header-logout" onClick={handleLogout}>Sign out</button>
+    </div>
+  )
+}
+
 function App() {
   usePreventWheelOnNumberInputs()
   return (
     <Router>
-      <div className="App">
-        <header className="app-header">
-          <div className="header-content">
-            <div className="header-brand">
-              <img src="/logo.png" alt="Wildwood Ingredients" className="header-logo" />
-              <h1>SLURP</h1>
-            </div>
-            <Navigation />
-          </div>
-        </header>
-        <main className="app-main">
+      <AuthProvider>
+        <div className="App">
           <Routes>
-            <Route path="/" element={<Inventory />} />
-            <Route path="/inventory/*" element={<Inventory />} />
-            <Route path="/finance/*" element={<Finance />} />
-            <Route path="/production/*" element={<Production />} />
-            <Route path="/quality/*" element={<Quality />} />
-            <Route path="/sales/*" element={<Sales />} />
+            <Route path="/login" element={<Login />} />
+            <Route path="/forgot-password" element={<ForgotPassword />} />
+            <Route path="/reset-password" element={<ResetPassword />} />
+            <Route path="/*" element={
+              <ProtectedRoute>
+                <BackdatedEntryProvider>
+                  <>
+                    <header className="app-header">
+                    <div className="header-content">
+                      <div className="header-brand">
+                        <img src="/logo.png" alt="Wildwood Ingredients" className="header-logo" />
+                        <h1>SLURP</h1>
+                      </div>
+                      <Navigation />
+                      <HeaderUser />
+                    </div>
+                  </header>
+                  <main className="app-main">
+                    <Routes>
+                      <Route path="/" element={<Inventory />} />
+                      <Route path="/inventory/*" element={<Inventory />} />
+                      <Route path="/finance/*" element={<Finance />} />
+                      <Route path="/production/*" element={<Production />} />
+                      <Route path="/quality/*" element={<Quality />} />
+                      <Route path="/sales/*" element={<Sales />} />
+                    </Routes>
+                  </main>
+                  </>
+                </BackdatedEntryProvider>
+              </ProtectedRoute>
+            } />
           </Routes>
-        </main>
-      </div>
+        </div>
+      </AuthProvider>
     </Router>
   )
 }

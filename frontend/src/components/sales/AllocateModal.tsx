@@ -8,8 +8,10 @@ interface Lot {
   id: number
   lot_number: string
   quantity_remaining: number
+  quantity_on_hold?: number
   received_date: string
   expiration_date?: string
+  status?: string
   item: {
     id: number
     sku: string
@@ -72,6 +74,7 @@ function AllocateModal({ salesOrderId, onClose, onSuccess }: AllocateModalProps)
   const [allocations, setAllocations] = useState<Map<number, ItemAllocation>>(new Map())
   const [unitDisplay, setUnitDisplay] = useState<'lbs' | 'kg'>('lbs')
   const [saving, setSaving] = useState(false)
+  const [includeOnHoldLots, setIncludeOnHoldLots] = useState(false)
 
   useEffect(() => {
     if (salesOrderId) {
@@ -85,6 +88,10 @@ function AllocateModal({ salesOrderId, onClose, onSuccess }: AllocateModalProps)
       initializeAllocations()
     }
   }, [salesOrder])
+
+  useEffect(() => {
+    if (salesOrder) loadAvailableLots()
+  }, [includeOnHoldLots])
 
   const loadSalesOrder = async (id: number) => {
     try {
@@ -109,9 +116,10 @@ function AllocateModal({ salesOrderId, onClose, onSuccess }: AllocateModalProps)
         // Get vendor from item if available, otherwise pass undefined
         const vendor = item.item.vendor || undefined
         const lots = await getLotsBySkuVendor(item.item.sku, vendor)
-        // Filter lots that are accepted and have remaining quantity
+        // Filter: remaining qty, item match; by default only accepted (available). Optionally include on_hold for ship-under-quarantine.
         const available = lots.filter(
-          (lot: Lot) => lot.quantity_remaining > 0 && lot.item.id === item.item.id
+          (lot: Lot) => lot.quantity_remaining > 0 && lot.item.id === item.item.id &&
+            (lot.status === 'accepted' || (includeOnHoldLots && lot.status === 'on_hold'))
         )
         lotsMap.set(item.item.id, available)
       } catch (error) {
@@ -211,6 +219,25 @@ function AllocateModal({ salesOrderId, onClose, onSuccess }: AllocateModalProps)
   const handleSaveAllocations = async () => {
     if (!salesOrder) return
 
+    // Check if any allocation uses an on-hold lot (ship under quarantine)
+    let hasOnHoldAllocation = false
+    for (const item of salesOrder.items) {
+      const alloc = allocations.get(item.id)
+      if (alloc?.allocations?.length) {
+        const lots = availableLots.get(item.item.id) || []
+        for (const a of alloc.allocations) {
+          if (a.quantity > 0 && lots.find((l: Lot) => l.id === a.lot_id)?.status === 'on_hold') {
+            hasOnHoldAllocation = true
+            break
+          }
+        }
+      }
+      if (hasOnHoldAllocation) break
+    }
+    if (hasOnHoldAllocation && !window.confirm('One or more lots are on hold. Allocate under quarantine (ship under quarantine)?')) {
+      return
+    }
+
     try {
       setSaving(true)
       const itemsData: ItemAllocation[] = []
@@ -282,6 +309,16 @@ function AllocateModal({ salesOrderId, onClose, onSuccess }: AllocateModalProps)
               kg
             </button>
           </div>
+          <div className="include-on-hold-toggle">
+            <label>
+              <input
+                type="checkbox"
+                checked={includeOnHoldLots}
+                onChange={(e) => setIncludeOnHoldLots(e.target.checked)}
+              />
+              Include lots on hold (ship under quarantine)
+            </label>
+          </div>
 
           <div className="allocation-items">
             {salesOrder.items.map(item => {
@@ -330,12 +367,13 @@ function AllocateModal({ salesOrderId, onClose, onSuccess }: AllocateModalProps)
                           {lots.map(lot => {
                             const lotAlloc = alloc?.allocations.find(a => a.lot_id === lot.id)
                             const allocatedQty = lotAlloc?.quantity || 0
-                            const availableQty = lot.quantity_remaining
+                            const onHold = lot.quantity_on_hold ?? 0
+                            const availableQty = Math.max(0, lot.quantity_remaining - onHold)
                             const maxAllocatable = Math.min(availableQty, remaining + allocatedQty)
 
                             return (
-                              <tr key={lot.id}>
-                                <td>{lot.lot_number}</td>
+                              <tr key={lot.id} className={lot.status === 'on_hold' ? 'lot-on-hold' : ''}>
+                                <td>{lot.lot_number}{lot.status === 'on_hold' ? ' (on hold)' : ''}</td>
                                 <td>{formatNumber(convertQuantity(availableQty, lot.item.unit_of_measure))} {unitDisplayText}</td>
                                 <td>
                                   <input

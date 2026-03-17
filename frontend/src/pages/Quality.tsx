@@ -2,16 +2,17 @@ import { useState } from 'react'
 import VendorApproval from '../components/quality/VendorApproval'
 import LotTracking from '../components/quality/LotTracking'
 import FinishedGoodsList from '../components/quality/FinishedGoodsList'
+import CriticalControlPoints from '../components/quality/CriticalControlPoints'
 import './Quality.css'
 
 const NAV_SECTIONS = [
   { label: 'Vendors', items: [{ id: 'vendors' as const, label: 'Vendor Approval' }] },
   { label: 'Tracking', items: [{ id: 'lot-tracking' as const, label: 'Lot Tracking' }] },
-  { label: 'Products', items: [{ id: 'finished-goods' as const, label: 'Finished Goods' }] },
+  { label: 'Products', items: [{ id: 'finished-goods' as const, label: 'Finished Goods' }, { id: 'ccps' as const, label: 'Critical Control Points' }] },
 ]
 
 function Quality() {
-  const [activeTab, setActiveTab] = useState<'vendors' | 'lot-tracking' | 'finished-goods'>('vendors')
+  const [activeTab, setActiveTab] = useState<'vendors' | 'lot-tracking' | 'finished-goods' | 'ccps'>('vendors')
 
   return (
     <div className="quality-page">
@@ -43,6 +44,7 @@ function Quality() {
           {activeTab === 'vendors' && <VendorApproval />}
           {activeTab === 'lot-tracking' && <LotTracking />}
           {activeTab === 'finished-goods' && <FinishedGoodsList />}
+          {activeTab === 'ccps' && <CriticalControlPoints />}
         </main>
       </div>
     </div>

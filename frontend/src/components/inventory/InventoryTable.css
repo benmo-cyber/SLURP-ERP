@@ -28,6 +28,39 @@
   margin-right: 0.5rem;
 }
 
+.inventory-table-tabs {
+  display: flex;
+  gap: 0.25rem;
+  border-bottom: 1px solid #e5e7eb;
+  padding-bottom: 0;
+}
+
+.tab-btn {
+  padding: 0.5rem 1rem;
+  border: 1px solid #e5e7eb;
+  border-bottom: none;
+  background: #f9fafb;
+  color: #6b7280;
+  cursor: pointer;
+  border-radius: 6px 6px 0 0;
+  font-size: 0.875rem;
+  font-weight: 500;
+  transition: all 0.15s ease;
+  margin-bottom: -1px;
+}
+
+.tab-btn:hover {
+  background: #f3f4f6;
+  color: #374151;
+}
+
+.tab-btn.active {
+  background: white;
+  color: #111827;
+  border-color: #e5e7eb;
+  border-bottom: 1px solid white;
+}
+
 .item-type-filter {
   display: flex;
   align-items: center;
@@ -463,6 +496,37 @@
 .vendor-row td {
   color: #6b7280;
   font-size: 0.8125rem;
+}
+
+.lot-action-btn {
+  font-size: 0.75rem;
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  cursor: pointer;
+  border: 1px solid #d1d5db;
+  background: #f9fafb;
+  color: #374151;
+}
+.lot-action-btn:hover {
+  background: #f3f4f6;
+  border-color: #9ca3af;
+}
+.lot-action-btn.release-hold {
+  border-color: #34d399;
+  background: #ecfdf5;
+  color: #047857;
+}
+.lot-action-btn.release-hold:hover {
+  background: #d1fae5;
+}
+
+.lot-action-btn.reconcile-btn {
+  border-color: #f59e0b;
+  background: #fffbeb;
+  color: #b45309;
+}
+.lot-action-btn.reconcile-btn:hover {
+  background: #fef3c7;
 }
 
 

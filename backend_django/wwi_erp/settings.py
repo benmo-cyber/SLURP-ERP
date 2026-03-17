@@ -103,7 +103,10 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 # REST Framework
 REST_FRAMEWORK = {
     'DEFAULT_PERMISSION_CLASSES': [
-        'rest_framework.permissions.AllowAny',
+        'rest_framework.permissions.IsAuthenticated',
+    ],
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'rest_framework.authentication.SessionAuthentication',
     ],
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
     'PAGE_SIZE': 100
@@ -115,7 +118,14 @@ CORS_ALLOWED_ORIGINS = [
     "http://127.0.0.1:5173",
 ]
 
+# Allow CSRF when requests come from the frontend (different port)
+CSRF_TRUSTED_ORIGINS = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+]
+
 CORS_ALLOW_ALL_ORIGINS = True  # For development only
+CORS_ALLOW_CREDENTIALS = True  # Required for session cookie auth
 
 # Email configuration (GoDaddy Microsoft 365)
 EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
@@ -126,3 +136,6 @@ EMAIL_HOST_USER = 'customerservice@wildwoodingredients.com'
 EMAIL_HOST_PASSWORD = 'dR2501$Dr'
 DEFAULT_FROM_EMAIL = 'customerservice@wildwoodingredients.com'
 EMAIL_REPLY_TO = 'customerservice@wildwoodingredients.com'
+
+# Frontend URL for password reset links in email
+FRONTEND_URL = os.environ.get('FRONTEND_URL', 'http://localhost:5173')

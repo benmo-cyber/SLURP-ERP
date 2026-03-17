@@ -1,5 +1,6 @@
 from django.db import models
 from django.utils import timezone
+from django.conf import settings
 
 
 class Item(models.Model):
@@ -186,16 +187,26 @@ class Lot(models.Model):
     expiration_date = models.DateTimeField(blank=True, null=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='accepted', help_text='Acceptance status of the lot')
     on_hold = models.BooleanField(default=False, help_text='Lot is on hold and not available for use (deprecated - use status instead)')
+    quantity_on_hold = models.FloatField(default=0.0, help_text='Amount of this lot on hold (not available). Use for partial holds.')
     freight_actual = models.FloatField(blank=True, null=True, help_text='Actual freight cost for this lot')
     po_number = models.CharField(max_length=100, blank=True, null=True, help_text='Purchase order number associated with this lot')
     short_reason = models.CharField(max_length=255, blank=True, null=True, help_text='Reason for short shipment (damage, short shipped, etc.)')
     created_at = models.DateTimeField(auto_now_add=True)
+    depleted_at = models.DateTimeField(blank=True, null=True, help_text='When quantity_remaining reached 0; lots are hidden from inventory table 24h after this.')
     
     class Meta:
         ordering = ['-created_at']
     
     def __str__(self):
         return self.lot_number
+    
+    def save(self, *args, **kwargs):
+        from django.utils import timezone
+        if self.quantity_remaining <= 0 and self.depleted_at is None:
+            self.depleted_at = timezone.now()
+        elif self.quantity_remaining > 0:
+            self.depleted_at = None
+        super().save(*args, **kwargs)
 
 
 class InventoryTransaction(models.Model):
@@ -548,6 +559,18 @@ class CheckInLog(models.Model):
         return f"Check-in: {self.item_sku} - {self.quantity} {self.quantity_unit} on {self.checked_in_at.strftime('%Y-%m-%d %H:%M')}"
 
 
+class CriticalControlPoint(models.Model):
+    """Critical control point (CCP) for pre-production checks on batch tickets (e.g. 20 mesh screen)."""
+    name = models.CharField(max_length=255, help_text='e.g. 20 mesh screen, 40 mesh screen')
+    display_order = models.PositiveSmallIntegerField(default=0, help_text='Order in dropdowns (lower first)')
+
+    class Meta:
+        ordering = ['display_order', 'name']
+
+    def __str__(self):
+        return self.name
+
+
 class Formula(models.Model):
     finished_good = models.OneToOneField(
         Item,
@@ -557,7 +580,15 @@ class Formula(models.Model):
     )
     version = models.CharField(max_length=50, default='1.0')
     notes = models.TextField(blank=True, null=True)
-    
+    critical_control_point = models.ForeignKey(
+        CriticalControlPoint,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='formulas',
+        help_text='CCP shown on batch ticket pre-production checks (e.g. Has [CCP] been inspected and installed properly?)'
+    )
+
     # Quality Control parameters
     qc_parameter_name = models.CharField(
         max_length=255, 
@@ -575,7 +606,15 @@ class Formula(models.Model):
         null=True,
         help_text='Maximum acceptable value for QC parameter'
     )
-    
+
+    # Mixing steps (Steps 1-6) for batch instructions
+    mixing_step_1 = models.TextField(blank=True, null=True, help_text='Mixing step 1')
+    mixing_step_2 = models.TextField(blank=True, null=True, help_text='Mixing step 2')
+    mixing_step_3 = models.TextField(blank=True, null=True, help_text='Mixing step 3')
+    mixing_step_4 = models.TextField(blank=True, null=True, help_text='Mixing step 4')
+    mixing_step_5 = models.TextField(blank=True, null=True, help_text='Mixing step 5')
+    mixing_step_6 = models.TextField(blank=True, null=True, help_text='Mixing step 6')
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     
@@ -715,6 +754,7 @@ class SalesOrder(models.Model):
     order_date = models.DateTimeField(auto_now_add=True)
     expected_ship_date = models.DateTimeField(blank=True, null=True, help_text='Requested ship date')
     actual_ship_date = models.DateTimeField(blank=True, null=True, help_text='Actual ship date')
+    carrier = models.CharField(max_length=255, blank=True, null=True, help_text='Shipping carrier (e.g. FedEx, UPS); shown on invoice under SHIPPED VIA')
     tracking_number = models.CharField(max_length=255, blank=True, null=True, help_text='Shipping tracking number')
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='draft')
     notes = models.TextField(blank=True, null=True)
@@ -1254,8 +1294,12 @@ class SalesOrderLot(models.Model):
 
 
 class Shipment(models.Model):
-    """Track individual shipments for sales orders (supports multiple shipments per order)"""
+    """Track individual shipments for sales orders (supports multiple shipments per order)."""
     sales_order = models.ForeignKey(SalesOrder, on_delete=models.CASCADE, related_name='shipments')
+    expected_ship_date = models.DateTimeField(
+        blank=True, null=True,
+        help_text='Agreed/due date for this release. Used for on-time KPI (compare to ship_date).'
+    )
     ship_date = models.DateTimeField(help_text='Date the shipment was shipped')
     tracking_number = models.CharField(max_length=255, help_text='Tracking number for this shipment')
     notes = models.TextField(blank=True, null=True)
@@ -1326,10 +1370,12 @@ class Invoice(models.Model):
     
     @property
     def days_aging(self):
-        """Calculate days aging (overdue) from due date"""
+        """Calculate days aging (overdue) from due date. Only counts after invoice is Issued (sent)."""
         from django.utils import timezone
         if self.status == 'paid':
             return 0
+        if self.status == 'draft':
+            return 0  # Don't start aging until invoice is moved to Issued
         today = timezone.now().date()
         return (today - self.due_date).days
 
@@ -1741,4 +1787,31 @@ class OrphanedPurchaseOrderItem(models.Model):
     
     def __str__(self):
         return f"Orphaned PO Item: {self.original_item_sku} (PO: {self.purchase_order.po_number})"
+
+
+class UserProfile(models.Model):
+    """Extended profile for ERP users: role (license tier) for access control."""
+    ROLE_CHOICES = [
+        ('viewer', 'Viewer'),
+        ('operator', 'Operator'),
+        ('manager', 'Manager'),
+        ('admin', 'Admin'),
+    ]
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='erp_profile',
+    )
+    role = models.CharField(
+        max_length=20,
+        choices=ROLE_CHOICES,
+        default='viewer',
+        help_text='Access tier: Viewer (read-only), Operator, Manager, Admin (full).',
+    )
+
+    class Meta:
+        db_table = 'erp_core_userprofile'
+
+    def __str__(self):
+        return f"{self.user.username} ({self.get_role_display()})"
 

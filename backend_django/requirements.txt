@@ -1,2 +1,6 @@
 # Packing list generation (GET /api/sales-orders/<id>/packing-list/)
 python-docx>=1.1.0
+
+# PO PDF: Jinja2 HTML template → PDF (pure Python, no GTK/Cairo)
+Jinja2>=3.0
+xhtml2pdf>=0.2.16

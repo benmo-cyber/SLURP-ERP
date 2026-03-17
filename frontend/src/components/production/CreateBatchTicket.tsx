@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { getItems, getFormulas, getLots, createProductionBatch, getItemPackSizes, getPartialLots } from '../../api/inventory'
 import { formatNumber } from '../../utils/formatNumber'
+import { useBackdatedEntry } from '../../context/BackdatedEntryContext'
 import './CreateBatchTicket.css'
 
 interface Item {
@@ -39,6 +40,7 @@ interface CreateBatchTicketProps {
 }
 
 function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
+  const { minDateForEntry } = useBackdatedEntry()
   const [batchType, setBatchType] = useState<'production' | 'repack'>('production')
   const [finishedGoods, setFinishedGoods] = useState<Item[]>([])
   const [repackItems, setRepackItems] = useState<Item[]>([])
@@ -449,36 +451,59 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
 
     try {
       setSubmitting(true)
-      
-      const quantityInLbs = quantityUnit === 'kg' 
-        ? convertWeight(parseFloat(quantity), 'kg', 'lbs')
-        : parseFloat(quantity)
-      // Round to avoid floating point precision issues
-      const roundedQuantityInLbs = Math.round(quantityInLbs * 100) / 100
 
-      // Calculate total quantity used (convert all to lbs for comparison)
-      let totalQuantityUsedInLbs = 0
-      Object.keys(selectedLots).forEach(lotId => {
-        const lot = availableLots.find(l => l.id === parseInt(lotId)) || allLots.find(l => l.id === parseInt(lotId))
-        if (lot) {
-          const quantityUsed = selectedLots[parseInt(lotId)]
-          // Convert from lot's native unit to lbs
-          if (lot.item.unit_of_measure === 'lbs') {
-            totalQuantityUsedInLbs += quantityUsed
-          } else if (lot.item.unit_of_measure === 'kg') {
-            totalQuantityUsedInLbs += convertWeight(quantityUsed, 'kg', 'lbs')
-          }
-        }
-      })
-      // Round to avoid floating point precision issues
-      totalQuantityUsedInLbs = Math.round(totalQuantityUsedInLbs * 100) / 100
-
-      // Validate that total quantity used equals quantity to produce (with tolerance for conversion rounding)
       const tolerance = 0.02  // Allow for kg/lbs conversion and floating point (e.g. 700.01 vs 700.00)
-      if (Math.abs(totalQuantityUsedInLbs - roundedQuantityInLbs) > tolerance) {
-        alert(`Quantity mismatch: Total quantity used (${formatNumber(totalQuantityUsedInLbs)} lbs) must equal quantity to produce (${formatNumber(roundedQuantityInLbs)} lbs)`)
-        setSubmitting(false)
-        return
+
+      // For repack: backend expects quantity_produced in the item's native unit (e.g. kg). For production: in lbs.
+      let quantityProducedForApi: number
+      if (batchType === 'repack' && selectedRepackItem) {
+        // Quantity to repack in the repack item's native unit
+        const parsedQty = parseFloat(quantity)
+        const quantityInNative =
+          quantityUnit === selectedRepackItem.unit_of_measure
+            ? parsedQty
+            : convertWeight(parsedQty, quantityUnit, selectedRepackItem.unit_of_measure as 'lbs' | 'kg')
+        quantityProducedForApi = Math.round(quantityInNative * 100) / 100
+
+        // Total quantity used is already in native unit (all repack lots are same item)
+        let totalQuantityUsedNative = 0
+        Object.keys(selectedLots).forEach(lotId => {
+          totalQuantityUsedNative += selectedLots[parseInt(lotId)]
+        })
+        totalQuantityUsedNative = Math.round(totalQuantityUsedNative * 100) / 100
+
+        if (Math.abs(totalQuantityUsedNative - quantityProducedForApi) > tolerance) {
+          const uom = selectedRepackItem.unit_of_measure
+          alert(`Quantity mismatch: Total quantity used (${formatNumber(totalQuantityUsedNative)} ${uom}) must equal quantity to repack (${formatNumber(quantityProducedForApi)} ${uom})`)
+          setSubmitting(false)
+          return
+        }
+      } else {
+        const quantityInLbs = quantityUnit === 'kg'
+          ? convertWeight(parseFloat(quantity), 'kg', 'lbs')
+          : parseFloat(quantity)
+        const roundedQuantityInLbs = Math.round(quantityInLbs * 100) / 100
+
+        let totalQuantityUsedInLbs = 0
+        Object.keys(selectedLots).forEach(lotId => {
+          const lot = availableLots.find(l => l.id === parseInt(lotId)) || allLots.find(l => l.id === parseInt(lotId))
+          if (lot) {
+            const quantityUsed = selectedLots[parseInt(lotId)]
+            if (lot.item.unit_of_measure === 'lbs') {
+              totalQuantityUsedInLbs += quantityUsed
+            } else if (lot.item.unit_of_measure === 'kg') {
+              totalQuantityUsedInLbs += convertWeight(quantityUsed, 'kg', 'lbs')
+            }
+          }
+        })
+        totalQuantityUsedInLbs = Math.round(totalQuantityUsedInLbs * 100) / 100
+
+        if (Math.abs(totalQuantityUsedInLbs - roundedQuantityInLbs) > tolerance) {
+          alert(`Quantity mismatch: Total quantity used (${formatNumber(totalQuantityUsedInLbs)} lbs) must equal quantity to produce (${formatNumber(roundedQuantityInLbs)} lbs)`)
+          setSubmitting(false)
+          return
+        }
+        quantityProducedForApi = roundedQuantityInLbs
       }
 
       // Check if production date is in the future
@@ -491,7 +516,7 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
       // Batch number will be auto-generated by the backend
       const batchData: any = {
         batch_type: batchType,
-        quantity_produced: roundedQuantityInLbs,
+        quantity_produced: quantityProducedForApi,
         production_date: productionDate,
         status: isFuture ? 'scheduled' : 'in_progress',
         inputs: Object.keys(selectedLots).map(lotId => {
@@ -805,12 +830,12 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
               value={productionDate}
               onChange={(e) => setProductionDate(e.target.value)}
               className="form-input"
-              min={new Date().toISOString().split('T')[0]}
+              min={minDateForEntry}
             />
             <small className="form-hint">
               {new Date(productionDate) > new Date() 
                 ? 'Future date selected - batch will be created as "Scheduled"'
-                : 'Select today or a future date'}
+                : minDateForEntry ? 'Select today or a future date' : 'Any date allowed (backdated entry on)'}
             </small>
           </div>
 

@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { getInvoice, updateInvoice } from '../../api/invoices'
+import { openPackingListForShipment } from '../../api/salesOrders'
 import { formatCurrency } from '../../utils/formatNumber'
 import './ViewInvoice.css'
 
@@ -14,6 +15,7 @@ interface Invoice {
     customer?: {
       payment_terms?: string
     }
+    shipments?: { id: number; ship_date?: string }[]
   }
   invoice_date: string
   due_date: string
@@ -111,7 +113,6 @@ function ViewInvoice({ invoiceId, onClose, onSuccess }: ViewInvoiceProps) {
 
   const handlePrintPackingList = async () => {
     if (!invoice?.sales_order?.id) return
-
     try {
       const { openPackingList } = await import('../../api/salesOrders')
       await openPackingList(invoice.sales_order.id)
@@ -119,6 +120,10 @@ function ViewInvoice({ invoiceId, onClose, onSuccess }: ViewInvoiceProps) {
       console.error('Failed to open packing list:', error)
       alert(error?.message || 'Failed to open packing list')
     }
+  }
+
+  const handlePackingListForShipment = (shipmentId: number) => {
+    openPackingListForShipment(shipmentId)
   }
 
   if (loading) {
@@ -179,7 +184,7 @@ function ViewInvoice({ invoiceId, onClose, onSuccess }: ViewInvoiceProps) {
                       className="status-select"
                     >
                       <option value="draft">Draft</option>
-                      <option value="sent">Sent</option>
+                      <option value="sent">Issued</option>
                       <option value="paid">Paid</option>
                       <option value="overdue">Overdue</option>
                       <option value="cancelled">Cancelled</option>
@@ -309,13 +314,32 @@ function ViewInvoice({ invoiceId, onClose, onSuccess }: ViewInvoiceProps) {
         <div className="modal-footer">
           <div className="footer-actions">
             {invoice.sales_order && (
-              <button
-                onClick={handlePrintPackingList}
-                className="btn btn-secondary"
-                title="View Packing List"
-              >
-                📦 Packing List
-              </button>
+              <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px' }}>
+                <button
+                  onClick={handlePrintPackingList}
+                  className="btn btn-secondary"
+                  title="View Packing List (full order)"
+                >
+                  📦 Packing List
+                </button>
+                {invoice.sales_order.shipments && invoice.sales_order.shipments.length > 0 && (
+                  <>
+                    <span style={{ fontSize: '0.85rem', color: '#666' }}>By release:</span>
+                    {invoice.sales_order.shipments.map((s: { id: number; ship_date?: string }, idx: number) => (
+                      <button
+                        key={s.id}
+                        type="button"
+                        className="btn btn-secondary"
+                        style={{ fontSize: '0.85rem', padding: '0.4rem 0.6rem' }}
+                        onClick={() => handlePackingListForShipment(s.id)}
+                        title={s.ship_date ? `Shipped ${s.ship_date.slice(0, 10)}` : `Release ${idx + 1}`}
+                      >
+                        Release {idx + 1}
+                      </button>
+                    ))}
+                  </>
+                )}
+              </div>
             )}
           </div>
           <div className="footer-actions">

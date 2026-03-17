@@ -1,13 +1,4 @@
-import axios from 'axios'
-
-const API_BASE_URL = 'http://localhost:8000/api'
-
-const api = axios.create({
-  baseURL: API_BASE_URL,
-  headers: {
-    'Content-Type': 'application/json',
-  },
-})
+import { api } from './client'
 
 // Items API
 export const getItems = async (approvedVendorsOnly: boolean = false) => {
@@ -106,6 +97,22 @@ export const updateLot = async (lotId: number, data: any) => {
   return response.data
 }
 
+export const putLotOnHold = async (lotId: number, quantity: number) => {
+  const response = await api.post(`/lots/${lotId}/put_on_hold/`, { quantity })
+  return response.data
+}
+
+export const releaseLotFromHold = async (lotId: number, quantity: number) => {
+  const response = await api.post(`/lots/${lotId}/release_from_hold/`, { quantity })
+  return response.data
+}
+
+/** Admin override: reconcile lot quantity_remaining to match reality. Requires staff. */
+export const reconcileLot = async (lotId: number, quantityRemaining: number, reason: string) => {
+  const response = await api.post(`/lots/${lotId}/reconcile/`, { quantity_remaining: quantityRemaining, reason: reason || 'Admin reconcile' })
+  return response.data
+}
+
 // Production Batches API
 export const getProductionBatches = async () => {
   const response = await api.get('/production-batches/')
@@ -136,6 +143,26 @@ export const reverseBatchTicket = async (batchId: number) => {
 export const getPartialLots = async (finishedGoodItemId: number) => {
   const response = await api.get(`/production-batches/partials/?finished_good_item_id=${finishedGoodItemId}`)
   return response.data
+}
+
+// Critical Control Points (CCP) API – for batch ticket pre-production checks
+export const getCriticalControlPoints = async () => {
+  const response = await api.get('/critical-control-points/')
+  return response.data.results || response.data
+}
+
+export const createCriticalControlPoint = async (data: { name: string; display_order?: number }) => {
+  const response = await api.post('/critical-control-points/', data)
+  return response.data
+}
+
+export const updateCriticalControlPoint = async (id: number, data: { name?: string; display_order?: number }) => {
+  const response = await api.put(`/critical-control-points/${id}/`, data)
+  return response.data
+}
+
+export const deleteCriticalControlPoint = async (id: number) => {
+  await api.delete(`/critical-control-points/${id}/`)
 }
 
 // Formulas API
@@ -185,10 +212,11 @@ export const createSalesOrder = async (data: any) => {
 }
 
 // Inventory Details API
-export const getInventoryDetails = async (itemType?: string) => {
+// inventoryTable: 'finished_good' | 'raw_material' | 'indirect_material' for split tables (distributed: raw until repack closed, then FG)
+export const getInventoryDetails = async (inventoryTable?: string) => {
   const params = new URLSearchParams()
-  if (itemType) {
-    params.append('item_type', itemType)
+  if (inventoryTable) {
+    params.append('inventory_table', inventoryTable)
   }
   const url = params.toString() ? `/lots/inventory_details/?${params}` : '/lots/inventory_details/'
   const response = await api.get(url)

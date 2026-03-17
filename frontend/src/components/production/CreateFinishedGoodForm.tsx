@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { getItems, createItem } from '../../api/inventory'
 import { createFinishedProductSpecification } from '../../api/production'
+import { useBackdatedEntry } from '../../context/BackdatedEntryContext'
 import './CreateFinishedGoodForm.css'
 
 interface CreateFinishedGoodFormProps {
@@ -416,6 +417,7 @@ function CreateFinishedGoodForm({ onClose, onSuccess }: CreateFinishedGoodFormPr
                     id="completed_date"
                     value={fpsData.completed_date}
                     onChange={(e) => handleChange('completed_date', e.target.value)}
+                    max={maxDateForEntry}
                   />
                 </div>
               </div>

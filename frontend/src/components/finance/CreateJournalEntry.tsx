@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { getAccounts, createJournalEntry } from '../../api/finance'
+import { useBackdatedEntry } from '../../context/BackdatedEntryContext'
 import './CreateJournalEntry.css'
 
 interface Account {
@@ -139,6 +140,7 @@ function CreateJournalEntry({ onClose, onSuccess }: CreateJournalEntryProps) {
                 type="date"
                 value={formData.entry_date}
                 onChange={(e) => setFormData({ ...formData, entry_date: e.target.value })}
+                max={maxDateForEntry}
                 required
               />
             </div>

@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { getItems, createLot } from '../../api/inventory'
 import { getPurchaseOrders } from '../../api/purchaseOrders'
 import { getVendors } from '../../api/quality'
+import { useBackdatedEntry } from '../../context/BackdatedEntryContext'
 import './CheckInForm.css'
 
 interface Item {
@@ -67,6 +68,7 @@ interface CheckInFormProps {
 }
 
 function CheckInForm({ onClose, onSuccess }: CheckInFormProps) {
+  const { maxDateForEntry } = useBackdatedEntry()
   const [items, setItems] = useState<Item[]>([])
   const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>([])
   const [vendors, setVendors] = useState<Vendor[]>([])
@@ -662,6 +664,7 @@ function CheckInForm({ onClose, onSuccess }: CheckInFormProps) {
                         type="date"
                         value={row.date}
                         onChange={(e) => handleRowChange(index, 'date', e.target.value)}
+                        max={maxDateForEntry}
                         required
                         className="table-input"
                       />

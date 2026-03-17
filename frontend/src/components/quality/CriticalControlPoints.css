@@ -1,0 +1,85 @@
+.critical-control-points {
+  padding: 0 1rem 1rem;
+}
+
+.ccp-loading {
+  padding: 2rem;
+  color: #666;
+}
+
+.ccp-header {
+  margin-bottom: 1.25rem;
+}
+
+.ccp-header h2 {
+  margin: 0 0 0.5rem 0;
+  font-size: 1.25rem;
+}
+
+.ccp-description {
+  margin: 0 0 1rem 0;
+  color: #555;
+  font-size: 0.9rem;
+  max-width: 560px;
+}
+
+.ccp-add-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  margin-bottom: 1rem;
+}
+
+.ccp-add-row input {
+  flex: 1;
+  max-width: 320px;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+}
+
+.ccp-table {
+  width: 100%;
+  max-width: 560px;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.ccp-table th,
+.ccp-table td {
+  padding: 0.5rem 0.75rem;
+  text-align: left;
+  border-bottom: 1px solid #eee;
+}
+
+.ccp-table th {
+  font-weight: 600;
+  background: #f5f5f5;
+}
+
+.ccp-table td input {
+  width: 100%;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+}
+
+.ccp-empty {
+  color: #888;
+  font-style: italic;
+  padding: 1.5rem !important;
+}
+
+.ccp-table .btn-sm {
+  margin-right: 0.35rem;
+}
+
+.btn-danger {
+  background: #c53030;
+  color: #fff;
+  border: none;
+}
+
+.btn-danger:hover {
+  background: #9b2c2c;
+}

@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Batch Ticket {{ batch_number }}</title>
+  <style>
+    @page { size: letter; margin: 0.5in; }
+    body { font-family: Helvetica, Arial, sans-serif; font-size: 8.5pt; color: #000; margin: 0; line-height: 1.15; }
+    .page-break { page-break-after: always; }
+    .header-table { width: 100%; border-collapse: collapse; margin-bottom: 4px; table-layout: fixed; }
+    .header-table td { vertical-align: top; padding: 0; }
+    .header-logo { width: 1.5in; }
+    .header-logo img { width: 140px; height: 140px; display: block; }
+    .header-right { font-size: 9pt; }
+    .header-right table { border-collapse: collapse; }
+    .header-right th { text-align: left; font-weight: bold; padding: 1px 6px 1px 0; width: 0.9in; }
+    .header-right td { text-align: right; padding: 1px 0; width: 2.2in; }
+    .section-title { font-weight: bold; font-size: 9.5pt; margin: 5px 0 2px 0; }
+    .pick-date-line { font-size: 8.5pt; margin-bottom: 4px; }
+    .pick-table, .pack-table, .step-table, .precheck-table { width: 100%; border-collapse: collapse; font-size: 7.5pt; margin-bottom: 2px; table-layout: fixed; }
+    .pick-table th, .pick-table td, .pack-table th, .pack-table td { border: 0.5px solid #000; padding: 2px 4px; vertical-align: middle; }
+    .pick-table .col-sku { width: 1.65in; }
+    .pick-table .col-vendor { width: 1.2in; }
+    .pick-table .col-vendor-lot { width: 1.2in; }
+    .pick-table .col-qty { width: 0.55in; text-align: right; }
+    .pick-table .col-pick { width: 0.75in; }
+    .pick-table .col-prod { width: 0.95in; }
+    .pick-table .col-ww { width: 1.2in; }
+    .pick-table th { font-weight: bold; background: #e8e8e8; text-align: center; }
+    .pack-table th { font-weight: bold; background: #1e3a5f; color: #fff; text-align: center; }
+    .pack-table .col-packaging { width: 28%; }
+    .pack-table .col-lot { width: 18%; }
+    .pack-table .col-qty { width: 12%; }
+    .pack-table .col-amount { width: 42%; }
+    .step-table th, .step-table td { border: 0.5px solid #888; padding: 2px 4px; vertical-align: top; }
+    .step-table th { font-weight: bold; width: 0.55in; text-align: center; background: #fff; }
+    .step-table .step-num { width: 0.55in; }
+    .step-table .step-content { width: 4in; }
+    .precheck-header { margin-bottom: 14px; }
+    .precheck-q { font-size: 8.5pt; margin-bottom: 4px; }
+    .precheck-rows { width: 100%; border: none; border-collapse: collapse; font-size: 9pt; margin-bottom: 0; }
+    .precheck-rows td { border: none; padding: 4px 8px 4px 0; vertical-align: middle; }
+    .precheck-rows td.precheck-chk { padding: 0 6px 0 4px; vertical-align: middle; border: none; }
+    .precheck-rows td.precheck-chk-after-label { padding-left: 18px; }
+    table.chk-box { border-collapse: collapse; display: inline-table; vertical-align: middle; }
+    table.chk-box td { width: 11pt; height: 14pt; padding: 0; background: #fff; border: 2px solid #000; }
+    .qc-disposition-rows td.precheck-chk.qc-chk-tight { padding: 0 0 0 2px; }
+    .precheck-rows td.precheck-ul { border-bottom: 1px solid #000; padding-bottom: 2px; }
+    .precheck-start-ul { border-bottom: 1px solid #000; width: 108pt; }
+    .hr-line { border-top: 1px solid #000; margin: 6px 0; }
+    .two-col { width: 100%; border-collapse: collapse; margin-bottom: 6px; }
+    .two-col td { padding: 0; font-size: 9pt; }
+    .two-col .right { text-align: right; }
+    .confidentiality { font-size: 7pt; margin: 8px 0 4px 0; }
+    .footer-line { font-size: 7pt; margin: 2px 0; }
+    .page-num { text-align: center; font-size: 8pt; margin: 6px 0; }
+    .small { font-size: 7pt; margin: 2px 0; }
+    .qc-calc-box { width: 100%; height: 1.15in; border: 1px solid #000; margin-top: 4px; background: #fff; }
+  </style>
+</head>
+<body>
+  <!-- PAGE 1 -->
+  <table class="header-table">
+    <tr>
+      <td class="header-logo">
+        {% if logo_base64 %}
+        <img src="data:image/png;base64,{{ logo_base64 }}" alt="" />
+        {% endif %}
+      </td>
+      <td class="header-right">
+        <table>
+          <tr><th>Production Date:</th><td>{{ prod_date or '_________________' }}</td></tr>
+          <tr><th>Product ID:</th><td>{{ product_id }}</td></tr>
+          <tr><th>SKU:</th><td>{{ sku }}</td></tr>
+          <tr><th>Batch Number:</th><td>{{ batch_number }}</td></tr>
+          <tr><th>Batch Size:</th><td>{{ batch_size }}</td></tr>
+          <tr><th>Pack Size:</th><td>{{ pack_size }}</td></tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+
+  <div class="section-title">Pick List</div>
+  <div class="pick-date-line">Pick Date___________&nbsp;&nbsp;&nbsp;Start Time _________&nbsp;&nbsp;&nbsp;End Time___________</div>
+  <table class="pick-table">
+    <thead>
+      <tr>
+        <th class="col-sku">Raw Material SKU</th>
+        <th class="col-vendor">Vendor</th>
+        <th class="col-vendor-lot">Vendor Lot</th>
+        <th class="col-qty">Quantity</th>
+        <th class="col-pick">Pick Initials</th>
+        <th class="col-prod">Production Initials</th>
+        <th class="col-ww">Wildwood Lot</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in pick_rows %}
+      <tr>
+        <td class="col-sku">{{ row.sku }}</td>
+        <td class="col-vendor">{{ row.vendor }}</td>
+        <td class="col-vendor-lot">{{ row.vendor_lot }}</td>
+        <td class="col-qty">{{ row.qty }}{% if row.uom %} {{ row.uom }}{% endif %}</td>
+        <td class="col-pick">{{ row.pick_init }}</td>
+        <td class="col-prod">{{ row.prod_init }}</td>
+        <td class="col-ww">{{ row.wildwood_lot }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <div class="hr-line"></div>
+
+  <div class="section-title">Pre-Production Checks</div>
+  <div class="precheck-q">Equipment Sanitized and in good order?</div>
+  <table class="precheck-rows" style="margin-left: 12pt; width: 100%;">
+    <tr>
+      <td style="width: 5%;">Yes</td>
+      <td class="precheck-chk"><table class="chk-box" cellpadding="0" cellspacing="0"><tr><td>&nbsp;</td></tr></table></td>
+      <td style="width: 4%;">No</td>
+      <td class="precheck-chk"><table class="chk-box" cellpadding="0" cellspacing="0"><tr><td>&nbsp;</td></tr></table></td>
+      <td style="width: 8%; padding-right: 10px;">Campaign</td>
+      <td class="precheck-chk precheck-chk-after-label"><table class="chk-box" cellpadding="0" cellspacing="0"><tr><td>&nbsp;</td></tr></table></td>
+      <td style="width: 12%;">Operator Initials</td>
+      <td class="precheck-ul" style="width: 15%;">&nbsp;</td>
+      <td style="width: 12%;">Supervisor Initials</td>
+      <td class="precheck-ul" style="width: 15%;">&nbsp;</td>
+    </tr>
+  </table>
+  <div style="margin-bottom: 4px;"></div>
+
+  <div class="precheck-q">{{ ccp_question }}</div>
+  <table class="precheck-rows" style="margin-left: 12pt; width: 100%;">
+    <tr>
+      <td style="width: 5%;">Yes</td>
+      <td class="precheck-chk"><table class="chk-box" cellpadding="0" cellspacing="0"><tr><td>&nbsp;</td></tr></table></td>
+      <td style="width: 4%;">No</td>
+      <td class="precheck-chk"><table class="chk-box" cellpadding="0" cellspacing="0"><tr><td>&nbsp;</td></tr></table></td>
+      <td style="width: 8%;"></td>
+      <td style="width: 12%;">Operator Initials</td>
+      <td class="precheck-ul" style="width: 15%;">&nbsp;</td>
+      <td style="width: 12%;">Supervisor Initials</td>
+      <td class="precheck-ul" style="width: 15%;">&nbsp;</td>
+    </tr>
+  </table>
+
+  <div class="hr-line"></div>
+
+  <div style="margin-bottom: 2px;"></div>
+  <div class="section-title">Batch Instructions</div>
+  <div class="pick-date-line" style="margin-bottom: 4px;">Start Time___________&nbsp;&nbsp;&nbsp;End Time ____________</div>
+  <table class="step-table" style="margin-bottom: 2px;">
+    <tr><th>Step</th><th>Initial After Completion</th></tr>
+    <tr><td class="step-num">1.)</td><td class="step-content">{{ mixing_steps[0] or ' ' }}</td></tr>
+    <tr><td class="step-num">2.)</td><td class="step-content">{{ mixing_steps[1] or ' ' }}</td></tr>
+    <tr><td class="step-num">3.)</td><td class="step-content">{{ mixing_steps[2] or ' ' }}</td></tr>
+    <tr><td class="step-num">4.)</td><td class="step-content">{{ mixing_steps[3] or ' ' }}</td></tr>
+    <tr><td class="step-num">5.)</td><td class="step-content">{{ mixing_steps[4] or ' ' }}</td></tr>
+    <tr><td class="step-num">6.)</td><td class="step-content">{{ mixing_steps[5] or ' ' }}</td></tr>
+  </table>
+
+  <div style="margin-bottom: 2px;"></div>
+  <div class="section-title">QC Results (Please write all data): Start Time _________ Initials __________</div>
+  <table cellpadding="0" cellspacing="0" style="width: 100%; border-collapse: collapse; border: 1px solid #000; margin-top: 2px;"><tr><td style="height: 0.75in; background: #fff;">&nbsp;</td></tr></table>
+  <div class="small" style="margin-top: 4px;">Adjustments (If needed):</div>
+  <div class="small" style="margin-top: 2px;">Raw Materials added as an adjustment should be repicked and highlighted</div>
+  {% if qc_info.get('actual') or qc_info.get('initials') %}
+  <div style="margin-top: 2px;">QC Data: {{ qc_info.get('actual', '') }}{% if qc_info.get('initials') %}  Initials: {{ qc_info.get('initials') }}{% endif %}</div>
+  {% endif %}
+  <div style="margin-top: 4px;">QC Disposition:</div>
+  <table class="precheck-rows" style="margin-left: 0; width: auto; margin-top: 4px;">
+    <tr>
+      <td style="width: auto;">Approve</td>
+      <td class="precheck-chk"><table class="chk-box" cellpadding="0" cellspacing="0"><tr><td>&nbsp;</td></tr></table></td>
+      <td style="width: auto; padding-left: 8px;">Not Approved</td>
+      <td class="precheck-chk"><table class="chk-box" cellpadding="0" cellspacing="0"><tr><td>&nbsp;</td></tr></table></td>
+    </tr>
+  </table>
+  <div style="margin-top: 4px;">Initials: ________________</div>
+  <div class="small" style="margin-top: 2px;">If QC does not approve, please place on hold and notify supervisor&nbsp;&nbsp;&nbsp;End Time ____________</div>
+
+  <div class="page-num">-- 1 of 2 --</div>
+
+  <div class="page-break"></div>
+
+  <!-- PAGE 2 -->
+  <div class="section-title">Batch Ticket</div>
+  <table class="header-table">
+    <tr>
+      <td class="header-logo">
+        {% if logo_base64 %}
+        <img src="data:image/png;base64,{{ logo_base64 }}" alt="" />
+        {% endif %}
+      </td>
+      <td class="header-right">
+        <table>
+          <tr><th>Product ID:</th><td>{{ product_id }}</td></tr>
+          <tr><th>SKU:</th><td>{{ sku }}</td></tr>
+          <tr><th>Batch Number:</th><td>{{ batch_number }}</td></tr>
+          <tr><th>Batch Size:</th><td>{{ batch_size }}</td></tr>
+          <tr><th>Pack Size:</th><td>{{ pack_size }}</td></tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+
+  <div class="section-title">Post-Production Checks</div>
+  <table cellpadding="0" cellspacing="0" style="margin-bottom: 10px; border: none; table-layout: fixed; width: 160pt;">
+    <tr>
+      <td style="border: none; padding: 0; width: 52pt; vertical-align: bottom;">Start Time&nbsp;</td>
+      <td style="border-bottom: 1px solid #000; width: 108pt; padding: 0; vertical-align: bottom;">&nbsp;</td>
+    </tr>
+  </table>
+  <div style="margin: 6px 0 4px 0;">Screen Clean of Extraneous Foreign Material?</div>
+  <table class="precheck-rows" style="margin-left: 0; width: 100%; margin-bottom: 8px;">
+    <tr>
+      <td style="width: 4%;">Yes</td>
+      <td class="precheck-chk"><table class="chk-box" cellpadding="0" cellspacing="0"><tr><td>&nbsp;</td></tr></table></td>
+      <td style="width: 4%;">No</td>
+      <td class="precheck-chk"><table class="chk-box" cellpadding="0" cellspacing="0"><tr><td>&nbsp;</td></tr></table></td>
+      <td style="width: 8%;"></td>
+      <td style="width: 15%;">If No, Explain:</td>
+      <td class="precheck-ul" style="width: 35%;">&nbsp;</td>
+    </tr>
+  </table>
+  <div style="margin: 4px 0 12px 0;">Operator Initials _____________&nbsp;&nbsp;&nbsp;Supervisor Initials _______________</div>
+
+  <div class="section-title">Pack Off</div>
+  <table class="pack-table">
+    <thead>
+      <tr>
+        <th class="col-packaging">Packaging</th>
+        <th class="col-lot">Lot</th>
+        <th class="col-qty">Quantity</th>
+        <th class="col-amount">Amount Unused &amp; Pkg. Returned to Inventory</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in pack_rows %}
+      <tr>
+        <td class="col-packaging">{{ row.packaging }}</td>
+        <td class="col-lot">{{ row.lot }}</td>
+        <td class="col-qty">{{ row.qty }}</td>
+        <td class="col-amount">{{ row.amount_unused }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <div class="small">Enter (+) when adding unused packaging back to inventory and a (-) when removing additional packaging.</div>
+
+  <div>Yield: {{ yield_val or '_______________' }}&nbsp;&nbsp;&nbsp;Loss: {{ loss_val or '_____________' }}&nbsp;&nbsp;&nbsp;End Time ____________</div>
+  <div>Spill&nbsp;&nbsp;&nbsp;&nbsp;{{ spill_val or '_______________' }}&nbsp;&nbsp;&nbsp;&nbsp;Waste&nbsp;&nbsp;&nbsp;&nbsp;{{ waste_val or '_______________' }}</div>
+
+  <div class="small">I confirm that all information recorded on this batch record is complete, accurate, and recorded in real time. I have followed all applicable batch instructions, food safety, GMP, and HACCP requirements for this production run, and I have reported any deviations, issues, or concerns immediately</div>
+  <div>Production Signature&nbsp;&nbsp;&nbsp;&nbsp;Date</div>
+  <div>________________________&nbsp;&nbsp;&nbsp;&nbsp;_________</div>
+  <div>Supervisor Verification&nbsp;&nbsp;&nbsp;&nbsp;Date</div>
+  <div>________________________&nbsp;&nbsp;&nbsp;&nbsp;__________</div>
+
+  <div class="page-num">-- 2 of 2 --</div>
+</body>
+</html>

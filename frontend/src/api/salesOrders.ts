@@ -1,13 +1,4 @@
-import axios from 'axios'
-
-const API_BASE_URL = 'http://localhost:8000/api'
-
-const api = axios.create({
-  baseURL: API_BASE_URL,
-  headers: {
-    'Content-Type': 'application/json',
-  },
-})
+import { api, API_BASE_URL } from './client'
 
 export const getSalesOrders = async () => {
   const response = await api.get('/sales-orders/')
@@ -52,6 +43,8 @@ export const shipSalesOrder = async (
     items: Array<{ item_id: number; quantity: number }>
     dimensions?: string
     pieces?: number
+    tracking_number?: string
+    carrier?: string
   }
 ) => {
   const response = await api.post(`/sales-orders/${id}/ship/`, data)
@@ -75,6 +68,21 @@ export const getPackingListUrl = (salesOrderId: number) =>
 /** Open packing list for a sales order in a new tab (same pattern as invoice PDF). */
 export const openPackingList = async (salesOrderId: number): Promise<void> => {
   window.open(getPackingListUrl(salesOrderId), '_blank', 'noopener,noreferrer')
+}
+
+/** Packing list URL for a specific shipment (one PDF per release). */
+export const getPackingListUrlForShipment = (shipmentId: number) =>
+  `${API_BASE_URL.replace(/\/$/, '')}/shipments/${shipmentId}/packing-list/`
+
+/** Open packing list for a shipment in a new tab. */
+export const openPackingListForShipment = (shipmentId: number): void => {
+  window.open(getPackingListUrlForShipment(shipmentId), '_blank', 'noopener,noreferrer')
+}
+
+/** Fetch shipments for a sales order (optional; invoice may already include sales_order.shipments). */
+export const getShipments = async (salesOrderId: number) => {
+  const response = await api.get(`/shipments/?sales_order=${salesOrderId}`)
+  return response.data.results ?? response.data
 }
 
 export const getAvailableSalesOrders = async () => {

@@ -1,8 +1,10 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
+from . import auth_views
 from .views import (
     ItemViewSet, ItemPackSizeViewSet, LotViewSet, ProductionBatchViewSet,
-    FormulaViewSet, PurchaseOrderViewSet, SalesOrderViewSet,
+    CriticalControlPointViewSet, FormulaViewSet, PurchaseOrderViewSet, SalesOrderViewSet,
+    ShipmentViewSet,
     InventoryTransactionViewSet, VendorViewSet,
     SupplierSurveyViewSet, SupplierDocumentViewSet, TemporaryExceptionViewSet,
     CostMasterViewSet, AccountViewSet, FinishedProductSpecificationViewSet,
@@ -19,9 +21,11 @@ router.register(r'items', ItemViewSet)
 router.register(r'item-pack-sizes', ItemPackSizeViewSet, basename='item-pack-sizes')
 router.register(r'lots', LotViewSet)
 router.register(r'production-batches', ProductionBatchViewSet)
+router.register(r'critical-control-points', CriticalControlPointViewSet)
 router.register(r'formulas', FormulaViewSet)
 router.register(r'purchase-orders', PurchaseOrderViewSet)
 router.register(r'sales-orders', SalesOrderViewSet)
+router.register(r'shipments', ShipmentViewSet, basename='shipments')
 router.register(r'inventory-transactions', InventoryTransactionViewSet)
 router.register(r'vendors', VendorViewSet)
 router.register(r'supplier-surveys', SupplierSurveyViewSet)
@@ -57,5 +61,11 @@ router.register(r'bank-reconciliations', BankReconciliationViewSet, basename='ba
 
 urlpatterns = [
     path('', include(router.urls)),
+    path('auth/csrf/', auth_views.csrf_token),
+    path('auth/login/', auth_views.login_view),
+    path('auth/logout/', auth_views.logout_view),
+    path('auth/me/', auth_views.me),
+    path('auth/password-reset/', auth_views.password_reset_request),
+    path('auth/password-reset-confirm/<str:uidb64>/<str:token>/', auth_views.password_reset_confirm_api),
 ]
 

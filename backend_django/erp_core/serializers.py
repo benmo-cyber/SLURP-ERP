@@ -1,6 +1,7 @@
 from rest_framework import serializers
 from .models import (
-    Item, ItemPackSize, Lot, ProductionBatch, ProductionBatchInput, ProductionBatchOutput, Formula, FormulaItem,
+    Item, ItemPackSize, Lot, ProductionBatch, ProductionBatchInput, ProductionBatchOutput,
+    CriticalControlPoint, Formula, FormulaItem,
     PurchaseOrder, PurchaseOrderItem, SalesOrder, SalesOrderItem,
     InventoryTransaction, Vendor, VendorHistory, SupplierSurvey,
     SupplierDocument, TemporaryException, CostMaster, CostMasterHistory, Account,
@@ -133,12 +134,15 @@ class LotSerializer(serializers.ModelSerializer):
         
         if status == 'accepted':
             validated_data['quantity_remaining'] = quantity
-        elif status in ['rejected', 'on_hold']:
+            validated_data['on_hold'] = False
+        elif status == 'rejected':
             validated_data['quantity_remaining'] = 0
-            if status == 'on_hold':
-                validated_data['on_hold'] = True
+            validated_data['on_hold'] = False
+        elif status == 'on_hold':
+            validated_data['quantity_remaining'] = quantity  # Physical qty in house; not available until released
+            validated_data['on_hold'] = True
+            validated_data['quantity_on_hold'] = quantity  # Whole lot on hold
         else:
-            # Default to quantity if status is not recognized
             validated_data['quantity_remaining'] = quantity
         
         # Ensure lot_number is set - database requires NOT NULL
@@ -174,6 +178,41 @@ class LotSerializer(serializers.ModelSerializer):
             validated_data['lot_number'] = lot_number
         
         return super().create(validated_data)
+    
+    def update(self, instance, validated_data):
+        """Sync quantity_on_hold with status; allow partial hold via quantity_on_hold."""
+        validated_data.pop('quantity_remaining', None)  # SerializerMethodField; don't write
+        new_qty_hold = validated_data.get('quantity_on_hold')
+        new_status = validated_data.get('status', instance.status)
+        qty_remaining = instance.quantity_remaining  # DB value
+
+        if new_qty_hold is not None:
+            # Partial hold: cap to 0 .. quantity_remaining and sync status
+            new_qty_hold = max(0.0, min(float(new_qty_hold), qty_remaining))
+            validated_data['quantity_on_hold'] = round(new_qty_hold, 2)
+            if new_qty_hold >= qty_remaining:
+                validated_data['status'] = 'on_hold'
+                validated_data['on_hold'] = True
+            elif new_qty_hold <= 0:
+                validated_data['status'] = 'accepted'
+                validated_data['on_hold'] = False
+            else:
+                validated_data['on_hold'] = True  # partial still "on hold" for display
+                if new_status != 'rejected':
+                    validated_data['status'] = 'on_hold'
+        else:
+            # Status-only update (whole lot)
+            if new_status == 'on_hold':
+                validated_data['on_hold'] = True
+                validated_data['quantity_on_hold'] = qty_remaining
+            elif new_status == 'accepted':
+                validated_data['on_hold'] = False
+                validated_data['quantity_on_hold'] = 0.0
+            elif new_status == 'rejected':
+                validated_data['on_hold'] = False
+                validated_data['quantity_remaining'] = 0
+                validated_data['quantity_on_hold'] = 0.0
+        return super().update(instance, validated_data)
 
 
 class ProductionBatchInputSerializer(serializers.ModelSerializer):
@@ -230,12 +269,25 @@ class FormulaItemSerializer(serializers.ModelSerializer):
         fields = '__all__'
 
 
+class CriticalControlPointSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CriticalControlPoint
+        fields = ['id', 'name', 'display_order']
+
+
 class FormulaSerializer(serializers.ModelSerializer):
     finished_good = ItemSerializer(read_only=True)
     finished_good_id = serializers.PrimaryKeyRelatedField(
         queryset=Item.objects.filter(item_type='finished_good'),
         source='finished_good',
         write_only=True
+    )
+    critical_control_point = CriticalControlPointSerializer(read_only=True)
+    critical_control_point_id = serializers.PrimaryKeyRelatedField(
+        queryset=CriticalControlPoint.objects.all(),
+        source='critical_control_point',
+        write_only=True,
+        allow_null=True
     )
     ingredients = FormulaItemSerializer(many=True, read_only=True)
     
@@ -645,15 +697,15 @@ class InvoiceSerializer(serializers.ModelSerializer):
         fields = '__all__'
     
     def get_days_aging(self, obj):
-        """Calculate days aging - handle manually created invoice objects"""
+        """Calculate days aging - only count after invoice is Issued (sent)."""
         try:
-            # Try to use the property if it exists
             if hasattr(obj, 'days_aging'):
                 return obj.days_aging
-            # Otherwise calculate manually
             from django.utils import timezone
             if obj.status == 'paid':
                 return 0
+            if obj.status == 'draft':
+                return 0  # Don't start aging until Issued
             if not hasattr(obj, 'due_date') or not obj.due_date:
                 return 0
             today = timezone.now().date()

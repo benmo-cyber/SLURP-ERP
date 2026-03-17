@@ -126,6 +126,13 @@ function ProductionBatchList({ onCloseBatch, onUnfkBatch, onAdjustBatch }: Produ
     return unitDisplay
   }
 
+  // Format quantity to produce so whole numbers (e.g. 700.01) display as 700, not 700.01
+  const formatQuantityToProduce = (quantity: number): string => {
+    const rounded = Math.round(quantity)
+    if (Math.abs(quantity - rounded) <= 0.02) return formatNumber(rounded, 0)
+    return formatNumber(quantity)
+  }
+
   if (loading) {
     return <div className="loading">Loading production batches...</div>
   }
@@ -195,7 +202,7 @@ function ProductionBatchList({ onCloseBatch, onUnfkBatch, onAdjustBatch }: Produ
                     )}
                   </td>
                   <td>{batch.finished_good_item.name}</td>
-                  <td>{convertQuantity(batch.quantity_produced)} {getDisplayUnit()}</td>
+                  <td>{unitDisplay === 'kg' ? formatNumber(batch.quantity_produced * 0.453592) : formatQuantityToProduce(batch.quantity_produced)} {getDisplayUnit()}</td>
                   <td>{formatProductionDate(batch.production_date)}</td>
                   <td>
                     <span className={`status-badge status-${batch.status}`}>

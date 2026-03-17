@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { getItems, getFormulas, updateFormula } from '../../api/inventory'
+import { getItems, getFormulas, getCriticalControlPoints, updateFormula } from '../../api/inventory'
 import { getVendors } from '../../api/quality'
 import './CreateFinishedGood.css'
 
@@ -20,14 +20,22 @@ interface EditFormulaProps {
 
 function EditFormula({ finishedGoodId, finishedGoodSku, finishedGoodName, onClose, onSuccess }: EditFormulaProps) {
   const [items, setItems] = useState<any[]>([])
+  const [ccps, setCcps] = useState<{ id: number; name: string; display_order: number }[]>([])
   const [formula, setFormula] = useState<any>(null)
   const [loading, setLoading] = useState(true)
   const [formData, setFormData] = useState({
     formula_version: '1.0',
     formula_notes: '',
+    critical_control_point_id: '' as string | number,
     qc_parameter_name: '',
     qc_spec_min: '',
     qc_spec_max: '',
+    mixing_step_1: '',
+    mixing_step_2: '',
+    mixing_step_3: '',
+    mixing_step_4: '',
+    mixing_step_5: '',
+    mixing_step_6: '',
   })
   const [ingredients, setIngredients] = useState<FormulaIngredient[]>([
     { item_id: '', percentage: '', notes: '' }
@@ -65,6 +73,9 @@ function EditFormula({ finishedGoodId, finishedGoodSku, finishedGoodName, onClos
       })
       const uniqueItems = Array.from(itemsBySku.values())
       setItems(uniqueItems)
+
+      const ccpsData = await getCriticalControlPoints()
+      setCcps(ccpsData)
       
       // Load the formula
       const formulas = await getFormulas()
@@ -78,6 +89,12 @@ function EditFormula({ finishedGoodId, finishedGoodSku, finishedGoodName, onClos
           qc_parameter_name: foundFormula.qc_parameter_name || '',
           qc_spec_min: foundFormula.qc_spec_min !== null && foundFormula.qc_spec_min !== undefined ? String(foundFormula.qc_spec_min) : '',
           qc_spec_max: foundFormula.qc_spec_max !== null && foundFormula.qc_spec_max !== undefined ? String(foundFormula.qc_spec_max) : '',
+          mixing_step_1: foundFormula.mixing_step_1 || '',
+          mixing_step_2: foundFormula.mixing_step_2 || '',
+          mixing_step_3: foundFormula.mixing_step_3 || '',
+          mixing_step_4: foundFormula.mixing_step_4 || '',
+          mixing_step_5: foundFormula.mixing_step_5 || '',
+          mixing_step_6: foundFormula.mixing_step_6 || '',
         })
         
         // Load ingredients
@@ -143,9 +160,16 @@ function EditFormula({ finishedGoodId, finishedGoodSku, finishedGoodName, onClos
         finished_good_id: finishedGoodId,
         version: formData.formula_version,
         notes: formData.formula_notes || null,
+        critical_control_point_id: formData.critical_control_point_id ? Number(formData.critical_control_point_id) : null,
         qc_parameter_name: formData.qc_parameter_name.trim() || null,
         qc_spec_min: formData.qc_spec_min.trim() ? parseFloat(formData.qc_spec_min) : null,
         qc_spec_max: formData.qc_spec_max.trim() ? parseFloat(formData.qc_spec_max) : null,
+        mixing_step_1: formData.mixing_step_1.trim() || null,
+        mixing_step_2: formData.mixing_step_2.trim() || null,
+        mixing_step_3: formData.mixing_step_3.trim() || null,
+        mixing_step_4: formData.mixing_step_4.trim() || null,
+        mixing_step_5: formData.mixing_step_5.trim() || null,
+        mixing_step_6: formData.mixing_step_6.trim() || null,
         ingredients: validIngredients.map(ing => ({
           item_id: parseInt(ing.item_id),
           percentage: parseFloat(ing.percentage),
@@ -223,6 +247,21 @@ function EditFormula({ finishedGoodId, finishedGoodSku, finishedGoodName, onClos
                 placeholder="1.0"
               />
             </div>
+            <div className="form-group">
+              <label>Critical Control Point (CCP)</label>
+              <select
+                value={formData.critical_control_point_id === '' ? '' : String(formData.critical_control_point_id)}
+                onChange={(e) => setFormData({ ...formData, critical_control_point_id: e.target.value === '' ? '' : Number(e.target.value) })}
+              >
+                <option value="">None (use default on batch ticket)</option>
+                {ccps.map((ccp) => (
+                  <option key={ccp.id} value={ccp.id}>{ccp.name}</option>
+                ))}
+              </select>
+              <small style={{ color: '#666', display: 'block', marginTop: '0.25rem' }}>
+                Shown on batch ticket pre-production: &quot;Has [CCP] been inspected and installed properly?&quot;
+              </small>
+            </div>
           </div>
 
           <div className="ingredients-section">
@@ -284,6 +323,27 @@ function EditFormula({ finishedGoodId, finishedGoodSku, finishedGoodName, onClos
                 </div>
               ))}
             </div>
+          </div>
+        </div>
+
+        <div className="form-section">
+          <h3>Mixing Steps</h3>
+          <p style={{ margin: '0 0 0.75rem 0', color: '#666', fontSize: '0.875rem' }}>
+            Enter mixing instructions for batch production (Steps 1–6). Optional.
+          </p>
+          <div className="form-grid" style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+            {[1, 2, 3, 4, 5, 6].map((step) => (
+              <div key={step} className="form-group" style={{ width: '100%' }}>
+                <label>Step {step}</label>
+                <textarea
+                  value={formData[`mixing_step_${step}` as keyof typeof formData] as string}
+                  onChange={(e) => setFormData({ ...formData, [`mixing_step_${step}`]: e.target.value })}
+                  rows={2}
+                  placeholder={`Mixing step ${step}...`}
+                  style={{ width: '100%', resize: 'vertical' }}
+                />
+              </div>
+            ))}
           </div>
         </div>
 

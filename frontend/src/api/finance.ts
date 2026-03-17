@@ -1,14 +1,5 @@
-import axios from 'axios'
+import { api } from './client'
 import { getItems } from './inventory'
-
-const API_BASE_URL = 'http://localhost:8000/api'
-
-const api = axios.create({
-  baseURL: API_BASE_URL,
-  headers: {
-    'Content-Type': 'application/json',
-  },
-})
 
 // Re-export getItems for convenience
 export { getItems }

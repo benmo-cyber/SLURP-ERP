@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { getItems, createItem, createFormula } from '../../api/inventory'
+import { getItems, createItem, createFormula, getCriticalControlPoints } from '../../api/inventory'
 import { getVendors } from '../../api/quality'
 import './CreateFinishedGood.css'
 
@@ -16,6 +16,7 @@ interface CreateFinishedGoodProps {
 
 function CreateFinishedGood({ onClose = () => {}, onSuccess = () => {} }: CreateFinishedGoodProps) {
   const [items, setItems] = useState<any[]>([])
+  const [ccps, setCcps] = useState<{ id: number; name: string }[]>([])
   const [approvedVendors, setApprovedVendors] = useState<any[]>([])
   const [formData, setFormData] = useState({
     sku: '',
@@ -24,6 +25,7 @@ function CreateFinishedGood({ onClose = () => {}, onSuccess = () => {} }: Create
     pack_size: '',
     pack_size_unit: 'lbs' as 'lbs' | 'kg' | 'ea',
     formula_version: '1.0',
+    critical_control_point_id: '' as string | number,
     mixing_instructions: '',
     order_of_addition: '',
     equipment: '',
@@ -142,6 +144,7 @@ function CreateFinishedGood({ onClose = () => {}, onSuccess = () => {} }: Create
       await createFormula({
         finished_good_id: itemResponse.id,
         version: formData.formula_version,
+        critical_control_point_id: formData.critical_control_point_id ? Number(formData.critical_control_point_id) : null,
         mixing_instructions: formData.mixing_instructions || null,
         order_of_addition: formData.order_of_addition || null,
         equipment: formData.equipment || null,
@@ -248,6 +251,18 @@ function CreateFinishedGood({ onClose = () => {}, onSuccess = () => {} }: Create
                 required
                 placeholder="1.0"
               />
+            </div>
+            <div className="form-group">
+              <label>Critical Control Point (CCP)</label>
+              <select
+                value={formData.critical_control_point_id === '' ? '' : String(formData.critical_control_point_id)}
+                onChange={(e) => setFormData({ ...formData, critical_control_point_id: e.target.value === '' ? '' : Number(e.target.value) })}
+              >
+                <option value="">None</option>
+                {ccps.map((ccp) => (
+                  <option key={ccp.id} value={ccp.id}>{ccp.name}</option>
+                ))}
+              </select>
             </div>
           </div>
 

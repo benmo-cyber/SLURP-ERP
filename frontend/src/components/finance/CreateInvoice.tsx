@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { getItems, createInvoice } from '../../api/finance'
 import { getSalesOrder } from '../../api/salesOrders'
+import { useBackdatedEntry } from '../../context/BackdatedEntryContext'
 import './CreateInvoice.css'
 
 interface Item {
@@ -238,6 +239,7 @@ function CreateInvoice({ onClose, onSuccess, salesOrderId }: CreateInvoiceProps)
                 type="date"
                 value={formData.invoice_date}
                 onChange={(e) => setFormData({ ...formData, invoice_date: e.target.value })}
+                max={maxDateForEntry}
                 required
               />
             </div>

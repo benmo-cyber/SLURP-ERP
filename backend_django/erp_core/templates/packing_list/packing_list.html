@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Packing List {{ so_number }}</title>
+  <style>
+    @page { size: letter; margin: 0.5in; }
+    body { font-family: Arial, Helvetica, sans-serif; font-size: 9pt; color: #000; margin: 0; line-height: 1.25; }
+    .header-table { width: 100%; border-collapse: collapse; margin-bottom: 14px; }
+    .header-table td { vertical-align: top; padding: 0; }
+    .logo-cell { width: 2in; }
+    .logo-cell img { width: 120px; height: 120px; display: block; }
+    .title-right { text-align: right; }
+    .title-right h1 { margin: 0 0 6px 0; font-size: 18pt; }
+    .bill-ship-table { width: 100%; border-collapse: collapse; margin-bottom: 14px; }
+    .bill-ship-table td { vertical-align: top; width: 50%; padding: 0 8px 0 0; font-size: 9pt; }
+    .meta-table { width: 100%; border-collapse: collapse; margin-bottom: 12px; font-size: 9pt; }
+    .meta-table td { padding: 2px 8px 2px 0; }
+    .items-table { width: 100%; border-collapse: collapse; font-size: 9pt; }
+    .items-table th, .items-table td { border: 0.5px solid #333; padding: 5px 6px; text-align: left; }
+    .items-table th { background: #e8e8e8; font-weight: bold; }
+    .items-table .col-qty { text-align: right; width: 15%; }
+    .items-table .col-sku { width: 25%; }
+  </style>
+</head>
+<body>
+  <table class="header-table">
+    <tr>
+      <td class="logo-cell">
+        {% if logo_base64 %}
+        <img src="data:image/png;base64,{{ logo_base64 }}" alt="" />
+        {% else %}
+        <span style="font-weight: bold;">Wildwood Ingredients, LLC</span>
+        {% endif %}
+      </td>
+      <td class="title-right">
+        <h1>Packing List</h1>
+        <div>SO # {{ so_number }}</div>
+      </td>
+    </tr>
+  </table>
+
+  <table class="bill-ship-table">
+    <tr>
+      <td><strong>Ship To:</strong><br/><pre style="margin: 0; font-family: inherit; white-space: pre-wrap;">{{ ship_to_text }}</pre></td>
+      <td><strong>Bill To:</strong><br/><pre style="margin: 0; font-family: inherit; white-space: pre-wrap;">{{ bill_to_text }}</pre></td>
+    </tr>
+  </table>
+
+  <table class="meta-table">
+    <tr><td><strong>Date:</strong></td><td>{{ date_str }}</td><td><strong>Order Date:</strong></td><td>{{ order_date_str }}</td></tr>
+    <tr><td><strong>Ship Date:</strong></td><td>{{ ship_date_str }}</td><td><strong>PO / SO #:</strong></td><td>{{ po_so_str }}</td></tr>
+    {% if dimensions != '—' or pieces != '—' %}
+    <tr><td><strong>Dimensions:</strong></td><td>{{ dimensions }}</td><td><strong>Pieces:</strong></td><td>{{ pieces }}</td></tr>
+    {% endif %}
+  </table>
+
+  <table class="items-table">
+    <thead>
+      <tr>
+        <th class="col-sku">SKU / Item</th>
+        <th>Description</th>
+        <th class="col-qty">Quantity</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in line_items %}
+      <tr>
+        <td class="col-sku">{{ row.sku }}</td>
+        <td>{{ row.description }}</td>
+        <td class="col-qty">{{ row.quantity }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</body>
+</html>

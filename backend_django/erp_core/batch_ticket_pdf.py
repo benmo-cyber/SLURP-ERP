@@ -771,11 +771,14 @@ def _fill_batch_ticket_template_pymupdf(
     spill_val=None,
     waste_val=None,
     logo_path=None,
+    mixing_steps=None,
 ):
     if indirect_materials_rows is None:
         indirect_materials_rows = []
     if qc_info is None:
         qc_info = {}
+    if mixing_steps is None or len(mixing_steps) < 6:
+        mixing_steps = (list(mixing_steps) + [''] * 6)[:6]
     """
     Open the template PDF and insert variable data at positions found from the template text.
     Returns PDF bytes so the output is an exact copy of the template with data filled in.
@@ -867,6 +870,13 @@ def _fill_batch_ticket_template_pymupdf(
                 insert_after(page0, "Batch Size:", batch_size_str, 20)
                 insert_after(page0, "Pack Size:", (pack_size_str or "")[:20], 20)
         insert_after(page0, "Production Date:", (prod_date_str or "")[:16], 16)
+
+        # Batch Instructions: fill formula mixing steps 1-6 after "1.)" through "6.)"
+        for step_num in range(1, 7):
+            step_text = (mixing_steps[step_num - 1] or "").strip()[:120]
+            if step_text:
+                label = f"{step_num}.)"
+                insert_after(page0, label, step_text, max_len=120)
 
         # Pick list: use measured template positions; draw each cell with insert_text (insert_textbox hides text on this template)
         # 7 columns: raw_material, sku, vendor, vendor_lot (combined), qty, pick_init, prod_init
@@ -1332,6 +1342,21 @@ def build_batch_ticket_pdf(batch):
             if m:
                 qc_info[key] = m.group(1).strip()
 
+    # Load formula mixing steps (Steps 1-6) for the finished good
+    mixing_steps = ['', '', '', '', '', '']
+    try:
+        from .models import Formula
+        formula = getattr(fg, 'formula', None)
+        if formula is None:
+            formula = Formula.objects.filter(finished_good=fg).first()
+        if formula:
+            for i in range(1, 7):
+                step_text = (getattr(formula, f'mixing_step_{i}', None) or '').strip()
+                if step_text:
+                    mixing_steps[i - 1] = step_text
+    except Exception as e:
+        logger.warning("Could not load formula mixing steps for batch ticket: %s", e)
+
     status_prefix = batch.status.replace('_', '-')
     filename = f"{status_prefix}({batch.batch_number}).pdf"
 
@@ -1418,6 +1443,7 @@ def build_batch_ticket_pdf(batch):
                 spill_val,
                 waste_val,
                 logo_path,
+                mixing_steps=mixing_steps,
             )
             if temp_dir:
                 _cleanup_temp_dir(temp_dir)
@@ -1617,10 +1643,19 @@ def build_batch_ticket_pdf(batch):
     elements.append(precheck_tbl)
     elements.append(Spacer(1, space_md))
 
-    # 6. Batch Instructions (template)
+    # 6. Batch Instructions (template) — formula mixing steps 1-6
     elements.append(Paragraph("Batch Instructions", ParagraphStyle('Bold2', parent=styles['Normal'], fontName='Helvetica-Bold', fontSize=9)))
     elements.append(Spacer(1, 0.04 * inch))
-    step_data = [['Step', 'Initial After Completion'], ['1.)', ''], ['2.)', ''], ['3.)', ''], ['4.)', ''], ['5.)', ''], ['6.)', 'End Time ____________']]
+    step_para_style = ParagraphStyle('StepContent', parent=normal_style, fontSize=8, leftIndent=0, spaceBefore=0, spaceAfter=0)
+    step_data = [
+        ['Step', 'Initial After Completion'],
+        ['1.)', Paragraph((mixing_steps[0] or '').strip().replace('&', '&amp;') or ' ', step_para_style)],
+        ['2.)', Paragraph((mixing_steps[1] or '').strip().replace('&', '&amp;') or ' ', step_para_style)],
+        ['3.)', Paragraph((mixing_steps[2] or '').strip().replace('&', '&amp;') or ' ', step_para_style)],
+        ['4.)', Paragraph((mixing_steps[3] or '').strip().replace('&', '&amp;') or ' ', step_para_style)],
+        ['5.)', Paragraph((mixing_steps[4] or '').strip().replace('&', '&amp;') or ' ', step_para_style)],
+        ['6.)', Paragraph(((mixing_steps[5] or '').strip() or 'End Time ____________').replace('&', '&amp;'), step_para_style)],
+    ]
     step_tbl = Table(step_data, colWidths=[0.55 * inch, 4.0 * inch])
     step_tbl.setStyle(TableStyle([
         ('FONTSIZE', (0, 0), (-1, -1), 8),
@@ -1628,6 +1663,7 @@ def build_batch_ticket_pdf(batch):
         ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
         ('TOPPADDING', (0, 0), (-1, -1), 2),
         ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
+        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
     ]))
     elements.append(step_tbl)
     elements.append(Spacer(1, space_md))

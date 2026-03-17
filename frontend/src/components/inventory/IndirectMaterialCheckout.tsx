@@ -1,9 +1,7 @@
 import { useState, useEffect } from 'react'
 import { getLots } from '../../api/inventory'
-import axios from 'axios'
+import { api } from '../../api/client'
 import './IndirectMaterialCheckout.css'
-
-const API_BASE_URL = 'http://localhost:8000/api'
 
 interface Lot {
   id: number
@@ -72,8 +70,8 @@ function IndirectMaterialCheckout({ onClose, onSuccess }: { onClose: () => void;
     try {
       setSubmitting(true)
       
-      await axios.post(
-        `${API_BASE_URL}/lots/${selectedLotId}/checkout_indirect_material/`,
+      await api.post(
+        `/lots/${selectedLotId}/checkout_indirect_material/`,
         {
           quantity: qty,
           notes: notes || undefined,

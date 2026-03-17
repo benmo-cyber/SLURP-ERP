@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import { createPayment, getAccountsPayable, getAccountsReceivable, getAccounts } from '../../api/finance'
+import { useBackdatedEntry } from '../../context/BackdatedEntryContext'
 import './PaymentEntry.css'
 
 interface PaymentEntryProps {
@@ -242,6 +243,7 @@ const PaymentEntry: React.FC<PaymentEntryProps> = ({ onClose, onSuccess, payment
               type="date"
               value={formData.payment_date}
               onChange={(e) => setFormData({ ...formData, payment_date: e.target.value })}
+              max={maxDateForEntry}
               required
             />
           </div>

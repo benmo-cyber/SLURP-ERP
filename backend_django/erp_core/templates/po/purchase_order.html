@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Purchase Order {{ po_number }}</title>
+  <style>
+    @page { size: letter; margin: 0.4in; }
+    body { font-family: Helvetica, Arial, sans-serif; font-size: 9pt; color: #000; margin: 0; line-height: 1.25; }
+    /* Header: logo + address left; title + status box top-right, same row */
+    .header { margin-bottom: 6px; }
+    .header-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+    .header-table td { vertical-align: top; }
+    .header-logo-cell { width: 252px; padding-right: 16px; }
+    .company-addr { font-size: 8pt; color: #333; line-height: 1.3; }
+    .header-right-cell { text-align: right; padding-left: 16px; }
+    .po-title-box { background: #e8eef4; padding: 8px 14px 10px 14px; text-align: right; }
+    .po-title { font-size: 18pt; font-weight: bold; color: #1e3a5f; letter-spacing: 0.5px; margin: 0; }
+    .po-status { font-size: 8pt; color: #555; margin: 0; }
+    /* PO details: compact two-column list */
+    .meta-table { width: 100%; border-collapse: collapse; font-size: 8pt; margin-bottom: 6px; table-layout: fixed; max-width: 420px; }
+    .meta-table th { text-align: left; padding: 3px 6px; border: 1px solid #bbb; background: #e8eef4; font-weight: bold; color: #333; width: 100px; }
+    .meta-table td { padding: 3px 6px; border: 1px solid #bbb; background: #fff; }
+    /* Section titles: compact */
+    .section-title { font-size: 10pt; font-weight: bold; color: #1e3a5f; margin: 8px 0 4px 0; text-transform: uppercase; border-bottom: 2px solid #1e3a5f; padding-bottom: 2px; }
+    /* Vendor / Bill To / Ship To: compact */
+    .details-table { width: 100%; border-collapse: collapse; margin-bottom: 6px; table-layout: fixed; font-size: 8pt; }
+    .details-table th { background: #1e3a5f; color: #fff; padding: 4px 6px; border: 1px solid #1e3a5f; text-align: left; font-weight: bold; }
+    .details-table td { padding: 4px 6px; border: 1px solid #bbb; vertical-align: top; background: #fff; line-height: 1.25; }
+    /* Line items: compact rows */
+    .items-table { width: 100%; border-collapse: collapse; margin-bottom: 6px; font-size: 8pt; table-layout: fixed; }
+    .items-table th { background: #c5d4e8; color: #333; padding: 2px 6px; border: 1px solid #bbb; font-weight: bold; }
+    .items-table td { padding: 2px 6px; border: 1px solid #bbb; }
+    .items-table .row-alt { background: #eef2f7; }
+    .items-table .num, .items-table .money { text-align: right; }
+    /* Summary: compact */
+    .summary-wrap { width: 100%; border-collapse: collapse; table-layout: fixed; margin-top: 4px; }
+    .summary-wrap td { vertical-align: top; padding: 0 8px 0 0; }
+    .summary-notes { width: 55%; }
+    .notes-label { font-weight: bold; font-size: 8pt; color: #333; margin-bottom: 2px; }
+    .notes-text { font-size: 8pt; color: #000; line-height: 1.25; }
+    .summary-table-wrap { width: 45%; text-align: right; }
+    .summary-table { border-collapse: collapse; width: 220px; margin-left: auto; table-layout: fixed; font-size: 9pt; }
+    .summary-table td { padding: 3px 8px; border: 1px solid #bbb; background: #fff; }
+    .summary-table .row-alt td { background: #f5f5f5; }
+    .summary-table .total-row td { font-weight: bold; background: #1e3a5f; color: #fff; border-color: #1e3a5f; padding: 4px 8px; }
+    .summary-table .label { text-align: left; width: 80px; }
+    .summary-table .value { text-align: right; width: 120px; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <table class="header-table">
+      <tr>
+        <td class="header-logo-cell">
+          {% if logo_base64 %}
+          <img src="data:image/png;base64,{{ logo_base64 }}" alt="" style="width: 240px; height: 240px; margin-bottom: 4px;" />
+          {% endif %}
+          <div class="company-addr">6431 Michels Drive<br />Washington, MO 63090</div>
+        </td>
+        <td class="header-right-cell">
+          <div class="po-title-box">
+            <div class="po-title">PURCHASE ORDER</div>
+            <div class="po-status">Status: {{ status }}</div>
+          </div>
+        </td>
+      </tr>
+    </table>
+  </div>
+
+  <table class="meta-table">
+    <tr><th>PO Number</th><td>{{ po_number }}</td></tr>
+    <tr><th>PO Date</th><td>{{ po_date }}</td></tr>
+    <tr><th>Delivery Date</th><td>{{ delivery_date }}</td></tr>
+    <tr><th>Payment Terms</th><td>{{ payment_terms }}</td></tr>
+    <tr><th>Ship Via</th><td>{{ ship_via }}</td></tr>
+  </table>
+
+  <div class="section-title">Vendor &amp; Shipping Details</div>
+  <table class="details-table">
+    <tr>
+      <th>Vendor / Supplier</th>
+      <th>Bill To</th>
+      <th>Ship To</th>
+    </tr>
+    <tr>
+      <td>{{ vendor_name }}<br />{{ vendor_addr1 }}<br />{{ vendor_addr2 }}</td>
+      <td>{{ bill_to_name }}<br />{{ bill_to_addr1 }}<br />{{ bill_to_addr2 }}</td>
+      <td>{{ ship_to_name }}<br />{{ ship_to_addr1 }}<br />{{ ship_to_addr2 }}</td>
+    </tr>
+  </table>
+
+  <div class="section-title">Line Items</div>
+  <table class="items-table">
+    <thead>
+      <tr>
+        <th>#</th>
+        <th>Description</th>
+        <th class="num">Qty</th>
+        <th>Unit</th>
+        <th class="money">Unit Price</th>
+        <th class="num">Tax %</th>
+        <th class="money">Line Total</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for item in line_items %}
+      <tr class="{{ 'row-alt' if loop.index % 2 == 0 else '' }}">
+        <td>{{ item.num }}</td>
+        <td>{{ item.description }}</td>
+        <td class="num">{{ item.qty }}</td>
+        <td>{{ item.unit }}</td>
+        <td class="money">{{ item.unit_price }}</td>
+        <td class="num">{{ item.tax_pct }}</td>
+        <td class="money">{{ item.line_total }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <div class="section-title">Summary</div>
+  <table class="summary-wrap">
+    <tr>
+      <td class="summary-notes">
+        <div class="notes-label">Notes / Instructions</div>
+        <div class="notes-text">{{ notes }}</div>
+      </td>
+      <td class="summary-table-wrap">
+        <table class="summary-table">
+          <tr><td class="label">Subtotal</td><td class="value">{{ subtotal }}</td></tr>
+          <tr class="row-alt"><td class="label">Shipping</td><td class="value">{{ shipping }}</td></tr>
+          <tr><td class="label">Tax</td><td class="value">$0.00</td></tr>
+          <tr class="row-alt"><td class="label">Discount</td><td class="value">{{ discount }}</td></tr>
+          <tr class="total-row"><td class="label">Total</td><td class="value">{{ total }}</td></tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

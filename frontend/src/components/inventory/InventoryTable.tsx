@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { getInventoryDetails, getLotsBySkuVendor, updateLot } from '../../api/inventory'
+import { getInventoryDetails, getLotsBySkuVendor, updateLot, putLotOnHold, releaseLotFromHold, reconcileLot } from '../../api/inventory'
 import { getFinishedProductSpecification, getFpsPdfUrl } from '../../api/production'
 import { formatNumber, formatNumberFlexible } from '../../utils/formatNumber'
 import './InventoryTable.css'
@@ -35,6 +35,7 @@ interface Lot {
   po_carrier?: string
   quantity: number
   quantity_remaining: number
+  quantity_on_hold?: number
   received_date: string
   expiration_date?: string
   status: string
@@ -58,7 +59,7 @@ function InventoryTable() {
   const [inventoryDetails, setInventoryDetails] = useState<InventoryDetail[]>([])
   const [loading, setLoading] = useState(true)
   const [unitDisplay, setUnitDisplay] = useState<'lbs' | 'kg'>('lbs')
-  const [itemTypeFilter, setItemTypeFilter] = useState<string>('')
+  const [inventoryTable, setInventoryTable] = useState<'finished_good' | 'raw_material' | 'indirect_material'>('finished_good')
   const [fpsLinks, setFpsLinks] = useState<Map<number, number>>(new Map())
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set())
   const [lotDetails, setLotDetails] = useState<Map<string, Lot[]>>(new Map())
@@ -69,7 +70,7 @@ function InventoryTable() {
 
   useEffect(() => {
     loadData()
-  }, [itemTypeFilter])
+  }, [inventoryTable])
 
   // Reload data when component key changes (refresh trigger)
   useEffect(() => {
@@ -111,7 +112,7 @@ function InventoryTable() {
     try {
       setLoading(true)
       console.log('Loading inventory details...')
-      const data = await getInventoryDetails(itemTypeFilter || undefined)
+      const data = await getInventoryDetails(inventoryTable)
       console.log('Inventory data received:', data)
       console.log('Number of entries:', Array.isArray(data) ? data.length : 'Not an array')
       if (Array.isArray(data) && data.length > 0) {
@@ -256,20 +257,28 @@ function InventoryTable() {
             kg
           </button>
         </div>
-        <div className="item-type-filter">
-          <label htmlFor="item-type-filter">Filter by Type:</label>
-          <select
-            id="item-type-filter"
-            value={itemTypeFilter}
-            onChange={(e) => setItemTypeFilter(e.target.value)}
-            className="filter-select"
+        <div className="inventory-table-tabs">
+          <button
+            type="button"
+            className={`tab-btn ${inventoryTable === 'finished_good' ? 'active' : ''}`}
+            onClick={() => setInventoryTable('finished_good')}
           >
-            <option value="">All Types</option>
-            <option value="raw_material">Raw Material</option>
-            <option value="finished_good">Finished Good</option>
-            <option value="indirect_material">Indirect Material</option>
-            <option value="distributed_item">Distributed Item</option>
-          </select>
+            Finished Goods
+          </button>
+          <button
+            type="button"
+            className={`tab-btn ${inventoryTable === 'raw_material' ? 'active' : ''}`}
+            onClick={() => setInventoryTable('raw_material')}
+          >
+            Raw Materials
+          </button>
+          <button
+            type="button"
+            className={`tab-btn ${inventoryTable === 'indirect_material' ? 'active' : ''}`}
+            onClick={() => setInventoryTable('indirect_material')}
+          >
+            Indirect Materials (Packaging)
+          </button>
         </div>
       </div>
 
@@ -293,7 +302,6 @@ function InventoryTable() {
                 Vendor {sortConfig.key === 'vendor' && (sortConfig.direction === 'asc' ? '↑' : '↓')}
               </th>
               <th>Pack Size</th>
-              <th>Total</th>
               <th>Available</th>
               <th>On Order</th>
               <th>Alloc. Sales</th>
@@ -305,14 +313,13 @@ function InventoryTable() {
           <tbody>
             {sortedInventoryDetails.length === 0 ? (
               <tr>
-                <td colSpan={11} className="no-data">No inventory found</td>
+                <td colSpan={10} className="no-data">No inventory found</td>
               </tr>
             ) : (
               sortedInventoryDetails.map((detail) => {
                 // Master SKU row
                 if (detail.level === 'sku') {
                   const unit = detail.pack_size_unit
-                  const displayTQ = unit !== 'ea' ? convertQuantity(detail.total_quantity, unit) : formatNumber(detail.total_quantity, 0)
                   const displayAllocSales = unit !== 'ea' ? convertQuantity(detail.allocated_to_sales, unit) : formatNumber(detail.allocated_to_sales, 0)
                   const displayAllocProd = unit !== 'ea' ? convertQuantity(detail.allocated_to_production, unit) : formatNumber(detail.allocated_to_production, 0)
                   const displayOnHold = unit !== 'ea' ? convertQuantity(detail.on_hold, unit) : formatNumber(detail.on_hold, 0)
@@ -364,7 +371,6 @@ function InventoryTable() {
                         </td>
                         <td>All Vendors</td>
                         <td>-</td>
-                        <td>{displayTQ} {displayUnit}</td>
                         <td className={detail.available > 0 ? 'available' : 'unavailable'}>
                           {displayAvailable} {displayUnit}
                         </td>
@@ -378,7 +384,6 @@ function InventoryTable() {
                       </tr>
                       {isSkuExpanded && vendors.map((vendorDetail) => {
                         const vendorUnit = vendorDetail.pack_size_unit
-                        const vendorDisplayTQ = vendorUnit !== 'ea' ? convertQuantity(vendorDetail.total_quantity, vendorUnit) : formatNumber(vendorDetail.total_quantity, 0)
                         const vendorDisplayAllocSales = vendorUnit !== 'ea' ? convertQuantity(vendorDetail.allocated_to_sales, vendorUnit) : formatNumber(vendorDetail.allocated_to_sales, 0)
                         const vendorDisplayAllocProd = vendorUnit !== 'ea' ? convertQuantity(vendorDetail.allocated_to_production, vendorUnit) : formatNumber(vendorDetail.allocated_to_production, 0)
                         const vendorDisplayOnHold = vendorUnit !== 'ea' ? convertQuantity(vendorDetail.on_hold, vendorUnit) : formatNumber(vendorDetail.on_hold, 0)
@@ -412,7 +417,6 @@ function InventoryTable() {
                               <td>{vendorDetail.description}</td>
                               <td>{vendorDetail.vendor}</td>
                               <td>{vendorPackSizeDisplay}</td>
-                              <td>{vendorDisplayTQ} {vendorDisplayUnit}</td>
                               <td className={vendorDetail.available > 0 ? 'available' : 'unavailable'}>
                                 {vendorDisplayAvailable} {vendorDisplayUnit}
                               </td>
@@ -426,7 +430,7 @@ function InventoryTable() {
                             </tr>
                             {isVendorExpanded && (
                               <tr className="lot-details-row">
-                                <td colSpan={11} className="lot-details-cell">
+                                <td colSpan={10} className="lot-details-cell">
                                   {isLoadingVendorLots ? (
                                     <div className="loading-lots">Loading lot details...</div>
                                   ) : vendorLots.length === 0 ? (
@@ -445,16 +449,23 @@ function InventoryTable() {
                                             <th>Received Date</th>
                                             <th>Expiration Date</th>
                                             <th>Quantity</th>
-                                            <th>Remaining</th>
+                                            <th>Available</th>
+                                            <th>On Hold</th>
                                             <th>Status</th>
                                             <th>Committed</th>
+                                            <th>Actions</th>
                                           </tr>
                                         </thead>
                                         <tbody>
                                           {vendorLots.map((lot) => {
                                             const lotUnit = lot.item.unit_of_measure
                                             const displayQty = lotUnit !== 'ea' ? convertQuantity(lot.quantity, lotUnit) : formatNumber(lot.quantity, 0)
-                                            const displayRemaining = lotUnit !== 'ea' ? convertQuantity(lot.quantity_remaining, lotUnit) : formatNumber(lot.quantity_remaining, 0)
+                                            const salesCommit = lot.committed_to_sales_qty ?? 0
+                                            const prodCommit = lot.committed_to_production_qty ?? 0
+                                            const onHold = lot.quantity_on_hold ?? 0
+                                            // quantity_remaining from API is already (physical − sales alloc); subtract prod and on hold for available
+                                            const availableFromLot = Math.max(0, lot.quantity_remaining - prodCommit - onHold)
+                                            const displayRemaining = lotUnit !== 'ea' ? convertQuantity(availableFromLot, lotUnit) : formatNumber(availableFromLot, 0)
                                             const lotDisplayUnit = getDisplayUnit(lotUnit)
                                             const receivedDate = new Date(lot.received_date).toLocaleDateString()
                                             const expDate = lot.expiration_date ? new Date(lot.expiration_date).toLocaleDateString() : 'N/A'
@@ -518,6 +529,73 @@ function InventoryTable() {
                                                 handleFieldSave()
                                               } else if (e.key === 'Escape') {
                                                 handleFieldCancel()
+                                              }
+                                            }
+                                            
+                                            const qtyOnHold = lot.quantity_on_hold ?? 0
+                                            const handlePutOnHold = async () => {
+                                              const raw = window.prompt(
+                                                `Put how much on hold? (Max available from this lot.) Unit: ${lotDisplayUnit}`
+                                              )
+                                              if (raw == null) return
+                                              const qty = parseFloat(raw)
+                                              if (Number.isNaN(qty) || qty <= 0) {
+                                                alert('Enter a positive number.')
+                                                return
+                                              }
+                                              try {
+                                                const updated = await putLotOnHold(lot.id, qty)
+                                                const updatedLots = vendorLots.map(l => l.id === lot.id ? { ...l, ...updated } : l)
+                                                setLotDetails(new Map([...lotDetails, [vendorRowKey, updatedLots]]))
+                                                loadData()
+                                              } catch (err: any) {
+                                                console.error('Put on hold failed:', err)
+                                                alert(err?.response?.data?.error || 'Failed to put on hold.')
+                                              }
+                                            }
+                                            const handleReleaseFromHold = async () => {
+                                              const maxRelease = qtyOnHold
+                                              if (maxRelease <= 0) return
+                                              const raw = window.prompt(
+                                                `Release how much from hold? (Max: ${formatNumber(lotUnit !== 'ea' ? convertQuantity(maxRelease, lotUnit) : maxRelease, 2)} ${lotDisplayUnit})`
+                                              )
+                                              if (raw == null) return
+                                              const qty = parseFloat(raw)
+                                              if (Number.isNaN(qty) || qty <= 0 || qty > maxRelease) {
+                                                alert(`Enter a number between 0 and ${maxRelease}.`)
+                                                return
+                                              }
+                                              try {
+                                                const updated = await releaseLotFromHold(lot.id, qty)
+                                                const updatedLots = vendorLots.map(l => l.id === lot.id ? { ...l, ...updated } : l)
+                                                setLotDetails(new Map([...lotDetails, [vendorRowKey, updatedLots]]))
+                                                loadData()
+                                              } catch (err: any) {
+                                                console.error('Release from hold failed:', err)
+                                                alert(err?.response?.data?.error || 'Failed to release from hold.')
+                                              }
+                                            }
+                                            const handleReconcile = async () => {
+                                              const currentRem = lot.quantity_remaining
+                                              const raw = window.prompt(
+                                                `Admin reconcile: set quantity remaining (physical) for this lot. Current: ${formatNumber(lotUnit !== 'ea' ? convertQuantity(currentRem, lotUnit) : currentRem, 2)} ${lotDisplayUnit}. New value:`
+                                              )
+                                              if (raw == null) return
+                                              const qty = parseFloat(raw)
+                                              if (Number.isNaN(qty) || qty < 0) {
+                                                alert('Enter a non-negative number.')
+                                                return
+                                              }
+                                              const reason = window.prompt('Reason for reconcile (optional):') || 'Admin reconcile'
+                                              const valueInItemUnit = lotUnit === 'ea' ? qty : (unitDisplay === 'kg' && lotUnit === 'lbs' ? qty * 2.20462 : unitDisplay === 'lbs' && lotUnit === 'kg' ? qty / 2.20462 : qty)
+                                              try {
+                                                const updated = await reconcileLot(lot.id, valueInItemUnit, reason)
+                                                const updatedLots = vendorLots.map(l => l.id === lot.id ? { ...l, ...updated } : l)
+                                                setLotDetails(new Map([...lotDetails, [vendorRowKey, updatedLots]]))
+                                                loadData()
+                                              } catch (err: any) {
+                                                console.error('Reconcile failed:', err)
+                                                alert(err?.response?.data?.error || 'Reconcile failed. Requires staff/superuser.')
                                               }
                                             }
                                             
@@ -586,7 +664,10 @@ function InventoryTable() {
                                                   )}
                                                 </td>
                                                 <td>{displayQty} {lotDisplayUnit}</td>
-                                                <td>{displayRemaining} {lotDisplayUnit}</td>
+                                                <td title={`Available = remaining after sales alloc − production (${prodCommit}) − on hold (${onHold})`}>{displayRemaining} {lotDisplayUnit}</td>
+                                                <td>
+                                                  {(lotUnit !== 'ea' ? convertQuantity(qtyOnHold, lotUnit) : formatNumber(qtyOnHold, 0))} {lotDisplayUnit}
+                                                </td>
                                                 <td>
                                                   <span className={`status-badge status-${lot.status}`}>
                                                     {lot.status}
@@ -629,6 +710,34 @@ function InventoryTable() {
                                                       return <span className="committed-badge not-committed">-</span>
                                                     }
                                                   })()}
+                                                </td>
+                                                <td>
+                                                  {qtyOnHold > 0 && (
+                                                    <button
+                                                      type="button"
+                                                      className="lot-action-btn release-hold"
+                                                      onClick={handleReleaseFromHold}
+                                                      title="Release from hold (e.g. after micro results)"
+                                                    >
+                                                      Release from hold
+                                                    </button>
+                                                  )}
+                                                  <button
+                                                    type="button"
+                                                    className="lot-action-btn put-hold"
+                                                    onClick={handlePutOnHold}
+                                                    title="Put amount on hold (partial or full)"
+                                                  >
+                                                    Put on hold
+                                                  </button>
+                                                  <button
+                                                    type="button"
+                                                    className="lot-action-btn reconcile-btn"
+                                                    onClick={handleReconcile}
+                                                    title="Admin override: reconcile quantity to match reality (staff only)"
+                                                  >
+                                                    Reconcile
+                                                  </button>
                                                 </td>
                                               </tr>
                                             )

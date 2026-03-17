@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { getAvailableSalesOrders, getSalesOrder, allocateSalesOrder, shipSalesOrder, cancelSalesOrder, openPackingList } from '../../api/salesOrders'
 import { getLotsBySkuVendor, getItems } from '../../api/inventory'
 import { formatNumber } from '../../utils/formatNumber'
+import { useBackdatedEntry } from '../../context/BackdatedEntryContext'
 import './CheckOutModal.css'
 
 interface Lot {
@@ -10,6 +11,7 @@ interface Lot {
   quantity_remaining: number
   received_date: string
   expiration_date?: string
+  status?: string
   item: {
     id: number
     sku: string
@@ -69,6 +71,7 @@ interface CheckOutModalProps {
 }
 
 function CheckOutModal({ onClose, onSuccess }: CheckOutModalProps) {
+  const { maxDateForEntry } = useBackdatedEntry()
   const [salesOrders, setSalesOrders] = useState<SalesOrder[]>([])
   const [selectedSOId, setSelectedSOId] = useState<number | null>(null)
   const [salesOrder, setSalesOrder] = useState<SalesOrder | null>(null)
@@ -77,6 +80,8 @@ function CheckOutModal({ onClose, onSuccess }: CheckOutModalProps) {
   const [rawMaterialLots, setRawMaterialLots] = useState<Map<number, Lot[]>>(new Map())
   const [allocations, setAllocations] = useState<Map<number, ItemAllocation>>(new Map())
   const [shipDate, setShipDate] = useState<string>('')
+  const [carrier, setCarrier] = useState<string>('')
+  const [trackingNumber, setTrackingNumber] = useState<string>('')
   const [dimensions, setDimensions] = useState<string>('')
   const [pieces, setPieces] = useState<number | ''>('')
   const [unitDisplay, setUnitDisplay] = useState<'lbs' | 'kg'>('lbs')
@@ -314,6 +319,16 @@ function CheckOutModal({ onClose, onSuccess }: CheckOutModalProps) {
       return
     }
 
+    const itemIdsToShip = new Set(itemsToShip.map((i: { item_id: number }) => i.item_id))
+    const hasOnHoldAllocated = salesOrder?.items?.some(
+      (item) => itemIdsToShip.has(item.item.id) && item.allocated_lots?.some(
+        (al: { lot: Lot }) => al.lot?.status === 'on_hold'
+      )
+    )
+    if (hasOnHoldAllocated && !confirm('One or more allocated lots are on hold (ship under quarantine). Proceed with checkout?')) {
+      return
+    }
+
     if (!confirm('Are you sure you want to checkout this order? This will create a DRAFT invoice and packing list.')) {
       return
     }
@@ -323,6 +338,8 @@ function CheckOutModal({ onClose, onSuccess }: CheckOutModalProps) {
       const result = await shipSalesOrder(salesOrder.id, {
         ship_date: shipDate,
         items: itemsToShip,
+        carrier: carrier.trim() || undefined,
+        tracking_number: trackingNumber.trim() || undefined,
         dimensions: dimensions.trim() || undefined,
         pieces: pieces !== '' ? Number(pieces) : undefined,
       })
@@ -538,9 +555,31 @@ function CheckOutModal({ onClose, onSuccess }: CheckOutModalProps) {
                     value={shipDate}
                     onChange={(e) => setShipDate(e.target.value)}
                     className="form-input"
+                    max={maxDateForEntry}
                     required
                   />
                   <p className="info-text">You can set the ship date earlier than the requested date if needed.</p>
+                </div>
+                <div className="form-group">
+                  <label>Carrier</label>
+                  <input
+                    type="text"
+                    value={carrier}
+                    onChange={(e) => setCarrier(e.target.value)}
+                    placeholder="e.g. FedEx, UPS"
+                    className="form-input"
+                  />
+                  <p className="info-text">Shipping carrier; shown on the invoice under SHIPPED VIA.</p>
+                </div>
+                <div className="form-group">
+                  <label>Tracking number</label>
+                  <input
+                    type="text"
+                    value={trackingNumber}
+                    onChange={(e) => setTrackingNumber(e.target.value)}
+                    placeholder="Optional"
+                    className="form-input"
+                  />
                 </div>
                 <div className="form-group">
                   <label>Dimensions</label>

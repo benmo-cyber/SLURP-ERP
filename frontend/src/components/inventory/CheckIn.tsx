@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { getItems, createLot, getItemPackSizes } from '../../api/inventory'
+import { useBackdatedEntry } from '../../context/BackdatedEntryContext'
 import './CheckIn.css'
 
 interface ItemPackSize {
@@ -176,6 +177,7 @@ function CheckIn() {
               id="received_date"
               value={formData.received_date}
               onChange={(e) => setFormData({ ...formData, received_date: e.target.value })}
+              max={maxDateForEntry}
               required
             />
           </div>

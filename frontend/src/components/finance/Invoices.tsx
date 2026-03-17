@@ -1,10 +1,12 @@
 import { useState, useEffect } from 'react'
-import { getInvoices, updateInvoice, getAgingReport, getInvoicePdfUrl } from '../../api/invoices'
-import { openPackingList } from '../../api/salesOrders'
+import { getInvoices, updateInvoice, getAgingReport } from '../../api/invoices'
+import { openPackingList, openPackingListForShipment } from '../../api/salesOrders'
 import { formatCurrency } from '../../utils/formatNumber'
 import CreateInvoice from './CreateInvoice'
 import ViewInvoice from './ViewInvoice'
 import './Invoices.css'
+
+const API_BASE_URL = 'http://localhost:8000/api'
 
 interface Invoice {
   id: number
@@ -17,6 +19,12 @@ interface Invoice {
     customer?: {
       payment_terms?: string
     }
+    shipments?: {
+      id: number
+      ship_date: string
+      expected_ship_date?: string | null
+      tracking_number: string
+    }[]
   }
   customer_name?: string
   payment_terms?: string
@@ -44,6 +52,8 @@ function Invoices() {
   const [viewingInvoice, setViewingInvoice] = useState<number | null>(null)
   type InvoiceSortKey = 'invoice_number' | 'customer' | 'invoice_date' | 'due_date' | 'grand_total' | 'status' | null
   const [sort, setSort] = useState<{ key: InvoiceSortKey; dir: 'asc' | 'desc' }>({ key: 'invoice_date', dir: 'desc' })
+
+  const statusLabel = (status: string) => status === 'sent' ? 'Issued' : status
 
   useEffect(() => {
     loadInvoices()
@@ -218,7 +228,7 @@ function Invoices() {
           >
             <option value="">All</option>
             <option value="draft">Draft</option>
-            <option value="sent">Sent</option>
+            <option value="sent">Issued</option>
             <option value="paid">Paid</option>
             <option value="overdue">Overdue</option>
             <option value="cancelled">Cancelled</option>
@@ -258,13 +268,13 @@ function Invoices() {
                 >
                   <td className="invoice-number">
                     <a
-                      href={getInvoicePdfUrl(invoice.id)}
+                      href={`${API_BASE_URL}/invoices/${invoice.id}/pdf/`}
                       target="_blank"
                       rel="noopener noreferrer"
                       style={{ color: '#0066cc', textDecoration: 'underline', cursor: 'pointer' }}
                       onClick={(e) => {
                         e.preventDefault()
-                        window.open(getInvoicePdfUrl(invoice.id), '_blank')
+                        window.open(`${API_BASE_URL}/invoices/${invoice.id}/pdf/`, '_blank')
                       }}
                       title="Click to view/print invoice PDF"
                     >
@@ -314,7 +324,7 @@ function Invoices() {
                         className="status-select"
                       >
                         <option value="draft">Draft</option>
-                        <option value="sent">Sent</option>
+                        <option value="sent">Issued</option>
                         <option value="paid">Paid</option>
                         <option value="overdue">Overdue</option>
                         <option value="cancelled">Cancelled</option>
@@ -328,26 +338,42 @@ function Invoices() {
                         }}
                         title={invoice.status === 'draft' ? 'Click to change status (e.g., to Issued)' : 'Click to change status'}
                       >
-                        {invoice.status}
+                        {statusLabel(invoice.status)}
                       </span>
                     )}
                   </td>
                   <td>
                     {invoice.sales_order?.id ? (
-                      <button
-                        onClick={async (e) => {
-                          e.stopPropagation()
-                          try {
-                            await openPackingList(invoice.sales_order!.id)
-                          } catch (err: any) {
-                            alert(err?.message || 'Failed to open packing list')
-                          }
-                        }}
-                        className="btn btn-small btn-secondary"
-                        title="View Packing List in new window"
-                      >
-                        View
-                      </button>
+                      <div className="packing-list-cell">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            openPackingList(invoice.sales_order!.id)
+                          }}
+                          className="btn btn-small btn-secondary"
+                          title="View packing list (full order)"
+                        >
+                          View
+                        </button>
+                        {invoice.sales_order.shipments && invoice.sales_order.shipments.length > 0 && (
+                          <div className="packing-list-releases">
+                            {invoice.sales_order.shipments.map((s, idx) => (
+                              <button
+                                key={s.id}
+                                type="button"
+                                className="btn-link btn-link-sm"
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  openPackingListForShipment(s.id)
+                                }}
+                                title={`Packing list for release ${idx + 1} (${s.ship_date?.slice(0, 10) || ''})`}
+                              >
+                                Release {idx + 1}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
                     ) : (
                       <span style={{ color: '#999' }}>-</span>
                     )}

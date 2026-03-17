@@ -6,7 +6,8 @@ from django.utils import timezone
 from django.db import models
 from datetime import datetime
 from .models import (
-    Item, Lot, ProductionBatch, ProductionBatchInput, ProductionBatchOutput, Formula, FormulaItem,
+    Item, Lot, ProductionBatch, ProductionBatchInput, ProductionBatchOutput,
+    CriticalControlPoint, Formula, FormulaItem,
     PurchaseOrder, PurchaseOrderItem, SalesOrder, SalesOrderItem,
     InventoryTransaction, LotNumberSequence, Vendor, VendorHistory,
     SupplierSurvey, SupplierDocument, TemporaryException, CostMaster, CostMasterHistory, Account,
@@ -19,14 +20,14 @@ from .models import (
 from .serializers import (
     ItemSerializer, LotSerializer, ProductionBatchSerializer,
     AccountsPayableSerializer, AccountsReceivableSerializer, PaymentSerializer, BankReconciliationSerializer,
-    FormulaSerializer, FormulaItemSerializer,
+    CriticalControlPointSerializer, FormulaSerializer, FormulaItemSerializer,
     PurchaseOrderSerializer, PurchaseOrderItemSerializer,
     SalesOrderSerializer, SalesOrderItemSerializer,
     InventoryTransactionSerializer, VendorSerializer, VendorHistorySerializer,
     SupplierSurveySerializer, SupplierDocumentSerializer, TemporaryExceptionSerializer,
     CostMasterSerializer, CostMasterHistorySerializer, AccountSerializer,
     FinishedProductSpecificationSerializer, CustomerSerializer, CustomerPricingSerializer, VendorPricingSerializer,
-    InvoiceSerializer, InvoiceItemSerializer, ShipToLocationSerializer,
+    InvoiceSerializer, InvoiceItemSerializer, ShipmentSerializer, ShipToLocationSerializer,
     CustomerContactSerializer, SalesCallSerializer, CustomerForecastSerializer, LotDepletionLogSerializer,
     LotTransactionLogSerializer, PurchaseOrderLogSerializer, ProductionLogSerializer, ItemPackSizeSerializer,
     FiscalPeriodSerializer, JournalEntrySerializer, JournalEntryLineSerializer, GeneralLedgerEntrySerializer, AccountBalanceSerializer
@@ -1850,12 +1851,23 @@ class LotViewSet(viewsets.ModelViewSet):
         if not items.exists():
             return Response({'error': 'No items found for this SKU/vendor combination'}, status=status.HTTP_404_NOT_FOUND)
         
-        # Get all lots for these items
+        # Get all lots for these items (accepted and on_hold; visible = qty>0 or depleted <24h)
         item_ids = items.values_list('id', flat=True)
-        lots = Lot.objects.filter(
-            item_id__in=item_ids,
-            status='accepted'
-        ).select_related('item').order_by('-received_date')
+        from django.utils import timezone
+        from datetime import timedelta
+        from django.db.models import Q
+        now = timezone.now()
+        depleted_cutoff = now - timedelta(hours=24)
+        try:
+            lot_visible_q = Q(quantity_remaining__gt=0) | Q(depleted_at__gte=depleted_cutoff)
+            lots = Lot.objects.filter(
+                item_id__in=item_ids
+            ).filter(status__in=['accepted', 'on_hold']).filter(lot_visible_q).select_related('item').order_by('-received_date')
+        except Exception:
+            lots = Lot.objects.filter(
+                item_id__in=item_ids,
+                quantity_remaining__gt=0
+            ).filter(status__in=['accepted', 'on_hold']).select_related('item').order_by('-received_date')
         
         # Get PO tracking info for lots with PO numbers
         from .models import PurchaseOrder
@@ -1976,6 +1988,118 @@ class LotViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(lot)
         return Response(serializer.data, status=status.HTTP_200_OK)
     
+    @action(detail=True, methods=['post'])
+    def put_on_hold(self, request, pk=None):
+        """Put a partial or full amount of this lot on hold. Body: { quantity }."""
+        lot = self.get_object()
+        try:
+            quantity = round(float(request.data.get('quantity', 0)), 2)
+        except (TypeError, ValueError):
+            return Response({'error': 'Valid quantity is required'}, status=status.HTTP_400_BAD_REQUEST)
+        if quantity <= 0:
+            return Response({'error': 'Quantity must be positive'}, status=status.HTTP_400_BAD_REQUEST)
+        from django.db.models import Sum
+        from .models import SalesOrderLot, ProductionBatchInput
+        sales_alloc = SalesOrderLot.objects.filter(
+            lot=lot,
+            sales_order_item__sales_order__status__in=[
+                'draft', 'allocated', 'issued', 'ready_for_shipment', 'shipped'
+            ]
+        ).aggregate(total=Sum('quantity_allocated'))['total'] or 0.0
+        prod_alloc = ProductionBatchInput.objects.filter(
+            lot=lot, batch__status='in_progress'
+        ).aggregate(total=Sum('quantity_used'))['total'] or 0.0
+        available = max(0.0, lot.quantity_remaining - sales_alloc - prod_alloc - getattr(lot, 'quantity_on_hold', 0.0))
+        if quantity > available:
+            return Response(
+                {'error': f'Only {available} available to put on hold (remaining minus sales/prod allocations and current on hold)'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        current_hold = getattr(lot, 'quantity_on_hold', 0.0)
+        lot.quantity_on_hold = round(current_hold + quantity, 2)
+        lot.on_hold = True
+        if lot.quantity_on_hold >= lot.quantity_remaining:
+            lot.status = 'on_hold'
+        lot.save(update_fields=['quantity_on_hold', 'on_hold', 'status'])
+        serializer = self.get_serializer(lot)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+    
+    @action(detail=True, methods=['post'])
+    def release_from_hold(self, request, pk=None):
+        """Release a quantity from hold. Body: { quantity }."""
+        lot = self.get_object()
+        try:
+            quantity = round(float(request.data.get('quantity', 0)), 2)
+        except (TypeError, ValueError):
+            return Response({'error': 'Valid quantity is required'}, status=status.HTTP_400_BAD_REQUEST)
+        if quantity <= 0:
+            return Response({'error': 'Quantity must be positive'}, status=status.HTTP_400_BAD_REQUEST)
+        current_hold = getattr(lot, 'quantity_on_hold', 0.0)
+        if quantity > current_hold:
+            return Response(
+                {'error': f'Only {current_hold} on hold; cannot release more'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        lot.quantity_on_hold = round(current_hold - quantity, 2)
+        if lot.quantity_on_hold <= 0:
+            lot.quantity_on_hold = 0.0
+            lot.on_hold = False
+            lot.status = 'accepted'
+        else:
+            lot.on_hold = True
+            lot.status = 'on_hold'
+        lot.save(update_fields=['quantity_on_hold', 'on_hold', 'status'])
+        serializer = self.get_serializer(lot)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+    
+    @action(detail=True, methods=['post'])
+    def reconcile(self, request, pk=None):
+        """Admin override: set quantity_remaining to match reality. Requires staff or superuser."""
+        if not getattr(request.user, 'is_authenticated', True) or (
+            not getattr(request.user, 'is_staff', False) and not getattr(request.user, 'is_superuser', False)
+        ):
+            return Response({'error': 'Admin override requires staff or superuser.'}, status=status.HTTP_403_FORBIDDEN)
+        lot = self.get_object()
+        try:
+            new_remaining = round(float(request.data.get('quantity_remaining')), 2)
+        except (TypeError, ValueError):
+            return Response({'error': 'Valid quantity_remaining is required'}, status=status.HTTP_400_BAD_REQUEST)
+        if new_remaining < 0:
+            return Response({'error': 'quantity_remaining cannot be negative'}, status=status.HTTP_400_BAD_REQUEST)
+        reason = (request.data.get('reason') or '').strip() or 'Admin reconcile'
+        quantity_before = lot.quantity_remaining
+        quantity_change = new_remaining - quantity_before
+        if quantity_change == 0:
+            serializer = self.get_serializer(lot)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        lot.quantity_remaining = new_remaining
+        if new_remaining > 0:
+            lot.depleted_at = None
+        lot.save(update_fields=['quantity_remaining', 'depleted_at'])
+        try:
+            from .models import LotTransactionLog
+            LotTransactionLog.objects.create(
+                lot=lot,
+                lot_number=lot.lot_number or '',
+                item_sku=lot.item.sku,
+                item_name=lot.item.name,
+                vendor=lot.item.vendor or '',
+                transaction_type='adjustment',
+                quantity_before=quantity_before,
+                quantity_change=quantity_change,
+                quantity_after=new_remaining,
+                unit_of_measure=lot.item.unit_of_measure,
+                reference_number=None,
+                reference_type='admin_reconcile',
+                notes=reason,
+                logged_by=getattr(request.user, 'username', None) or getattr(request.user, 'email', None) or 'admin'
+            )
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f'Failed to log reconcile: {e}')
+        serializer = self.get_serializer(lot)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+    
     @action(detail=False, methods=['get'])
     def debug_lot(self, request):
         """Debug endpoint to check a specific lot number"""
@@ -2055,13 +2179,26 @@ class LotViewSet(viewsets.ModelViewSet):
             return Response([])
         
         try:
-            # Get all items
-            items = Item.objects.all()
-            
-            # Filter by item_type if provided
+            from django.utils import timezone
+            from datetime import timedelta
+            # inventory_table: finished_good | raw_material | indirect_material (split view); or item_type for legacy filter
+            inventory_table = request.query_params.get('inventory_table', None)
             item_type_filter = request.query_params.get('item_type', None)
-            if item_type_filter:
-                items = items.filter(item_type=item_type_filter)
+            
+            if inventory_table:
+                # Separate tables: FG, Raw, Indirect. Distributed: raw until repack closed, then FG.
+                if inventory_table == 'finished_good':
+                    items = Item.objects.filter(item_type__in=['finished_good', 'distributed_item'])
+                elif inventory_table == 'raw_material':
+                    items = Item.objects.filter(item_type__in=['raw_material', 'distributed_item'])
+                elif inventory_table == 'indirect_material':
+                    items = Item.objects.filter(item_type='indirect_material')
+                else:
+                    items = Item.objects.all()
+            else:
+                items = Item.objects.all()
+                if item_type_filter:
+                    items = items.filter(item_type=item_type_filter)
         except (OperationalError, Exception) as e:
             import traceback
             traceback.print_exc()
@@ -2105,6 +2242,37 @@ class LotViewSet(viewsets.ModelViewSet):
             for item_id in items.values_list('id', flat=True):
                 item_sales_allocations[item_id] = 0.0
         
+        # Detect if Lot table has quantity_on_hold (migration 0061); if not, use legacy on_hold logic
+        use_legacy_on_hold = False
+        try:
+            Lot.objects.filter(quantity_remaining__gt=0).first()
+        except Exception as e:
+            err = str(e).lower()
+            if 'quantity_on_hold' in err or 'no such column' in err:
+                use_legacy_on_hold = True
+        
+        # Lots visible in inventory: qty > 0 OR depleted within last 24h (so can unfk quickly)
+        from datetime import timedelta
+        now = timezone.now()
+        depleted_cutoff = now - timedelta(hours=24)
+        try:
+            lot_visible_q = Q(quantity_remaining__gt=0) | Q(depleted_at__gte=depleted_cutoff)
+        except Exception:
+            lot_visible_q = Q(quantity_remaining__gt=0)
+        
+        # For inventory_table split: which lot IDs are repack outputs (distributed -> FG)
+        repack_output_lot_ids = set()
+        if inventory_table and inventory_table in ('finished_good', 'raw_material'):
+            try:
+                from .models import ProductionBatchOutput
+                repack_output_lot_ids = set(
+                    ProductionBatchOutput.objects.filter(
+                        batch__batch_type='repack', batch__status='closed'
+                    ).values_list('lot_id', flat=True)
+                )
+            except Exception:
+                pass
+        
         # Group items by SKU to avoid duplicates
         items_by_sku = {}
         for item in items:
@@ -2132,15 +2300,32 @@ class LotViewSet(viewsets.ModelViewSet):
             except Exception:
                 pass
             
-            # Get all lots for all items with this SKU
+            # Get all lots for all items with this SKU (accepted and on_hold; visible = qty>0 or depleted <24h)
             item_ids = [i.id for i in sku_items]
+            item_types = {i.id: i.item_type for i in sku_items}
             try:
-                item_lots = Lot.objects.filter(
-                    item_id__in=item_ids,
-                    status='accepted'
-                ).select_related('item')
+                if use_legacy_on_hold:
+                    qs = Lot.objects.filter(
+                        item_id__in=item_ids,
+                        status__in=['accepted', 'on_hold']
+                    ).filter(lot_visible_q).only(
+                        'id', 'lot_number', 'vendor_lot_number', 'item_id', 'pack_size_id', 'quantity', 'quantity_remaining',
+                        'received_date', 'expiration_date', 'status', 'on_hold', 'freight_actual', 'po_number', 'short_reason', 'created_at'
+                    ).select_related('item')
+                else:
+                    qs = Lot.objects.filter(
+                        item_id__in=item_ids,
+                        status__in=['accepted', 'on_hold']
+                    ).filter(lot_visible_q).select_related('item')
+                item_lots = list(qs)
             except Exception:
                 item_lots = []
+            
+            # For split table: distributed_item lots go to FG only if from repack output, to Raw only if not
+            if inventory_table == 'finished_good' and repack_output_lot_ids is not None:
+                item_lots = [lot for lot in item_lots if item_types.get(lot.item_id) != 'distributed_item' or lot.id in repack_output_lot_ids]
+            elif inventory_table == 'raw_material' and repack_output_lot_ids is not None:
+                item_lots = [lot for lot in item_lots if item_types.get(lot.item_id) != 'distributed_item' or lot.id not in repack_output_lot_ids]
             
             # Build a map of vendor -> lots by checking PO vendor
             vendor_lots_map = {}
@@ -2155,11 +2340,8 @@ class LotViewSet(viewsets.ModelViewSet):
             except Exception:
                 pass
             
-            # Only include lots with quantity_remaining > 0 (depleted lots are removed from table, exist only in log)
+            # Include lot (already filtered by lot_visible_q: qty>0 or depleted within 24h)
             for lot in item_lots:
-                # Skip lots that are depleted (quantity_remaining <= 0)
-                if lot.quantity_remaining <= 0:
-                    continue
                 
                 vendor_name = None
                 if lot.po_number and po_table_exists:
@@ -2305,11 +2487,11 @@ class LotViewSet(viewsets.ModelViewSet):
                 except Exception:
                     pass
                 
-                # Calculate on hold
-                on_hold = sum(
-                    lot.quantity_remaining for lot in vendor_lots 
-                    if lot.status == 'on_hold' or lot.on_hold
-                )
+                # Calculate on hold (quantity_on_hold is source of truth when column exists; else use status/on_hold)
+                if use_legacy_on_hold:
+                    on_hold = sum(lot.quantity_remaining for lot in vendor_lots if lot.status == 'on_hold' or lot.on_hold)
+                else:
+                    on_hold = sum(getattr(lot, 'quantity_on_hold', 0.0) for lot in vendor_lots)
                 
                 # Get sales allocation - sum across all items with this SKU for this vendor
                 allocated_to_sales = 0.0
@@ -2320,12 +2502,10 @@ class LotViewSet(viewsets.ModelViewSet):
                     for sku_item in sku_items:
                         allocated_to_sales += item_sales_allocations.get(sku_item.id, 0.0)
                 
-                # Available = quantity_remaining - on_hold only.
-                # quantity_remaining above is already (lot.quantity_remaining - lot_sales_allocations) per lot,
-                # so sales allocation is already subtracted; do NOT subtract allocated_to_sales again.
-                # Do NOT subtract allocated_to_production: lot.quantity_remaining is already reduced
-                # when inputs are added to a batch (at batch create).
-                available = max(0.0, quantity_remaining - on_hold)
+                # Available = quantity_remaining - on_hold - allocated_to_production.
+                # We do NOT reduce lot.quantity_remaining when adding to a batch; we reduce when the batch closes.
+                # So "available" = what's left minus what's committed to in-progress batches.
+                available = max(0.0, quantity_remaining - on_hold - allocated_to_production)
                 
                 # Create vendor-level inventory entry (nested under SKU)
                 vendor_entry = {
@@ -2543,13 +2723,15 @@ class LotViewSet(viewsets.ModelViewSet):
                     lot.lot_number = vendor_lot_number
                 lot.save()
         
-        # Set quantity_remaining based on lot_status
+        # Set quantity_remaining and on_hold based on lot_status
         if lot_status == 'accepted':
             lot.quantity_remaining = lot.quantity
+            lot.on_hold = False
         elif lot_status == 'rejected':
             lot.quantity_remaining = 0
+            lot.on_hold = False
         elif lot_status == 'on_hold':
-            lot.quantity_remaining = 0
+            lot.quantity_remaining = lot.quantity  # Physical qty in house; not available until released
             lot.on_hold = True
         lot.save()
         
@@ -3022,9 +3204,15 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
             
             try:
                 lot = Lot.objects.get(id=lot_id)
-                if lot.quantity_remaining < quantity_used:
+                # Available = quantity_remaining minus what's already committed to in-progress batches (we don't reduce lot until batch closes)
+                from django.db.models import Sum
+                already_allocated = ProductionBatchInput.objects.filter(
+                    lot=lot, batch__status='in_progress'
+                ).aggregate(total=Sum('quantity_used'))['total'] or 0.0
+                available = lot.quantity_remaining - already_allocated
+                if available < quantity_used:
                     return Response(
-                        {'error': f'Insufficient quantity in lot {lot.lot_number}. Available: {lot.quantity_remaining}, Requested: {quantity_used}'},
+                        {'error': f'Insufficient quantity in lot {lot.lot_number}. Available: {available}, Requested: {quantity_used}'},
                         status=status.HTTP_400_BAD_REQUEST
                     )
                 
@@ -3114,59 +3302,9 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
                 lot=lot,
                 quantity_used=quantity_used
             )
-            
-            # Determine transaction types based on batch type
-            input_transaction_type = 'repack_input' if batch_type == 'repack' else 'production_input'
-            depletion_method = 'repack' if batch_type == 'repack' else 'production'
-            batch_type_label = 'repack' if batch_type == 'repack' else 'production'
-            
-            # Create inventory transaction for input (reduce quantity)
-            # Preserve exact integers, round decimals to 2 places
-            # Use tolerance of 0.01 to catch floating point errors (e.g., 615.99 -> 616)
-            rounded_to_int = round(quantity_used)
-            if abs(quantity_used - rounded_to_int) <= 0.01:
-                rounded_quantity = rounded_to_int  # Exact integer
-            else:
-                rounded_quantity = round(quantity_used, 2)  # Round to 2 decimal places
-            
-            quantity_before = lot.quantity_remaining
-            
-            transaction = InventoryTransaction.objects.create(
-                transaction_type=input_transaction_type,
-                lot=lot,
-                quantity=-rounded_quantity,
-                notes=f'{"Repack" if batch_type == "repack" else "Production"} batch {batch.batch_number} input',
-                reference_number=batch.batch_number
-            )
-            
-            # Log the transaction
-            log_lot_transaction(
-                lot=lot,
-                quantity_before=quantity_before,
-                quantity_change=-rounded_quantity,
-                transaction_type=input_transaction_type,
-                reference_number=batch.batch_number,
-                reference_type='batch_number',
-                transaction_id=transaction.id,
-                batch_id=batch.id,
-                notes=f'Used in {batch_type_label} batch {batch.batch_number}' + (' - Distributed item repack/relabel' if batch_type == 'repack' else '')
-            )
-            
-            # Update lot quantity_remaining - round to 2 decimal places
-            lot.quantity_remaining = round(lot.quantity_remaining - rounded_quantity, 2)
-            lot.save()
-            
-            # Log depletion if lot reaches zero or below
-            log_lot_depletion(
-                lot=lot,
-                quantity_before=quantity_before,
-                quantity_used=rounded_quantity,
-                depletion_method=depletion_method,
-                reference_number=batch.batch_number,
-                reference_type='batch_number',
-                batch_id=batch.id,
-                notes=f'Used in {batch_type_label} batch {batch.batch_number}' + (' - Distributed item repack/relabel' if batch_type == 'repack' else '')
-            )
+            # Do NOT reduce lot.quantity_remaining here. Lots are reduced when the batch is closed.
+            # This way "Available" in inventory = quantity_remaining - allocated_to_production shows correctly
+            # (e.g. 5000 received - 140 committed = 4860 available).
         
         # Validate that total input quantity equals quantity to produce (with tolerance for conversion rounding)
         # This is a second validation check after batch creation
@@ -3380,29 +3518,24 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
             if 'quantity_produced' in data:
                 data['quantity_produced'] = round(float(data['quantity_produced']), 2)
             
-            # Delete existing inputs and restore lot quantities
+            # Delete existing inputs; restore lot only if we had reduced (legacy: transaction exists)
             for existing_input in instance.inputs.all():
                 lot = existing_input.lot
-                # Restore the quantity that was used
-                lot.quantity_remaining = round(lot.quantity_remaining + existing_input.quantity_used, 2)
-                lot.save()
-                
-                # CRITICAL FIX: Delete the old inventory transaction to prevent duplicates
-                # Find and delete ALL matching transactions for this batch input (should be only one, but handle duplicates)
+                # Only restore if there's a consumption transaction (we now only reduce at batch close)
                 old_transactions = InventoryTransaction.objects.filter(
                     lot=lot,
                     reference_number=instance.batch_number,
                     transaction_type__in=['production_input', 'repack_input'],
-                    quantity__lt=0  # Negative quantity (consumption)
+                    quantity__lt=0
                 ).order_by('-transaction_date')
-                
-                # Delete ALL matching transactions (handles duplicates)
                 for old_txn in old_transactions:
-                    # Verify this transaction matches the input quantity (within rounding tolerance)
+                    if abs(abs(old_txn.quantity) - existing_input.quantity_used) < 0.01:
+                        lot.quantity_remaining = round(lot.quantity_remaining + existing_input.quantity_used, 2)
+                        lot.save()
+                        break
+                for old_txn in list(old_transactions):
                     if abs(abs(old_txn.quantity) - existing_input.quantity_used) < 0.01:
                         old_txn.delete()
-                
-                # Also delete any associated lot transaction logs to prevent duplicates
                 from .models import LotTransactionLog
                 LotTransactionLog.objects.filter(
                     lot=lot,
@@ -3410,8 +3543,6 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
                     transaction_type__in=['production_input', 'repack_input'],
                     batch_id=instance.id
                 ).delete()
-                
-                # Delete the old input
                 existing_input.delete()
             
             # Create new inputs with rounded quantities
@@ -3429,66 +3560,23 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
                 
                 if lot_id and quantity_used > 0:
                     try:
+                        from django.db.models import Sum
                         lot = Lot.objects.get(id=lot_id)
-                        if lot.quantity_remaining < quantity_used:
+                        already_allocated = ProductionBatchInput.objects.filter(
+                            lot=lot, batch__status='in_progress'
+                        ).aggregate(total=Sum('quantity_used'))['total'] or 0.0
+                        available = lot.quantity_remaining - already_allocated
+                        if available < quantity_used:
                             return Response(
-                                {'error': f'Insufficient quantity in lot {lot.lot_number}. Available: {lot.quantity_remaining}, Requested: {quantity_used}'},
+                                {'error': f'Insufficient quantity in lot {lot.lot_number}. Available: {available}, Requested: {quantity_used}'},
                                 status=status.HTTP_400_BAD_REQUEST
                             )
-                        
                         ProductionBatchInput.objects.create(
                             batch=instance,
                             lot=lot,
                             quantity_used=quantity_used
                         )
-                        
-                        # Create inventory transaction for input (reduce quantity)
-                        # Preserve exact integers, round decimals to 2 places
-                        # Use tolerance of 0.01 to catch floating point errors (e.g., 615.99 -> 616)
-                        rounded_to_int = round(quantity_used)
-                        if abs(quantity_used - rounded_to_int) <= 0.01:
-                            rounded_qty = rounded_to_int  # Exact integer
-                        else:
-                            rounded_qty = round(quantity_used, 2)  # Round to 2 decimal places
-                        
-                        quantity_before = lot.quantity_remaining
-                        
-                        transaction = InventoryTransaction.objects.create(
-                            transaction_type='production_input',
-                            lot=lot,
-                            quantity=-rounded_qty,
-                            notes=f'Batch {instance.batch_number} input (adjusted)',
-                            reference_number=instance.batch_number
-                        )
-                        
-                        # Log the transaction
-                        log_lot_transaction(
-                            lot=lot,
-                            quantity_before=quantity_before,
-                            quantity_change=-rounded_qty,
-                            transaction_type='production_input',
-                            reference_number=instance.batch_number,
-                            reference_type='batch_number',
-                            transaction_id=transaction.id,
-                            batch_id=instance.id,
-                            notes=f'Adjusted in production batch {instance.batch_number}'
-                        )
-                        
-                        # Update lot quantity_remaining
-                        lot.quantity_remaining = round(lot.quantity_remaining - rounded_qty, 2)
-                        lot.save()
-                        
-                        # Log depletion if lot reaches zero or below
-                        log_lot_depletion(
-                            lot=lot,
-                            quantity_before=quantity_before,
-                            quantity_used=quantity_used,
-                            depletion_method='production',
-                            reference_number=instance.batch_number,
-                            reference_type='batch_number',
-                            batch_id=instance.id,
-                            notes=f'Adjusted in production batch {instance.batch_number}'
-                        )
+                        # Do NOT reduce lot here; we reduce when the batch is closed.
                     except Lot.DoesNotExist:
                         return Response(
                             {'error': f'Lot with id {lot_id} not found'},
@@ -3525,6 +3613,37 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
             
             # Log production batch closure
             log_production_batch_closure(batch, notes=f'Batch {batch.batch_number} closed')
+            
+            # Reduce input lot quantities now that batch is closed (we don't reduce at batch create)
+            batch_type_label = 'repack' if batch.batch_type == 'repack' else 'production'
+            input_transaction_type = 'repack_input' if batch.batch_type == 'repack' else 'production_input'
+            for batch_input in batch.inputs.all():
+                lot = batch_input.lot
+                qty = batch_input.quantity_used
+                rounded_qty = round(qty) if abs(qty - round(qty)) <= 0.01 else round(qty, 2)
+                quantity_before = lot.quantity_remaining
+                if lot.quantity_remaining < rounded_qty:
+                    continue  # Should not happen if create validation was correct
+                lot.quantity_remaining = round(lot.quantity_remaining - rounded_qty, 2)
+                lot.save()
+                InventoryTransaction.objects.create(
+                    transaction_type=input_transaction_type,
+                    lot=lot,
+                    quantity=-rounded_qty,
+                    notes=f'{batch_type_label.capitalize()} batch {batch.batch_number} input (closed)',
+                    reference_number=batch.batch_number
+                )
+                log_lot_transaction(
+                    lot=lot,
+                    quantity_before=quantity_before,
+                    quantity_change=-rounded_qty,
+                    transaction_type=input_transaction_type,
+                    reference_number=batch.batch_number,
+                    reference_type='batch_number',
+                    transaction_id=None,
+                    batch_id=batch.id,
+                    notes=f'Used in {batch_type_label} batch {batch.batch_number} (closed)'
+                )
             
             # Check if batch has outputs
             if batch.outputs.exists():
@@ -3570,15 +3689,17 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
                     # Get pack size for the lot (use default pack size for this item)
                     pack_size = ItemPackSize.objects.filter(item=item, is_default=True, is_active=True).first()
                     
-                    # Create new combined lot
+                    # Create new combined lot (on hold until micro testing results)
                     new_lot = Lot.objects.create(
                         lot_number=lot_number,
                         item=item,
                         pack_size=pack_size,
                         quantity=combined_output_quantity,
                         quantity_remaining=combined_output_quantity,
+                        quantity_on_hold=combined_output_quantity,
                         received_date=timezone.now(),
-                        status='accepted'
+                        status='on_hold',
+                        on_hold=True
                     )
                     
                     # Create output record
@@ -3651,15 +3772,17 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
                         # Generate new lot number (ONLY on batch closure)
                         lot_number = generate_lot_number()
                         
-                        # Create new lot
+                        # Create new lot (on hold until micro testing results)
                         new_lot = Lot.objects.create(
                             lot_number=lot_number,
                             item=item,
                             pack_size=pack_size,
                             quantity=output_quantity,
                             quantity_remaining=output_quantity,
+                            quantity_on_hold=output_quantity,
                             received_date=timezone.now(),
-                            status='accepted'
+                            status='on_hold',
+                            on_hold=True
                         )
                         
                         # Create output record
@@ -3751,24 +3874,35 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
     
     @action(detail=True, methods=['get'], url_path='pdf', url_name='pdf')
     def generate_pdf(self, request, pk=None):
-        """Generate a PDF batch ticket for printing. Uses template from Sensitive/Batch Ticket.pdf when present."""
+        """Generate a PDF batch ticket. Tries HTML→PDF first; falls back to current template/flowable."""
         from django.http import HttpResponse, JsonResponse
 
         batch = self.get_object()
+        pdf_bytes, filename = None, None
         try:
-            from .batch_ticket_pdf import build_batch_ticket_pdf
-        except ImportError as e:
+            from .batch_ticket_pdf_html import generate_batch_ticket_pdf_from_html
+            pdf_bytes, filename = generate_batch_ticket_pdf_from_html(batch)
+        except Exception:
+            pass
+        if not pdf_bytes:
+            try:
+                from .batch_ticket_pdf import build_batch_ticket_pdf
+                pdf_bytes, filename = build_batch_ticket_pdf(batch)
+            except ImportError as e:
+                return JsonResponse(
+                    {'error': 'Batch ticket PDF module not available: ' + str(e)},
+                    status=500
+                )
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                return JsonResponse(
+                    {'error': 'Failed to generate batch ticket PDF: ' + str(e)},
+                    status=500
+                )
+        if not pdf_bytes:
             return JsonResponse(
-                {'error': 'Batch ticket PDF module not available: ' + str(e)},
-                status=500
-            )
-        try:
-            pdf_bytes, filename = build_batch_ticket_pdf(batch)
-        except Exception as e:
-            import traceback
-            traceback.print_exc()
-            return JsonResponse(
-                {'error': 'Failed to generate batch ticket PDF: ' + str(e)},
+                {'error': 'Failed to generate batch ticket PDF'},
                 status=500
             )
         response = HttpResponse(pdf_bytes, content_type='application/pdf')
@@ -3863,22 +3997,20 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
             except Exception:
                 pass
             
-            # Get input lot IDs before processing
+            # Get input lot IDs before processing (for reversing transactions)
             input_lot_ids = list(batch.inputs.values_list('lot_id', flat=True))
             
-            # Restore input lot quantities first
-            for batch_input in batch.inputs.all():
-                try:
-                    # Use select_related or get the lot directly
-                    lot_id = batch_input.lot_id
-                    if lot_id:
-                        lot = Lot.objects.get(id=lot_id)
-                        # Restore the quantity that was used
-                        lot.quantity_remaining += batch_input.quantity_used
-                        lot.save()
-                except (Lot.DoesNotExist, AttributeError, ValueError):
-                    # Lot was already deleted or doesn't exist, skip
-                    pass
+            # Restore input lot quantities only if batch was closed (we reduce lots at close, not at create)
+            if batch.status == 'closed':
+                for batch_input in batch.inputs.all():
+                    try:
+                        lot_id = batch_input.lot_id
+                        if lot_id:
+                            lot = Lot.objects.get(id=lot_id)
+                            lot.quantity_remaining = round(lot.quantity_remaining + batch_input.quantity_used, 2)
+                            lot.save()
+                    except (Lot.DoesNotExist, AttributeError, ValueError):
+                        pass
             
             # Delete output lots FIRST (these were created by the batch)
             # This must happen before deleting the batch to avoid foreign key issues
@@ -3965,7 +4097,7 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
 
 
 class FormulaViewSet(viewsets.ModelViewSet):
-    queryset = Formula.objects.select_related('finished_good').prefetch_related('ingredients__item').all()
+    queryset = Formula.objects.select_related('finished_good', 'critical_control_point').prefetch_related('ingredients__item').all()
     serializer_class = FormulaSerializer
     
     def create(self, request, *args, **kwargs):
@@ -4021,6 +4153,11 @@ class FormulaViewSet(viewsets.ModelViewSet):
         # Return the formula with ingredients
         serializer = self.get_serializer(formula)
         return Response(serializer.data)
+
+
+class CriticalControlPointViewSet(viewsets.ModelViewSet):
+    queryset = CriticalControlPoint.objects.all()
+    serializer_class = CriticalControlPointSerializer
 
 
 class PurchaseOrderViewSet(viewsets.ModelViewSet):
@@ -4338,15 +4475,32 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
     
     @action(detail=True, methods=['get'], url_path='pdf', url_name='pdf')
     def generate_pdf(self, request, pk=None):
-        """Generate a PDF purchase order"""
+        """Generate a PDF purchase order. Prefer Jinja2 HTML→PDF; fallback to template fill then ReportLab."""
+        import logging
+        from pathlib import Path
         from django.http import HttpResponse
         from .pdf_generator import generate_purchase_order_pdf
-        
+        from .po_pdf_template import get_po_template_pdf_path, fill_po_template_pdf
+        from .po_pdf_html import generate_po_pdf_from_html
+
+        logger = logging.getLogger(__name__)
         purchase_order = self.get_object()
-        
+
         try:
-            pdf_content = generate_purchase_order_pdf(purchase_order)
-            
+            pdf_content = generate_po_pdf_from_html(purchase_order)
+            if pdf_content:
+                logger.info("PO PDF: using HTML path for PO %s", getattr(purchase_order, "po_number", pk))
+            if not pdf_content:
+                project_root = Path(__file__).resolve().parent.parent.parent
+                template_path = get_po_template_pdf_path(project_root)
+                if template_path:
+                    pdf_content = fill_po_template_pdf(template_path, purchase_order)
+                    if pdf_content:
+                        logger.info("PO PDF: using template-fill path for PO %s", getattr(purchase_order, "po_number", pk))
+            if not pdf_content:
+                pdf_content = generate_purchase_order_pdf(purchase_order)
+                logger.info("PO PDF: using ReportLab fallback for PO %s", getattr(purchase_order, "po_number", pk))
+
             response = HttpResponse(pdf_content, content_type='application/pdf')
             response['Content-Disposition'] = f'inline; filename="Purchase_Order_{purchase_order.po_number}.pdf"'
             return response
@@ -4871,6 +5025,7 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
         ship_date_str = request.data.get('ship_date')
         invoice_date_str = request.data.get('invoice_date', ship_date_str)
         tracking_number = request.data.get('tracking_number', '').strip()
+        carrier = (request.data.get('carrier') or '').strip()
         items_to_ship = request.data.get('items', [])  # List of {item_id, quantity} for partial shipments
         
         # Validate order is issued or ready_for_shipment and has allocations
@@ -4917,9 +5072,22 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
         try:
             with transaction.atomic():
                 # Create shipment record (tracking number, dimensions, pieces can be set at checkout)
+                ship_dt = timezone.make_aware(datetime.combine(ship_date, datetime.min.time()))
+                expected_dt = None
+                if request.data.get('expected_ship_date'):
+                    try:
+                        from django.utils.dateparse import parse_datetime
+                        expected_dt = parse_datetime(request.data.get('expected_ship_date'))
+                        if expected_dt and timezone.is_naive(expected_dt):
+                            expected_dt = timezone.make_aware(expected_dt)
+                    except Exception:
+                        pass
+                if expected_dt is None and sales_order.expected_ship_date:
+                    expected_dt = sales_order.expected_ship_date
                 shipment = Shipment.objects.create(
                     sales_order=sales_order,
-                    ship_date=timezone.make_aware(datetime.combine(ship_date, datetime.min.time())),
+                    expected_ship_date=expected_dt,
+                    ship_date=ship_dt,
                     tracking_number=tracking_number or '',
                     notes=request.data.get('notes', ''),
                     dimensions=(request.data.get('dimensions') or '').strip() or None,
@@ -5031,10 +5199,12 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
                         quantity_shipped=quantity_to_ship
                     )
                 
-                # Update sales order status and tracking
+                # Update sales order status, tracking, and carrier
                 sales_order.actual_ship_date = timezone.make_aware(datetime.combine(ship_date, datetime.min.time()))
                 if not sales_order.tracking_number:
                     sales_order.tracking_number = tracking_number
+                if carrier:
+                    sales_order.carrier = carrier
                 
                 # Check if order is fully shipped
                 all_fully_shipped = all(
@@ -5606,21 +5776,37 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['get'], url_path='packing-list', url_name='packing-list')
     def packing_list(self, request, pk=None):
-        """Generate packing list document from template (PDF in WWI ERP or docx in Sensitive)."""
+        """Generate packing list PDF. Same flow as invoice: try HTML→PDF first, then fallback to template fill."""
         from django.http import HttpResponse
-        from pathlib import Path
-        import os
-        import tempfile
-        
+
         # Load with relations needed for ship to / bill to and shipments (dimensions, pieces)
         sales_order = SalesOrder.objects.select_related(
             'ship_to_location', 'customer'
         ).prefetch_related('items__item', 'shipments').get(pk=self.get_object().pk)
-        
+
+        # Same flow as invoice PDF: try HTML→PDF first (no external template required)
+        try:
+            from .packing_list_pdf_html import generate_packing_list_pdf_from_html
+            pdf_content = generate_packing_list_pdf_from_html(sales_order)
+            if pdf_content:
+                response = HttpResponse(pdf_content, content_type='application/pdf')
+                response['Content-Disposition'] = f'inline; filename="Packing_List_{sales_order.so_number or pk}.pdf"'
+                response['X-Content-Type-Options'] = 'nosniff'
+                return response
+        except Exception as e:
+            import traceback
+            logger.error('Packing list HTML PDF failed: %s', str(e))
+            logger.error(traceback.format_exc())
+
+        # Fallback: template-based (PDF or docx)
+        from pathlib import Path
+        import os
+        import tempfile
+
         template_path, template_type = self._get_packing_list_template_path()
         if not template_path or not template_path.exists():
             return Response(
-                {'error': 'Packing list template not found. Add "Packing list template.pdf" to the WWI ERP folder.'},
+                {'error': 'Packing list template not found. Add "Packing list template.pdf" to the WWI ERP folder, or ensure packing_list_pdf_html is available.'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
@@ -6131,6 +6317,44 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
             )
 
 
+class ShipmentViewSet(viewsets.ReadOnlyModelViewSet):
+    """List/retrieve shipments. Packing list PDF per shipment. Filter by ?sales_order=<id>."""
+    serializer_class = ShipmentSerializer
+    queryset = Shipment.objects.select_related(
+        'sales_order', 'sales_order__customer', 'sales_order__ship_to_location'
+    ).prefetch_related('items__sales_order_item__item').all()
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        so_id = self.request.query_params.get('sales_order')
+        if so_id:
+            qs = qs.filter(sales_order_id=so_id)
+        return qs
+
+    @action(detail=True, methods=['get'], url_path='packing-list', url_name='packing-list')
+    def packing_list(self, request, pk=None):
+        """Generate packing list PDF for this shipment (one PDF per release)."""
+        from django.http import HttpResponse
+        shipment = self.get_object()
+        try:
+            from .packing_list_pdf_html import generate_packing_list_pdf_from_shipment
+            pdf_content = generate_packing_list_pdf_from_shipment(shipment)
+            if pdf_content:
+                so_num = (shipment.sales_order.so_number or pk) if shipment.sales_order_id else pk
+                response = HttpResponse(pdf_content, content_type='application/pdf')
+                response['Content-Disposition'] = f'inline; filename="Packing_List_{so_num}_Release_{shipment.id}.pdf"'
+                response['X-Content-Type-Options'] = 'nosniff'
+                return response
+        except Exception as e:
+            import traceback
+            logger.error('Shipment packing list PDF failed: %s', str(e))
+            logger.error(traceback.format_exc())
+        return Response(
+            {'error': 'Failed to generate packing list for this shipment.'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
 class InvoiceViewSet(viewsets.ModelViewSet):
     serializer_class = InvoiceSerializer
     queryset = Invoice.objects.none()  # Will be set in get_queryset
@@ -6150,7 +6374,9 @@ class InvoiceViewSet(viewsets.ModelViewSet):
         
         # Build queryset - use raw SQL if column doesn't exist to avoid ORM errors
         if has_sales_order_column:
-            queryset = Invoice.objects.select_related('sales_order', 'sales_order__customer').prefetch_related('items').all()
+            queryset = Invoice.objects.select_related(
+                'sales_order', 'sales_order__customer', 'sales_order__ship_to_location'
+            ).prefetch_related('items', 'sales_order__shipments').all()
         else:
             # No sales_order_id column - use raw SQL to avoid ORM trying to access it
             # We'll manually construct the queryset using raw SQL
@@ -6638,7 +6864,7 @@ class InvoiceViewSet(viewsets.ModelViewSet):
                     # Load sales order if exists
                     if invoice.sales_order_id:
                         try:
-                            invoice.sales_order = SalesOrder.objects.select_related('customer').get(id=invoice.sales_order_id)
+                            invoice.sales_order = SalesOrder.objects.select_related('customer', 'ship_to_location').get(id=invoice.sales_order_id)
                         except SalesOrder.DoesNotExist:
                             invoice.sales_order = None
                     
@@ -6874,6 +7100,22 @@ class InvoiceViewSet(viewsets.ModelViewSet):
             invoice_id = kwargs.get('pk')
             data = request.data.copy()
             
+            # Before moving from Draft to Sent (issued): require carrier and tracking on the sales order
+            if data.get('status') == 'sent':
+                try:
+                    inv = Invoice.objects.select_related('sales_order').get(pk=invoice_id)
+                    if inv.sales_order_id and inv.sales_order:
+                        so = inv.sales_order
+                        carrier = (getattr(so, 'carrier', None) or '').strip()
+                        tracking = (getattr(so, 'tracking_number', None) or '').strip()
+                        if not carrier or not tracking:
+                            return Response(
+                                {'error': 'Carrier and tracking number must be entered on the sales order before the invoice can be moved to Issued/Sent.'},
+                                status=http_status.HTTP_400_BAD_REQUEST
+                            )
+                except Invoice.DoesNotExist:
+                    pass
+            
             # Check database schema
             with connection.cursor() as cursor:
                 cursor.execute("PRAGMA table_info(erp_core_invoice)")
@@ -7106,7 +7348,7 @@ class InvoiceViewSet(viewsets.ModelViewSet):
                     
                     if invoice.sales_order_id:
                         try:
-                            invoice.sales_order = SalesOrder.objects.select_related('customer').get(id=invoice.sales_order_id)
+                            invoice.sales_order = SalesOrder.objects.select_related('customer', 'ship_to_location').get(id=invoice.sales_order_id)
                         except SalesOrder.DoesNotExist:
                             invoice.sales_order = None
                     
@@ -7325,7 +7567,7 @@ class InvoiceViewSet(viewsets.ModelViewSet):
                     if invoice.sales_order_id:
                         try:
                             from .models import SalesOrder
-                            invoice.sales_order = SalesOrder.objects.select_related('customer').get(id=invoice.sales_order_id)
+                            invoice.sales_order = SalesOrder.objects.select_related('customer', 'ship_to_location').get(id=invoice.sales_order_id)
                         except SalesOrder.DoesNotExist:
                             invoice.sales_order = None
                 else:
@@ -7380,318 +7622,30 @@ class InvoiceViewSet(viewsets.ModelViewSet):
             return Response({'error': 'Invoice not found'}, status=http_status.HTTP_404_NOT_FOUND)
         
         try:
-            from docx import Document
-            
-            # Get template path from Sensitive folder
-            PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-            template_path = PROJECT_ROOT / 'Sensitive' / 'Invoice Template.docx'
-            
-            if not template_path.exists():
-                return Response(
-                    {'error': 'Invoice template not found'},
-                    status=http_status.HTTP_500_INTERNAL_SERVER_ERROR
-                )
-            
-            # Load template
-            doc = Document(str(template_path))
-            
-            # Helper function to format date (handles both date objects and strings)
-            def format_date(date_value):
-                if not date_value:
-                    return ''
-                if isinstance(date_value, str):
-                    try:
-                        from datetime import datetime
-                        date_obj = datetime.strptime(date_value, '%Y-%m-%d').date()
-                        return date_obj.strftime('%m/%d/%Y')
-                    except:
-                        return date_value
-                return date_value.strftime('%m/%d/%Y')
-            
-            # Get customer information
-            customer_name = ''
-            customer_address = ''
-            customer_city = ''
-            customer_state = ''
-            customer_zip = ''
-            customer_country = ''
-            customer_phone = ''
-            payment_terms = ''
-            tracking_number = ''
-            po_number = ''
-            
-            if invoice.sales_order:
-                if hasattr(invoice.sales_order, 'customer_name') and invoice.sales_order.customer_name:
-                    customer_name = invoice.sales_order.customer_name
-                elif hasattr(invoice.sales_order, 'customer') and invoice.sales_order.customer:
-                    customer_name = invoice.sales_order.customer.name
-                    if hasattr(invoice.sales_order.customer, 'address'):
-                        customer_address = invoice.sales_order.customer.address or ''
-                    if hasattr(invoice.sales_order.customer, 'payment_terms'):
-                        payment_terms = invoice.sales_order.customer.payment_terms or ''
-                
-                # Get address from sales order if available
-                if hasattr(invoice.sales_order, 'customer_address') and invoice.sales_order.customer_address:
-                    customer_address = invoice.sales_order.customer_address
-                if hasattr(invoice.sales_order, 'customer_city') and invoice.sales_order.customer_city:
-                    customer_city = invoice.sales_order.customer_city
-                if hasattr(invoice.sales_order, 'customer_state') and invoice.sales_order.customer_state:
-                    customer_state = invoice.sales_order.customer_state
-                if hasattr(invoice.sales_order, 'customer_zip') and invoice.sales_order.customer_zip:
-                    customer_zip = invoice.sales_order.customer_zip
-                if hasattr(invoice.sales_order, 'customer_country') and invoice.sales_order.customer_country:
-                    customer_country = invoice.sales_order.customer_country
-                if hasattr(invoice.sales_order, 'customer_phone') and invoice.sales_order.customer_phone:
-                    customer_phone = invoice.sales_order.customer_phone
-                if hasattr(invoice.sales_order, 'tracking_number') and invoice.sales_order.tracking_number:
-                    tracking_number = invoice.sales_order.tracking_number
-                if hasattr(invoice.sales_order, 'customer_reference_number') and invoice.sales_order.customer_reference_number:
-                    po_number = invoice.sales_order.customer_reference_number
-            
-            # Replace text in paragraphs
-            for paragraph in doc.paragraphs:
-                # Replace invoice number
-                if 'Invoice number:' in paragraph.text:
-                    paragraph.text = paragraph.text.replace('Invoice number:', f'Invoice number: {invoice.invoice_number}')
-                # Replace date
-                if 'Date:' in paragraph.text and 'Invoice number:' not in paragraph.text:
-                    paragraph.text = paragraph.text.replace('Date:', f'Date: {format_date(invoice.invoice_date)}')
-                # Replace payment terms
-                if 'Payment Terms:' in paragraph.text:
-                    paragraph.text = paragraph.text.replace('Payment Terms:', f'Payment Terms: {payment_terms}')
-                # Replace tracking number
-                if 'Tracking number:' in paragraph.text:
-                    paragraph.text = paragraph.text.replace('Tracking number:', f'Tracking number: {tracking_number}')
-            
-            # Replace text in tables
-            for table_idx, table in enumerate(doc.tables):
-                for row in table.rows:
-                    for cell in row.cells:
-                        cell_text = cell.text
-                        
-                        # Replace invoice number
-                        if 'Invoice number:' in cell_text:
-                            cell.text = cell_text.replace('Invoice number:', f'Invoice number: {invoice.invoice_number}')
-                        # Replace date
-                        if 'Date:' in cell_text and 'Invoice number:' not in cell_text:
-                            cell.text = cell_text.replace('Date:', f'Date: {format_date(invoice.invoice_date)}')
-                        # Replace customer info placeholder
-                        if '(customer, customer billing address, ship to address)' in cell_text:
-                            customer_info = customer_name
-                            if customer_address:
-                                customer_info += f'\n{customer_address}'
-                            if customer_city or customer_state or customer_zip:
-                                city_state_zip = ', '.join(filter(None, [customer_city, customer_state, customer_zip]))
-                                customer_info += f'\n{city_state_zip}'
-                            if customer_country:
-                                customer_info += f'\n{customer_country}'
-                            if customer_phone:
-                                customer_info += f'\nPhone: {customer_phone}'
-                            cell.text = cell_text.replace('(customer, customer billing address, ship to address)', customer_info)
-                        # Replace PO/REF number placeholder
-                        if '(PO number, REF number as applicable)' in cell_text:
-                            po_ref_text = po_number if po_number else ''
-                            cell.text = cell_text.replace('(PO number, REF number as applicable)', po_ref_text)
-            
-            # Fill in items table (Table 1 based on template structure)
-            if len(doc.tables) > 1:
-                items_table = doc.tables[1]  # Second table is the items table
-                
-                # Get invoice items
-                items = getattr(invoice, '_prefetched_objects_cache', {}).get('items', [])
-                if not items and hasattr(invoice, 'items'):
-                    try:
-                        items = list(invoice.items.all())
-                    except:
-                        items = []
-                
-                # Find the row with "(item description)" placeholder
-                item_start_row = None
-                for i, row in enumerate(items_table.rows):
-                    row_text = ' '.join([cell.text for cell in row.cells]).lower()
-                    if '(item description)' in row_text.lower():
-                        item_start_row = i
-                        break
-                
-                if item_start_row is not None:
-                    # Remove placeholder row and any empty rows after it (but keep freight and total rows)
-                    # Find where freight row starts
-                    freight_row = None
-                    total_row = None
-                    for i, row in enumerate(items_table.rows):
-                        row_text = ' '.join([cell.text for cell in row.cells]).lower()
-                        if 'freight' in row_text:
-                            freight_row = i
-                        if 'total' in row_text and i > (freight_row or 0):
-                            total_row = i
-                            break
-                    
-                    # Remove rows between item_start_row and freight_row (or total_row if no freight)
-                    rows_to_remove = []
-                    end_row = freight_row if freight_row else (total_row if total_row else len(items_table.rows))
-                    for i in range(item_start_row, end_row):
-                        rows_to_remove.append(i)
-                    
-                    # Remove rows in reverse order to maintain indices
-                    for i in reversed(rows_to_remove):
-                        items_table._element.remove(items_table.rows[i]._element)
-                    
-                    # Insert invoice items
-                    for item in items:
-                        new_row = items_table.add_row()
-                        cells = new_row.cells
-                        if len(cells) >= 1:
-                            cells[0].text = item.description or ''
-                        if len(cells) >= 2:
-                            cells[1].text = f"{item.quantity:.2f}" if item.quantity else ''
-                        if len(cells) >= 3:
-                            cells[2].text = f"${item.unit_price:.2f}" if item.unit_price else ''
-                        if len(cells) >= 4:
-                            cells[3].text = f"${item.total:.2f}" if item.total else ''
-                    
-                    # Update freight row if it exists
-                    if freight_row:
-                        # Find the new freight row index (it may have shifted)
-                        for i, row in enumerate(items_table.rows):
-                            row_text = ' '.join([cell.text for cell in row.cells]).lower()
-                            if 'freight' in row_text:
-                                freight_cells = row.cells
-                                if len(freight_cells) >= 4:
-                                    freight_cells[3].text = f"${invoice.freight:.2f}" if invoice.freight else ''
-                                break
-                    
-                    # Update total row
-                    if total_row:
-                        # Find the new total row index
-                        for i, row in enumerate(items_table.rows):
-                            row_text = ' '.join([cell.text for cell in row.cells]).lower()
-                            if 'total' in row_text and i > 0:
-                                total_cells = row.cells
-                                # Update all TOTAL cells with grand total
-                                for cell in total_cells:
-                                    if cell.text.strip().upper() == 'TOTAL':
-                                        cell.text = f"${invoice.grand_total:.2f}"
-                                break
-            
-            # Save to temporary file
-            import time
-            tmp_path = None
-            pdf_path = None
+            # Try HTML→PDF first; fallback to ReportLab.
             pdf_content = None
-            is_pdf = False
-            
             try:
-                # Create temp file with unique name
-                tmp_fd, tmp_path = tempfile.mkstemp(suffix='.docx')
-                os.close(tmp_fd)  # Close the file descriptor so doc.save can use it
-                
-                # Save document
-                doc.save(tmp_path)
-                
-                # Try to convert to PDF
-                try:
-                    from docx2pdf import convert
-                    pdf_path = tmp_path.replace('.docx', '.pdf')
-                    convert(tmp_path, pdf_path)
-                    
-                    # Wait a moment to ensure file is fully written and closed
-                    time.sleep(0.1)
-                    
-                    # Read PDF content
-                    with open(pdf_path, 'rb') as pdf_file:
-                        pdf_content = pdf_file.read()
-                    is_pdf = pdf_content.startswith(b'%PDF')
-                    
-                    # Clean up temp PDF file
-                    try:
-                        if os.path.exists(pdf_path):
-                            os.unlink(pdf_path)
-                    except Exception as e:
-                        import logging
-                        logger = logging.getLogger(__name__)
-                        logger.warning(f"Could not delete temp PDF file {pdf_path}: {e}")
-                        
-                except Exception as e:
-                    # If PDF conversion fails, use DOCX file
-                    import logging
-                    logger = logging.getLogger(__name__)
-                    logger.warning(f"PDF conversion failed: {e}. Using DOCX file instead.")
-                    with open(tmp_path, 'rb') as docx_file:
-                        pdf_content = docx_file.read()
-                    is_pdf = False
-                
-                # Clean up temp DOCX file
-                try:
-                    if tmp_path and os.path.exists(tmp_path):
-                        # Wait a moment to ensure file is closed
-                        time.sleep(0.1)
-                        os.unlink(tmp_path)
-                except Exception as e:
-                    import logging
-                    logger = logging.getLogger(__name__)
-                    logger.warning(f"Could not delete temp DOCX file {tmp_path}: {e}")
-                    # Try again after a longer delay
-                    try:
-                        time.sleep(0.5)
-                        if os.path.exists(tmp_path):
-                            os.unlink(tmp_path)
-                    except:
-                        pass  # If it still fails, just continue - temp files will be cleaned up by OS
-            except Exception as e:
-                # If file operations fail, log and return error
-                import logging
-                import traceback
-                logger = logging.getLogger(__name__)
-                logger.error(f'Failed to save/convert invoice document: {str(e)}')
-                logger.error(f'Traceback: {traceback.format_exc()}')
-                return Response(
-                    {'error': f'Failed to generate invoice document: {str(e)}'},
-                    status=http_status.HTTP_500_INTERNAL_SERVER_ERROR
-                )
-            
-            # Ensure we have content before returning
-            if pdf_content is None or len(pdf_content) == 0:
-                return Response(
-                    {'error': 'Failed to generate invoice document - no content'},
-                    status=http_status.HTTP_500_INTERNAL_SERVER_ERROR
-                )
-            
-            # Return as HTTP response
-            filename = f"Invoice_{invoice.invoice_number}.pdf" if is_pdf else f"Invoice_{invoice.invoice_number}.docx"
-            content_type = 'application/pdf' if is_pdf else 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-            
-            try:
-                response = HttpResponse(pdf_content, content_type=content_type)
-                response['Content-Disposition'] = f'inline; filename="{filename}"'
-                response['X-Content-Type-Options'] = 'nosniff'
-                response['Content-Length'] = str(len(pdf_content))
-                return response
-            except Exception as e:
-                import logging
-                logger = logging.getLogger(__name__)
-                logger.error(f'Failed to create HTTP response: {str(e)}')
-                return Response(
-                    {'error': f'Failed to create HTTP response: {str(e)}'},
-                    status=http_status.HTTP_500_INTERNAL_SERVER_ERROR
-                )
-            
-        except ImportError:
-            return Response(
-                {'error': 'python-docx is not installed. Please install it with: pip install python-docx'},
-                status=http_status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
+                from .invoice_pdf_html import generate_invoice_pdf_from_html
+                pdf_content = generate_invoice_pdf_from_html(invoice)
+            except Exception:
+                pass
+            if not pdf_content:
+                pdf_content = generate_invoice_pdf(invoice)
+            response = HttpResponse(pdf_content, content_type='application/pdf')
+            response['Content-Disposition'] = f'inline; filename="Invoice_{invoice.invoice_number}.pdf"'
+            response['X-Content-Type-Options'] = 'nosniff'
+            return response
         except Exception as e:
             import logging
             import traceback
             logger = logging.getLogger(__name__)
             logger.error(f'Failed to generate invoice PDF: {str(e)}')
-            logger.error(f'Traceback: {traceback.format_exc()}')
+            logger.error(traceback.format_exc())
             return Response(
                 {'error': f'Failed to generate invoice PDF: {str(e)}'},
                 status=http_status.HTTP_500_INTERNAL_SERVER_ERROR
             )
-
-
+        
 class CalendarEventsViewSet(viewsets.ViewSet):
     """Calendar events for shipments, raw materials, and production"""
     

@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Invoice {{ invoice_number }}</title>
+  <style>
+    @page { size: letter; margin: 0.5in; }
+    body { font-family: Arial, Helvetica, sans-serif; font-size: 9pt; color: #000; margin: 0; line-height: 1.25; }
+    .header-table { width: 100%; border-collapse: collapse; margin-bottom: 18px; }
+    .header-table td { vertical-align: top; padding: 0; }
+    .logo-cell { width: 2.2in; }
+    .logo-cell img { width: 2.5in; height: 2.5in; display: block; }
+    .company-addr { font-size: 9pt; font-weight: bold; margin-top: 4px; }
+    .inv-right { text-align: right; }
+    .inv-title { font-size: 20pt; font-weight: bold; margin-bottom: 8px; }
+    .inv-meta { font-size: 9pt; }
+    .bill-ship-table { width: 100%; border-collapse: collapse; margin-bottom: 14px; }
+    .bill-ship-table td { vertical-align: top; width: 3.2in; font-size: 9pt; }
+    .comments-wrap { margin-left: 2.2in; margin-bottom: 14px; }
+    .comments-label { font-weight: bold; font-size: 9pt; }
+    .comments-body { font-size: 9pt; }
+    .ref-table, .items-table, .totals-table { width: 100%; border-collapse: collapse; font-size: 9pt; }
+    .ref-table th, .ref-table td, .items-table th, .items-table td { border: 0.5px solid #d0d0d0; padding: 5px; text-align: left; }
+    .ref-table th, .items-table th { background: #e8e8e8; font-weight: bold; }
+    .items-table .num { text-align: right; }
+    .items-table .align-right { text-align: right; }
+    .items-table .row-alt { background: #fafafa; }
+    .totals-table { margin-top: 22px; }
+    .totals-table td { padding: 4px 0; font-size: 9pt; }
+    .totals-table .label { width: 1.2in; }
+    .totals-table .value { text-align: right; width: 1.5in; }
+    .totals-table .total-row { font-weight: bold; border-top: 1px solid #d0d0d0; padding-top: 4px; }
+    .footer { font-size: 9pt; color: #5a5a5a; text-align: center; margin-top: 28px; }
+  </style>
+</head>
+<body>
+  <table class="header-table">
+    <tr>
+      <td class="logo-cell">
+        {% if logo_base64 %}
+        <img src="data:image/png;base64,{{ logo_base64 }}" alt="" />
+        {% else %}
+        <span style="font-weight: bold;">Wildwood Ingredients, LLC</span>
+        {% endif %}
+        <div class="company-addr">6431 Michels Drive, Washington, MO 63090<br/>Phone: 314-835-8207</div>
+      </td>
+      <td class="inv-right">
+        <div class="inv-title">INVOICE</div>
+        <div class="inv-meta">INVOICE # {{ invoice_number }}<br/>DATE: {{ invoice_date }}</div>
+      </td>
+    </tr>
+  </table>
+
+  <table class="bill-ship-table">
+    <tr>
+      <td><strong>BILL TO:</strong><br/>{{ bill_to_html }}</td>
+      <td><strong>SHIP TO:</strong><br/>{{ ship_to_html }}</td>
+    </tr>
+  </table>
+
+  {% if comments_text %}
+  <div class="comments-wrap">
+    <div class="comments-label">COMMENTS OR SPECIAL INSTRUCTIONS:</div>
+    <div class="comments-body">{{ comments_text }}</div>
+  </div>
+  {% endif %}
+
+  <table class="ref-table">
+    <tr>
+      <th>CUST REF #</th>
+      <th>P.O. NUMBER</th>
+      <th>S.O. NUMBER</th>
+      <th>SHIPPED VIA</th>
+      <th>PAYMENT TERMS</th>
+    </tr>
+    <tr>
+      <td>{{ cust_ref }}</td>
+      <td>{{ po_num }}</td>
+      <td>{{ so_num }}</td>
+      <td>{{ shipped_via }}</td>
+      <td>{{ payment_terms }}</td>
+    </tr>
+  </table>
+
+  <table class="items-table" style="margin-top: 20px;">
+    <thead>
+      <tr>
+        <th>QUANTITY</th>
+        <th>DESCRIPTION</th>
+        <th>LOT #</th>
+        <th>UNIT PRICE</th>
+        <th>TOTAL</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in line_items %}
+      <tr{% if loop.index0 % 2 %} class="row-alt"{% endif %}>
+        <td>{{ row.qty }}</td>
+        <td>{{ row.description }}</td>
+        <td>{{ row.lot }}</td>
+        <td class="align-right">{{ row.unit_price }}</td>
+        <td class="align-right">{{ row.total }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <table class="totals-table">
+    <tr><td class="label">SUBTOTAL</td><td class="value">{{ subtotal }}</td></tr>
+    <tr><td class="label">SALES TAX</td><td class="value">{{ tax }}</td></tr>
+    <tr><td class="label">SHIPPING</td><td class="value">{{ shipping }}</td></tr>
+    <tr><td class="label total-row">TOTAL DUE</td><td class="value total-row">{{ total_due }}</td></tr>
+  </table>
+
+  <div class="footer">
+    <p>Make all checks payable to Wildwood Ingredients, LLC.</p>
+    <p>Thank you for your business! For invoice related questions, contact Greg Morris: greg.morris@wildwoodingredients.com.</p>
+  </div>
+</body>
+</html>

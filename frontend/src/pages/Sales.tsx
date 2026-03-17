@@ -86,6 +86,7 @@ function Sales() {
           {activeTab === 'orders' && (
             <SalesOrdersList
               refreshKey={refreshKey}
+              onSelectOrder={handleEditSalesOrder}
               onEditOrder={handleEditSalesOrder}
             />
           )}
