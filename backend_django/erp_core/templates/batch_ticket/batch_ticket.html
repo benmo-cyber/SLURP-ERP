@@ -73,6 +73,9 @@
           <tr><th>Product ID:</th><td>{{ product_id }}</td></tr>
           <tr><th>SKU:</th><td>{{ sku }}</td></tr>
           <tr><th>Batch Number:</th><td>{{ batch_number }}</td></tr>
+          {% if campaign_lot_code %}
+          <tr><th>Campaign Lot Code:</th><td>{{ campaign_lot_code }}</td></tr>
+          {% endif %}
           <tr><th>Batch Size:</th><td>{{ batch_size }}</td></tr>
           <tr><th>Pack Size:</th><td>{{ pack_size }}</td></tr>
         </table>
@@ -197,6 +200,9 @@
           <tr><th>Product ID:</th><td>{{ product_id }}</td></tr>
           <tr><th>SKU:</th><td>{{ sku }}</td></tr>
           <tr><th>Batch Number:</th><td>{{ batch_number }}</td></tr>
+          {% if campaign_lot_code %}
+          <tr><th>Campaign Lot Code:</th><td>{{ campaign_lot_code }}</td></tr>
+          {% endif %}
           <tr><th>Batch Size:</th><td>{{ batch_size }}</td></tr>
           <tr><th>Pack Size:</th><td>{{ pack_size }}</td></tr>
         </table>

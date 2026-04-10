@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { getLots, getProductionBatches } from '../../api/inventory'
+import { formatAppDate } from '../../utils/appDateFormat'
 import './LotTracking.css'
 
 interface Lot {
@@ -169,7 +170,7 @@ function LotTracking() {
               </div>
               <div className="info-item">
                 <label>Received Date:</label>
-                <span>{new Date(selectedLot.received_date).toLocaleDateString()}</span>
+                <span>{formatAppDate(selectedLot.received_date)}</span>
               </div>
             </div>
           </div>
@@ -197,7 +198,7 @@ function LotTracking() {
                         <td className="batch-number">{trace.batch_number}</td>
                         <td>{trace.finished_good}</td>
                         <td>{trace.quantity_used.toLocaleString()}</td>
-                        <td>{new Date(trace.date).toLocaleDateString()}</td>
+                        <td>{formatAppDate(trace.date)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -215,7 +216,7 @@ function LotTracking() {
                     <div className="trace-header">
                       <span className="batch-number">{trace.batch_number}</span>
                       <span>Produced: {trace.quantity_produced.toLocaleString()}</span>
-                      <span>{new Date(trace.date).toLocaleDateString()}</span>
+                      <span>{formatAppDate(trace.date)}</span>
                     </div>
                     {trace.inputs.length > 0 && (
                       <div className="input-lots">

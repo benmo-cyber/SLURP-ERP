@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { getInvoices, updateInvoice, getAgingReport } from '../../api/invoices'
-import { openPackingList, openPackingListForShipment } from '../../api/salesOrders'
 import { formatCurrency } from '../../utils/formatNumber'
+import { formatAppDate } from '../../utils/appDateFormat'
 import CreateInvoice from './CreateInvoice'
 import ViewInvoice from './ViewInvoice'
 import './Invoices.css'
@@ -19,12 +19,6 @@ interface Invoice {
     customer?: {
       payment_terms?: string
     }
-    shipments?: {
-      id: number
-      ship_date: string
-      expected_ship_date?: string | null
-      tracking_number: string
-    }[]
   }
   customer_name?: string
   payment_terms?: string
@@ -39,7 +33,11 @@ interface Invoice {
   days_aging: number
 }
 
-function Invoices() {
+interface InvoicesProps {
+  onNavigateToTab?: (tab: string) => void
+}
+
+function Invoices({ onNavigateToTab }: InvoicesProps) {
   const [invoices, setInvoices] = useState<Invoice[]>([])
   const [loading, setLoading] = useState(true)
   const [showCreate, setShowCreate] = useState(false)
@@ -158,7 +156,17 @@ function Invoices() {
   return (
     <div className="invoices">
       <div className="invoices-header">
-        <h2>Invoices</h2>
+        <div className="invoices-header-main">
+          <h2>Invoices</h2>
+          {onNavigateToTab && (
+            <div className="invoices-related-links">
+              <span className="related-label">Related:</span>
+              <button type="button" className="link-btn" onClick={() => onNavigateToTab('ar')}>Accounts Receivable</button>
+              <span className="related-sep">|</span>
+              <button type="button" className="link-btn" onClick={() => onNavigateToTab('reports')}>Financial Reports</button>
+            </div>
+          )}
+        </div>
         <div className="header-actions">
           <button
             onClick={() => setShowAgingReport(!showAgingReport)}
@@ -218,9 +226,9 @@ function Invoices() {
         </div>
       )}
 
-      <div className="filters">
-        <label>
-          Filter by Status:
+      <div className="invoices-filters">
+        <label className="invoices-filter-label">
+          <span className="invoices-filter-text">Status</span>
           <select
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
@@ -236,27 +244,26 @@ function Invoices() {
         </label>
       </div>
 
-      <div className="invoices-table-container">
+      <div className="invoices-table-container table-wrapper">
         <table className="invoices-table">
           <thead>
             <tr>
-              <th className="sortable" onClick={() => handleSort('invoice_number')}>Invoice Number {sort.key === 'invoice_number' && (sort.dir === 'asc' ? '↑' : '↓')}</th>
-              <th>Sales Order</th>
-              <th className="sortable" onClick={() => handleSort('customer')}>Customer {sort.key === 'customer' && (sort.dir === 'asc' ? '↑' : '↓')}</th>
-              <th>Tracking Number</th>
-              <th className="sortable" onClick={() => handleSort('invoice_date')}>Invoice Date {sort.key === 'invoice_date' && (sort.dir === 'asc' ? '↑' : '↓')}</th>
-              <th className="sortable" onClick={() => handleSort('due_date')}>Due Date {sort.key === 'due_date' && (sort.dir === 'asc' ? '↑' : '↓')}</th>
-              <th>Payment Terms</th>
-              <th>Days Aging</th>
-              <th className="sortable" onClick={() => handleSort('grand_total')}>Grand Total {sort.key === 'grand_total' && (sort.dir === 'asc' ? '↑' : '↓')}</th>
-              <th className="sortable" onClick={() => handleSort('status')}>Status {sort.key === 'status' && (sort.dir === 'asc' ? '↑' : '↓')}</th>
-              <th>Packing List</th>
+              <th className="sortable sortable-header" onClick={() => handleSort('invoice_number')}>Invoice # {sort.key === 'invoice_number' && (sort.dir === 'asc' ? '↑' : '↓')}</th>
+              <th>S.O.</th>
+              <th className="sortable sortable-header" onClick={() => handleSort('customer')}>Customer {sort.key === 'customer' && (sort.dir === 'asc' ? '↑' : '↓')}</th>
+              <th>Tracking</th>
+              <th className="sortable sortable-header" onClick={() => handleSort('invoice_date')}>Invoice date {sort.key === 'invoice_date' && (sort.dir === 'asc' ? '↑' : '↓')}</th>
+              <th className="sortable sortable-header" onClick={() => handleSort('due_date')}>Due date {sort.key === 'due_date' && (sort.dir === 'asc' ? '↑' : '↓')}</th>
+              <th>Terms</th>
+              <th>Aging</th>
+              <th className="sortable sortable-header inv-col-amount" onClick={() => handleSort('grand_total')}>Total {sort.key === 'grand_total' && (sort.dir === 'asc' ? '↑' : '↓')}</th>
+              <th className="sortable sortable-header" onClick={() => handleSort('status')}>Status {sort.key === 'status' && (sort.dir === 'asc' ? '↑' : '↓')}</th>
             </tr>
           </thead>
           <tbody>
             {sortedInvoices.length === 0 ? (
               <tr>
-                <td colSpan={11} className="empty-state">
+                <td colSpan={10} className="empty-state">
                   No invoices found.
                 </td>
               </tr>
@@ -271,12 +278,12 @@ function Invoices() {
                       href={`${API_BASE_URL}/invoices/${invoice.id}/pdf/`}
                       target="_blank"
                       rel="noopener noreferrer"
-                      style={{ color: '#0066cc', textDecoration: 'underline', cursor: 'pointer' }}
+                      className="invoice-pdf-link"
                       onClick={(e) => {
                         e.preventDefault()
                         window.open(`${API_BASE_URL}/invoices/${invoice.id}/pdf/`, '_blank')
                       }}
-                      title="Click to view/print invoice PDF"
+                      title="View invoice PDF"
                     >
                       {invoice.invoice_number}
                     </a>
@@ -290,8 +297,8 @@ function Invoices() {
                   <td>
                     {invoice.sales_order?.tracking_number || '-'}
                   </td>
-                  <td>{invoice.invoice_date ? new Date(invoice.invoice_date).toLocaleDateString() : '-'}</td>
-                  <td>{invoice.due_date ? new Date(invoice.due_date).toLocaleDateString() : '-'}</td>
+                  <td>{invoice.invoice_date ? formatAppDate(invoice.invoice_date) : '-'}</td>
+                  <td>{invoice.due_date ? formatAppDate(invoice.due_date) : '-'}</td>
                   <td>
                     {invoice.payment_terms || invoice.sales_order?.customer?.payment_terms || '-'}
                   </td>
@@ -301,7 +308,7 @@ function Invoices() {
                     </span>
                   </td>
                   <td className="amount">{formatCurrency(invoice.grand_total)}</td>
-                  <td>
+                  <td className="inv-status-cell">
                     {editingStatus === invoice.id ? (
                       <select
                         value={newStatus}
@@ -340,42 +347,6 @@ function Invoices() {
                       >
                         {statusLabel(invoice.status)}
                       </span>
-                    )}
-                  </td>
-                  <td>
-                    {invoice.sales_order?.id ? (
-                      <div className="packing-list-cell">
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            openPackingList(invoice.sales_order!.id)
-                          }}
-                          className="btn btn-small btn-secondary"
-                          title="View packing list (full order)"
-                        >
-                          View
-                        </button>
-                        {invoice.sales_order.shipments && invoice.sales_order.shipments.length > 0 && (
-                          <div className="packing-list-releases">
-                            {invoice.sales_order.shipments.map((s, idx) => (
-                              <button
-                                key={s.id}
-                                type="button"
-                                className="btn-link btn-link-sm"
-                                onClick={(e) => {
-                                  e.stopPropagation()
-                                  openPackingListForShipment(s.id)
-                                }}
-                                title={`Packing list for release ${idx + 1} (${s.ship_date?.slice(0, 10) || ''})`}
-                              >
-                                Release {idx + 1}
-                              </button>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    ) : (
-                      <span style={{ color: '#999' }}>-</span>
                     )}
                   </td>
                 </tr>

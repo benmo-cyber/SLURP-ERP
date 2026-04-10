@@ -109,7 +109,9 @@ def _put_value(page, rect, value, fontname="helv", fontsize=10, right_align=Fals
     if value is None or str(value).strip() == "":
         return
     val = str(value).strip()[:60]
-    fs_use = min(fs, fontsize)
+    # Don't cap to the placeholder font size; the template-fill rectangles are fixed,
+    # but we want callers to be able to increase font sizes where needed.
+    fs_use = fontsize
     try:
         if right_align:
             page.insert_textbox(r, val, fontsize=fs_use, fontname=fontname, color=(0, 0, 0), align=fitz.TEXT_ALIGN_RIGHT)
@@ -173,9 +175,23 @@ def fill_po_template_pdf(template_path, purchase_order):
         notes_text = (getattr(purchase_order, "notes", None) or "").strip()
 
         # --- Header: one placeholder → one value (redact exact bbox, then insert) ---
+        # Enlarge left-column labels in the top meta table for readability.
+        # These are static text in the template PDF, so redraw just these labels.
+        for label, replacement in [
+            ("PO Number", "PO Number"),
+            ("PO Date", "PO Date"),
+            ("Requested By", ""),  # removed per request
+            ("Delivery Date", "Delivery Date"),
+            ("Payment Terms", "Payment Terms"),
+            ("Ship Via", "Ship Via"),
+        ]:
+            r_lbl = _find_rects(page, label)
+            if r_lbl:
+                _put_value(page, r_lbl[0], replacement, fontsize=12)
+
         r = _find_rects(page, "[PO-0001]")
         if r:
-            _put_value(page, r[0], purchase_order.po_number or "")
+            _put_value(page, r[0], purchase_order.po_number or "", fontsize=12)
 
         for search, val in [
             ("Draft / Open / Closed", status_label),
@@ -183,37 +199,36 @@ def fill_po_template_pdf(template_path, purchase_order):
         ]:
             r = _find_rects(page, search)
             if r:
-                _put_value(page, r[0], val)
+                _put_value(page, r[0], val, fontsize=10)
                 break
 
         # PO Date and Delivery Date: template often has two "[Month DD, YYYY]"
         r_date = _find_rects(page, "[Month DD, YYYY]")
         if r_date and len(r_date) >= 1:
-            _put_value(page, r_date[0], order_date)
+            _put_value(page, r_date[0], order_date, fontsize=12)
         if r_date and len(r_date) >= 2:
-            _put_value(page, r_date[1], delivery_date)
+            _put_value(page, r_date[1], delivery_date, fontsize=12)
 
         for search, val in [
-            ("[Name]", requested_by),
             ("[Net 30]", payment_terms),
             ("[Carrier / Method]", ship_via),
         ]:
             r = _find_rects(page, search)
             if r:
-                _put_value(page, r[0], val)
+                _put_value(page, r[0], val, fontsize=12)
 
         # Vendor & shipping blocks
         r = _find_rects(page, "[Supplier Name]")
         if r:
-            _put_value(page, r[0], vendor_name)
+            _put_value(page, r[0], vendor_name, fontsize=10)
 
         # Address lines: usually 3 occurrences (Vendor, Bill To, Ship To)
         r_a1 = _find_rects(page, "[Address Line 1]")
         if r_a1 and len(r_a1) >= 3:
-            _put_value_multi(page, r_a1[:3], [vendor_addr1, bill_addr1, ship_addr1])
+            _put_value_multi(page, r_a1[:3], [vendor_addr1, bill_addr1, ship_addr1], fontsize=10)
         r_a2 = _find_rects(page, "[Address Line 2]")
         if r_a2 and len(r_a2) >= 3:
-            _put_value_multi(page, r_a2[:3], [vendor_addr2, bill_addr2, ship_addr2])
+            _put_value_multi(page, r_a2[:3], [vendor_addr2, bill_addr2, ship_addr2], fontsize=10)
 
         for search, val in [
             ("[Your Company Name]", bill_to_name),
@@ -221,10 +236,11 @@ def fill_po_template_pdf(template_path, purchase_order):
         ]:
             r = _find_rects(page, search)
             if r:
-                _put_value(page, r[0], val)
+                _put_value(page, r[0], val, fontsize=10)
 
         # Optional fields: only replace if we have a value; otherwise redact placeholder so cell is blank
         for search, val in [
+            ("[Name]", ""),
             ("[Contact Name]", ""),
             ("[Email / Phone]", ""),
             ("[AP / Purchasing Contact]", ""),
@@ -252,7 +268,13 @@ def fill_po_template_pdf(template_path, purchase_order):
             if len(desc_rects) >= len(items):
                 for i, po_item in enumerate(items):
                     item = po_item.item
-                    desc = (item.name if item else (po_item.notes or "")) or ""
+                    if item:
+                        desc = ((item.vendor_item_name or item.name) or "").strip()
+                        num = (getattr(item, "vendor_item_number", None) or "").strip()
+                        if num and desc:
+                            desc = f"{desc} ({num})"
+                    else:
+                        desc = (po_item.notes or "") or ""
                     _put_value(page, desc_rects[i], desc[:50], fontsize=9)
                 for j in range(len(items), min(4, len(desc_rects))):
                     _put_value(page, desc_rects[j], "")  # blank empty rows
@@ -272,7 +294,9 @@ def fill_po_template_pdf(template_path, purchase_order):
             unit_rects = [t for t in unit_rects if 320 < t[1] < 450][:4]
             if len(unit_rects) >= len(items):
                 for i, po_item in enumerate(items):
-                    uom = (getattr(po_item.item, "unit_of_measure", None) if po_item.item else None) or "lbs"
+                    uom = (getattr(po_item, "order_uom", None) or "").strip() or (
+                        (getattr(po_item.item, "unit_of_measure", None) if po_item.item else None) or "lbs"
+                    )
                     uom = "ea" if str(uom).lower() in ("ea", "each") else uom
                     _put_value(page, unit_rects[i], uom, fontsize=9)
                 for j in range(len(items), min(4, len(unit_rects))):

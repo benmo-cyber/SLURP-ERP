@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  WWI ERP private sample import — copy into data/private_sample_data/ and edit.
+  Root tag must be <wwi_sample_data version="1">.
+-->
+<wwi_sample_data version="1">
+  <vendors>
+    <!-- name is required and must be unique (Vendor.name). -->
+    <vendor name="Sample Vendor Co" approval_status="approved" />
+  </vendors>
+
+  <customers>
+    <!-- customer_id and name are required. -->
+    <customer
+      customer_id="SAMPLE-CUST-001"
+      name="Sample Customer LLC"
+      city="Portland"
+      state="OR"
+      country="USA"
+    />
+  </customers>
+
+  <items>
+    <!-- sku + vendor (string) must match Item unique_together. vendor should match a Vendor name above if you use Quality/Vendor screens. -->
+    <item
+      sku="SAMPLE-FG-001"
+      name="Sample Finished Good"
+      item_type="finished_good"
+      unit_of_measure="kg"
+      vendor="Sample Vendor Co"
+      product_category="natural_colors"
+    />
+  </items>
+</wwi_sample_data>

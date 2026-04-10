@@ -1,6 +1,32 @@
 import { useState, useEffect } from 'react'
-import { getVendor, updateVendor, approveVendor, getSupplierSurvey, getSupplierDocuments, getVendorItems, createSupplierDocument, updateSupplierDocument } from '../../api/quality'
+import { getVendor, patchVendor, approveVendor, getSupplierSurvey, getSupplierDocuments, getVendorItems, createSupplierDocument, updateSupplierDocument, createVendorContact, updateVendorContact, deleteVendorContact } from '../../api/quality'
+import { SERVICE_VENDOR_TYPE_OPTIONS, getServiceVendorTypeLabel } from '../../constants/serviceVendorTypes'
+import { formatVendorAddress, formatVendorAddressWithSurveyFallback } from '../../utils/formatVendorAddress'
+import { VendorAddressFields } from './VendorAddressFields'
+import { formatAppDate } from '../../utils/appDateFormat'
 import './VendorDetail.css'
+
+interface VendorContact {
+  id: number
+  vendor: number
+  name: string
+  title?: string
+  emails?: string[]
+  phone?: string
+  location_label?: string
+  notes?: string
+}
+
+function parseEmailsInput(text: string): string[] {
+  return text
+    .split(/[\n,;]+/)
+    .map((e) => e.trim())
+    .filter(Boolean)
+}
+
+function formatEmailsForInput(emails?: string[]): string {
+  return (emails || []).join('\n')
+}
 
 interface Vendor {
   id: number
@@ -11,12 +37,23 @@ interface Vendor {
   on_time_performance: number
   quality_complaints: number
   approved_date?: string
+  street_address?: string
   address?: string
+  city?: string
+  state?: string
+  zip_code?: string
+  country?: string
   phone?: string
   email?: string
   contact_name?: string
   payment_terms?: string
   notes?: string
+  is_service_vendor?: boolean
+  service_vendor_type?: string
+  contacts?: VendorContact[]
+  /** Nested from API; company_info may hold address from approval questionnaire */
+  survey?: { company_info?: Record<string, unknown> } | null
+  display_address?: string | null
 }
 
 interface VendorDetailProps {
@@ -26,8 +63,8 @@ interface VendorDetailProps {
 
 function VendorDetail({ vendor: initialVendor, onClose }: VendorDetailProps) {
   const [vendor, setVendor] = useState<Vendor>(initialVendor)
-  const [activeTab, setActiveTab] = useState<'overview' | 'survey' | 'documents' | 'exceptions' | 'history' | 'items'>('overview')
-  const [loading, setLoading] = useState(false)
+  const [activeTab, setActiveTab] = useState<'overview' | 'survey' | 'documents' | 'contacts' | 'exceptions' | 'history' | 'items'>('overview')
+  const [loading, setLoading] = useState(true)
   const [editing, setEditing] = useState(false)
   const [survey, setSurvey] = useState<any>(null)
   const [documents, setDocuments] = useState<any[]>([])
@@ -36,6 +73,7 @@ function VendorDetail({ vendor: initialVendor, onClose }: VendorDetailProps) {
     name: vendor.name,
     vendor_id: vendor.vendor_id || '',
     street_address: vendor.street_address || '',
+    address: vendor.address || '',
     city: vendor.city || '',
     state: vendor.state || '',
     zip_code: vendor.zip_code || '',
@@ -45,7 +83,10 @@ function VendorDetail({ vendor: initialVendor, onClose }: VendorDetailProps) {
     contact_name: vendor.contact_name || '',
     payment_terms: vendor.payment_terms || '',
     notes: vendor.notes || '',
+    is_service_vendor: !!vendor.is_service_vendor,
+    service_vendor_type: vendor.service_vendor_type || '',
   })
+  const [contactForm, setContactForm] = useState<{ id?: number; name: string; emailsText: string; phone: string; location_label: string; notes: string } | null>(null)
 
   useEffect(() => {
     loadVendorDetails()
@@ -63,6 +104,7 @@ function VendorDetail({ vendor: initialVendor, onClose }: VendorDetailProps) {
         name: data.name || '',
         vendor_id: data.vendor_id || '',
         street_address: data.street_address || '',
+        address: data.address || '',
         city: data.city || '',
         state: data.state || '',
         zip_code: data.zip_code || '',
@@ -72,6 +114,8 @@ function VendorDetail({ vendor: initialVendor, onClose }: VendorDetailProps) {
         contact_name: data.contact_name || '',
         payment_terms: data.payment_terms || '',
         notes: data.notes || '',
+        is_service_vendor: !!data.is_service_vendor,
+        service_vendor_type: data.service_vendor_type || '',
       })
     } catch (error) {
       console.error('Failed to load vendor details:', error)
@@ -85,9 +129,9 @@ function VendorDetail({ vendor: initialVendor, onClose }: VendorDetailProps) {
       setLoading(true)
       const updateData = {
         ...formData,
-        // Convert empty strings to null for optional fields
         vendor_id: formData.vendor_id || null,
         street_address: formData.street_address || null,
+        address: formData.address || null,
         city: formData.city || null,
         state: formData.state || null,
         zip_code: formData.zip_code || null,
@@ -97,8 +141,10 @@ function VendorDetail({ vendor: initialVendor, onClose }: VendorDetailProps) {
         contact_name: formData.contact_name || null,
         payment_terms: formData.payment_terms || null,
         notes: formData.notes || null,
+        is_service_vendor: formData.is_service_vendor,
+        service_vendor_type: formData.service_vendor_type || null,
       }
-      await updateVendor(vendor.id, updateData)
+      await patchVendor(vendor.id, updateData)
       await loadVendorDetails()
       setEditing(false)
       alert('Vendor information updated successfully')
@@ -116,6 +162,7 @@ function VendorDetail({ vendor: initialVendor, onClose }: VendorDetailProps) {
       name: vendor.name || '',
       vendor_id: vendor.vendor_id || '',
       street_address: vendor.street_address || '',
+      address: vendor.address || '',
       city: vendor.city || '',
       state: vendor.state || '',
       zip_code: vendor.zip_code || '',
@@ -125,8 +172,50 @@ function VendorDetail({ vendor: initialVendor, onClose }: VendorDetailProps) {
       contact_name: vendor.contact_name || '',
       payment_terms: vendor.payment_terms || '',
       notes: vendor.notes || '',
+      is_service_vendor: !!vendor.is_service_vendor,
+      service_vendor_type: vendor.service_vendor_type || '',
     })
     setEditing(false)
+  }
+
+  const handleSaveContact = async () => {
+    if (!contactForm || !contactForm.name.trim()) return
+    try {
+      setLoading(true)
+      const emails = parseEmailsInput(contactForm.emailsText)
+      const payload = {
+        name: contactForm.name.trim(),
+        title: contactForm.title.trim() || undefined,
+        emails,
+        phone: contactForm.phone || undefined,
+        location_label: contactForm.location_label || undefined,
+        notes: contactForm.notes || undefined,
+      }
+      if (contactForm.id) {
+        await updateVendorContact(contactForm.id, payload)
+      } else {
+        await createVendorContact({ vendor: vendor.id, ...payload })
+      }
+      setContactForm(null)
+      await loadVendorDetails()
+    } catch (e: any) {
+      alert(e.response?.data?.detail || e.message || 'Failed to save contact')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleDeleteContact = async (c: VendorContact) => {
+    if (!confirm(`Delete contact "${c.name}"?`)) return
+    try {
+      setLoading(true)
+      await deleteVendorContact(c.id)
+      await loadVendorDetails()
+    } catch (e: any) {
+      alert(e.response?.data?.detail || e.message || 'Failed to delete contact')
+    } finally {
+      setLoading(false)
+    }
   }
 
   const loadSurvey = async () => {
@@ -192,6 +281,12 @@ function VendorDetail({ vendor: initialVendor, onClose }: VendorDetailProps) {
           onClick={() => setActiveTab('overview')}
         >
           Overview
+        </button>
+        <button
+          className={`tab-button ${activeTab === 'contacts' ? 'active' : ''}`}
+          onClick={() => setActiveTab('contacts')}
+        >
+          Contacts
         </button>
         <button
           className={`tab-button ${activeTab === 'survey' ? 'active' : ''}`}
@@ -267,50 +362,18 @@ function VendorDetail({ vendor: initialVendor, onClose }: VendorDetailProps) {
                     onChange={(e) => setFormData({ ...formData, vendor_id: e.target.value })}
                   />
                 </div>
-                <div className="form-group">
-                  <label>Street Address</label>
-                  <input
-                    type="text"
-                    value={formData.street_address}
-                    onChange={(e) => setFormData({ ...formData, street_address: e.target.value })}
-                  />
-                </div>
-                <div className="form-row">
-                  <div className="form-group">
-                    <label>City</label>
-                    <input
-                      type="text"
-                      value={formData.city}
-                      onChange={(e) => setFormData({ ...formData, city: e.target.value })}
-                    />
-                  </div>
-                  <div className="form-group">
-                    <label>State</label>
-                    <input
-                      type="text"
-                      value={formData.state}
-                      onChange={(e) => setFormData({ ...formData, state: e.target.value })}
-                    />
-                  </div>
-                </div>
-                <div className="form-row">
-                  <div className="form-group">
-                    <label>ZIP Code</label>
-                    <input
-                      type="text"
-                      value={formData.zip_code}
-                      onChange={(e) => setFormData({ ...formData, zip_code: e.target.value })}
-                    />
-                  </div>
-                  <div className="form-group">
-                    <label>Country</label>
-                    <input
-                      type="text"
-                      value={formData.country}
-                      onChange={(e) => setFormData({ ...formData, country: e.target.value })}
-                    />
-                  </div>
-                </div>
+                <VendorAddressFields
+                  idPrefix="vd-edit"
+                  values={{
+                    street_address: formData.street_address,
+                    address: formData.address,
+                    city: formData.city,
+                    state: formData.state,
+                    zip_code: formData.zip_code,
+                    country: formData.country,
+                  }}
+                  onChange={(patch) => setFormData({ ...formData, ...patch })}
+                />
                 <div className="form-group">
                   <label>Phone</label>
                   <input
@@ -352,6 +415,30 @@ function VendorDetail({ vendor: initialVendor, onClose }: VendorDetailProps) {
                     rows={4}
                   />
                 </div>
+                <div className="form-group form-group-inline">
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={formData.is_service_vendor}
+                      onChange={(e) => setFormData({ ...formData, is_service_vendor: e.target.checked })}
+                    />
+                    {' '}Service vendor
+                  </label>
+                  <small className="form-hint">e.g. customs broker; allows adding contacts for notify party on POs.</small>
+                </div>
+                {formData.is_service_vendor && (
+                  <div className="form-group">
+                    <label>Service vendor type</label>
+                    <select
+                      value={formData.service_vendor_type}
+                      onChange={(e) => setFormData({ ...formData, service_vendor_type: e.target.value })}
+                    >
+                      {SERVICE_VENDOR_TYPE_OPTIONS.map((opt) => (
+                        <option key={opt.value || 'empty'} value={opt.value}>{opt.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
                 <div className="form-actions">
                   <button onClick={handleSave} className="btn btn-primary" disabled={loading}>
                     Save
@@ -387,16 +474,17 @@ function VendorDetail({ vendor: initialVendor, onClose }: VendorDetailProps) {
                   <label>Quality Complaints:</label>
                   <span>{vendor.quality_complaints}</span>
                 </div>
-                <div className="info-item">
-                  <label>Address:</label>
-                  <span>
-                    {vendor.street_address || vendor.address || ''}
-                    {vendor.city && `, ${vendor.city}`}
-                    {vendor.state && `, ${vendor.state}`}
-                    {vendor.zip_code && ` ${vendor.zip_code}`}
-                    {vendor.country && `, ${vendor.country}`}
-                    {!vendor.street_address && !vendor.address && !vendor.city && 'N/A'}
-                  </span>
+                <div className="info-item info-item-address">
+                  <label>Address</label>
+                  <div className="address-display-readonly">
+                    {(() => {
+                      const primary = formatVendorAddressWithSurveyFallback(vendor).trim()
+                      if (primary) return primary
+                      const secondary = formatVendorAddress(vendor).trim()
+                      if (secondary) return secondary
+                      return 'No address on file — click Edit to add country and address details.'
+                    })()}
+                  </div>
                 </div>
                 <div className="info-item">
                   <label>Phone:</label>
@@ -420,7 +508,135 @@ function VendorDetail({ vendor: initialVendor, onClose }: VendorDetailProps) {
                     <span>{vendor.notes}</span>
                   </div>
                 )}
+                {(vendor.is_service_vendor || vendor.service_vendor_type) && (
+                  <>
+                    <div className="info-item">
+                      <label>Service vendor:</label>
+                      <span>{vendor.is_service_vendor ? 'Yes' : 'No'}</span>
+                    </div>
+                    {vendor.service_vendor_type && (
+                      <div className="info-item">
+                        <label>Type:</label>
+                        <span>{getServiceVendorTypeLabel(vendor.service_vendor_type)}</span>
+                      </div>
+                    )}
+                  </>
+                )}
               </div>
+            )}
+          </div>
+        )}
+
+        {activeTab === 'contacts' && (
+          <div className="contacts-tab">
+            <h3>Contacts</h3>
+            <p className="tab-hint">
+              Add people or offices for this vendor (name, title, emails, phone).{' '}
+              {vendor.is_service_vendor
+                ? 'For service vendors, these can also be selected as notify party on purchase orders (e.g. by port).'
+                : 'You can add as many contacts as you need.'}
+            </p>
+            {contactForm ? (
+              <div className="contact-edit-form">
+                <div className="form-group">
+                  <label>Name *</label>
+                  <input value={contactForm.name} onChange={(e) => setContactForm({ ...contactForm, name: e.target.value })} />
+                </div>
+                <div className="form-group">
+                  <label>Title / role</label>
+                  <input
+                    placeholder="e.g. Sales Manager, Logistics, AP"
+                    value={contactForm.title}
+                    onChange={(e) => setContactForm({ ...contactForm, title: e.target.value })}
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Email addresses</label>
+                  <textarea
+                    rows={4}
+                    placeholder="One per line, or separate with commas"
+                    value={contactForm.emailsText}
+                    onChange={(e) => setContactForm({ ...contactForm, emailsText: e.target.value })}
+                  />
+                  <small className="form-hint">You can enter multiple addresses.</small>
+                </div>
+                <div className="form-group">
+                  <label>Phone</label>
+                  <input value={contactForm.phone} onChange={(e) => setContactForm({ ...contactForm, phone: e.target.value })} />
+                </div>
+                <div className="form-group">
+                  <label>Location / port</label>
+                  <input placeholder="e.g. Long Beach, Houston (optional)" value={contactForm.location_label} onChange={(e) => setContactForm({ ...contactForm, location_label: e.target.value })} />
+                </div>
+                <div className="form-group">
+                  <label>Notes</label>
+                  <input value={contactForm.notes} onChange={(e) => setContactForm({ ...contactForm, notes: e.target.value })} />
+                </div>
+                <div className="form-actions">
+                  <button type="button" onClick={() => setContactForm(null)} className="btn btn-secondary">Cancel</button>
+                  <button type="button" onClick={handleSaveContact} className="btn btn-primary" disabled={loading}>Save</button>
+                </div>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() =>
+                  setContactForm({ name: '', title: '', emailsText: '', phone: '', location_label: '', notes: '' })
+                }
+                className="btn btn-primary"
+                style={{ marginBottom: 12 }}
+              >
+                Add contact
+              </button>
+            )}
+            <table className="vendor-contacts-table">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Title</th>
+                  <th>Location</th>
+                  <th>Email(s)</th>
+                  <th>Phone</th>
+                  <th>Notes</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {(vendor.contacts || []).map((c) => (
+                  <tr key={c.id}>
+                    <td>{c.name}</td>
+                    <td>{c.title || '—'}</td>
+                    <td>{c.location_label || '—'}</td>
+                    <td>{(c.emails && c.emails.length > 0) ? c.emails.join(', ') : '—'}</td>
+                    <td>{c.phone || '—'}</td>
+                    <td>{c.notes || '—'}</td>
+                    <td>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setContactForm({
+                            id: c.id,
+                            name: c.name,
+                            title: c.title || '',
+                            emailsText: formatEmailsForInput(c.emails),
+                            phone: c.phone || '',
+                            location_label: c.location_label || '',
+                            notes: c.notes || '',
+                          })
+                        }
+                        className="btn btn-sm btn-secondary"
+                      >
+                        Edit
+                      </button>
+                      {' '}
+                      <button type="button" onClick={() => handleDeleteContact(c)} className="btn btn-sm btn-danger">Delete</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {(!vendor.contacts || vendor.contacts.length === 0) && !contactForm && (
+              <p className="empty-hint">No contacts yet. Click &quot;Add contact&quot; to create one.</p>
             )}
           </div>
         )}
@@ -436,7 +652,7 @@ function VendorDetail({ vendor: initialVendor, onClose }: VendorDetailProps) {
                 {survey.status === 'approved' && survey.approved_date && (
                   <div className="survey-info">
                     <p><strong>Approved by:</strong> {survey.approved_by || 'DOOF'}</p>
-                    <p><strong>Approved date:</strong> {new Date(survey.approved_date).toLocaleDateString()}</p>
+                    <p><strong>Approved date:</strong> {formatAppDate(survey.approved_date)}</p>
                   </div>
                 )}
                 {survey.company_info && Object.keys(survey.company_info).length > 0 && (
@@ -673,11 +889,11 @@ function VendorDetail({ vendor: initialVendor, onClose }: VendorDetailProps) {
                       <tr key={doc.id}>
                         <td>{doc.document_name}</td>
                         <td>{doc.document_type}</td>
-                        <td>{new Date(doc.uploaded_at).toLocaleDateString()}</td>
+                        <td>{formatAppDate(doc.uploaded_at)}</td>
                         <td>
                           {doc.expiration_date ? (
                             <span className={new Date(doc.expiration_date) < new Date() ? 'expired' : ''}>
-                              {new Date(doc.expiration_date).toLocaleDateString()}
+                              {formatAppDate(doc.expiration_date)}
                             </span>
                           ) : 'N/A'}
                         </td>

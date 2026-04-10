@@ -92,12 +92,17 @@
   font-weight: 600;
 }
 
-/* Main content */
+/* Margin on child so sticky table headers align with scrollport; avoids overriding child padding */
 .finance-main {
   flex: 1;
   min-width: 0;
-  padding: 1.5rem 2rem;
+  padding: 0;
   overflow-y: auto;
+}
+
+.finance-main > * {
+  margin: 1.5rem 2rem;
+  box-sizing: border-box;
 }
 
 /* Responsive: collapse sidebar on narrow screens */
@@ -154,7 +159,7 @@
     border-radius: 6px;
   }
 
-  .finance-main {
-    padding: 1rem;
+  .finance-main > * {
+    margin: 1rem;
   }
 }

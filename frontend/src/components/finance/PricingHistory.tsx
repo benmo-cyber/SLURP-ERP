@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts'
 import { getItems } from '../../api/inventory'
 import { getPricingHistory } from '../../api/costMaster'
+import { formatAppDate } from '../../utils/appDateFormat'
 import './PricingHistory.css'
 
 interface Item {
@@ -99,7 +100,7 @@ function PricingHistory() {
       const sku = entry.cost_master_detail.wwi_product_code
       if (!skus.includes(sku)) return
 
-      const date = new Date(entry.effective_date).toLocaleDateString()
+      const date = formatAppDate(entry.effective_date)
       const price = unitDisplay === 'kg' 
         ? (entry.price_per_kg || 0)
         : (entry.price_per_lb || 0)

@@ -1,6 +1,20 @@
+# Django API
+Django>=5.0,<6
+djangorestframework
+django-cors-headers
+
 # Packing list generation (GET /api/sales-orders/<id>/packing-list/)
 python-docx>=1.1.0
 
-# PO PDF: Jinja2 HTML template → PDF (pure Python, no GTK/Cairo)
+# PO / invoice HTML -> PDF (Jinja2 template + xhtml2pdf)
 Jinja2>=3.0
 xhtml2pdf>=0.2.16
+
+# ReportLab PDFs (invoices, PO fallback paths, batch ticket fallback)
+reportlab
+
+# Template-fill PDFs (PO, invoice, batch ticket) + some view helpers
+pymupdf
+
+# Customer PO PDF text extraction
+pypdf

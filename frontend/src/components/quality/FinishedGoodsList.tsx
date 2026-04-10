@@ -3,6 +3,8 @@ import { getItems, getFormulas } from '../../api/inventory'
 import CreateFinishedGood from './CreateFinishedGood'
 import UnlinkFinishedGood from './UnlinkFinishedGood'
 import EditFormula from './EditFormula'
+import ItemCoaTestLinesEditor from './ItemCoaTestLinesEditor'
+import { formatAppDate } from '../../utils/appDateFormat'
 import './FinishedGoodsList.css'
 
 interface Item {
@@ -11,10 +13,22 @@ interface Item {
   name: string
   description?: string
   item_type: string
+  vendor?: string | null
   unit_of_measure: string
   pack_size?: number
   created_at: string
   updated_at: string
+}
+
+function itemTypeLabel(itemType: string): string {
+  if (itemType === 'distributed_item') return 'Distributed'
+  if (itemType === 'finished_good') return 'Finished good'
+  return itemType
+}
+
+function formatVendor(v: string | null | undefined): string {
+  const s = (v || '').trim()
+  return s || '—'
 }
 
 function FinishedGoodsList() {
@@ -24,6 +38,7 @@ function FinishedGoodsList() {
   const [showCreateForm, setShowCreateForm] = useState(false)
   const [showUnlinkModal, setShowUnlinkModal] = useState(false)
   const [editingFormula, setEditingFormula] = useState<{itemId: number, sku: string, name: string} | null>(null)
+  const [coaEditorItem, setCoaEditorItem] = useState<Item | null>(null)
 
   useEffect(() => {
     loadFinishedGoods()
@@ -36,7 +51,15 @@ function FinishedGoodsList() {
         getItems(),
         getFormulas()
       ])
-      const finishedGoods = items.filter((item: Item) => item.item_type === 'finished_good')
+      const finishedGoods = items
+        .filter((item: Item) => item.item_type === 'finished_good' || item.item_type === 'distributed_item')
+        .sort((a, b) => {
+          const sku = (a.sku || '').localeCompare(b.sku || '')
+          if (sku !== 0) return sku
+          const va = (a.vendor || '').trim()
+          const vb = (b.vendor || '').trim()
+          return va.localeCompare(vb)
+        })
       setFinishedGoods(finishedGoods)
       setFormulas(formulasData)
     } catch (error) {
@@ -77,7 +100,13 @@ function FinishedGoodsList() {
   return (
     <div className="finished-goods-list">
       <div className="finished-goods-header">
-        <h2>Finished Goods</h2>
+        <div>
+          <h2>Finished Goods</h2>
+          <p className="finished-goods-subtitle">
+            Same SKU can appear twice: each row is a separate item keyed by <strong>SKU + vendor</strong> (e.g. in-house
+            manufacture vs a vendor). Distributed SKUs are listed here so COA / micro test lines can be set per item.
+          </p>
+        </div>
         <div className="header-actions">
           <button 
             onClick={() => setShowCreateForm(true)} 
@@ -85,11 +114,12 @@ function FinishedGoodsList() {
           >
             Create Finished Good
           </button>
-          <button 
-            onClick={() => setShowUnlinkModal(true)} 
+          <button
+            onClick={() => setShowUnlinkModal(true)}
             className="btn btn-danger"
+            title="Remove a finished good from the catalog (not a batch or receipt reversal)"
           >
-            UNFK
+            Unlink finished good
           </button>
         </div>
       </div>
@@ -126,11 +156,26 @@ function FinishedGoodsList() {
         </div>
       )}
 
+      {coaEditorItem && (
+        <div className="modal-overlay" onClick={() => setCoaEditorItem(null)}>
+          <div className="modal-content finished-good-modal coa-lines-modal-wrap" onClick={(e) => e.stopPropagation()}>
+            <ItemCoaTestLinesEditor
+              itemId={coaEditorItem.id}
+              sku={coaEditorItem.sku}
+              name={coaEditorItem.name}
+              onClose={() => setCoaEditorItem(null)}
+            />
+          </div>
+        </div>
+      )}
+
       <div className="finished-goods-table-wrapper">
         <table className="finished-goods-table">
           <thead>
             <tr>
               <th>SKU</th>
+              <th>Type</th>
+              <th>Vendor</th>
               <th>Name</th>
               <th>Description</th>
               <th>Unit of Measure</th>
@@ -142,7 +187,7 @@ function FinishedGoodsList() {
           <tbody>
             {finishedGoods.length === 0 ? (
               <tr>
-                <td colSpan={7} className="empty-state">
+                <td colSpan={9} className="empty-state">
                   No finished goods found. Click "Create Finished Good" to add one.
                 </td>
               </tr>
@@ -152,23 +197,47 @@ function FinishedGoodsList() {
                 return (
                   <tr key={item.id}>
                     <td><strong>{item.sku}</strong></td>
+                    <td>
+                      <span
+                        className={
+                          item.item_type === 'distributed_item'
+                            ? 'finished-goods-type-badge finished-goods-type-badge--distributed'
+                            : 'finished-goods-type-badge'
+                        }
+                      >
+                        {itemTypeLabel(item.item_type)}
+                      </span>
+                    </td>
+                    <td>{formatVendor(item.vendor)}</td>
                     <td>{item.name}</td>
                     <td>{item.description || '-'}</td>
                     <td>{item.unit_of_measure}</td>
                     <td>{item.pack_size ? `${item.pack_size} ${item.unit_of_measure}` : '-'}</td>
-                    <td>{new Date(item.created_at).toLocaleDateString()}</td>
+                    <td>{formatAppDate(item.created_at)}</td>
                     <td>
-                      {hasFormula ? (
+                      <div className="finished-goods-actions">
+                        {hasFormula ? (
+                          <button
+                            type="button"
+                            onClick={() => handleEditFormula(item)}
+                            className="btn btn-sm btn-secondary"
+                            style={{ padding: '4px 12px', fontSize: '0.875rem' }}
+                          >
+                            Edit Formula
+                          </button>
+                        ) : (
+                          <span style={{ color: '#999', fontStyle: 'italic' }}>No formula</span>
+                        )}
                         <button
-                          onClick={() => handleEditFormula(item)}
+                          type="button"
+                          onClick={() => setCoaEditorItem(item)}
                           className="btn btn-sm btn-secondary"
                           style={{ padding: '4px 12px', fontSize: '0.875rem' }}
+                          title="Micro tests and COA specification rows for this SKU"
                         >
-                          Edit Formula
+                          COA / micro tests
                         </button>
-                      ) : (
-                        <span style={{ color: '#999', fontStyle: 'italic' }}>No formula</span>
-                      )}
+                      </div>
                     </td>
                   </tr>
                 )

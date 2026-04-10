@@ -10,6 +10,12 @@ class Item(models.Model):
         ('finished_good', 'Finished Good'),
         ('indirect_material', 'Indirect Material'),
     ]
+    PRODUCT_CATEGORY_CHOICES = [
+        ('natural_colors', 'Natural Colors'),
+        ('synthetic_colors', 'Synthetic Colors'),
+        ('antioxidants', 'Antioxidants'),
+        ('other', 'Other'),
+    ]
     
     UNIT_CHOICES = [
         ('lbs', 'Pounds'),
@@ -20,6 +26,12 @@ class Item(models.Model):
     sku = models.CharField(max_length=255, db_index=True)
     name = models.CharField(max_length=255, help_text='WWI Item Name - used for sales orders and internal reference')
     vendor_item_name = models.CharField(max_length=255, blank=True, null=True, help_text='Vendor Item Name - used in purchase orders to vendors')
+    vendor_item_number = models.CharField(
+        max_length=255,
+        blank=True,
+        null=True,
+        help_text="Vendor catalog / part number (shown on POs and item lists next to vendor name).",
+    )
     description = models.TextField(blank=True, null=True)
     item_type = models.CharField(max_length=50, choices=ITEM_TYPE_CHOICES)
     unit_of_measure = models.CharField(max_length=10, choices=UNIT_CHOICES)
@@ -31,9 +43,38 @@ class Item(models.Model):
     country_of_origin = models.CharField(max_length=255, blank=True, null=True, help_text='Country of origin for tariff calculation')
     on_order = models.FloatField(default=0.0, help_text='Quantity currently on order')
     approved_for_formulas = models.BooleanField(default=False)
+    product_category = models.CharField(
+        max_length=50,
+        choices=PRODUCT_CATEGORY_CHOICES,
+        blank=True,
+        null=True,
+        help_text='Product category: Natural Colors, Synthetic Colors, Antioxidants, or Other'
+    )
+    # Parent / pack variant (pigment SKUs: letter + material code; optional L/K + 4-digit pack suffix)
+    sku_parent_code = models.CharField(
+        max_length=64,
+        blank=True,
+        null=True,
+        db_index=True,
+        help_text='Material family code (e.g. D1307, P2408). Set automatically from SKU when parseable.',
+    )
+    sku_pack_suffix = models.CharField(
+        max_length=32,
+        blank=True,
+        null=True,
+        help_text='Pack segment when present, e.g. L0040 or K0920. Null for master / parent-only rows.',
+    )
+    sku_parent_item = models.ForeignKey(
+        'self',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='sku_variant_items',
+        help_text='Optional link to the master item row for this family (same vendor when possible).',
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    
+
     class Meta:
         ordering = ['sku', 'vendor']
         unique_together = [['sku', 'vendor']]
@@ -184,6 +225,11 @@ class Lot(models.Model):
     quantity = models.FloatField()
     quantity_remaining = models.FloatField()
     received_date = models.DateTimeField()
+    manufacture_date = models.DateTimeField(
+        blank=True,
+        null=True,
+        help_text='Manufacturer production or pack date when known (common for distributed / resale goods).',
+    )
     expiration_date = models.DateTimeField(blank=True, null=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='accepted', help_text='Acceptance status of the lot')
     on_hold = models.BooleanField(default=False, help_text='Lot is on hold and not available for use (deprecated - use status instead)')
@@ -207,6 +253,142 @@ class Lot(models.Model):
         elif self.quantity_remaining > 0:
             self.depleted_at = None
         super().save(*args, **kwargs)
+
+
+class ItemCoaTestLine(models.Model):
+    """
+    Per-item COA / micro test rows (Test + Specification columns on the certificate).
+    Used when releasing manufactured lots from hold and for PDF generation.
+    """
+    RESULT_KIND_CHOICES = [
+        ('numeric_range', 'Numeric range (min–max)'),
+        ('numeric_minimum', 'Numeric minimum (e.g. NLT)'),
+        ('pass_fail', 'Pass / fail (text)'),
+        ('text_only', 'Text only (no auto pass/fail)'),
+    ]
+
+    item = models.ForeignKey(
+        Item,
+        on_delete=models.CASCADE,
+        related_name='coa_test_lines',
+        limit_choices_to={'item_type__in': ['finished_good', 'distributed_item']},
+    )
+    sort_order = models.PositiveSmallIntegerField(default=0)
+    test_name = models.CharField(max_length=255)
+    specification_text = models.TextField(help_text='Shown in the COA Specification column')
+    result_kind = models.CharField(max_length=32, choices=RESULT_KIND_CHOICES, default='text_only')
+    numeric_min = models.FloatField(blank=True, null=True, help_text='For numeric_minimum or numeric_range')
+    numeric_max = models.FloatField(blank=True, null=True, help_text='For numeric_range only')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['item', 'sort_order', 'id']
+        verbose_name = 'Item COA test line'
+        verbose_name_plural = 'Item COA test lines'
+
+    def __str__(self):
+        return f"{self.item.sku} — {self.test_name}"
+
+
+class LotCoaCertificate(models.Model):
+    """Master COA for a manufactured lot (micro/QC recorded at full release from hold).
+
+    Customer name and PO are not stored here; use LotCoaCustomerCopy per sales allocation.
+    Legacy rows may still have customer_name / customer_po populated.
+    """
+    lot = models.OneToOneField(Lot, on_delete=models.CASCADE, related_name='coa_certificate')
+    customer_name = models.CharField(
+        max_length=255,
+        blank=True,
+        default='',
+        help_text='Deprecated: use customer-specific COAs on sales allocations.',
+    )
+    customer_po = models.CharField(
+        max_length=120,
+        blank=True,
+        default='',
+        help_text='Deprecated: use customer-specific COAs on sales allocations.',
+    )
+    quantity_snapshot = models.FloatField(
+        blank=True,
+        null=True,
+        help_text='Lot quantity (item UOM) shown on master COA PDF at issue time',
+    )
+    qc_parameter_name_snapshot = models.CharField(max_length=255, blank=True, default='')
+    qc_spec_min_snapshot = models.FloatField(blank=True, null=True)
+    qc_spec_max_snapshot = models.FloatField(blank=True, null=True)
+    qc_result_value = models.FloatField(blank=True, null=True)
+    qc_result_pass = models.BooleanField(blank=True, null=True)
+    coa_pdf = models.FileField(upload_to='coa_pdfs/', blank=True, null=True)
+    issued_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    recorded_by = models.CharField(max_length=255, blank=True, null=True)
+
+    class Meta:
+        verbose_name = 'Lot COA certificate'
+        verbose_name_plural = 'Lot COA certificates'
+        ordering = ['-issued_at']
+
+    def __str__(self):
+        return f"COA {self.lot.lot_number or self.lot_id}"
+
+
+class LotCoaCustomerCopy(models.Model):
+    """Customer-facing COA PDF for one lot allocation (lot + sales order line + qty)."""
+
+    certificate = models.ForeignKey(
+        LotCoaCertificate,
+        on_delete=models.CASCADE,
+        related_name='customer_copies',
+    )
+    sales_order_lot = models.OneToOneField(
+        'SalesOrderLot',
+        on_delete=models.CASCADE,
+        related_name='coa_customer_copy',
+    )
+    customer_name = models.CharField(max_length=255, blank=True, default='')
+    customer_po = models.CharField(max_length=120, blank=True, default='')
+    quantity_snapshot = models.FloatField(
+        help_text='Allocated quantity (item UOM) shown on this COA',
+    )
+    coa_pdf = models.FileField(upload_to='coa_pdfs/customer/', blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = 'Lot COA (customer copy)'
+        verbose_name_plural = 'Lot COA customer copies'
+
+    def __str__(self):
+        so = self.sales_order_lot.sales_order_item.sales_order.so_number
+        ln = self.certificate.lot.lot_number or str(self.certificate.lot_id)
+        return f"COA {ln} → {so}"
+
+
+class LotCoaLineResult(models.Model):
+    """One analysis row on a lot COA (micro or other tests)."""
+    certificate = models.ForeignKey(LotCoaCertificate, on_delete=models.CASCADE, related_name='line_results')
+    item_line = models.ForeignKey(
+        ItemCoaTestLine,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='lot_results',
+    )
+    test_name = models.CharField(max_length=255)
+    specification_text = models.TextField()
+    result_text = models.CharField(max_length=500)
+    passes = models.BooleanField(blank=True, null=True)
+
+    class Meta:
+        ordering = ['id']
+        verbose_name = 'Lot COA line result'
+        verbose_name_plural = 'Lot COA line results'
+
+    def __str__(self):
+        return f"{self.test_name}: {self.result_text}"
 
 
 class InventoryTransaction(models.Model):
@@ -395,6 +577,50 @@ class PurchaseOrderLog(models.Model):
         return f"PO {self.po_number} - {self.get_action_display()} on {self.logged_at.strftime('%Y-%m-%d %H:%M')}"
 
 
+class CampaignLot(models.Model):
+    """
+    Customer-facing campaign lot code: ISO year week (YYWW) + product code (e.g. 2609D1307).
+    Batch/lot numbers remain the traceability authority; this links batches to a campaign label.
+    """
+    item = models.ForeignKey(
+        Item,
+        on_delete=models.CASCADE,
+        related_name='campaign_lots',
+    )
+    anchor_date = models.DateField(
+        help_text='Calendar date used to compute ISO week and YYWW prefix (Mon–Sun ISO week).',
+    )
+    product_code = models.CharField(
+        max_length=40,
+        help_text='Product code suffix, e.g. D1307 (pigment, solubility, form, strength).',
+    )
+    campaign_code = models.CharField(max_length=64, unique=True, db_index=True)
+    iso_year = models.PositiveSmallIntegerField()
+    iso_week = models.PositiveSmallIntegerField()
+    notes = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = 'Campaign lot'
+
+    def save(self, *args, **kwargs):
+        d = self.anchor_date
+        if d is not None:
+            iso = d.isocalendar()
+            self.iso_year = iso[0]
+            self.iso_week = iso[1]
+            yy = str(iso[0])[-2:]
+            ww = f'{iso[1]:02d}'
+            pc = (self.product_code or '').strip()
+            self.campaign_code = f'{yy}{ww}{pc}'
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return self.campaign_code
+
+
 class ProductionBatch(models.Model):
     BATCH_TYPE_CHOICES = [
         ('production', 'Production'),
@@ -420,6 +646,20 @@ class ProductionBatch(models.Model):
     spills = models.FloatField(default=0.0)
     notes = models.TextField(blank=True, null=True)
     recipe_snapshot = models.TextField(blank=True, null=True, help_text='JSON: formula overrides used (batch %, substitutions) for audit')
+    batch_ticket_mass_unit = models.CharField(
+        max_length=16,
+        blank=True,
+        default='',
+        help_text="Default mass unit for batch ticket PDF pick list and batch totals. Empty=native (each line's item UoM). 'lbs' or 'kg' converts all mass quantities.",
+    )
+    campaign = models.ForeignKey(
+        CampaignLot,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='batches',
+        help_text='Optional campaign lot (YYWW+product). Batch lot remains primary for traceability.',
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     
@@ -522,6 +762,16 @@ class CheckInLog(models.Model):
     
     # Check-in form data
     received_date = models.DateTimeField(help_text='Date material was received')
+    manufacture_date = models.DateTimeField(
+        blank=True,
+        null=True,
+        help_text='Manufacturer date when recorded at check-in (snapshot)',
+    )
+    expiration_date = models.DateTimeField(
+        blank=True,
+        null=True,
+        help_text='Expiration date for the lot as recorded at check-in (snapshot)',
+    )
     vendor_lot_number = models.CharField(max_length=100, blank=True, null=True)
     quantity = models.FloatField(help_text='Quantity received in item native unit')
     quantity_unit = models.CharField(max_length=10, choices=Item.UNIT_CHOICES, default='lbs', help_text='Unit of measure for quantity')
@@ -557,6 +807,29 @@ class CheckInLog(models.Model):
     
     def __str__(self):
         return f"Check-in: {self.item_sku} - {self.quantity} {self.quantity_unit} on {self.checked_in_at.strftime('%Y-%m-%d %H:%M')}"
+
+
+class LotAttributeChangeLog(models.Model):
+    """Audit trail when editable lot fields change after creation (e.g. expiration after re-QC)."""
+
+    lot = models.ForeignKey(Lot, on_delete=models.CASCADE, related_name='attribute_change_logs')
+    field_name = models.CharField(max_length=64, db_index=True)
+    old_value = models.TextField(blank=True, default='')
+    new_value = models.TextField(blank=True, default='')
+    reason = models.CharField(max_length=500, blank=True, default='')
+    changed_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    changed_by = models.CharField(max_length=255, blank=True, default='')
+
+    class Meta:
+        ordering = ['-changed_at']
+        verbose_name = 'Lot attribute change log'
+        verbose_name_plural = 'Lot attribute change logs'
+        indexes = [
+            models.Index(fields=['-changed_at', 'field_name']),
+        ]
+
+    def __str__(self):
+        return f"Lot {self.lot_id} {self.field_name} @ {self.changed_at}"
 
 
 class CriticalControlPoint(models.Model):
@@ -615,6 +888,12 @@ class Formula(models.Model):
     mixing_step_5 = models.TextField(blank=True, null=True, help_text='Mixing step 5')
     mixing_step_6 = models.TextField(blank=True, null=True, help_text='Mixing step 6')
 
+    shelf_life_months = models.PositiveSmallIntegerField(
+        blank=True,
+        null=True,
+        help_text='Default shelf life in months from batch close / lot receipt; used to set expiration on new FG output lots.',
+    )
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     
@@ -639,6 +918,68 @@ class FormulaItem(models.Model):
         return f"{self.formula.finished_good.name} - {self.item.name} ({self.percentage}%)"
 
 
+class RDFormula(models.Model):
+    """R&D formula: pre-commercialization BOM for cost estimation; can be promoted to Finished Good."""
+    STATUS_CHOICES = [
+        ('draft', 'Draft'),
+        ('approved', 'Approved'),
+        ('scrapped', 'Scrapped'),
+    ]
+    name = models.CharField(max_length=255, help_text='Product name (e.g. Natural Red D1307)')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='draft')
+    notes = models.TextField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-updated_at']
+        verbose_name = 'R&D Formula'
+        verbose_name_plural = 'R&D Formulas'
+
+    def __str__(self):
+        return self.name
+
+    @property
+    def total_cost_per_lb(self):
+        total = sum(
+            (line.formula_cost or 0) for line in self.lines.all()
+        )
+        return round(total, 2)
+
+
+class RDFormulaLine(models.Model):
+    """Single line in an R&D formula BOM: ingredient, packaging, or labor."""
+    LINE_TYPE_CHOICES = [
+        ('ingredient', 'Ingredient'),
+        ('packaging', 'Packaging'),
+        ('labor', 'Labor'),
+    ]
+    rd_formula = models.ForeignKey(RDFormula, on_delete=models.CASCADE, related_name='lines')
+    line_type = models.CharField(max_length=20, choices=LINE_TYPE_CHOICES)
+    sequence = models.PositiveSmallIntegerField(default=0, help_text='Order: R1=1, R2=2, P1=3, etc.')
+    item = models.ForeignKey(Item, on_delete=models.SET_NULL, null=True, blank=True, related_name='rd_formula_lines', help_text='Optional: link to Item for dropdown selection')
+    description = models.CharField(max_length=255, blank=True, help_text='Display name when no item or override (e.g. Beet Powder 0.8% (Nutracean))')
+    composition_pct = models.FloatField(blank=True, null=True, help_text='Composition % (ingredients/packaging); null for labor')
+    price_per_lb = models.FloatField(blank=True, null=True, help_text='Price per lb or per unit')
+    labor_flat_amount = models.FloatField(blank=True, null=True, help_text='Flat $ for labor line only')
+    notes = models.TextField(blank=True, null=True)
+
+    class Meta:
+        ordering = ['rd_formula', 'line_type', 'sequence', 'id']
+        unique_together = [['rd_formula', 'line_type', 'sequence']]
+
+    def __str__(self):
+        return f"{self.rd_formula.name} - {self.get_line_type_display()} #{self.sequence}"
+
+    @property
+    def formula_cost(self):
+        if self.line_type == 'labor':
+            return self.labor_flat_amount
+        if self.composition_pct is not None and self.price_per_lb is not None:
+            return round((self.composition_pct / 100.0) * self.price_per_lb, 2)
+        return None
+
+
 class PurchaseOrder(models.Model):
     PO_TYPE_CHOICES = [
         ('vendor', 'Vendor'),
@@ -658,7 +999,8 @@ class PurchaseOrder(models.Model):
     vendor_customer_name = models.CharField(max_length=255)
     vendor_customer_id = models.CharField(max_length=100, blank=True, null=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='draft')
-    order_date = models.DateTimeField(auto_now_add=True)
+    # Business PO / issue date (editable; staff God mode / historical entry)
+    order_date = models.DateTimeField(default=timezone.now)
     order_number = models.CharField(max_length=100, blank=True, null=True, help_text='Internal order number')
     expected_delivery_date = models.DateField(blank=True, null=True)
     required_date = models.DateField(blank=True, null=True)
@@ -686,6 +1028,24 @@ class PurchaseOrder(models.Model):
     revision_number = models.IntegerField(default=0)
     original_po = models.ForeignKey('self', on_delete=models.SET_NULL, blank=True, null=True, related_name='revisions')
     notes = models.TextField(blank=True, null=True)
+    notify_party_contacts = models.ManyToManyField(
+        'VendorContact',
+        related_name='purchase_orders_as_notify_party',
+        blank=True,
+        help_text='Notify party contacts (e.g. customs broker by port) for importation'
+    )
+    drop_ship = models.BooleanField(
+        default=False,
+        help_text='Vendor ships direct to final destination; do not check in or mark received into stock.',
+    )
+    fulfillment_sales_order = models.ForeignKey(
+        'SalesOrder',
+        on_delete=models.SET_NULL,
+        blank=True,
+        null=True,
+        related_name='drop_ship_purchase_orders',
+        help_text='Sales order this drop-ship PO fulfills (ship-to copied from SO).',
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     
@@ -720,6 +1080,12 @@ class PurchaseOrderItem(models.Model):
     quantity_received = models.FloatField(default=0.0)
     unit_price = models.FloatField(blank=True, null=True)
     # unit_cost removed - database only has unit_price, use unit_price instead
+    order_uom = models.CharField(
+        max_length=20,
+        blank=True,
+        null=True,
+        help_text='UoM for quantity_ordered and unit_price on this line (e.g. lbs, kg). Blank means use the item master UoM.',
+    )
     notes = models.TextField(blank=True, null=True)
     
     class Meta:
@@ -751,7 +1117,9 @@ class SalesOrder(models.Model):
     customer_zip = models.CharField(max_length=20, blank=True, null=True, help_text='Legacy field - use ship_to_location when possible')
     customer_country = models.CharField(max_length=100, blank=True, null=True, help_text='Legacy field - use ship_to_location when possible')
     customer_phone = models.CharField(max_length=50, blank=True, null=True, help_text='Legacy field - use ship_to_location when possible')
-    order_date = models.DateTimeField(auto_now_add=True)
+    contact = models.ForeignKey('CustomerContact', on_delete=models.SET_NULL, blank=True, null=True, related_name='sales_orders', help_text='Contact for this order (e.g. billing, sales)')
+    # Business order date (editable; staff God mode / historical entry)
+    order_date = models.DateTimeField(default=timezone.now)
     expected_ship_date = models.DateTimeField(blank=True, null=True, help_text='Requested ship date')
     actual_ship_date = models.DateTimeField(blank=True, null=True, help_text='Actual ship date')
     carrier = models.CharField(max_length=255, blank=True, null=True, help_text='Shipping carrier (e.g. FedEx, UPS); shown on invoice under SHIPPED VIA')
@@ -761,6 +1129,10 @@ class SalesOrder(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     customer_po_pdf = models.FileField(upload_to='customer_pos/%Y/%m/', blank=True, null=True, help_text='Uploaded customer PO document (PDF)')
+    drop_ship = models.BooleanField(
+        default=False,
+        help_text='Vendor ships direct to customer; do not receive into inventory or allocate from stock.',
+    )
 
     class Meta:
         ordering = ['-created_at']
@@ -835,6 +1207,16 @@ class Vendor(models.Model):
     approved_by = models.CharField(max_length=100, blank=True, null=True)
     payment_terms = models.CharField(max_length=50, blank=True, null=True, help_text='Payment terms (e.g., "Net 30", "Net 60", "Due on Receipt")')
     
+    # Service vendor (e.g. customs broker): can have contacts used as notify party on POs
+    is_service_vendor = models.BooleanField(default=False, help_text='Service vendor (e.g. customs broker) with contacts for notify party')
+    SERVICE_VENDOR_TYPE_CHOICES = [
+        ('', '—'),
+        ('customs_broker', 'Customs Broker'),
+        ('freight_forwarder', 'Freight Forwarder'),
+        # To add more: add a tuple here and the same option in frontend SERVICE_VENDOR_TYPE_OPTIONS.
+    ]
+    service_vendor_type = models.CharField(max_length=50, blank=True, null=True, choices=SERVICE_VENDOR_TYPE_CHOICES, help_text='Type of service vendor')
+    
     # Compliance fields
     gfsi_certified = models.BooleanField(default=False)
     gfsi_certificate_number = models.CharField(max_length=255, blank=True, null=True)
@@ -854,6 +1236,38 @@ class Vendor(models.Model):
     
     def __str__(self):
         return self.name
+
+
+class VendorContact(models.Model):
+    """Contact at a vendor (sales, logistics, etc.); service vendors also use these for PO notify party."""
+    vendor = models.ForeignKey(Vendor, on_delete=models.CASCADE, related_name='contacts')
+    name = models.CharField(max_length=255, help_text='Contact or office name')
+    title = models.CharField(
+        max_length=255,
+        blank=True,
+        null=True,
+        help_text='Job title or role (e.g. Sales Manager, Logistics)',
+    )
+    emails = models.JSONField(
+        default=list,
+        blank=True,
+        help_text='Email addresses (list of strings; multiple allowed)',
+    )
+    phone = models.CharField(max_length=50, blank=True, null=True)
+    location_label = models.CharField(max_length=100, blank=True, null=True, help_text='Port or location (e.g. Long Beach, Houston)')
+    notes = models.TextField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        ordering = ['vendor', 'location_label', 'name']
+        verbose_name = 'Vendor contact'
+        verbose_name_plural = 'Vendor contacts'
+    
+    def __str__(self):
+        if self.location_label:
+            return f"{self.vendor.name} — {self.name} ({self.location_label})"
+        return f"{self.vendor.name} — {self.name}"
 
 
 class VendorHistory(models.Model):
@@ -976,6 +1390,10 @@ class CostMaster(models.Model):
     price_per_kg = models.FloatField(blank=True, null=True)
     price_per_lb = models.FloatField(blank=True, null=True)
     incoterms = models.CharField(max_length=50, choices=INCOTERMS_CHOICES, blank=True, null=True)
+    incoterms_place = models.CharField(
+        max_length=255, blank=True, null=True,
+        help_text='Named place for the Incoterm (e.g. "Long Beach, CA" for FCA Long Beach, CA). Origin remains country of origin.'
+    )
     origin = models.CharField(max_length=255, blank=True, null=True)
     vendor = models.CharField(max_length=255, blank=True, null=True, db_index=True)
     hts_code = models.CharField(max_length=50, blank=True, null=True)
@@ -1110,11 +1528,16 @@ class Customer(models.Model):
     contact_name = models.CharField(max_length=255, blank=True, null=True)
     email = models.EmailField(blank=True, null=True)
     phone = models.CharField(max_length=50, blank=True, null=True)
-    address = models.TextField(blank=True, null=True)
-    city = models.CharField(max_length=100, blank=True, null=True)
-    state = models.CharField(max_length=50, blank=True, null=True)
-    zip_code = models.CharField(max_length=20, blank=True, null=True)
-    country = models.CharField(max_length=100, blank=True, null=True, default='USA')
+    address = models.TextField(blank=True, null=True, help_text='Headquarters street address')
+    city = models.CharField(max_length=100, blank=True, null=True, help_text='Headquarters city')
+    state = models.CharField(max_length=50, blank=True, null=True, help_text='Headquarters state')
+    zip_code = models.CharField(max_length=20, blank=True, null=True, help_text='Headquarters ZIP')
+    country = models.CharField(max_length=100, blank=True, null=True, default='USA', help_text='Headquarters country')
+    bill_to_address = models.TextField(blank=True, null=True, help_text='Bill-to street address (leave blank if same as HQ)')
+    bill_to_city = models.CharField(max_length=100, blank=True, null=True)
+    bill_to_state = models.CharField(max_length=50, blank=True, null=True)
+    bill_to_zip_code = models.CharField(max_length=20, blank=True, null=True)
+    bill_to_country = models.CharField(max_length=100, blank=True, null=True)
     payment_terms = models.CharField(max_length=50, blank=True, null=True, help_text='Payment terms (e.g., "Net 30", "Net 15", "Due on Receipt")')
     notes = models.TextField(blank=True, null=True)
     is_active = models.BooleanField(default=True)
@@ -1156,14 +1579,28 @@ class ShipToLocation(models.Model):
 
 class CustomerContact(models.Model):
     """Contacts associated with customers"""
+    CONTACT_TYPE_CHOICES = [
+        ('billing', 'Billing'),
+        ('sales', 'Sales'),
+        ('shipping', 'Shipping'),
+        ('general', 'General'),
+        ('other', 'Other'),
+    ]
     customer = models.ForeignKey(Customer, on_delete=models.CASCADE, related_name='contacts')
     first_name = models.CharField(max_length=100)
     last_name = models.CharField(max_length=100)
     title = models.CharField(max_length=100, blank=True, null=True, help_text='Job title/position')
-    email = models.EmailField(blank=True, null=True)
+    contact_type = models.CharField(max_length=20, choices=CONTACT_TYPE_CHOICES, default='general', help_text='Type of contact (e.g. Billing, Sales)')
+    emails = models.JSONField(
+        default=list,
+        blank=True,
+        help_text='Email addresses (list of strings; multiple allowed)',
+    )
     phone = models.CharField(max_length=50, blank=True, null=True)
     mobile = models.CharField(max_length=50, blank=True, null=True)
     is_primary = models.BooleanField(default=False, help_text='Primary contact for this customer')
+    is_ap_contact = models.BooleanField(default=False, help_text='A/P contact: receives invoices when issued')
+    is_purchasing_contact = models.BooleanField(default=False, help_text='Purchasing contact: receives sales order confirmations when issued')
     is_active = models.BooleanField(default=True)
     notes = models.TextField(blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -1235,6 +1672,8 @@ class CustomerPricing(models.Model):
     item = models.ForeignKey(Item, on_delete=models.CASCADE, related_name='customer_pricing')
     unit_price = models.FloatField()
     unit_of_measure = models.CharField(max_length=10, choices=Item.UNIT_CHOICES, default='lbs')
+    incoterms = models.CharField(max_length=30, blank=True, null=True, help_text='Incoterms for this item (e.g. FOB, CIF, DAP)')
+    incoterms_place = models.CharField(max_length=100, blank=True, null=True, help_text='Place/point for the incoterm (e.g. New York for CIF New York)')
     effective_date = models.DateField()
     expiry_date = models.DateField(blank=True, null=True)
     is_active = models.BooleanField(default=True)
@@ -1293,6 +1732,24 @@ class SalesOrderLot(models.Model):
         return f"{self.sales_order_item.sales_order.so_number} - {self.lot.lot_number} - {self.quantity_allocated}"
 
 
+class ShipIdempotency(models.Model):
+    """
+    Stores successful /sales-orders/{id}/ship/ responses keyed by X-Idempotency-Key
+    so duplicate submits (double-click, retries) cannot create duplicate shipments.
+    """
+    key = models.CharField(max_length=128, unique=True, db_index=True)
+    sales_order = models.ForeignKey('SalesOrder', on_delete=models.CASCADE, related_name='ship_idempotencies')
+    shipment = models.ForeignKey('Shipment', on_delete=models.CASCADE, related_name='idempotency_records')
+    response_json = models.TextField(help_text='JSON body returned to the client')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name_plural = 'Ship idempotency keys'
+
+    def __str__(self):
+        return f'{self.key[:16]}… → shipment {self.shipment_id}'
+
+
 class Shipment(models.Model):
     """Track individual shipments for sales orders (supports multiple shipments per order)."""
     sales_order = models.ForeignKey(SalesOrder, on_delete=models.CASCADE, related_name='shipments')
@@ -1303,8 +1760,18 @@ class Shipment(models.Model):
     ship_date = models.DateTimeField(help_text='Date the shipment was shipped')
     tracking_number = models.CharField(max_length=255, help_text='Tracking number for this shipment')
     notes = models.TextField(blank=True, null=True)
-    dimensions = models.CharField(max_length=255, blank=True, null=True, help_text='Pallet/box dimensions (e.g. 48x40x60)')
+    dimensions = models.TextField(blank=True, null=True, help_text='Human-readable summary; per-piece values in piece_dimensions')
     pieces = models.PositiveIntegerField(blank=True, null=True, help_text='Number of boxes (ground) or pallets (FTL/LTL)')
+    piece_dimensions = models.JSONField(
+        blank=True,
+        null=True,
+        help_text='List of dimension strings, one per handling unit (same length as pieces)',
+    )
+    piece_weights = models.JSONField(
+        blank=True,
+        null=True,
+        help_text='List of weight strings per handling unit (same length as pieces), e.g. "45 lbs"',
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     
     class Meta:
@@ -1345,6 +1812,7 @@ class Invoice(models.Model):
     invoice_type = models.CharField(max_length=20, choices=INVOICE_TYPE_CHOICES, default='customer')
     customer_vendor_name = models.CharField(max_length=255, blank=True, default='')
     sales_order = models.ForeignKey(SalesOrder, on_delete=models.CASCADE, related_name='invoices', blank=True, null=True, db_column='sales_order_id')
+    contact = models.ForeignKey(CustomerContact, on_delete=models.SET_NULL, blank=True, null=True, related_name='invoices', help_text='Bill-to or primary contact for this invoice')
     invoice_date = models.DateField()
     due_date = models.DateField(help_text='Calculated from invoice_date + payment_terms')
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='draft')
@@ -1367,6 +1835,35 @@ class Invoice(models.Model):
         if self.sales_order:
             return f"{self.invoice_number} - {self.sales_order.so_number}"
         return f"{self.invoice_number}"
+
+    def _payment_terms_string_for_due_date(self):
+        """Customer payment terms from linked sales order or bill-to contact."""
+        if self.sales_order_id:
+            try:
+                so = self.sales_order
+                if so is None:
+                    so = SalesOrder.objects.filter(pk=self.sales_order_id).select_related('customer').first()
+                if so and getattr(so, 'customer', None):
+                    return (so.customer.payment_terms or '').strip()
+            except Exception:
+                pass
+        if self.contact_id:
+            try:
+                cc = self.contact
+                if cc is None:
+                    cc = CustomerContact.objects.filter(pk=self.contact_id).select_related('customer').first()
+                if cc and getattr(cc, 'customer', None):
+                    return (cc.customer.payment_terms or '').strip()
+            except Exception:
+                pass
+        return ''
+
+    def save(self, *args, **kwargs):
+        from .invoice_helpers import due_date_from_issue_and_payment_terms
+        if self.invoice_date:
+            terms = self._payment_terms_string_for_due_date()
+            self.due_date = due_date_from_issue_and_payment_terms(self.invoice_date, terms)
+        super().save(*args, **kwargs)
     
     @property
     def days_aging(self):
@@ -1376,6 +1873,8 @@ class Invoice(models.Model):
             return 0
         if self.status == 'draft':
             return 0  # Don't start aging until invoice is moved to Issued
+        if not self.due_date:
+            return 0
         today = timezone.now().date()
         return (today - self.due_date).days
 
@@ -1559,6 +2058,27 @@ class AccountsPayable(models.Model):
     account = models.ForeignKey(Account, on_delete=models.SET_NULL, blank=True, null=True, related_name='ap_entries', help_text='AP account')
     journal_entry = models.ForeignKey(JournalEntry, on_delete=models.SET_NULL, blank=True, null=True, related_name='ap_entries', help_text='Journal entry created for this AP')
     notes = models.TextField(blank=True, null=True)
+    COST_CATEGORY_CHOICES = [
+        ('', 'Legacy / unspecified'),
+        ('material', 'Material — vendor goods invoice (COGS)'),
+        ('freight', 'Freight — shipping / logistics invoice'),
+        ('duty_tax', 'Duty & tax — CBP, customs, broker'),
+    ]
+    cost_category = models.CharField(
+        max_length=20,
+        choices=COST_CATEGORY_CHOICES,
+        blank=True,
+        default='',
+        help_text='For landed cost: classify this AP line (link same PO on vendor, freight, and duty invoices).',
+    )
+    # Actual cost tracking (from vendor invoice / import) — used for cost actuals vs Cost Master estimates
+    freight_total = models.FloatField(blank=True, null=True, help_text='Actual total freight on this invoice/shipment (spread over quantity for unit cost)')
+    tariff_duties_paid = models.FloatField(blank=True, null=True, help_text='Duties/tariff paid at import for this shipment')
+    shipment_method = models.CharField(
+        max_length=20, blank=True, null=True,
+        choices=[('air', 'Air'), ('sea', 'Sea')],
+        help_text='Method of shipment (air vs sea)'
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     

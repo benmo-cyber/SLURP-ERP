@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <style>
+    /* Letter single page: tight margins + compact type (COA logo smaller than packing list) */
+    @page { size: letter; margin: 0.45in; }
+    body {
+      font-family: Arial, Helvetica, sans-serif;
+      font-size: 9pt;
+      color: #1a1a1a;
+      margin: 0;
+      line-height: 1.2;
+    }
+    .header { display: table; width: 100%; margin-bottom: 8pt; }
+    .header-left { display: table-cell; vertical-align: top; width: 48%; }
+    .header-right {
+      display: table-cell;
+      vertical-align: top;
+      text-align: right;
+      font-size: 8pt;
+      line-height: 1.3;
+      color: #333;
+    }
+    .logo {
+      width: 60px;
+      height: 60px;
+      display: block;
+      object-fit: contain;
+      margin-bottom: 2pt;
+    }
+    .company-name { font-weight: bold; font-size: 10pt; margin-top: 2pt; }
+    h1 {
+      text-align: center;
+      font-size: 13pt;
+      margin: 4pt 0 8pt 0;
+      letter-spacing: 0.03em;
+    }
+    .meta { width: 100%; margin-bottom: 8pt; font-size: 9pt; border-collapse: collapse; }
+    .meta td { padding: 1pt 8pt 2pt 0; vertical-align: top; }
+    .meta .k { font-weight: bold; width: 100px; color: #333; white-space: nowrap; }
+    .meta .v { }
+    table.tests { width: 100%; border-collapse: collapse; margin-top: 4pt; font-size: 8pt; }
+    table.tests th {
+      text-align: left;
+      border-bottom: 2px solid #333;
+      padding: 3pt 3pt;
+      font-weight: bold;
+      text-transform: uppercase;
+      letter-spacing: 0.02em;
+      font-size: 7.5pt;
+    }
+    table.tests td { border-bottom: 1px solid #ccc; padding: 3pt 3pt; vertical-align: top; }
+    .col-test { width: 28%; }
+    .col-spec { width: 38%; }
+    .col-result { width: 34%; }
+    .sign-off-section {
+      margin-top: 12pt;
+      padding-top: 8pt;
+      border-top: 1px solid #333;
+    }
+    .sign-off-table { width: 100%; border-collapse: collapse; font-size: 9pt; }
+    .sign-off-table td { width: 50%; vertical-align: bottom; padding: 6pt 10pt 0 0; }
+    .sign-off-table td:last-child { padding-right: 0; padding-left: 10pt; }
+    .sign-off-label { font-weight: bold; margin-bottom: 3pt; display: block; color: #111; }
+    .sign-off-hint { font-size: 7.5pt; color: #555; font-weight: normal; margin-top: 2pt; }
+    .sign-off-line { border-bottom: 1px solid #000; height: 22pt; margin-top: 2pt; font-size: 1pt; line-height: 22pt; }
+    .footer {
+      margin-top: 10pt;
+      padding-top: 6pt;
+      border-top: 1px solid #ddd;
+      font-size: 8.5pt;
+      color: #444;
+    }
+    .footer-row { display: table; width: 100%; }
+    .footer-left { display: table-cell; }
+    .footer-right { display: table-cell; text-align: right; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="header-left">
+      {% if logo_base64 %}
+      <img class="logo" src="data:image/png;base64,{{ logo_base64 }}" alt=""/>
+      {% endif %}
+      <div class="company-name">Wildwood Ingredients, LLC</div>
+    </div>
+    <div class="header-right">
+      6431 Michels Dr.<br/>
+      Washington, MO 63090<br/>
+      314-835-8207
+    </div>
+  </div>
+
+  <h1>Certificate of Analysis</h1>
+
+  <table class="meta">
+    <tr><td class="k">Product</td><td class="v">{{ product_name }}</td></tr>
+    <tr><td class="k">Lot No</td><td class="v">{{ lot_number }}</td></tr>
+    <tr><td class="k">Quantity</td><td class="v">{{ quantity_display }}</td></tr>
+    <tr><td class="k">Customer</td><td class="v">{{ customer_name }}</td></tr>
+    <tr><td class="k">PO</td><td class="v">{{ customer_po }}</td></tr>
+    <tr><td class="k">Manuf. Date</td><td class="v">{{ manufacture_date }}</td></tr>
+    <tr><td class="k">Exp. Date</td><td class="v">{{ expiration_date }}</td></tr>
+  </table>
+
+  <table class="tests">
+    <thead>
+      <tr>
+        <th class="col-test">Test</th>
+        <th class="col-spec">Specification</th>
+        <th class="col-result">Result</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in test_rows %}
+      <tr>
+        <td class="col-test">{{ row.test }}</td>
+        <td class="col-spec">{{ row.specification }}</td>
+        <td class="col-result">{{ row.result }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <div class="sign-off-section">
+    <table class="sign-off-table">
+      <tr>
+        <td>
+          <span class="sign-off-label">Authorized signature</span>
+          <div class="sign-off-line">&nbsp;</div>
+          <span class="sign-off-hint">Sign to acknowledge this certificate.</span>
+        </td>
+        <td>
+          <span class="sign-off-label">Date</span>
+          <div class="sign-off-line">&nbsp;</div>
+          <span class="sign-off-hint">Date of signature.</span>
+        </td>
+      </tr>
+    </table>
+  </div>
+
+  <div class="footer">
+    <div class="footer-row">
+      <div class="footer-left">Wildwood Ingredients, LLC</div>
+      <div class="footer-right">COA issue date: {{ issue_date }}</div>
+    </div>
+  </div>
+</body>
+</html>

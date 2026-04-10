@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { getLots } from '../../api/inventory'
+import { lotAvailableForUse } from '../../utils/lotQuantities'
 import { api } from '../../api/client'
 import './IndirectMaterialCheckout.css'
 
@@ -13,6 +14,9 @@ interface Lot {
     unit_of_measure: string
   }
   quantity_remaining: number
+  quantity_available_for_use?: number
+  quantity_on_hold?: number
+  committed_to_production_qty?: number
   status: string
 }
 
@@ -33,10 +37,11 @@ function IndirectMaterialCheckout({ onClose, onSuccess }: { onClose: () => void;
     try {
       setLoading(true)
       const allLots = await getLots()
-      const indirectMaterialLots = allLots.filter((lot: Lot) => 
-        lot.item.item_type === 'indirect_material' && 
-        lot.quantity_remaining > 0 &&
-        (!lot.status || lot.status === 'accepted')
+      const indirectMaterialLots = allLots.filter(
+        (lot: Lot) =>
+          lot.item.item_type === 'indirect_material' &&
+          lotAvailableForUse(lot) > 0 &&
+          (!lot.status || lot.status === 'accepted')
       )
       setLots(indirectMaterialLots)
     } catch (error) {
@@ -62,8 +67,9 @@ function IndirectMaterialCheckout({ onClose, onSuccess }: { onClose: () => void;
     }
 
     const qty = parseFloat(quantity)
-    if (qty > selectedLot.quantity_remaining) {
-      alert(`Cannot exceed available quantity: ${selectedLot.quantity_remaining} ${selectedLot.item.unit_of_measure}`)
+    const maxAvail = lotAvailableForUse(selectedLot)
+    if (qty > maxAvail) {
+      alert(`Cannot exceed available quantity: ${maxAvail} ${selectedLot.item.unit_of_measure}`)
       return
     }
 
@@ -103,6 +109,7 @@ function IndirectMaterialCheckout({ onClose, onSuccess }: { onClose: () => void;
   }
 
   const selectedLot = selectedLotId ? lots.find(l => l.id === selectedLotId) : null
+  const selectedMax = selectedLot ? lotAvailableForUse(selectedLot) : 0
 
   return (
     <div className="indirect-material-checkout-modal">
@@ -130,7 +137,8 @@ function IndirectMaterialCheckout({ onClose, onSuccess }: { onClose: () => void;
                 <option value="">-- Select --</option>
                 {lots.map((lot) => (
                   <option key={lot.id} value={lot.id}>
-                    {lot.item.name} ({lot.item.sku}) - Lot: {lot.lot_number} - Available: {lot.quantity_remaining} {lot.item.unit_of_measure}
+                    {lot.item.name} ({lot.item.sku}) - Lot: {lot.lot_number} - Available:{' '}
+                    {lotAvailableForUse(lot)} {lot.item.unit_of_measure}
                   </option>
                 ))}
               </select>
@@ -146,7 +154,7 @@ function IndirectMaterialCheckout({ onClose, onSuccess }: { onClose: () => void;
                     type="number"
                     step="0.01"
                     min="0"
-                    max={selectedLot.quantity_remaining}
+                    max={selectedMax}
                     value={quantity}
                     onChange={(e) => {
                       const val = e.target.value
@@ -160,7 +168,7 @@ function IndirectMaterialCheckout({ onClose, onSuccess }: { onClose: () => void;
                   <span>{selectedLot.item.unit_of_measure}</span>
                 </div>
                 <small className="form-hint">
-                  Available: {selectedLot.quantity_remaining} {selectedLot.item.unit_of_measure}
+                  Available: {selectedMax} {selectedLot.item.unit_of_measure}
                 </small>
               </div>
 

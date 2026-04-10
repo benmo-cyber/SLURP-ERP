@@ -25,6 +25,7 @@ function EditFormula({ finishedGoodId, finishedGoodSku, finishedGoodName, onClos
   const [loading, setLoading] = useState(true)
   const [formData, setFormData] = useState({
     formula_version: '1.0',
+    shelf_life_months: '' as string,
     formula_notes: '',
     critical_control_point_id: '' as string | number,
     qc_parameter_name: '',
@@ -85,6 +86,10 @@ function EditFormula({ finishedGoodId, finishedGoodSku, finishedGoodName, onClos
         setFormula(foundFormula)
         setFormData({
           formula_version: foundFormula.version || '1.0',
+          shelf_life_months:
+            foundFormula.shelf_life_months !== null && foundFormula.shelf_life_months !== undefined
+              ? String(foundFormula.shelf_life_months)
+              : '',
           formula_notes: foundFormula.notes || '',
           qc_parameter_name: foundFormula.qc_parameter_name || '',
           qc_spec_min: foundFormula.qc_spec_min !== null && foundFormula.qc_spec_min !== undefined ? String(foundFormula.qc_spec_min) : '',
@@ -152,6 +157,16 @@ function EditFormula({ finishedGoodId, finishedGoodSku, finishedGoodName, onClos
       return
     }
 
+    let shelfLifeMonths: number | null = null
+    if (formData.shelf_life_months.trim()) {
+      const n = parseInt(formData.shelf_life_months, 10)
+      if (Number.isNaN(n) || n < 1) {
+        alert('Shelf life (months) must be a positive whole number, or leave blank.')
+        return
+      }
+      shelfLifeMonths = n
+    }
+
     try {
       setSubmitting(true)
       
@@ -159,6 +174,7 @@ function EditFormula({ finishedGoodId, finishedGoodSku, finishedGoodName, onClos
       await updateFormula(formula.id, {
         finished_good_id: finishedGoodId,
         version: formData.formula_version,
+        shelf_life_months: shelfLifeMonths,
         notes: formData.formula_notes || null,
         critical_control_point_id: formData.critical_control_point_id ? Number(formData.critical_control_point_id) : null,
         qc_parameter_name: formData.qc_parameter_name.trim() || null,
@@ -246,6 +262,21 @@ function EditFormula({ finishedGoodId, finishedGoodSku, finishedGoodName, onClos
                 required
                 placeholder="1.0"
               />
+            </div>
+            <div className="form-group">
+              <label>Shelf life (months)</label>
+              <input
+                type="number"
+                min={1}
+                max={120}
+                step={1}
+                value={formData.shelf_life_months}
+                onChange={(e) => setFormData({ ...formData, shelf_life_months: e.target.value })}
+                placeholder="e.g. 24"
+              />
+              <small style={{ color: '#666', display: 'block', marginTop: '0.25rem' }}>
+                Used to set expiration on new lots when a production or repack batch closes (from batch close date). Leave blank to set expiration manually per lot.
+              </small>
             </div>
             <div className="form-group">
               <label>Critical Control Point (CCP)</label>

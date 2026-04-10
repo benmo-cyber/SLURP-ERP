@@ -1,8 +1,9 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { createSalesOrder, updateSalesOrder, getSalesOrder, parseCustomerPo, uploadCustomerPo, type ParsedCustomerPO } from '../../api/salesOrders'
 import { getItems } from '../../api/inventory'
-import { getCustomers, getShipToLocations, getCustomerPricing } from '../../api/customers'
+import { getCustomers, getShipToLocations, getCustomerPricing, getCustomerContacts } from '../../api/customers'
 import { formatNumber, formatCurrency } from '../../utils/formatNumber'
+import { useGodMode } from '../../context/GodModeContext'
 import './CreateSalesOrder.css'
 
 interface Item {
@@ -63,12 +64,25 @@ interface CreateSalesOrderProps {
 }
 
 function CreateSalesOrder({ onClose, onSuccess, salesOrder }: CreateSalesOrderProps) {
+  const { godModeOn, canUseGodMode, maxDateForEntry, minDateForEntry } = useGodMode()
+  const todayYmd = useMemo(() => {
+    const d = new Date()
+    return (
+      d.getFullYear() +
+      '-' +
+      String(d.getMonth() + 1).padStart(2, '0') +
+      '-' +
+      String(d.getDate()).padStart(2, '0')
+    )
+  }, [])
   const [items, setItems] = useState<Item[]>([])
   const [customers, setCustomers] = useState<Customer[]>([])
   const [shipToLocations, setShipToLocations] = useState<ShipToLocation[]>([])
   const [customerPricing, setCustomerPricing] = useState<CustomerPricing[]>([])
   const [selectedCustomerId, setSelectedCustomerId] = useState<number | null>(null)
   const [selectedShipToId, setSelectedShipToId] = useState<number | null>(null)
+  const [contacts, setContacts] = useState<{ id: number; first_name: string; last_name: string; contact_type?: string }[]>([])
+  const [selectedContactId, setSelectedContactId] = useState<number | null>(null)
   const [loading, setLoading] = useState(false)
   const [poUploadDragOver, setPoUploadDragOver] = useState(false)
   const [poParseLoading, setPoParseLoading] = useState(false)
@@ -80,6 +94,8 @@ function CreateSalesOrder({ onClose, onSuccess, salesOrder }: CreateSalesOrderPr
   const poFileInputRef = useRef<HTMLInputElement>(null)
   
   const [formData, setFormData] = useState({
+    so_number: '', // Leave blank for auto-generation; set for legacy / God mode
+    order_date: todayYmd,
     customer_reference_number: '',
     customer_name: '',
     customer_id: '',
@@ -97,12 +113,15 @@ function CreateSalesOrder({ onClose, onSuccess, salesOrder }: CreateSalesOrderPr
     discount: 0,
     grand_total: 0,
     notes: '',
+    drop_ship: false,
   })
 
   const [soItems, setSoItems] = useState<SOItem[]>([
     { item_id: null, vendor_part_number: '', description: '', quantity_ordered: '', unit: '', unit_price: '', notes: '' }
   ])
   const [unitDisplay, setUnitDisplay] = useState<'lbs' | 'kg'>('lbs')
+  /** While typing "12." on mass UoM price (display unit), hold raw string so toggle math + manual edit both work */
+  const [unitPriceDrafts, setUnitPriceDrafts] = useState<Record<number, string>>({})
 
   useEffect(() => {
     loadItems()
@@ -116,10 +135,13 @@ function CreateSalesOrder({ onClose, onSuccess, salesOrder }: CreateSalesOrderPr
     if (selectedCustomerId) {
       loadShipToLocations(selectedCustomerId)
       loadCustomerPricing(selectedCustomerId)
+      loadCustomerContacts(selectedCustomerId)
     } else {
       setShipToLocations([])
       setSelectedShipToId(null)
       setCustomerPricing([])
+      setContacts([])
+      setSelectedContactId(null)
     }
   }, [selectedCustomerId])
 
@@ -141,6 +163,10 @@ function CreateSalesOrder({ onClose, onSuccess, salesOrder }: CreateSalesOrderPr
   }, [selectedShipToId, shipToLocations])
 
   useEffect(() => {
+    setUnitPriceDrafts({})
+  }, [unitDisplay])
+
+  useEffect(() => {
     calculateTotals()
   }, [soItems, formData.freight, formData.misc, formData.prepaid, formData.discount])
 
@@ -156,7 +182,16 @@ function CreateSalesOrder({ onClose, onSuccess, salesOrder }: CreateSalesOrderPr
         const sku = (p.item?.sku || '').toLowerCase()
         return name && (desc.includes(name) || name.includes(desc) || (sku && (desc.includes(sku) || sku.includes(desc))))
       })
-      if (match) return { ...row, item_id: match.item_id, unit: row.unit || match.unit_of_measure, unit_price: row.unit_price || match.unit_price }
+      if (match) {
+        const keepPrice =
+          row.unit_price !== '' && row.unit_price !== null && row.unit_price !== undefined
+        return {
+          ...row,
+          item_id: match.item_id,
+          unit: row.unit || match.unit_of_measure,
+          unit_price: keepPrice ? row.unit_price : match.unit_price,
+        }
+      }
       return row
     }))
   }, [selectedCustomerId, customerPricing])
@@ -260,18 +295,37 @@ function CreateSalesOrder({ onClose, onSuccess, salesOrder }: CreateSalesOrderPr
       // Set customer
       if (orderData.customer) {
         setSelectedCustomerId(orderData.customer.id)
+        try {
+          const contactList = await getCustomerContacts(orderData.customer.id)
+          const list = Array.isArray(contactList) ? contactList : (contactList?.results ?? [])
+          setContacts(list)
+        } catch {
+          setContacts([])
+        }
       }
       
       // Set ship-to location
       if (orderData.ship_to_location) {
         setSelectedShipToId(orderData.ship_to_location.id)
       }
+      // Set contact
+      if (orderData.contact) {
+        setSelectedContactId(orderData.contact.id)
+      } else {
+        setSelectedContactId(null)
+      }
       
       // Set form data
       setFormData({
+        so_number: orderData.so_number || '',
+        order_date: orderData.order_date ? orderData.order_date.slice(0, 10) : todayYmd,
         customer_reference_number: orderData.customer_reference_number || '',
         customer_name: orderData.customer_name || '',
-        customer_id: orderData.customer_id || '',
+        // Form field labeled "Customer PO Number" — not API customer_id (FK)
+        customer_id:
+          orderData.customer_reference_number ||
+          (orderData as { customer_legacy_id?: string }).customer_legacy_id ||
+          '',
         customer_address: orderData.customer_address || '',
         customer_city: orderData.customer_city || '',
         customer_state: orderData.customer_state || '',
@@ -286,6 +340,7 @@ function CreateSalesOrder({ onClose, onSuccess, salesOrder }: CreateSalesOrderPr
         discount: orderData.discount || 0,
         grand_total: orderData.grand_total || 0,
         notes: orderData.notes || '',
+        drop_ship: !!(orderData as { drop_ship?: boolean }).drop_ship,
       })
       
       // Set items
@@ -310,6 +365,18 @@ function CreateSalesOrder({ onClose, onSuccess, salesOrder }: CreateSalesOrderPr
     }
   }
 
+  const loadCustomerContacts = async (customerId: number) => {
+    try {
+      const data = await getCustomerContacts(customerId)
+      const list = Array.isArray(data) ? data : (data?.results ?? [])
+      setContacts(list)
+      setSelectedContactId(null)
+    } catch (error) {
+      console.error('Failed to load contacts:', error)
+      setContacts([])
+    }
+  }
+
   const loadShipToLocations = async (customerId: number) => {
     try {
       const data = await getShipToLocations(customerId)
@@ -331,31 +398,29 @@ function CreateSalesOrder({ onClose, onSuccess, salesOrder }: CreateSalesOrderPr
 
   const loadCustomerPricing = async (customerId: number) => {
     try {
-      const data = await getCustomerPricing(customerId)
-      
-      // Handle both array and paginated response
-      const pricingList = Array.isArray(data) ? data : (data.results || [])
-      
-      // Filter to only active pricing that is currently effective
-      const today = new Date().toISOString().split('T')[0]
-      const activePricing = pricingList.filter((pricing: any) => {
-        if (!pricing.is_active) return false
-        if (pricing.effective_date > today) return false
-        if (pricing.expiry_date && pricing.expiry_date < today) return false
-        return true
-      })
-      
-      // If multiple pricing records for same item, get the most recent effective one
+      const data = await getCustomerPricing(customerId, undefined, true)
+      const pricingList = Array.isArray(data) ? data : []
+
+      // Dates as ISO strings from the API may include a time part; string-compare to YYYY-MM-DD only.
+      const toYmd = (v: unknown): string => {
+        if (v == null || v === '') return ''
+        const s = String(v)
+        const m = s.match(/^(\d{4}-\d{2}-\d{2})/)
+        return m ? m[1] : s.slice(0, 10)
+      }
+
+      // Server already applies current_only (effective / expiry / active). Dedupe by item_id: keep latest effective row.
       const pricingMap = new Map<number, CustomerPricing>()
-      activePricing.forEach((pricing: any) => {
+      ;(pricingList as any[]).forEach((pricing: any) => {
         const itemId = pricing.item_id || pricing.item?.id
         if (!itemId) {
           console.warn('Pricing record missing item_id:', pricing)
           return
         }
         const existing = pricingMap.get(itemId)
-        if (!existing || pricing.effective_date > existing.effective_date) {
-          // Ensure item object is properly structured
+        const ed = toYmd(pricing.effective_date)
+        const exEd = existing ? toYmd(existing.effective_date) : ''
+        if (!existing || ed > exEd) {
           const item = pricing.item || {}
           pricingMap.set(itemId, {
             id: pricing.id,
@@ -374,8 +439,12 @@ function CreateSalesOrder({ onClose, onSuccess, salesOrder }: CreateSalesOrderPr
           })
         }
       })
-      
-      const finalPricing = Array.from(pricingMap.values())
+
+      const finalPricing = Array.from(pricingMap.values()).sort((a, b) => {
+        const sa = (a.item.sku || a.item.name || '').toLowerCase()
+        const sb = (b.item.sku || b.item.name || '').toLowerCase()
+        return sa.localeCompare(sb)
+      })
       setCustomerPricing(finalPricing)
     } catch (error) {
       console.error('Failed to load customer pricing:', error)
@@ -392,8 +461,8 @@ function CreateSalesOrder({ onClose, onSuccess, salesOrder }: CreateSalesOrderPr
     } else {
       setFormData(prev => ({ ...prev, customer_name: '' }))
     }
-    // Clear ship-to selection when customer changes
     setSelectedShipToId(null)
+    setSelectedContactId(null)
     setFormData(prev => ({
       ...prev,
       customer_address: '',
@@ -408,38 +477,59 @@ function CreateSalesOrder({ onClose, onSuccess, salesOrder }: CreateSalesOrderPr
   }
 
   const handleItemChange = (index: number, field: keyof SOItem, value: any) => {
-    const updated = [...soItems]
-    updated[index] = { ...updated[index], [field]: value }
-    
-      // Auto-populate description, unit, and price from customer pricing when item is selected
-    if (field === 'item_id' && value) {
-      const itemId = typeof value === 'number' ? value : parseInt(value)
-      const pricing = customerPricing.find(p => p.item_id === itemId)
-      if (pricing && pricing.item) {
-        updated[index].description = pricing.item.name || ''
-        updated[index].unit = pricing.unit_of_measure
-        updated[index].unit_price = pricing.unit_price
-      } else {
-        // Fallback to item data if pricing not found (shouldn't happen if filtering works)
-        const item = items.find(i => i.id === itemId)
-        if (item) {
-          updated[index].description = item.name
-          updated[index].unit = item.unit_of_measure
+    if (field === 'item_id') {
+      setUnitPriceDrafts((prev) => {
+        const next = { ...prev }
+        delete next[index]
+        return next
+      })
+    }
+
+    // Functional update so rapid keystrokes / multiple fields never clobber each other (stale soItems closure).
+    setSoItems((prev) => {
+      const updated = [...prev]
+      const row = { ...updated[index] }
+      updated[index] = row
+      ;(row as any)[field] = value
+
+      if (field === 'item_id' && value) {
+        const itemId = typeof value === 'number' ? value : parseInt(String(value), 10)
+        const pricing = customerPricing.find((p) => p.item_id === itemId)
+        if (pricing && pricing.item) {
+          row.description = pricing.item.name || ''
+          row.unit = pricing.unit_of_measure
+          row.unit_price = pricing.unit_price
+        } else {
+          const item = items.find((i) => i.id === itemId)
+          if (item) {
+            row.description = item.name
+            row.unit = item.unit_of_measure
+          }
         }
       }
-    }
-    
-    // Handle quantity and price fields - allow empty string
-    if (field === 'quantity_ordered' || field === 'unit_price') {
-      if (value === '' || value === null || value === undefined) {
-        updated[index][field] = ''
-      } else {
-        const numValue = typeof value === 'string' ? parseFloat(value) : value
-        updated[index][field] = isNaN(numValue) ? '' : numValue
+
+      if (field === 'quantity_ordered' || field === 'unit_price') {
+        const v = (row as any)[field]
+        if (v === '' || v === null || v === undefined) {
+          ;(row as any)[field] = ''
+        } else if (typeof v === 'string') {
+          const t = v.trim()
+          if (t === '' || t === '.') {
+            ;(row as any)[field] = ''
+          } else if (/^\d+\.$/.test(t)) {
+            ;(row as any)[field] = t
+          } else {
+            const numValue = parseFloat(t)
+            ;(row as any)[field] = isNaN(numValue) ? '' : numValue
+          }
+        } else {
+          const numValue = v as number
+          ;(row as any)[field] = isNaN(numValue) ? '' : numValue
+        }
       }
-    }
-    
-    setSoItems(updated)
+
+      return updated
+    })
   }
 
   const addItem = () => {
@@ -489,6 +579,11 @@ function CreateSalesOrder({ onClose, onSuccess, salesOrder }: CreateSalesOrderPr
       handleItemChange(index, 'quantity_ordered', '')
       return
     }
+    const t = inputValue.trim()
+    if (/^\d+\.$/.test(t)) {
+      handleItemChange(index, 'quantity_ordered', t)
+      return
+    }
     const parsed = parseFloat(inputValue)
     if (isNaN(parsed)) return
     const u = (row.unit || '').toLowerCase()
@@ -499,39 +594,93 @@ function CreateSalesOrder({ onClose, onSuccess, salesOrder }: CreateSalesOrderPr
     handleItemChange(index, 'quantity_ordered', storedRounded)
   }
 
-  /** Unit price in row's stored unit ($/lb or $/kg) → value to show when unitDisplay differs */
+  /** Stored $/line-unit → value shown when lbs/kg line uses quantity toggle */
   const unitPriceForDisplay = (row: SOItem): string | number => {
+    if (row.unit_price === '' || row.unit_price === null || row.unit_price === undefined) return ''
     const price = typeof row.unit_price === 'string' ? parseFloat(row.unit_price) : row.unit_price
-    if (price === '' || (typeof price === 'number' && isNaN(price))) return ''
+    if (typeof price === 'number' && isNaN(price)) return ''
     const u = (row.unit || '').toLowerCase()
-    if (u === 'lbs' && unitDisplay === 'kg') return Math.round(price * 2.20462 * 100) / 100  // $/lb → $/kg
-    if (u === 'kg' && unitDisplay === 'lbs') return Math.round((price / 2.20462) * 100) / 100  // $/kg → $/lb
+    if (u === 'lbs' && unitDisplay === 'kg') return Math.round(Number(price) * 2.20462 * 100) / 100
+    if (u === 'kg' && unitDisplay === 'lbs') return Math.round((Number(price) / 2.20462) * 100) / 100
     return price
   }
 
-  /** User edited unit price in display unit → stored value in row.unit */
-  const handleUnitPriceChange = (index: number, inputValue: string) => {
+  const getUnitPriceInputValue = (index: number, row: SOItem): string => {
+    if (unitPriceDrafts[index] !== undefined) return unitPriceDrafts[index]
+    const u = (row.unit || '').toLowerCase()
+    if (u === 'lbs' || u === 'kg') {
+      const v = unitPriceForDisplay(row)
+      if (v === '' || v === null || (typeof v === 'number' && isNaN(v))) return ''
+      return String(v)
+    }
+    if (row.unit_price === '' || row.unit_price === null || row.unit_price === undefined) return ''
+    return String(row.unit_price)
+  }
+
+  /** Mass UoM: user edits in toggle unit ($/lb or $/kg); we store in line unit */
+  const handleUnitPriceInputChange = (index: number, raw: string) => {
     const row = soItems[index]
-    if (inputValue === '') {
+    const u = (row.unit || '').toLowerCase()
+    const t = raw.trim()
+
+    if (t === '') {
+      setUnitPriceDrafts((prev) => {
+        const next = { ...prev }
+        delete next[index]
+        return next
+      })
       handleItemChange(index, 'unit_price', '')
       return
     }
-    const parsed = parseFloat(inputValue)
+    if (/^\d+\.$/.test(t)) {
+      setUnitPriceDrafts((prev) => ({ ...prev, [index]: t }))
+      return
+    }
+
+    setUnitPriceDrafts((prev) => {
+      const next = { ...prev }
+      delete next[index]
+      return next
+    })
+
+    const parsed = parseFloat(t)
     if (isNaN(parsed)) return
-    const u = (row.unit || '').toLowerCase()
-    let stored: number
-    if (u === 'lbs' && unitDisplay === 'kg') stored = parsed / 2.20462   // user entered $/kg → store $/lb
-    else if (u === 'kg' && unitDisplay === 'lbs') stored = parsed * 2.20462  // user entered $/lb → store $/kg
-    else stored = parsed
-    const storedRounded = stored === Math.round(stored) ? stored : Math.round(stored * 100) / 100
-    handleItemChange(index, 'unit_price', storedRounded)
+
+    if (u === 'lbs' && unitDisplay === 'kg') {
+      const stored = parsed / 2.20462
+      handleItemChange(index, 'unit_price', Math.round(stored * 100) / 100)
+    } else if (u === 'kg' && unitDisplay === 'lbs') {
+      const stored = parsed * 2.20462
+      handleItemChange(index, 'unit_price', Math.round(stored * 100) / 100)
+    } else {
+      const rounded = parsed === Math.round(parsed) ? parsed : Math.round(parsed * 100) / 100
+      handleItemChange(index, 'unit_price', rounded)
+    }
+  }
+
+  const commitUnitPriceDraftIfNeeded = (index: number) => {
+    const d = unitPriceDrafts[index]
+    if (d != null && /^\d+\.$/.test(d)) {
+      setUnitPriceDrafts((prev) => {
+        const next = { ...prev }
+        delete next[index]
+        return next
+      })
+      handleUnitPriceInputChange(index, d.slice(0, -1))
+    }
   }
 
   const calculateTotals = () => {
     const subtotal = soItems.reduce((sum, item) => {
-      const price = typeof item.unit_price === 'string' ? parseFloat(item.unit_price) || 0 : item.unit_price
+      const rawP = item.unit_price
+      const price =
+        rawP === '' || rawP === null || rawP === undefined
+          ? 0
+          : typeof rawP === 'string'
+            ? parseFloat(rawP) || 0
+            : rawP
       const qty = typeof item.quantity_ordered === 'string' ? parseFloat(item.quantity_ordered) || 0 : item.quantity_ordered
-      return sum + (price * qty)
+      return sum + (Number(price) * Number(qty))
     }, 0)
     const grandTotal = subtotal + (formData.freight || 0) + (formData.misc || 0) - (formData.discount || 0) - (formData.prepaid || 0)
     
@@ -567,12 +716,16 @@ function CreateSalesOrder({ onClose, onSuccess, salesOrder }: CreateSalesOrderPr
     try {
       setLoading(true)
       
-      const payload = {
+      // PO / reference: never send `customer_id` in the JSON — DRF uses that key for the Customer FK (integer).
+      const refNum =
+        (formData.customer_reference_number || '').trim() || (formData.customer_id || '').trim() || null
+
+      const payload: Record<string, unknown> = {
         customer: selectedCustomerId,
         ship_to_location: selectedShipToId,
-        customer_reference_number: formData.customer_reference_number || null,
+        ...(selectedContactId && { contact: selectedContactId }),
+        customer_reference_number: refNum,
         customer_name: formData.customer_name,
-        customer_id: formData.customer_id || null, // This is the Customer PO Number field
         customer_address: formData.customer_address || null,
         customer_city: formData.customer_city || null,
         customer_state: formData.customer_state || null,
@@ -587,6 +740,7 @@ function CreateSalesOrder({ onClose, onSuccess, salesOrder }: CreateSalesOrderPr
         discount: formData.discount || 0,
         grand_total: formData.grand_total,
         notes: formData.notes || null,
+        drop_ship: formData.drop_ship,
         items: soItems.map(item => {
           // Quantity and unit_price must both be in the item's unit_of_measure (backend has no per-line unit).
           const itemObj = items.find(i => i.id === item.item_id)
@@ -610,16 +764,34 @@ function CreateSalesOrder({ onClose, onSuccess, salesOrder }: CreateSalesOrderPr
             notes: item.notes || '',
           }
         }),
-        status: 'draft',
+        // Preserve workflow status on edit; sending 'draft' every time prevented updates from sticking on issued orders.
+        status: salesOrder ? salesOrder.status : 'draft',
+      }
+
+      if (!salesOrder) {
+        if (formData.so_number?.trim()) {
+          payload.so_number = formData.so_number.trim()
+        }
+      } else {
+        payload.so_number =
+          godModeOn && canUseGodMode && formData.so_number?.trim()
+            ? formData.so_number.trim()
+            : salesOrder.so_number
+      }
+
+      if (godModeOn && canUseGodMode && formData.order_date) {
+        payload.order_date = `${formData.order_date}T12:00:00`
+      } else {
+        delete payload.order_date
       }
 
       if (salesOrder) {
         // Update existing sales order
-        const response = await updateSalesOrder(salesOrder.id, payload)
+        const response = await updateSalesOrder(salesOrder.id, payload as any)
         console.log('Sales order updated successfully:', response)
       } else {
         // Create new sales order
-        const response = await createSalesOrder(payload)
+        const response = await createSalesOrder(payload as any)
         console.log('Sales order created successfully:', response)
         const newId = response?.id
         if (newId && pendingPoFile) {
@@ -635,7 +807,13 @@ function CreateSalesOrder({ onClose, onSuccess, salesOrder }: CreateSalesOrderPr
       onClose()
     } catch (error: any) {
       console.error(`Failed to ${salesOrder ? 'update' : 'create'} sales order:`, error)
-      alert(error.response?.data?.detail || error.response?.data?.message || `Failed to ${salesOrder ? 'update' : 'create'} sales order`)
+      const d = error.response?.data
+      let msg: string | undefined
+      if (typeof d?.detail === 'string') msg = d.detail
+      else if (d?.detail && typeof d.detail === 'object') msg = JSON.stringify(d.detail)
+      else if (d?.error) msg = typeof d.error === 'string' ? d.error : JSON.stringify(d.error)
+      else if (d && typeof d === 'object') msg = JSON.stringify(d)
+      alert(msg || error.message || `Failed to ${salesOrder ? 'update' : 'create'} sales order`)
     } finally {
       setLoading(false)
     }
@@ -705,6 +883,36 @@ function CreateSalesOrder({ onClose, onSuccess, salesOrder }: CreateSalesOrderPr
             </div>
           )}
           <div className="so-form-section">
+            {((!salesOrder) || (godModeOn && canUseGodMode && salesOrder)) && (
+              <div className="form-row">
+                <div className="form-group">
+                  <label>SO Number {salesOrder ? '(God mode)' : '(leave blank for auto-generation)'}</label>
+                  <input
+                    type="text"
+                    value={formData.so_number}
+                    onChange={(e) => setFormData({ ...formData, so_number: e.target.value })}
+                    placeholder={salesOrder ? 'Edit SO number' : 'e.g. legacy SO-2023-001'}
+                  />
+                  <small style={{ color: '#666', fontSize: '0.85rem' }}>
+                    {salesOrder
+                      ? 'Staff only: change the document number when correcting historical data.'
+                      : 'For legacy or historical data (God mode), enter the number to use.'}
+                  </small>
+                </div>
+                {godModeOn && canUseGodMode && (!salesOrder || salesOrder.status === 'draft') && (
+                  <div className="form-group">
+                    <label>Order date</label>
+                    <input
+                      type="date"
+                      value={formData.order_date}
+                      onChange={(e) => setFormData({ ...formData, order_date: e.target.value })}
+                      max={maxDateForEntry}
+                      min={minDateForEntry}
+                    />
+                  </div>
+                )}
+              </div>
+            )}
             <div className="section-header">
               <h3>Customer Information</h3>
               {salesOrder && customerPoPdfUrl && (
@@ -751,6 +959,21 @@ function CreateSalesOrder({ onClose, onSuccess, salesOrder }: CreateSalesOrderPr
             </div>
 
             <div className="form-row">
+              <div className="form-group form-group--checkbox">
+                <label className="checkbox-label">
+                  <input
+                    type="checkbox"
+                    checked={formData.drop_ship}
+                    onChange={(e) => setFormData({ ...formData, drop_ship: e.target.checked })}
+                  />
+                  <span>Drop ship</span>
+                </label>
+                <small style={{ color: '#6b7280', display: 'block', marginTop: '0.25rem' }}>
+                  Vendor ships direct to this ship-to; you will not receive or allocate warehouse stock for this order.
+                </small>
+              </div>
+            </div>
+            <div className="form-row">
               <div className="form-group">
                 <label>Ship-to *</label>
                 <select
@@ -763,6 +986,21 @@ function CreateSalesOrder({ onClose, onSuccess, salesOrder }: CreateSalesOrderPr
                   {shipToLocations.map(location => (
                     <option key={location.id} value={location.id}>
                       {location.location_name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="form-group">
+                <label>Contact</label>
+                <select
+                  value={selectedContactId || ''}
+                  onChange={(e) => setSelectedContactId(e.target.value ? parseInt(e.target.value) : null)}
+                  disabled={!selectedCustomerId}
+                >
+                  <option value="">{selectedCustomerId ? 'Select Contact (optional)' : 'Select Customer First'}</option>
+                  {contacts.map(c => (
+                    <option key={c.id} value={c.id}>
+                      {c.first_name} {c.last_name}{c.contact_type ? ` (${String(c.contact_type).charAt(0).toUpperCase() + String(c.contact_type).slice(1)})` : ''}
                     </option>
                   ))}
                 </select>
@@ -868,7 +1106,7 @@ function CreateSalesOrder({ onClose, onSuccess, salesOrder }: CreateSalesOrderPr
                   <th>Description</th>
                   <th>Quantity</th>
                   <th>Unit</th>
-                  <th>Unit Price</th>
+                  <th title="For lb/kg lines, same display unit as Quantity (use the lbs/kg toggle). Stored per line unit.">Unit price</th>
                   <th>Amount</th>
                   <th>Notes</th>
                   <th>Actions</th>
@@ -911,9 +1149,9 @@ function CreateSalesOrder({ onClose, onSuccess, salesOrder }: CreateSalesOrderPr
                     </td>
                     <td>
                       <input
-                        type="number"
-                        step="0.01"
-                        min="0"
+                        type="text"
+                        inputMode="decimal"
+                        autoComplete="off"
                         value={quantityForDisplay(item)}
                         onChange={(e) => handleQuantityChange(index, e.target.value)}
                         className="number-input"
@@ -933,15 +1171,28 @@ function CreateSalesOrder({ onClose, onSuccess, salesOrder }: CreateSalesOrderPr
                           )}
                     </td>
                     <td>
-                      <input
-                        type="number"
-                        step="0.01"
-                        min="0"
-                        value={(item.unit || '').toLowerCase() === 'lbs' || (item.unit || '').toLowerCase() === 'kg' ? unitPriceForDisplay(item) : (item.unit_price === '' ? '' : item.unit_price)}
-                        onChange={(e) => ((item.unit || '').toLowerCase() === 'lbs' || (item.unit || '').toLowerCase() === 'kg') ? handleUnitPriceChange(index, e.target.value) : handleItemChange(index, 'unit_price', e.target.value)}
-                        className="number-input"
-                        required
-                      />
+                      {(item.unit || '').toLowerCase() === 'lbs' || (item.unit || '').toLowerCase() === 'kg' ? (
+                        <input
+                          type="text"
+                          inputMode="decimal"
+                          autoComplete="off"
+                          value={getUnitPriceInputValue(index, item)}
+                          onChange={(e) => handleUnitPriceInputChange(index, e.target.value)}
+                          onBlur={() => commitUnitPriceDraftIfNeeded(index)}
+                          className="number-input"
+                          required
+                        />
+                      ) : (
+                        <input
+                          type="text"
+                          inputMode="decimal"
+                          autoComplete="off"
+                          value={item.unit_price === '' || item.unit_price === null || item.unit_price === undefined ? '' : item.unit_price}
+                          onChange={(e) => handleItemChange(index, 'unit_price', e.target.value)}
+                          className="number-input"
+                          required
+                        />
+                      )}
                     </td>
                     <td>{formatCurrency((typeof item.unit_price === 'string' ? parseFloat(item.unit_price) || 0 : item.unit_price) * (typeof item.quantity_ordered === 'string' ? parseFloat(item.quantity_ordered) || 0 : item.quantity_ordered))}</td>
                     <td>

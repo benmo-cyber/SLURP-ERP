@@ -1,14 +1,58 @@
+from django.core.exceptions import ValidationError as DjangoValidationError
+from django.core.validators import validate_email
 from rest_framework import serializers
 from .models import (
-    Item, ItemPackSize, Lot, ProductionBatch, ProductionBatchInput, ProductionBatchOutput,
-    CriticalControlPoint, Formula, FormulaItem,
+    Item, ItemPackSize, Lot, CampaignLot, ProductionBatch, ProductionBatchInput, ProductionBatchOutput,
+    CriticalControlPoint, Formula, FormulaItem, RDFormula, RDFormulaLine,
     PurchaseOrder, PurchaseOrderItem, SalesOrder, SalesOrderItem,
-    InventoryTransaction, Vendor, VendorHistory, SupplierSurvey,
+    InventoryTransaction, Vendor, VendorContact, VendorHistory, SupplierSurvey,
     SupplierDocument, TemporaryException, CostMaster, CostMasterHistory, Account,
     FinishedProductSpecification, Customer, CustomerPricing, VendorPricing, SalesOrderLot, Invoice, InvoiceItem,
+    ItemCoaTestLine, LotCoaCertificate, LotCoaCustomerCopy, LotCoaLineResult,
     ShipToLocation, CustomerContact, SalesCall, CustomerForecast, LotDepletionLog, LotTransactionLog, PurchaseOrderLog, ProductionLog, CheckInLog,
-    Shipment, ShipmentItem, AccountsPayable, AccountsReceivable, Payment, BankReconciliation, FiscalPeriod, JournalEntry, JournalEntryLine, GeneralLedgerEntry, AccountBalance
+    LotAttributeChangeLog,
+    Shipment, ShipmentItem, AccountsPayable, AccountsReceivable, Payment, BankReconciliation, FiscalPeriod, JournalEntry, JournalEntryLine, GeneralLedgerEntry,     AccountBalance
 )
+
+
+def validate_contact_emails_list(value):
+    """Normalize and validate a list of email strings for VendorContact / CustomerContact."""
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise serializers.ValidationError('emails must be a list of strings')
+    out = []
+    for e in value:
+        s = (str(e) or '').strip()
+        if not s:
+            continue
+        try:
+            validate_email(s)
+        except DjangoValidationError:
+            raise serializers.ValidationError(f'Invalid email: {s}')
+        out.append(s)
+    return out
+
+
+def _coerce_optional_lot_datetime(validated_data, key):
+    """Normalize optional date/datetime strings on create/update to aware datetime at start of day, or None."""
+    raw = validated_data.get(key)
+    if raw is None:
+        return
+    from django.utils.dateparse import parse_datetime, parse_date
+    from django.utils import timezone
+    from datetime import datetime as dt_mod, time as time_mod
+
+    if isinstance(raw, str) and not str(raw).strip():
+        validated_data[key] = None
+        return
+    if isinstance(raw, str):
+        parsed = parse_datetime(raw)
+        if not parsed:
+            d_only = parse_date(raw)
+            if d_only:
+                parsed = timezone.make_aware(dt_mod.combine(d_only, time_mod.min))
+        validated_data[key] = parsed
 
 
 class ItemPackSizeSerializer(serializers.ModelSerializer):
@@ -25,7 +69,13 @@ class ItemPackSizeSerializer(serializers.ModelSerializer):
 
 class ItemSerializer(serializers.ModelSerializer):
     display_name_for_vendor = serializers.SerializerMethodField()
-    
+    sku_family_warnings = serializers.SerializerMethodField()
+
+    def get_sku_family_warnings(self, obj):
+        from erp_core.sku_family import item_sku_family_warnings
+
+        return item_sku_family_warnings(obj)
+
     def get_display_name_for_vendor(self, obj):
         """Returns vendor_item_name if available and item has a vendor, otherwise returns name"""
         if obj.vendor_item_name and obj.vendor:
@@ -37,6 +87,49 @@ class ItemSerializer(serializers.ModelSerializer):
     class Meta:
         model = Item
         fields = '__all__'
+
+    def validate(self, data):
+        """Derive sku_parent_code / sku_pack_suffix from SKU; validate optional sku_parent_item."""
+        from rest_framework.exceptions import ValidationError as DRFValidationError
+        from erp_core.sku_family import parse_sku_family
+
+        inst = getattr(self, 'instance', None)
+        item_type = data.get('item_type', getattr(inst, 'item_type', None) if inst else None)
+        product_category = data.get('product_category', getattr(inst, 'product_category', None) if inst else None)
+        sku = data.get('sku')
+        if sku is None and inst:
+            sku = inst.sku
+
+        if item_type == 'indirect_material':
+            return data
+
+        if sku:
+            parent, suffix = parse_sku_family(
+                str(sku).strip(),
+                product_category=product_category,
+                item_type=item_type,
+            )
+            if parent:
+                data['sku_parent_code'] = parent.upper()
+                data['sku_pack_suffix'] = suffix.upper() if suffix else None
+
+        if 'sku_parent_item' in data:
+            parent_item = data['sku_parent_item']
+        elif inst:
+            parent_item = inst.sku_parent_item
+        else:
+            parent_item = None
+        if parent_item is not None:
+            if inst and parent_item.pk == inst.pk:
+                raise DRFValidationError({'sku_parent_item': 'Item cannot be its own parent.'})
+            base = (parent_item.sku_parent_code or parent_item.sku or '').strip().upper()
+            pcode = (data.get('sku_parent_code') or (getattr(inst, 'sku_parent_code', None) or '')).strip().upper()
+            if pcode and base and pcode != base:
+                raise DRFValidationError(
+                    {'sku_parent_item': 'Selected parent does not match the family code implied by this SKU.'}
+                )
+
+        return data
     
     def get_pack_sizes(self, obj):
         """Return all active pack sizes for this item"""
@@ -58,6 +151,7 @@ class LotSerializer(serializers.ModelSerializer):
     pack_size_id = serializers.IntegerField(write_only=True, required=False, allow_null=True)
     received_date = serializers.DateTimeField(required=False, allow_null=True)
     quantity_remaining = serializers.SerializerMethodField()
+    quantity_available_for_use = serializers.SerializerMethodField()
     lot_number = serializers.CharField(required=False, allow_blank=False)
     
     class Meta:
@@ -67,39 +161,32 @@ class LotSerializer(serializers.ModelSerializer):
             'quantity_remaining': {'required': False},
         }
     
+    def _lot_breakdown(self, obj):
+        """One breakdown per lot per request (balances available vs commitments)."""
+        from .lot_display_quantities import compute_lot_quantity_breakdown
+
+        cache = self.context.setdefault("_lot_breakdown_cache", {})
+        if obj.pk not in cache:
+            cache[obj.pk] = compute_lot_quantity_breakdown(obj)
+        return cache[obj.pk]
+
     def get_quantity_remaining(self, obj):
-        """Calculate quantity_remaining excluding sales allocations
-        
-        Note: The lot's quantity_remaining in the database already reflects shipped quantities.
-        We only need to subtract allocations for orders that haven't been shipped yet.
-        """
-        from django.db.models import Sum
-        from .models import SalesOrderLot
-        
-        # Start with the lot's quantity_remaining (already accounts for shipped material)
-        remaining = obj.quantity_remaining
-        
-        # Only subtract allocations for orders that haven't been shipped yet
-        # (shipped orders already reduced the lot's quantity_remaining)
-        try:
-            allocated_to_sales = SalesOrderLot.objects.filter(
-                lot=obj,
-                sales_order_item__sales_order__status__in=[
-                    'draft', 'allocated', 'issued', 'ready_for_shipment'
-                    # Note: 'shipped' orders already reduced quantity_remaining, so don't subtract again
-                ]
-            ).aggregate(
-                total=Sum('quantity_allocated')
-            )['total'] or 0.0
-            
-            # Subtract allocated quantity from remaining
-            remaining = max(0.0, remaining - allocated_to_sales)
-        except Exception:
-            # If SalesOrderLot table doesn't exist or there's an error, just return the original
-            pass
-        
-        return remaining
-    
+        """Physical remaining minus open sales allocations (single breakdown; balances with available)."""
+        return self._lot_breakdown(obj)["quantity_remaining_after_sales"]
+
+    def get_quantity_available_for_use(self, obj):
+        """Same breakdown as committed/hold — uses normalized prod sum in arithmetic."""
+        return self._lot_breakdown(obj)["quantity_available_for_use"]
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        b = self._lot_breakdown(instance)
+        if "quantity" in data:
+            data["quantity"] = b["quantity_received"]
+        if "quantity_on_hold" in data:
+            data["quantity_on_hold"] = b["quantity_on_hold"]
+        return data
+
     def create(self, validated_data):
         item_id = validated_data.pop('item_id')
         item = Item.objects.get(id=item_id)
@@ -126,7 +213,10 @@ class LotSerializer(serializers.ModelSerializer):
             # If no date provided, use current time
             from django.utils import timezone
             validated_data['received_date'] = timezone.now()
-        
+
+        _coerce_optional_lot_datetime(validated_data, 'expiration_date')
+        _coerce_optional_lot_datetime(validated_data, 'manufacture_date')
+
         # Set quantity_remaining based on status (remove from validated_data if present)
         validated_data.pop('quantity_remaining', None)  # Remove if present, we'll set it below
         status = validated_data.get('status', 'accepted')
@@ -181,6 +271,10 @@ class LotSerializer(serializers.ModelSerializer):
     
     def update(self, instance, validated_data):
         """Sync quantity_on_hold with status; allow partial hold via quantity_on_hold."""
+        if 'expiration_date' in validated_data:
+            _coerce_optional_lot_datetime(validated_data, 'expiration_date')
+        if 'manufacture_date' in validated_data:
+            _coerce_optional_lot_datetime(validated_data, 'manufacture_date')
         validated_data.pop('quantity_remaining', None)  # SerializerMethodField; don't write
         new_qty_hold = validated_data.get('quantity_on_hold')
         new_status = validated_data.get('status', instance.status)
@@ -225,14 +319,18 @@ class ProductionBatchInputSerializer(serializers.ModelSerializer):
         fields = '__all__'
     
     def get_quantity_used(self, obj):
-        """Preserve exact integers when displaying quantity_used"""
+        """Preserve exact integers; ea/rolls keep extra precision; mass uses normalize_mass_quantity."""
+        from .mass_quantity import normalize_mass_quantity
+
         qty = obj.quantity_used
-        # Check if it's effectively an integer (within floating point tolerance)
-        # Use tolerance of 0.01 to catch floating point errors (e.g., 615.99 -> 616)
-        rounded = round(qty)
-        if abs(qty - rounded) <= 0.01:
-            return float(rounded)  # Return as float but exact integer value
-        return round(qty, 2)  # Round to 2 decimal places for decimals
+        lot = obj.lot
+        if getattr(lot.item, 'unit_of_measure', None) == 'ea':
+            q = float(qty)
+            ri = round(q)
+            if abs(q - ri) <= 0.01:
+                return float(ri)
+            return round(q, 5)
+        return normalize_mass_quantity(qty)
 
 
 class ProductionBatchOutputSerializer(serializers.ModelSerializer):
@@ -243,6 +341,50 @@ class ProductionBatchOutputSerializer(serializers.ModelSerializer):
         model = ProductionBatchOutput
         fields = '__all__'
 
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        from .mass_quantity import normalize_mass_quantity
+
+        if data.get('quantity_produced') is not None:
+            try:
+                data['quantity_produced'] = normalize_mass_quantity(float(data['quantity_produced']))
+            except (TypeError, ValueError):
+                pass
+        return data
+
+
+class CampaignLotSerializer(serializers.ModelSerializer):
+    """YYWW + product_code computed on save from anchor_date (ISO week)."""
+
+    class Meta:
+        model = CampaignLot
+        fields = '__all__'
+        read_only_fields = ('campaign_code', 'iso_year', 'iso_week', 'created_at', 'updated_at')
+
+    def validate_product_code(self, value):
+        v = (value or '').strip()
+        if not v:
+            raise serializers.ValidationError('Product code is required.')
+        return v
+
+    def create(self, validated_data):
+        from django.db import IntegrityError
+        try:
+            return super().create(validated_data)
+        except IntegrityError:
+            raise serializers.ValidationError(
+                'A campaign with this code already exists for this ISO week and product code.'
+            )
+
+    def update(self, instance, validated_data):
+        from django.db import IntegrityError
+        try:
+            return super().update(instance, validated_data)
+        except IntegrityError:
+            raise serializers.ValidationError(
+                'A campaign with this code already exists for this ISO week and product code.'
+            )
+
 
 class ProductionBatchSerializer(serializers.ModelSerializer):
     finished_good_item = ItemSerializer(read_only=True)
@@ -252,12 +394,75 @@ class ProductionBatchSerializer(serializers.ModelSerializer):
         write_only=True,
         required=False
     )
+    campaign = CampaignLotSerializer(read_only=True)
+    campaign_id = serializers.PrimaryKeyRelatedField(
+        queryset=CampaignLot.objects.all(),
+        source='campaign',
+        write_only=True,
+        allow_null=True,
+        required=False,
+    )
     inputs = ProductionBatchInputSerializer(many=True, read_only=True)
     outputs = ProductionBatchOutputSerializer(many=True, read_only=True)
-    
+
     class Meta:
         model = ProductionBatch
         fields = '__all__'
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        from .mass_quantity import normalize_mass_quantity
+
+        for key in ('quantity_produced', 'quantity_actual', 'variance', 'wastes', 'spills'):
+            if key in data and data[key] is not None:
+                try:
+                    data[key] = normalize_mass_quantity(float(data[key]))
+                except (TypeError, ValueError):
+                    pass
+        return data
+
+    def validate(self, data):
+        data = super().validate(data)
+        inst = self.instance
+        if 'campaign' in data:
+            campaign = data['campaign']
+        elif inst:
+            campaign = inst.campaign
+        else:
+            campaign = None
+        fg = data.get('finished_good_item', inst.finished_good_item if inst else None)
+        if campaign is not None and fg is not None and campaign.item_id != fg.id:
+            raise serializers.ValidationError(
+                {'campaign_id': 'Campaign lot must be for the same item as this batch.'}
+            )
+
+        # Closing a production batch: quantity_actual = total weight produced (inventory).
+        # variance = produced − batch ticket target. wastes + spills explain shortfall when produced < target.
+        merged_status = data.get('status', getattr(inst, 'status', None) if inst else None)
+        merged_type = data.get('batch_type', getattr(inst, 'batch_type', None) if inst else None)
+        if inst and merged_status == 'closed' and merged_type == 'production':
+            from .mass_quantity import normalize_mass_quantity
+
+            ticket = float(data.get('quantity_produced', inst.quantity_produced) or 0)
+            actual_raw = data.get('quantity_actual', inst.quantity_actual)
+            if actual_raw is None:
+                actual_raw = inst.quantity_produced
+            actual = float(actual_raw or 0)
+            wastes = float(data.get('wastes', getattr(inst, 'wastes', 0) or 0) or 0)
+            spills = float(data.get('spills', getattr(inst, 'spills', 0) or 0) or 0)
+            data['variance'] = normalize_mass_quantity(actual - ticket)
+            tol = 0.05
+            if ticket - actual > tol:
+                shortfall = normalize_mass_quantity(ticket - actual)
+                explained = normalize_mass_quantity(wastes + spills)
+                if abs(explained - shortfall) > tol:
+                    raise serializers.ValidationError({
+                        'non_field_errors': [
+                            'When production is below the batch ticket, wastes + spills must explain the shortfall '
+                            f'(target − produced = {shortfall}; wastes + spills = {explained}).'
+                        ]
+                    })
+        return data
 
 
 class FormulaItemSerializer(serializers.ModelSerializer):
@@ -273,6 +478,129 @@ class CriticalControlPointSerializer(serializers.ModelSerializer):
     class Meta:
         model = CriticalControlPoint
         fields = ['id', 'name', 'display_order']
+
+
+class ItemCoaTestLineSerializer(serializers.ModelSerializer):
+    def validate_item(self, value):
+        if getattr(value, 'item_type', None) not in ('finished_good', 'distributed_item'):
+            raise serializers.ValidationError('COA test lines apply only to finished good or distributed items.')
+        return value
+
+    class Meta:
+        model = ItemCoaTestLine
+        fields = [
+            'id',
+            'item',
+            'sort_order',
+            'test_name',
+            'specification_text',
+            'result_kind',
+            'numeric_min',
+            'numeric_max',
+            'created_at',
+            'updated_at',
+        ]
+        read_only_fields = ['created_at', 'updated_at']
+
+
+class LotCoaLineResultSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = LotCoaLineResult
+        fields = ['id', 'item_line', 'test_name', 'specification_text', 'result_text', 'passes']
+
+
+class LotCoaCertificateSerializer(serializers.ModelSerializer):
+    lot_number = serializers.CharField(source='lot.lot_number', read_only=True)
+    item_sku = serializers.CharField(source='lot.item.sku', read_only=True)
+    item_name = serializers.CharField(source='lot.item.name', read_only=True)
+    coa_pdf_url = serializers.SerializerMethodField()
+    line_results = LotCoaLineResultSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = LotCoaCertificate
+        fields = [
+            'id',
+            'lot',
+            'lot_number',
+            'item_sku',
+            'item_name',
+            'quantity_snapshot',
+            'customer_name',
+            'customer_po',
+            'qc_parameter_name_snapshot',
+            'qc_spec_min_snapshot',
+            'qc_spec_max_snapshot',
+            'qc_result_value',
+            'qc_result_pass',
+            'coa_pdf',
+            'coa_pdf_url',
+            'issued_at',
+            'updated_at',
+            'recorded_by',
+            'line_results',
+        ]
+        read_only_fields = [
+            'qc_parameter_name_snapshot',
+            'qc_spec_min_snapshot',
+            'qc_spec_max_snapshot',
+            'qc_result_value',
+            'qc_result_pass',
+            'coa_pdf',
+            'issued_at',
+            'updated_at',
+            'recorded_by',
+            'quantity_snapshot',
+        ]
+
+    def get_coa_pdf_url(self, obj):
+        req = self.context.get('request')
+        if not obj.coa_pdf:
+            return None
+        url = obj.coa_pdf.url
+        if req:
+            return req.build_absolute_uri(url)
+        return url
+
+
+class LotCoaCustomerCopySerializer(serializers.ModelSerializer):
+    """Customer-facing COA PDF for one lot line on a sales order."""
+
+    lot_number = serializers.CharField(source='certificate.lot.lot_number', read_only=True)
+    item_sku = serializers.CharField(source='certificate.lot.item.sku', read_only=True)
+    item_name = serializers.CharField(source='certificate.lot.item.name', read_only=True)
+    so_number = serializers.CharField(
+        source='sales_order_lot.sales_order_item.sales_order.so_number', read_only=True
+    )
+    coa_pdf_url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = LotCoaCustomerCopy
+        fields = [
+            'id',
+            'certificate',
+            'sales_order_lot',
+            'lot_number',
+            'item_sku',
+            'item_name',
+            'so_number',
+            'customer_name',
+            'customer_po',
+            'quantity_snapshot',
+            'coa_pdf',
+            'coa_pdf_url',
+            'created_at',
+            'updated_at',
+        ]
+        read_only_fields = ['coa_pdf', 'created_at', 'updated_at']
+
+    def get_coa_pdf_url(self, obj):
+        req = self.context.get('request')
+        if not obj.coa_pdf:
+            return None
+        url = obj.coa_pdf.url
+        if req:
+            return req.build_absolute_uri(url)
+        return url
 
 
 class FormulaSerializer(serializers.ModelSerializer):
@@ -296,33 +624,174 @@ class FormulaSerializer(serializers.ModelSerializer):
         fields = '__all__'
 
 
+class RDFormulaLineSerializer(serializers.ModelSerializer):
+    item = ItemSerializer(read_only=True)
+    item_id = serializers.PrimaryKeyRelatedField(
+        queryset=Item.objects.all(), source='item', write_only=True, allow_null=True
+    )
+    formula_cost = serializers.SerializerMethodField(read_only=True)
+
+    class Meta:
+        model = RDFormulaLine
+        fields = '__all__'
+
+    def get_formula_cost(self, obj):
+        return obj.formula_cost
+
+
+class RDFormulaSerializer(serializers.ModelSerializer):
+    lines = RDFormulaLineSerializer(many=True, read_only=True)
+    total_cost_per_lb = serializers.SerializerMethodField(read_only=True)
+
+    class Meta:
+        model = RDFormula
+        fields = '__all__'
+
+    def get_total_cost_per_lb(self, obj):
+        return obj.total_cost_per_lb
+
+
 class PurchaseOrderItemSerializer(serializers.ModelSerializer):
     item = ItemSerializer(read_only=True)
-    item_id = serializers.PrimaryKeyRelatedField(queryset=Item.objects.all(), source='item', write_only=True)
+    item_id = serializers.PrimaryKeyRelatedField(queryset=Item.objects.all(), source='item', write_only=True, required=False)
+    purchase_order = serializers.PrimaryKeyRelatedField(read_only=True)
     unit_cost = serializers.FloatField(source='unit_price', read_only=False, required=False, allow_null=True)
     
     class Meta:
         model = PurchaseOrderItem
         fields = ['id', 'purchase_order', 'item', 'item_id', 'quantity_ordered', 'quantity_received', 
-                  'unit_price', 'unit_cost', 'notes']
+                  'unit_price', 'unit_cost', 'order_uom', 'notes']
+
+
+class VendorContactSerializer(serializers.ModelSerializer):
+    vendor_name = serializers.CharField(source='vendor.name', read_only=True)
+
+    class Meta:
+        model = VendorContact
+        fields = '__all__'
+
+    def validate_emails(self, value):
+        return validate_contact_emails_list(value)
 
 
 class PurchaseOrderSerializer(serializers.ModelSerializer):
     items = PurchaseOrderItemSerializer(many=True, read_only=True)
     vendor_name = serializers.CharField(source='vendor_customer_name', read_only=True)
-    
+    notify_party_contacts = VendorContactSerializer(many=True, read_only=True)
+    notify_party_contact_ids = serializers.PrimaryKeyRelatedField(
+        queryset=VendorContact.objects.all(), many=True, write_only=True, required=False
+    )
+
     class Meta:
         model = PurchaseOrder
         fields = '__all__'
+
+    def validate_po_number(self, value):
+        if not value or not str(value).strip():
+            raise serializers.ValidationError('PO number cannot be empty.')
+        value = str(value).strip()
+        instance = getattr(self, 'instance', None)
+        if instance is not None and value != instance.po_number:
+            request = self.context.get('request')
+            if not request or not request.user.is_staff:
+                raise serializers.ValidationError('Only staff can change the PO number.')
+            if PurchaseOrder.objects.filter(po_number=value).exclude(pk=instance.pk).exists():
+                raise serializers.ValidationError('Another purchase order already uses this PO number.')
+        elif instance is None:
+            if PurchaseOrder.objects.filter(po_number=value).exists():
+                raise serializers.ValidationError('This PO number is already in use.')
+        return value
+
+    def validate(self, attrs):
+        request = self.context.get('request')
+        instance = getattr(self, 'instance', None)
+        if instance is not None and 'order_date' in attrs:
+            if instance.status != 'draft' and not (request and request.user and request.user.is_staff):
+                raise serializers.ValidationError(
+                    {'order_date': 'Only staff can change the PO / issue date after the order is no longer a draft.'}
+                )
+        if 'fulfillment_sales_order' in attrs:
+            fso = attrs['fulfillment_sales_order']
+        elif instance is not None:
+            fso = instance.fulfillment_sales_order
+        else:
+            fso = None
+        if fso is not None and not getattr(fso, 'drop_ship', False):
+            raise serializers.ValidationError(
+                {
+                    'fulfillment_sales_order': (
+                        'The linked sales order must be marked as drop ship. '
+                        'Edit the sales order and enable Drop ship, or choose a different order.'
+                    )
+                }
+            )
+        return attrs
+
+    def create(self, validated_data):
+        ids = validated_data.pop('notify_party_contact_ids', None)
+        instance = super().create(validated_data)
+        if ids is not None:
+            instance.notify_party_contacts.set(ids)
+        return instance
+
+    def update(self, instance, validated_data):
+        ids = validated_data.pop('notify_party_contact_ids', None)
+        instance = super().update(instance, validated_data)
+        if ids is not None:
+            instance.notify_party_contacts.set(ids)
+        return instance
 
 
 class SalesOrderLotSerializer(serializers.ModelSerializer):
     lot = LotSerializer(read_only=True)
     lot_id = serializers.PrimaryKeyRelatedField(queryset=Lot.objects.all(), source='lot', write_only=True)
-    
+    coa_customer_pdf_url = serializers.SerializerMethodField()
+    coa_pdf_url = serializers.SerializerMethodField()
+
     class Meta:
         model = SalesOrderLot
-        fields = '__all__'
+        fields = [
+            'id',
+            'sales_order_item',
+            'lot',
+            'lot_id',
+            'quantity_allocated',
+            'created_at',
+            'coa_customer_pdf_url',
+            'coa_pdf_url',
+        ]
+
+    def get_coa_customer_pdf_url(self, obj):
+        req = self.context.get('request')
+        try:
+            cc = obj.coa_customer_copy
+        except LotCoaCustomerCopy.DoesNotExist:
+            return None
+        if not cc.coa_pdf:
+            return None
+        url = cc.coa_pdf.url
+        if req:
+            return req.build_absolute_uri(url)
+        return url
+
+    def get_coa_pdf_url(self, obj):
+        """Prefer customer COA for this allocation; else master COA on the lot."""
+        req = self.context.get('request')
+        try:
+            cc = obj.coa_customer_copy
+        except LotCoaCustomerCopy.DoesNotExist:
+            cc = None
+        if cc and cc.coa_pdf:
+            url = cc.coa_pdf.url
+            return req.build_absolute_uri(url) if req else url
+        try:
+            cert = obj.lot.coa_certificate
+            if cert and cert.coa_pdf:
+                url = cert.coa_pdf.url
+                return req.build_absolute_uri(url) if req else url
+        except LotCoaCertificate.DoesNotExist:
+            pass
+        return None
 
 
 class SalesOrderItemSerializer(serializers.ModelSerializer):
@@ -359,6 +828,32 @@ class SalesOrderSerializer(serializers.ModelSerializer):
     class Meta:
         model = SalesOrder
         fields = '__all__'
+
+    def validate_so_number(self, value):
+        if not value or not str(value).strip():
+            raise serializers.ValidationError('SO number cannot be empty.')
+        value = str(value).strip()
+        instance = getattr(self, 'instance', None)
+        if instance is not None and value != instance.so_number:
+            request = self.context.get('request')
+            if not request or not request.user.is_staff:
+                raise serializers.ValidationError('Only staff can change the SO number.')
+            if SalesOrder.objects.filter(so_number=value).exclude(pk=instance.pk).exists():
+                raise serializers.ValidationError('Another sales order already uses this SO number.')
+        elif instance is None:
+            if SalesOrder.objects.filter(so_number=value).exists():
+                raise serializers.ValidationError('This SO number is already in use.')
+        return value
+
+    def validate(self, attrs):
+        request = self.context.get('request')
+        instance = getattr(self, 'instance', None)
+        if instance is not None and 'order_date' in attrs:
+            if instance.status != 'draft' and not (request and request.user and request.user.is_staff):
+                raise serializers.ValidationError(
+                    {'order_date': 'Only staff can change the order date after the order is no longer a draft.'}
+                )
+        return attrs
 
     def get_customer_po_pdf_url(self, obj):
         if not obj.pk or not obj.customer_po_pdf:
@@ -554,10 +1049,13 @@ class ShipToLocationSerializer(serializers.ModelSerializer):
 class CustomerContactSerializer(serializers.ModelSerializer):
     customer_name = serializers.CharField(source='customer.name', read_only=True)
     full_name = serializers.ReadOnlyField()
-    
+
     class Meta:
         model = CustomerContact
         fields = '__all__'
+
+    def validate_emails(self, value):
+        return validate_contact_emails_list(value)
 
 
 class SalesCallSerializer(serializers.ModelSerializer):
@@ -619,19 +1117,53 @@ class TemporaryExceptionSerializer(serializers.ModelSerializer):
 
 class VendorSerializer(serializers.ModelSerializer):
     history = VendorHistorySerializer(many=True, read_only=True)
+    contacts = VendorContactSerializer(many=True, read_only=True)
     survey = SupplierSurveySerializer(read_only=True)
     documents = SupplierDocumentSerializer(many=True, read_only=True)
     exceptions = TemporaryExceptionSerializer(many=True, read_only=True)
-    
+    display_address = serializers.SerializerMethodField(read_only=True)
+
     class Meta:
         model = Vendor
-        fields = '__all__'
+        # Explicit list so every scalar address field + display_address is always serialized (fields=__all__ can
+        # behave inconsistently across DRF versions with extra SerializerMethodFields).
+        fields = [
+            'id', 'name', 'vendor_id', 'contact_name', 'email', 'phone',
+            'address', 'street_address', 'city', 'state', 'zip_code', 'country',
+            'approval_status', 'risk_profile', 'risk_tier', 'on_time_performance',
+            'quality_complaints', 'notes', 'approved_date', 'approved_by', 'payment_terms',
+            'is_service_vendor', 'service_vendor_type', 'gfsi_certified', 'gfsi_certificate_number',
+            'gfsi_certification_body', 'fsma_compliant', 'ctpat_certified', 'bioterrorism_act_registered',
+            'bioterrorism_number', 'risk_assessment_date', 'risk_assessment_notes', 'created_at', 'updated_at',
+            'history', 'contacts', 'survey', 'documents', 'exceptions',
+            'display_address',
+        ]
+
+    def get_display_address(self, obj):
+        from erp_core.vendor_address_display import build_display_address
+
+        return build_display_address(obj)
 
 
 class CostMasterSerializer(serializers.ModelSerializer):
+    unit_of_measure = serializers.SerializerMethodField(read_only=True)
+
     class Meta:
         model = CostMaster
-        fields = '__all__'
+        fields = [
+            'id', 'vendor_material', 'wwi_product_code', 'price_per_kg', 'price_per_lb',
+            'incoterms', 'incoterms_place', 'origin', 'vendor', 'hts_code', 'tariff', 'freight_per_kg', 'cert_cost_per_kg',
+            'landed_cost_per_kg', 'landed_cost_per_lb', 'margin', 'selling_price_per_kg', 'selling_price_per_lb',
+            'strength', 'minimum', 'lead_time', 'notes', 'created_at', 'updated_at',
+            'unit_of_measure',
+        ]
+
+    def get_unit_of_measure(self, obj):
+        """Resolve Item unit (ea/lbs/kg) from wwi_product_code for display (e.g. EA for indirect materials)."""
+        if not obj.wwi_product_code:
+            return None
+        item = Item.objects.filter(sku=obj.wwi_product_code).first()
+        return getattr(item, 'unit_of_measure', None) if item else None
 
 
 class CostMasterHistorySerializer(serializers.ModelSerializer):
@@ -695,6 +1227,22 @@ class InvoiceSerializer(serializers.ModelSerializer):
     class Meta:
         model = Invoice
         fields = '__all__'
+
+    def validate_invoice_number(self, value):
+        if value is None or (isinstance(value, str) and not str(value).strip()):
+            raise serializers.ValidationError('Invoice number cannot be empty.')
+        value = str(value).strip()
+        instance = getattr(self, 'instance', None)
+        if instance is not None and value != instance.invoice_number:
+            request = self.context.get('request')
+            if not request or not request.user.is_staff:
+                raise serializers.ValidationError('Only staff can change the invoice number.')
+            if Invoice.objects.filter(invoice_number=value).exclude(pk=instance.pk).exists():
+                raise serializers.ValidationError('Another invoice already uses this number.')
+        elif instance is None:
+            if Invoice.objects.filter(invoice_number=value).exists():
+                raise serializers.ValidationError('This invoice number is already in use.')
+        return value
     
     def get_days_aging(self, obj):
         """Calculate days aging - only count after invoice is Issued (sent)."""
@@ -905,6 +1453,7 @@ class AccountsPayableSerializer(serializers.ModelSerializer):
     days_aging = serializers.ReadOnlyField()
     aging_bucket = serializers.ReadOnlyField()
     vendor_display = serializers.SerializerMethodField()
+    po_number = serializers.SerializerMethodField()
     
     class Meta:
         model = AccountsPayable
@@ -913,6 +1462,12 @@ class AccountsPayableSerializer(serializers.ModelSerializer):
     
     def get_vendor_display(self, obj):
         return obj.vendor_name
+    
+    def get_po_number(self, obj):
+        po = getattr(obj, 'purchase_order', None)
+        if po is not None:
+            return po.po_number
+        return None
 
 
 class AccountsReceivableSerializer(serializers.ModelSerializer):
@@ -995,4 +1550,14 @@ class CheckInLogSerializer(serializers.ModelSerializer):
     
     def get_item_display(self, obj):
         return f"{obj.item_sku} - {obj.item_name}"
+
+
+class LotAttributeChangeLogSerializer(serializers.ModelSerializer):
+    lot_number = serializers.CharField(source='lot.lot_number', read_only=True)
+    item_sku = serializers.CharField(source='lot.item.sku', read_only=True)
+
+    class Meta:
+        model = LotAttributeChangeLog
+        fields = '__all__'
+        read_only_fields = ['changed_at']
 

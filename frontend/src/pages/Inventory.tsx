@@ -55,8 +55,12 @@ function Inventory() {
             <button onClick={() => setShowIndirectMaterialCheckout(true)} className="btn btn-primary">
               Checkout Indirect Material
             </button>
-            <button onClick={() => setShowReverseCheckIn(true)} className="btn btn-danger">
-              UNFK
+            <button
+              onClick={() => setShowReverseCheckIn(true)}
+              className="btn btn-danger"
+              title="Reverse a mistaken check-in (removes receipt lot, rolls back PO received qty when allowed)"
+            >
+              Reverse check-in
             </button>
           </div>
         )}
@@ -100,7 +104,7 @@ function Inventory() {
 
         <main className="inventory-main">
           {activeTab === 'inventory' && <InventoryTable key={refreshKey} />}
-          {activeTab === 'items' && <ItemsList />}
+          {activeTab === 'items' && <ItemsList key={refreshKey} />}
           {activeTab === 'purchase-orders' && <PurchaseOrderList key={refreshKey} />}
           {activeTab === 'logs' && <Logs />}
         </main>

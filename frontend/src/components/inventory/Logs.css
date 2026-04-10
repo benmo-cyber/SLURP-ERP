@@ -185,7 +185,7 @@
 }
 
 .logs-table thead {
-  background: #f5f5f5;
+  background: var(--app-header-bg);
   position: sticky;
   top: 0;
 }
@@ -194,8 +194,9 @@
   padding: 12px;
   text-align: left;
   font-weight: 600;
-  color: #333;
-  border-bottom: 2px solid #ddd;
+  color: var(--app-header-text);
+  background: var(--app-header-bg);
+  border-bottom: 2px solid var(--table-header-border);
   white-space: nowrap;
 }
 

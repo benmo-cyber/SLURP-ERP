@@ -12,10 +12,27 @@ interface CreateCustomerPricingProps {
 
 function CreateCustomerPricing({ customerId, pricing, onClose, onSuccess }: CreateCustomerPricingProps) {
   const [items, setItems] = useState<any[]>([])
+  const INCOTERMS_OPTIONS = [
+    { value: '', label: '—' },
+    { value: 'EXW', label: 'EXW - Ex Works' },
+    { value: 'FCA', label: 'FCA - Free Carrier' },
+    { value: 'CPT', label: 'CPT - Carriage Paid To' },
+    { value: 'CIP', label: 'CIP - Carriage and Insurance Paid To' },
+    { value: 'DAP', label: 'DAP - Delivered at Place' },
+    { value: 'DPU', label: 'DPU - Delivered at Place Unloaded' },
+    { value: 'DDP', label: 'DDP - Delivered Duty Paid' },
+    { value: 'FAS', label: 'FAS - Free Alongside Ship' },
+    { value: 'FOB', label: 'FOB - Free on Board' },
+    { value: 'CFR', label: 'CFR - Cost and Freight' },
+    { value: 'CIF', label: 'CIF - Cost, Insurance and Freight' },
+  ]
+
   const [formData, setFormData] = useState({
-    item: pricing?.item || '',
+    item: pricing?.item?.id ?? pricing?.item_id ?? '',
     unit_price: pricing?.unit_price || '',
     unit_of_measure: pricing?.unit_of_measure || 'lbs',
+    incoterms: pricing?.incoterms || '',
+    incoterms_place: pricing?.incoterms_place || '',
     effective_date: pricing?.effective_date || new Date().toISOString().split('T')[0],
     expiry_date: pricing?.expiry_date || '',
     is_active: pricing?.is_active !== undefined ? pricing.is_active : true,
@@ -53,6 +70,8 @@ function CreateCustomerPricing({ customerId, pricing, onClose, onSuccess }: Crea
         item: parseInt(formData.item),
         unit_price: parseFloat(formData.unit_price),
         unit_of_measure: formData.unit_of_measure,
+        incoterms: formData.incoterms || null,
+        incoterms_place: formData.incoterms_place || null,
         effective_date: formData.effective_date,
         is_active: formData.is_active,
         notes: formData.notes,
@@ -126,6 +145,27 @@ function CreateCustomerPricing({ customerId, pricing, onClose, onSuccess }: Crea
                 <option value="kg">Kilograms (kg)</option>
                 <option value="ea">Each (ea)</option>
               </select>
+            </div>
+            <div className="form-group">
+              <label>Incoterms</label>
+              <select
+                value={formData.incoterms}
+                onChange={(e) => setFormData({ ...formData, incoterms: e.target.value })}
+              >
+                {INCOTERMS_OPTIONS.map((opt) => (
+                  <option key={opt.value || '_'} value={opt.value}>{opt.label}</option>
+                ))}
+              </select>
+            </div>
+            <div className="form-group">
+              <label>Incoterms place / point</label>
+              <input
+                type="text"
+                value={formData.incoterms_place}
+                onChange={(e) => setFormData({ ...formData, incoterms_place: e.target.value })}
+                placeholder="e.g. New York, Port of LA"
+                title="Place or point for the term (e.g. CIF New York)"
+              />
             </div>
           </div>
 

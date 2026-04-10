@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import { getFiscalPeriods, closeFiscalPeriod } from '../../api/finance'
+import { formatAppDate } from '../../utils/appDateFormat'
 import './FiscalPeriods.css'
 
 interface FiscalPeriodType {
@@ -40,7 +41,7 @@ const FiscalPeriods: React.FC = () => {
     }
   }
 
-  const formatDate = (d: string) => d ? new Date(d).toLocaleDateString() : ''
+  const formatDate = (d: string) => (d ? formatAppDate(d) : '')
 
   return (
     <div className="fiscal-periods">

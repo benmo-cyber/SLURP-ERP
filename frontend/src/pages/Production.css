@@ -106,8 +106,13 @@
 .production-main {
   flex: 1;
   min-width: 0;
-  padding: 1.5rem 2rem;
+  padding: 0;
   overflow-y: auto;
+}
+
+.production-main > * {
+  margin: 1.5rem 2rem;
+  box-sizing: border-box;
 }
 
 @media (max-width: 768px) {
@@ -155,7 +160,7 @@
     border-left: none;
     border-radius: 6px;
   }
-  .production-main {
-    padding: 1rem;
+  .production-main > * {
+    margin: 1rem;
   }
 }

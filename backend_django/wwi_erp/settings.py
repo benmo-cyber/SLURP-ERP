@@ -5,6 +5,8 @@ Django settings for wwi_erp project.
 from pathlib import Path
 import os
 
+from corsheaders.defaults import default_headers
+
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -26,7 +28,7 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'rest_framework',
     'corsheaders',
-    'erp_core',
+    'erp_core.apps.ErpCoreConfig',
 ]
 
 MIDDLEWARE = [
@@ -86,7 +88,10 @@ AUTH_PASSWORD_VALIDATORS = [
 
 # Internationalization
 LANGUAGE_CODE = 'en-us'
-TIME_ZONE = 'America/Chicago'  # Central Time (CST/CDT)
+# US Central with real DST (spring forward / fall back). IANA id — not a fixed UTC offset.
+# Winter: CST (UTC-6). Summer: CDT (UTC-5). Same zone the frontend uses (see appDateFormat.ts).
+BUSINESS_TIME_ZONE = 'America/Chicago'
+TIME_ZONE = BUSINESS_TIME_ZONE
 USE_I18N = True
 USE_TZ = True
 
@@ -112,6 +117,14 @@ REST_FRAMEWORK = {
     'PAGE_SIZE': 100
 }
 
+# HTML→PDF (xhtml2pdf): in-process is much faster on Windows (no subprocess spawn per PDF).
+# Set env HTML_PDF_USE_SUBPROCESS=1 if a template hangs the worker and you need a killable child process.
+HTML_PDF_USE_SUBPROCESS = os.environ.get('HTML_PDF_USE_SUBPROCESS', '').lower() in ('1', 'true', 'yes')
+
+# Address autocomplete (vendor facility address): Mapbox Geocoding API is used when set; otherwise OSM Nominatim.
+# https://account.mapbox.com/ — create a token with Geocoding scope; keep server-side only.
+MAPBOX_ACCESS_TOKEN = (os.environ.get('MAPBOX_ACCESS_TOKEN') or '').strip()
+
 # CORS settings
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",
@@ -122,10 +135,22 @@ CORS_ALLOWED_ORIGINS = [
 CSRF_TRUSTED_ORIGINS = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
+    "http://localhost:5174",
+    "http://127.0.0.1:5174",
+    "http://localhost:5175",
+    "http://127.0.0.1:5175",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://localhost:4173",
+    "http://127.0.0.1:4173",
 ]
 
 CORS_ALLOW_ALL_ORIGINS = True  # For development only
 CORS_ALLOW_CREDENTIALS = True  # Required for session cookie auth
+# Custom headers on API requests (e.g. checkout ship idempotency) must be listed or preflight fails.
+CORS_ALLOW_HEADERS = list(default_headers) + [
+    'x-idempotency-key',
+]
 
 # Email configuration (GoDaddy Microsoft 365)
 EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'

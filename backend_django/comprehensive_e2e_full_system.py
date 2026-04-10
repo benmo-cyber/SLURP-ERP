@@ -350,7 +350,7 @@ def test_production_batch_with_spillage(results, raw_item, finished_good, formul
         # Track after batch creation
         tracker.snapshot(raw_item.id, "after_batch_creation")
         
-        # Close batch with spillage: actual 103 lbs, spills 7 lbs, net 96 lbs
+        # Close batch: 103 lbs total produced; spills 7 lbs documented on batch (does not reduce output lot)
         batch.quantity_actual = 103.0
         batch.spills = 7.0
         batch.wastes = 0.0
@@ -359,10 +359,9 @@ def test_production_batch_with_spillage(results, raw_item, finished_good, formul
         batch.closed_date = timezone.now()
         batch.save()
         
-        # Simulate batch closure logic (normally done in view)
-        # This is the key part: output should be actual - spills = 103 - 7 = 96 lbs
-        output_quantity = round(max(0, batch.quantity_actual - batch.spills), 2)
-        assert output_quantity == 96.0, f"Expected output 96 lbs, got {output_quantity}"
+        # Simulate batch closure logic (normally done in view): output = total produced
+        output_quantity = round(max(0.0, float(batch.quantity_actual)), 2)
+        assert output_quantity == 103.0, f"Expected output 103 lbs, got {output_quantity}"
         
         # Create output lot
         # Get or create pack size for finished good
@@ -398,7 +397,7 @@ def test_production_batch_with_spillage(results, raw_item, finished_good, formul
             transaction_type='production_output',
             lot=output_lot,
             quantity=output_quantity,
-            notes=f'Production batch {batch.batch_number} output (actual: {batch.quantity_actual} lbs, spills: {batch.spills} lbs, net: {output_quantity} lbs)',
+            notes=f'Production batch {batch.batch_number} output ({output_quantity} lbs produced; spills {batch.spills} lbs documented)',
             reference_number=batch.batch_number
         )
         
@@ -419,18 +418,18 @@ def test_production_batch_with_spillage(results, raw_item, finished_good, formul
         else:
             results.add_fail("Raw material consumed", f"Expected -100, got {raw_change['change'] if raw_change else 'None'}")
         
-        if fg_change and fg_change['change'] == 96.0:
-            results.add_pass("Finished good produced (with spillage)", f"{fg_change['change']} lbs (actual: 103, spills: 7)")
+        if fg_change and fg_change['change'] == 103.0:
+            results.add_pass("Finished good produced (with spillage)", f"{fg_change['change']} lbs (total produced)")
         else:
-            results.add_fail("Finished good produced", f"Expected 96 lbs, got {fg_change['change'] if fg_change else 'None'}")
+            results.add_fail("Finished good produced", f"Expected 103 lbs, got {fg_change['change'] if fg_change else 'None'}")
         
         # Verify output lot quantity
-        if output_lot.quantity == 96.0 and output_lot.quantity_remaining == 96.0:
-            results.add_pass("Output lot quantity correct", f"{output_lot.quantity} lbs (net after spills)")
+        if output_lot.quantity == 103.0 and output_lot.quantity_remaining == 103.0:
+            results.add_pass("Output lot quantity correct", f"{output_lot.quantity} lbs (total produced)")
         else:
             results.add_fail("Output lot quantity", f"Expected 96 lbs, got {output_lot.quantity}")
         
-        results.add_pass("Close production batch with spillage", f"Net output: {output_quantity} lbs")
+        results.add_pass("Close production batch with spillage", f"Output: {output_quantity} lbs produced")
         return batch, output_lot
     except Exception as e:
         results.add_fail("Production batch with spillage", str(e))
@@ -718,7 +717,7 @@ def main():
     
     # Verify spillage was handled correctly
     if batch.quantity_actual == 103.0 and batch.spills == 7.0:
-        expected_output = 96.0
+        expected_output = 103.0
         if fg_lot.quantity == expected_output and fg_lot.quantity_remaining == expected_output:
             results.add_pass("Spillage handling verified", 
                            f"Actual: {batch.quantity_actual}, Spills: {batch.spills}, Output: {fg_lot.quantity}")

@@ -15,6 +15,13 @@ export const createCustomerPricing = async (data: any) => {
   return response.data
 }
 
+/** Customer pricing history by product code(s) for margin/trend charts */
+export const getCustomerPricingHistory = async (productCodes: string[]) => {
+  const params = productCodes.map(code => `product_code=${encodeURIComponent(code)}`).join('&')
+  const response = await api.get(`/customer-pricing/price_history/?${params}`)
+  return response.data
+}
+
 // Vendor Pricing API
 export const getVendorPricing = async () => {
   const response = await api.get('/vendor-pricing/')
@@ -155,10 +162,86 @@ export const getAccountBalance = async (accountId: number, asOfDate: string) => 
   return response.data
 }
 
+/** One vendor PO row for the AP workbench (issued+), with AP lines grouped by landed-cost category. */
+export interface ApPoWorkqueueRow {
+  purchase_order_id: number
+  po_number: string
+  vendor_name: string
+  po_status: string
+  order_date: string
+  payment_workflow: 'awaiting_bills' | 'open' | 'partial' | 'paid' | 'overdue'
+  /** From Quality → Vendor profile (e.g. Net 30) */
+  vendor_payment_terms?: string | null
+  /** Earliest due date among open-balance AP lines on this PO */
+  next_open_due_date?: string | null
+  total_open_balance: number
+  ap_line_count: number
+  material_entries: AccountsPayableLine[]
+  freight_entries: AccountsPayableLine[]
+  duty_tax_entries: AccountsPayableLine[]
+}
+
+export interface AccountsPayableLine {
+  id: number
+  vendor_name: string
+  invoice_number: string | null
+  invoice_date: string
+  due_date: string
+  original_amount: number
+  amount_paid: number
+  balance: number
+  status: string
+  days_aging: number
+  aging_bucket: string
+  po_number?: string | null
+  purchase_order?: number | null
+  freight_total?: number | null
+  tariff_duties_paid?: number | null
+  shipment_method?: string | null
+  notes?: string | null
+  cost_category?: string
+}
+
+export interface CreateApForPoPayload {
+  purchase_order: number
+  cost_category: '' | 'material' | 'freight' | 'duty_tax'
+  original_amount: number
+  invoice_number?: string | null
+  invoice_date?: string
+  due_date?: string
+  vendor_name?: string | null
+  freight_total?: number | null
+  tariff_duties_paid?: number | null
+  shipment_method?: string | null
+  notes?: string | null
+}
+
 // Accounts Payable API
-export const getAccountsPayable = async (params?: { status?: string, vendor_name?: string, due_date_from?: string, due_date_to?: string }) => {
-  const response = await api.get('/accounts-payable/', { params })
+export const getAccountsPayable = async (params?: {
+  status?: string
+  vendor_name?: string
+  due_date_from?: string
+  due_date_to?: string
+  standalone_only?: boolean | string
+}) => {
+  const { standalone_only, ...rest } = params || {}
+  const response = await api.get('/accounts-payable/', {
+    params: {
+      ...rest,
+      ...(standalone_only === true || standalone_only === 'true' ? { standalone_only: 'true' } : {}),
+    },
+  })
   return response.data.results || response.data
+}
+
+export const getApPoWorkqueue = async (params?: { vendor_name?: string; workflow?: string }) => {
+  const response = await api.get('/accounts-payable/po-workqueue/', { params })
+  return response.data as ApPoWorkqueueRow[]
+}
+
+export const createAccountsPayableForPo = async (data: CreateApForPoPayload) => {
+  const response = await api.post('/accounts-payable/create-for-po/', data)
+  return response.data as AccountsPayableLine
 }
 
 export const getAccountsPayableAging = async () => {
@@ -172,7 +255,7 @@ export const getAccountsPayableEntry = async (id: number) => {
 }
 
 export const updateAccountsPayableEntry = async (id: number, data: any) => {
-  const response = await api.put(`/accounts-payable/${id}/`, data)
+  const response = await api.patch(`/accounts-payable/${id}/`, data)
   return response.data
 }
 

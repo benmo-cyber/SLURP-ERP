@@ -14,7 +14,7 @@ django.setup()
 
 from erp_core.models import Vendor, PurchaseOrder
 from erp_core.email_service import send_purchase_order_email
-from erp_core.pdf_generator import generate_purchase_order_pdf
+from erp_core.po_pdf_html import generate_po_pdf_from_html
 from django.utils import timezone
 from datetime import timedelta
 
@@ -69,7 +69,7 @@ def send_test_po_to_nutracean():
         
         # Generate PDF
         print("Generating PDF...")
-        pdf_content = generate_purchase_order_pdf(po)
+        pdf_content = generate_po_pdf_from_html(po)
         
         # Save PDF to file as backup
         pdf_path = BASE_DIR / f"Purchase_Order_{po.po_number}.pdf"

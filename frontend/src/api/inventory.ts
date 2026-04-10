@@ -1,10 +1,26 @@
 import { api } from './client'
 
 // Items API
-export const getItems = async (approvedVendorsOnly: boolean = false) => {
-  const url = approvedVendorsOnly ? '/items/?approved_vendors_only=true' : '/items/'
+export const getItems = async (
+  approvedVendorsOrOptions?: boolean | {
+    approvedVendorsOnly?: boolean
+    skuMastersOnly?: boolean
+  }
+) => {
+  let approvedVendorsOnly = false
+  let skuMastersOnly = false
+  if (typeof approvedVendorsOrOptions === 'boolean') {
+    approvedVendorsOnly = approvedVendorsOrOptions
+  } else if (approvedVendorsOrOptions && typeof approvedVendorsOrOptions === 'object') {
+    approvedVendorsOnly = !!approvedVendorsOrOptions.approvedVendorsOnly
+    skuMastersOnly = !!approvedVendorsOrOptions.skuMastersOnly
+  }
+  const params = new URLSearchParams()
+  if (approvedVendorsOnly) params.set('approved_vendors_only', 'true')
+  if (skuMastersOnly) params.set('sku_masters_only', 'true')
+  const q = params.toString()
+  const url = q ? `/items/?${q}` : '/items/'
   const response = await api.get(url)
-  // Handle paginated response
   return response.data.results || response.data
 }
 
@@ -19,7 +35,7 @@ export const createItem = async (data: any) => {
 }
 
 export const updateItem = async (id: number, data: any) => {
-  const response = await api.put(`/items/${id}/`, data)
+  const response = await api.patch(`/items/${id}/`, data)
   return response.data
 }
 
@@ -67,10 +83,12 @@ export const createLot = async (data: any) => {
     status: data.status || 'accepted',
   }
   
-  // Add optional fields only if they exist
-  if (data.expiration_date) payload.expiration_date = data.expiration_date
+  if (data.expiration_date != null && String(data.expiration_date).trim() !== '') {
+    payload.expiration_date = data.expiration_date
+  }
   if (data.freight_actual) payload.freight_actual = parseFloat(data.freight_actual) || null
   if (data.po_number) payload.po_number = data.po_number
+  if (data.lot_number && data.lot_number.trim()) payload.lot_number = data.lot_number.trim() // Manual/legacy lot number
   if (data.vendor_lot_number) payload.vendor_lot_number = data.vendor_lot_number
   if (data.short_reason && data.short_reason.trim()) payload.short_reason = data.short_reason.trim()
   // Add check-in form fields
@@ -79,7 +97,10 @@ export const createLot = async (data: any) => {
   if (data.carrier_free_pests !== undefined) payload.carrier_free_pests = data.carrier_free_pests
   if (data.shipment_accepted !== undefined) payload.shipment_accepted = data.shipment_accepted
   if (data.initials) payload.initials = data.initials
-  if (data.carrier) payload.carrier = data.carrier
+  // Always send carrier so the check-in log row stores it (backend also falls back to PO carrier if blank)
+  if (data.carrier !== undefined && data.carrier !== null) {
+    payload.carrier = String(data.carrier).trim()
+  }
   if (data.notes) payload.notes = data.notes
   
   console.log('API payload:', payload)
@@ -92,8 +113,38 @@ export const reverseCheckIn = async (lotId: number) => {
   return response.data
 }
 
+export type BulkReverseCheckInResult = {
+  reversed: { lot_number?: string; item_sku?: string; quantity?: number }[]
+  failed: { lot_id?: number; lot_number?: string; error: string }[]
+  message?: string
+}
+
+/** Reverse many receipt lots. Send lotIds and/or poNumber (union: po adds every lot on that PO). */
+export const bulkReverseCheckIn = async (params: {
+  lotIds?: number[]
+  poNumber?: string
+}): Promise<BulkReverseCheckInResult> => {
+  const body: Record<string, unknown> = {}
+  if (params.lotIds?.length) body.lot_ids = params.lotIds
+  if (params.poNumber?.trim()) body.po_number = params.poNumber.trim()
+  const response = await api.post('/lots/bulk-reverse-check-in/', body)
+  return response.data
+}
+
+/** Lots with this PO number (check-in / receipt history on PO detail). */
+export const getLotsByPurchaseOrder = async (poNumber: string) => {
+  const response = await api.get('/lots/by-po/', { params: { po_number: poNumber } })
+  return response.data
+}
+
 export const updateLot = async (lotId: number, data: any) => {
   const response = await api.patch(`/lots/${lotId}/`, data)
+  return response.data
+}
+
+/** Regenerate stored master + customer COA PDFs from current lot data (e.g. after template edits). */
+export const regenerateLotCoa = async (lotId: number) => {
+  const response = await api.post(`/lots/${lotId}/regenerate-coa/`)
   return response.data
 }
 
@@ -102,15 +153,62 @@ export const putLotOnHold = async (lotId: number, quantity: number) => {
   return response.data
 }
 
-export const releaseLotFromHold = async (lotId: number, quantity: number) => {
-  const response = await api.post(`/lots/${lotId}/release_from_hold/`, { quantity })
+export type ReleaseFromHoldCoaPayload = {
+  qc_result_value?: number
+  line_results: { item_line_id: number; result_text: string }[]
+}
+
+export const releaseLotFromHold = async (
+  lotId: number,
+  quantity: number,
+  coa?: ReleaseFromHoldCoaPayload
+) => {
+  const body: Record<string, unknown> = { quantity }
+  if (coa) body.coa = coa
+  const response = await api.post(`/lots/${lotId}/release_from_hold/`, body)
   return response.data
 }
 
-/** Admin override: reconcile lot quantity_remaining to match reality. Requires staff. */
+/** Admin: set on-hand only (quantity_remaining). Does not change received (quantity). Requires staff. */
 export const reconcileLot = async (lotId: number, quantityRemaining: number, reason: string) => {
   const response = await api.post(`/lots/${lotId}/reconcile/`, { quantity_remaining: quantityRemaining, reason: reason || 'Admin reconcile' })
   return response.data
+}
+
+/** Admin: set received total only (lot.quantity). Does not change on-hand (quantity_remaining). Requires staff. */
+export const adjustLotReceived = async (lotId: number, quantity: number, reason: string) => {
+  const response = await api.post(`/lots/${lotId}/adjust_received/`, {
+    quantity,
+    reason: reason || 'Adjust received quantity',
+  })
+  return response.data
+}
+
+// Campaign lots (YYWW + product code; ISO week from anchor_date)
+export type CampaignLot = {
+  id: number
+  item: number
+  anchor_date: string
+  product_code: string
+  campaign_code: string
+  iso_year: number
+  iso_week: number
+  notes?: string
+}
+
+export const getCampaignLots = async (itemId: number) => {
+  const response = await api.get(`/campaign-lots/?item=${itemId}`)
+  return (response.data.results || response.data) as CampaignLot[]
+}
+
+export const createCampaignLot = async (data: {
+  item: number
+  anchor_date: string
+  product_code: string
+  notes?: string
+}) => {
+  const response = await api.post('/campaign-lots/', data)
+  return response.data as CampaignLot
 }
 
 // Production Batches API
@@ -224,10 +322,21 @@ export const getInventoryDetails = async (inventoryTable?: string) => {
 }
 
 // Get lots by SKU and vendor
-export const getLotsBySkuVendor = async (sku: string, vendor?: string) => {
+export const getLotsBySkuVendor = async (
+  sku: string,
+  vendor?: string,
+  inventoryTable?: 'finished_good' | 'raw_material' | 'indirect_material',
+  options?: { deeper?: boolean }
+) => {
   const params = new URLSearchParams({ sku })
   if (vendor) {
     params.append('vendor', vendor)
+  }
+  if (inventoryTable) {
+    params.append('inventory_table', inventoryTable)
+  }
+  if (options?.deeper) {
+    params.append('deeper', '1')
   }
   try {
     const response = await api.get(`/lots/lots_by_sku_vendor/?${params}`)
@@ -244,6 +353,35 @@ export const getLotsBySkuVendor = async (sku: string, vendor?: string) => {
       return []
     }
     console.error(`Error fetching lots for SKU ${sku}, vendor ${vendor}:`, error)
+    throw error
+  }
+}
+
+/** Lots for a single Item row (matches inventory rules for the given inventory_table tab). */
+export const getLotsByItemId = async (
+  itemId: number,
+  inventoryTable?: 'finished_good' | 'raw_material' | 'indirect_material',
+  options?: { deeper?: boolean }
+) => {
+  const params = new URLSearchParams({ item_id: String(itemId) })
+  if (inventoryTable) {
+    params.append('inventory_table', inventoryTable)
+  }
+  if (options?.deeper) {
+    params.append('deeper', '1')
+  }
+  try {
+    const response = await api.get(`/lots/lots_by_sku_vendor/?${params}`)
+    if (response.data && typeof response.data === 'object' && !Array.isArray(response.data) && response.data.error) {
+      console.warn(`API returned error for item ${itemId}:`, response.data.error)
+      return []
+    }
+    return response.data || []
+  } catch (error: any) {
+    if (error.response?.status === 404) {
+      return []
+    }
+    console.error(`Error fetching lots for item ${itemId}:`, error)
     throw error
   }
 }
@@ -442,6 +580,8 @@ export interface CheckInLog {
   po_number?: string
   vendor_name?: string
   received_date: string
+  manufacture_date?: string | null
+  expiration_date?: string | null
   vendor_lot_number?: string
   quantity: number
   quantity_unit: 'lbs' | 'kg' | 'ea'
@@ -472,6 +612,38 @@ export const getCheckInLogs = async (filters?: {
   if (filters?.date_to) params.append('date_to', filters.date_to)
   
   const url = params.toString() ? `/check-in-logs/?${params}` : '/check-in-logs/'
+  const response = await api.get(url)
+  return response.data.results || response.data
+}
+
+// Lot attribute change logs (e.g. expiration date corrections after re-QC)
+export interface LotAttributeChangeLog {
+  id: number
+  lot: number
+  lot_number?: string
+  item_sku?: string
+  field_name: string
+  old_value: string
+  new_value: string
+  reason: string
+  changed_at: string
+  changed_by: string
+}
+
+export const getLotAttributeChangeLogs = async (filters?: {
+  lot_number?: string
+  sku?: string
+  field_name?: string
+  date_from?: string
+  date_to?: string
+}) => {
+  const params = new URLSearchParams()
+  if (filters?.lot_number) params.append('lot_number', filters.lot_number)
+  if (filters?.sku) params.append('sku', filters.sku)
+  if (filters?.field_name) params.append('field_name', filters.field_name)
+  if (filters?.date_from) params.append('date_from', filters.date_from)
+  if (filters?.date_to) params.append('date_to', filters.date_to)
+  const url = params.toString() ? `/lot-attribute-change-logs/?${params}` : '/lot-attribute-change-logs/'
   const response = await api.get(url)
   return response.data.results || response.data
 }

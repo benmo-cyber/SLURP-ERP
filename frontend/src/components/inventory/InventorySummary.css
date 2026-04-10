@@ -123,16 +123,17 @@
 }
 
 .lots-table thead {
-  background-color: #f8f9fa;
+  background-color: var(--app-header-bg);
 }
 
 .lots-table th {
   padding: 0.75rem;
   text-align: left;
   font-weight: 600;
-  color: #2c3e50;
+  color: var(--app-header-text);
+  background-color: var(--app-header-bg);
   font-size: 0.9rem;
-  border-bottom: 2px solid #e0e0e0;
+  border-bottom: 2px solid var(--table-header-border);
 }
 
 .lots-table td {

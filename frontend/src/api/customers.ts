@@ -41,13 +41,34 @@ export const deleteCustomer = async (id: number) => {
 }
 
 // Customer Pricing API
-export const getCustomerPricing = async (customerId?: number, itemId?: number) => {
-  const params = new URLSearchParams()
-  if (customerId) params.append('customer_id', customerId.toString())
-  if (itemId) params.append('item_id', itemId.toString())
-  params.append('is_active', 'true')
-  const response = await api.get(`/customer-pricing/?${params}`)
-  return response.data.results || response.data
+// currentOnly: when true, only returns pricing effective today and not expired (e.g. for sales order entry)
+// Follows all pagination pages — default PAGE_SIZE is 100; large customers otherwise miss SKUs on page 2+.
+export const getCustomerPricing = async (customerId?: number, itemId?: number, currentOnly?: boolean) => {
+  const base = new URLSearchParams()
+  if (customerId) base.append('customer_id', customerId.toString())
+  if (itemId) base.append('item_id', itemId.toString())
+  base.append('is_active', 'true')
+  if (currentOnly) base.append('current_only', 'true')
+
+  const all: unknown[] = []
+  let page = 1
+  for (;;) {
+    const params = new URLSearchParams(base.toString())
+    params.set('page', String(page))
+    const response = await api.get(`/customer-pricing/?${params.toString()}`)
+    const data = response.data
+    if (Array.isArray(data)) {
+      all.push(...data)
+      break
+    }
+    const results = (data && (data as { results?: unknown[] }).results) || []
+    all.push(...results)
+    const next = data && (data as { next?: string | null }).next
+    if (!next || results.length === 0) break
+    page += 1
+    if (page > 500) break
+  }
+  return all
 }
 
 export const createCustomerPricing = async (data: any) => {
@@ -70,6 +91,11 @@ export const getShipToLocations = async (customerId?: number) => {
   const params = customerId ? `?customer_id=${customerId}` : ''
   const response = await api.get(`/ship-to-locations/${params}`)
   return response.data.results || response.data
+}
+
+export const getShipToLocation = async (id: number) => {
+  const response = await api.get(`/ship-to-locations/${id}/`)
+  return response.data
 }
 
 export const createShipToLocation = async (data: any) => {

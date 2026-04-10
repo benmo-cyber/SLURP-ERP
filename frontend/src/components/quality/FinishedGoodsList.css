@@ -5,8 +5,32 @@
 .finished-goods-header {
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  align-items: flex-start;
+  gap: 1rem;
   margin-bottom: 20px;
+}
+
+.finished-goods-subtitle {
+  margin: 0.35rem 0 0 0;
+  max-width: 48rem;
+  font-size: 0.85rem;
+  line-height: 1.45;
+  color: #4b5563;
+}
+
+.finished-goods-type-badge {
+  display: inline-block;
+  padding: 0.15rem 0.45rem;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  background: #eef2ff;
+  color: #3730a3;
+}
+
+.finished-goods-type-badge--distributed {
+  background: #fef3c7;
+  color: #92400e;
 }
 
 .header-actions {
@@ -31,15 +55,16 @@
 }
 
 .finished-goods-table thead {
-  background-color: #f8f9fa;
+  background-color: var(--app-header-bg);
 }
 
 .finished-goods-table th {
   padding: 12px 16px;
   text-align: left;
   font-weight: 600;
-  color: #333;
-  border-bottom: 2px solid #dee2e6;
+  color: var(--app-header-text);
+  background-color: var(--app-header-bg);
+  border-bottom: 2px solid var(--table-header-border);
 }
 
 .finished-goods-table td {
@@ -103,4 +128,16 @@
   text-align: center;
   padding: 40px;
   color: #6c757d;
+}
+
+.finished-goods-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+}
+
+.coa-lines-modal-wrap {
+  max-width: none;
+  width: auto;
 }

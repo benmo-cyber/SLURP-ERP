@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react'
 import { getItems, getFormulas, getLots, getProductionBatch, updateProductionBatch } from '../../api/inventory'
 import { formatNumber } from '../../utils/formatNumber'
+import { normalizeMassQuantity } from '../../utils/massQuantity'
+import { lotAvailableForUse } from '../../utils/lotQuantities'
 import './AdjustBatch.css'
 
 interface Item {
@@ -30,6 +32,9 @@ interface Lot {
   vendor_lot_number?: string | null
   item: Item
   quantity_remaining: number
+  quantity_available_for_use?: number
+  quantity_on_hold?: number
+  committed_to_production_qty?: number
   unit_of_measure: string
 }
 
@@ -89,9 +94,7 @@ function AdjustBatch({ batch, onClose, onSuccess }: AdjustBatchProps) {
           }
           
           // Preserve exact integers
-          const roundedToInt = Math.round(displayQty)
-          const isInteger = Math.abs(displayQty - roundedToInt) <= 0.01
-          const finalDisplayQty = isInteger ? roundedToInt : Math.round(displayQty * 100) / 100
+          const finalDisplayQty = normalizeMassQuantity(displayQty)
           
           newInputValues[lot.id] = finalDisplayQty.toString()
         }
@@ -111,8 +114,10 @@ function AdjustBatch({ batch, onClose, onSuccess }: AdjustBatchProps) {
       
       // Set initial values from batch
       if (batchData.finished_good_item) {
-        setQuantity(batchData.quantity_produced.toString())
-        setQuantityUnit(batchData.finished_good_item.unit_of_measure === 'kg' ? 'kg' : 'lbs')
+        const fgUom = batchData.finished_good_item.unit_of_measure === 'kg' ? 'kg' : 'lbs'
+        const displayQty = normalizeMassQuantity(batchData.quantity_produced as number)
+        setQuantity(String(displayQty))
+        setQuantityUnit(fgUom)
       }
 
       // Load existing inputs - convert from lot's native unit to display unit
@@ -135,10 +140,7 @@ function AdjustBatch({ batch, onClose, onSuccess }: AdjustBatchProps) {
             }
           }
           
-          // Preserve exact integers
-          const roundedToInt = Math.round(displayQty)
-          const isInteger = Math.abs(displayQty - roundedToInt) <= 0.01
-          const finalDisplayQty = isInteger ? roundedToInt : Math.round(displayQty * 100) / 100
+          const finalDisplayQty = normalizeMassQuantity(displayQty)
           
           // Store in lot's native unit for submission (storedQty)
           existingInputs[lot.id] = storedQty
@@ -156,7 +158,7 @@ function AdjustBatch({ batch, onClose, onSuccess }: AdjustBatchProps) {
       ])
       
       setFormulas(formulasData)
-      setAllLots(lotsData.filter((lot: Lot) => lot.quantity_remaining > 0))
+      setAllLots(lotsData.filter((lot: Lot) => lotAvailableForUse(lot) > 0))
       
       // Find and set the formula for this batch
       if (batchData.finished_good_item) {
@@ -182,22 +184,22 @@ function AdjustBatch({ batch, onClose, onSuccess }: AdjustBatchProps) {
     const requiredSkus = formula.ingredients.map(ing => ing.item.sku)
     
     // Filter lots to only show those matching formula ingredients by SKU
-    const available = allLots.filter(lot => 
-      requiredSkus.includes(lot.item.sku) && lot.quantity_remaining > 0
+    const available = allLots.filter(
+      (lot) => requiredSkus.includes(lot.item.sku) && lotAvailableForUse(lot) > 0
     )
     
     setAvailableLots(available)
   }
 
   const convertWeight = (value: number, from: 'lbs' | 'kg', to: 'lbs' | 'kg'): number => {
-    if (from === to) return value
+    if (from === to) return normalizeMassQuantity(value)
     if (from === 'lbs' && to === 'kg') {
       const converted = value / 2.20462
-      return Math.round(converted * 100) / 100
+      return normalizeMassQuantity(Math.round(converted * 100) / 100)
     }
     if (from === 'kg' && to === 'lbs') {
       const converted = value * 2.20462
-      return Math.round(converted * 100) / 100
+      return normalizeMassQuantity(Math.round(converted * 100) / 100)
     }
     return value
   }
@@ -264,13 +266,17 @@ function AdjustBatch({ batch, onClose, onSuccess }: AdjustBatchProps) {
       } else if (quantityUnit === 'lbs' && batchDetails?.finished_good_item?.unit_of_measure === 'kg') {
         quantityToProduce = quantityToProduce / 2.20462
       }
-      quantityToProduce = Math.round(quantityToProduce * 100) / 100
+      quantityToProduce = normalizeMassQuantity(Math.round(quantityToProduce * 100) / 100)
 
-      // Prepare inputs array - round all quantities to 2 decimal places
-      const inputs: BatchInput[] = Object.entries(selectedLots).map(([lotId, qty]) => ({
-        lot_id: parseInt(lotId),
-        quantity_used: Math.round(qty * 100) / 100
-      }))
+      // Prepare inputs array (ea/rolls keep 5 dp; mass uses normalize_mass_quantity)
+      const inputs: BatchInput[] = Object.entries(selectedLots).map(([lotId, qty]) => {
+        const lot = allLots.find((l) => l.id === parseInt(lotId, 10))
+        const q =
+          lot?.item.unit_of_measure === 'ea'
+            ? Math.round(qty * 1e5) / 1e5
+            : normalizeMassQuantity(Math.round(qty * 100) / 100)
+        return { lot_id: parseInt(lotId, 10), quantity_used: q }
+      })
 
       await updateProductionBatch(batch.id, {
         quantity_produced: quantityToProduce,
@@ -386,11 +392,13 @@ function AdjustBatch({ batch, onClose, onSuccess }: AdjustBatchProps) {
                   const currentQty = lotInputValues[lot.id] || ''
                   
                   // Calculate max value in display unit
-                  const maxInDisplayUnit = quantityUnit === lot.unit_of_measure
-                    ? lot.quantity_remaining
-                    : (lot.unit_of_measure === 'lbs'
-                        ? convertWeight(lot.quantity_remaining, 'lbs', quantityUnit)
-                        : convertWeight(lot.quantity_remaining, 'kg', quantityUnit))
+                  const availNative = lotAvailableForUse(lot)
+                  const maxInDisplayUnit =
+                    quantityUnit === lot.unit_of_measure
+                      ? availNative
+                      : lot.unit_of_measure === 'lbs'
+                        ? convertWeight(availNative, 'lbs', quantityUnit)
+                        : convertWeight(availNative, 'kg', quantityUnit)
                   
                   return (
                     <div key={lot.id} className={`lot-selection-card ${isSelected ? 'selected' : ''}`}>
@@ -404,7 +412,7 @@ function AdjustBatch({ batch, onClose, onSuccess }: AdjustBatchProps) {
                           <span className="item-name">{lot.item.name}</span>
                         </div>
                         <div className="lot-details">
-                          <span>Available: {formatNumber(lot.quantity_remaining)} {lot.unit_of_measure}</span>
+                          <span>Available: {formatNumber(lotAvailableForUse(lot))} {lot.unit_of_measure}</span>
                         </div>
                       </div>
                       <div className="lot-input">

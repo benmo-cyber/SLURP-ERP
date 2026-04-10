@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react'
-import { getCustomer, getCustomerPricing, getShipToLocations, getCustomerContacts, getSalesCalls, getCustomerForecasts, getCustomerUsage, updateCustomer, deleteShipToLocation, deleteCustomerContact, deleteSalesCall, deleteCustomerForecast, deleteCustomerPricing } from '../../api/customers'
+import { getCustomer, getCustomerPricing, getShipToLocations, getCustomerContacts, getSalesCalls, getCustomerForecasts, getCustomerUsage, updateCustomer, updateCustomerContact, deleteShipToLocation, deleteCustomerContact, deleteSalesCall, deleteCustomerForecast, deleteCustomerPricing } from '../../api/customers'
 import { getItems } from '../../api/inventory'
 import { formatNumber, formatCurrency } from '../../utils/formatNumber'
+import { formatAppDate, formatAppDateTime } from '../../utils/appDateFormat'
 import CreateShipToLocation from './CreateShipToLocation'
 import CreateContact from './CreateContact'
 import CreateSalesCall from './CreateSalesCall'
@@ -21,6 +22,11 @@ interface Customer {
   state?: string
   zip_code?: string
   country?: string
+  bill_to_address?: string
+  bill_to_city?: string
+  bill_to_state?: string
+  bill_to_zip_code?: string
+  bill_to_country?: string
   payment_terms?: string
   notes?: string
   is_active: boolean
@@ -65,6 +71,12 @@ function CustomerProfile({ customerId, onClose }: CustomerProfileProps) {
     state: '',
     zip_code: '',
     country: 'USA',
+    bill_to_same_as_hq: false,
+    bill_to_address: '',
+    bill_to_city: '',
+    bill_to_state: '',
+    bill_to_zip_code: '',
+    bill_to_country: '',
     payment_terms: '',
     notes: '',
     is_active: true,
@@ -94,6 +106,30 @@ function CustomerProfile({ customerId, onClose }: CustomerProfileProps) {
       loadCustomerData()
     } catch (error: any) {
       alert(error.response?.data?.detail || error.message || 'Failed to delete contact')
+    }
+  }
+
+  const handleToggleContactFlag = async (contact: any, field: 'is_ap_contact' | 'is_purchasing_contact') => {
+    const value = !contact[field]
+    try {
+      await updateCustomerContact(contact.id, {
+        customer: customerId,
+        first_name: contact.first_name,
+        last_name: contact.last_name,
+        title: contact.title ?? '',
+        contact_type: contact.contact_type || 'general',
+        emails: Array.isArray(contact.emails) ? contact.emails : [],
+        phone: contact.phone ?? '',
+        mobile: contact.mobile ?? '',
+        is_primary: contact.is_primary ?? false,
+        is_ap_contact: field === 'is_ap_contact' ? value : (contact.is_ap_contact ?? false),
+        is_purchasing_contact: field === 'is_purchasing_contact' ? value : (contact.is_purchasing_contact ?? false),
+        is_active: contact.is_active !== undefined ? contact.is_active : true,
+        notes: contact.notes ?? '',
+      })
+      loadCustomerData()
+    } catch (error: any) {
+      alert(error.response?.data?.detail || error.message || 'Failed to update contact')
     }
   }
 
@@ -132,16 +168,38 @@ function CustomerProfile({ customerId, onClose }: CustomerProfileProps) {
 
   const openEditProfile = () => {
     if (!customer) return
-    setEditFormData({
-      name: customer.name,
-      contact_name: customer.contact_name || '',
-      email: customer.email || '',
-      phone: customer.phone || '',
+    const hq = {
       address: customer.address || '',
       city: customer.city || '',
       state: customer.state || '',
       zip_code: customer.zip_code || '',
       country: customer.country || 'USA',
+    }
+    const billTo = {
+      bill_to_address: customer.bill_to_address ?? customer.address ?? '',
+      bill_to_city: customer.bill_to_city ?? customer.city ?? '',
+      bill_to_state: customer.bill_to_state ?? customer.state ?? '',
+      bill_to_zip_code: customer.bill_to_zip_code ?? customer.zip_code ?? '',
+      bill_to_country: customer.bill_to_country ?? customer.country ?? 'USA',
+    }
+    const billToSameAsHq =
+      (billTo.bill_to_address || '') === (hq.address || '') &&
+      (billTo.bill_to_city || '') === (hq.city || '') &&
+      (billTo.bill_to_state || '') === (hq.state || '') &&
+      (billTo.bill_to_zip_code || '') === (hq.zip_code || '') &&
+      (billTo.bill_to_country || '') === (hq.country || '')
+    setEditFormData({
+      name: customer.name,
+      contact_name: customer.contact_name || '',
+      email: customer.email || '',
+      phone: customer.phone || '',
+      address: hq.address,
+      city: hq.city,
+      state: hq.state,
+      zip_code: hq.zip_code,
+      country: hq.country,
+      bill_to_same_as_hq: billToSameAsHq,
+      ...billTo,
       payment_terms: customer.payment_terms || '',
       notes: customer.notes || '',
       is_active: customer.is_active,
@@ -149,21 +207,29 @@ function CustomerProfile({ customerId, onClose }: CustomerProfileProps) {
     setShowEditProfile(true)
   }
 
-  const getProfilePayload = () => ({
-    customer_id: customer!.customer_id,
-    name: editFormData.name,
-    contact_name: editFormData.contact_name || null,
-    email: editFormData.email || null,
-    phone: editFormData.phone || null,
-    address: editFormData.address || null,
-    city: editFormData.city || null,
-    state: editFormData.state || null,
-    zip_code: editFormData.zip_code || null,
-    country: editFormData.country || null,
-    payment_terms: editFormData.payment_terms || null,
-    notes: editFormData.notes || null,
-    is_active: editFormData.is_active,
-  })
+  const getProfilePayload = () => {
+    const billToSameAsHq = editFormData.bill_to_same_as_hq
+    return {
+      customer_id: customer!.customer_id,
+      name: editFormData.name,
+      contact_name: editFormData.contact_name || null,
+      email: editFormData.email || null,
+      phone: editFormData.phone || null,
+      address: editFormData.address || null,
+      city: editFormData.city || null,
+      state: editFormData.state || null,
+      zip_code: editFormData.zip_code || null,
+      country: editFormData.country || null,
+      bill_to_address: billToSameAsHq ? (editFormData.address || null) : (editFormData.bill_to_address || null),
+      bill_to_city: billToSameAsHq ? (editFormData.city || null) : (editFormData.bill_to_city || null),
+      bill_to_state: billToSameAsHq ? (editFormData.state || null) : (editFormData.bill_to_state || null),
+      bill_to_zip_code: billToSameAsHq ? (editFormData.zip_code || null) : (editFormData.bill_to_zip_code || null),
+      bill_to_country: billToSameAsHq ? (editFormData.country || null) : (editFormData.bill_to_country || null),
+      payment_terms: editFormData.payment_terms || null,
+      notes: editFormData.notes || null,
+      is_active: editFormData.is_active,
+    }
+  }
 
   const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -290,48 +356,148 @@ function CustomerProfile({ customerId, onClose }: CustomerProfileProps) {
                 </div>
               </div>
               <div className="form-group">
-                <label>Street address</label>
+                <label>Headquarters address — Street</label>
                 <textarea
                   value={editFormData.address}
-                  onChange={(e) => setEditFormData({ ...editFormData, address: e.target.value })}
+                  onChange={(e) => {
+                    const next = { ...editFormData, address: e.target.value }
+                    if (next.bill_to_same_as_hq) {
+                      next.bill_to_address = next.address
+                      next.bill_to_city = next.city
+                      next.bill_to_state = next.state
+                      next.bill_to_zip_code = next.zip_code
+                      next.bill_to_country = next.country
+                    }
+                    setEditFormData(next)
+                  }}
                   rows={2}
                   placeholder="Street, suite/unit, building (do not include city, state, or country—use the fields below)"
                 />
               </div>
               <div className="form-row">
                 <div className="form-group">
-                  <label>City</label>
+                  <label>HQ City</label>
                   <input
                     type="text"
                     value={editFormData.city}
-                    onChange={(e) => setEditFormData({ ...editFormData, city: e.target.value })}
+                    onChange={(e) => {
+                      const next = { ...editFormData, city: e.target.value }
+                      if (next.bill_to_same_as_hq) next.bill_to_city = next.city
+                      setEditFormData(next)
+                    }}
                   />
                 </div>
                 <div className="form-group">
-                  <label>State</label>
+                  <label>HQ State</label>
                   <input
                     type="text"
                     value={editFormData.state}
-                    onChange={(e) => setEditFormData({ ...editFormData, state: e.target.value })}
+                    onChange={(e) => {
+                      const next = { ...editFormData, state: e.target.value }
+                      if (next.bill_to_same_as_hq) next.bill_to_state = next.state
+                      setEditFormData(next)
+                    }}
                   />
                 </div>
                 <div className="form-group">
-                  <label>ZIP code</label>
+                  <label>HQ ZIP code</label>
                   <input
                     type="text"
                     value={editFormData.zip_code}
-                    onChange={(e) => setEditFormData({ ...editFormData, zip_code: e.target.value })}
+                    onChange={(e) => {
+                      const next = { ...editFormData, zip_code: e.target.value }
+                      if (next.bill_to_same_as_hq) next.bill_to_zip_code = next.zip_code
+                      setEditFormData(next)
+                    }}
                   />
                 </div>
                 <div className="form-group">
-                  <label>Country</label>
+                  <label>HQ Country</label>
                   <input
                     type="text"
                     value={editFormData.country}
-                    onChange={(e) => setEditFormData({ ...editFormData, country: e.target.value })}
+                    onChange={(e) => {
+                      const next = { ...editFormData, country: e.target.value }
+                      if (next.bill_to_same_as_hq) next.bill_to_country = next.country
+                      setEditFormData(next)
+                    }}
                   />
                 </div>
               </div>
+
+              <div className="form-group">
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={editFormData.bill_to_same_as_hq}
+                    onChange={(e) => {
+                      const checked = e.target.checked
+                      setEditFormData({
+                        ...editFormData,
+                        bill_to_same_as_hq: checked,
+                        ...(checked
+                          ? {
+                              bill_to_address: editFormData.address,
+                              bill_to_city: editFormData.city,
+                              bill_to_state: editFormData.state,
+                              bill_to_zip_code: editFormData.zip_code,
+                              bill_to_country: editFormData.country,
+                            }
+                          : {}),
+                      })
+                    }}
+                  />
+                  Bill-to address is same as HQ
+                </label>
+              </div>
+              {!editFormData.bill_to_same_as_hq && (
+                <>
+                  <div className="form-group">
+                    <label>Bill-to address — Street</label>
+                    <textarea
+                      value={editFormData.bill_to_address}
+                      onChange={(e) => setEditFormData({ ...editFormData, bill_to_address: e.target.value })}
+                      rows={2}
+                      placeholder="Bill-to street address"
+                    />
+                  </div>
+                  <div className="form-row">
+                    <div className="form-group">
+                      <label>Bill-to City</label>
+                      <input
+                        type="text"
+                        value={editFormData.bill_to_city}
+                        onChange={(e) => setEditFormData({ ...editFormData, bill_to_city: e.target.value })}
+                      />
+                    </div>
+                    <div className="form-group">
+                      <label>Bill-to State</label>
+                      <input
+                        type="text"
+                        value={editFormData.bill_to_state}
+                        onChange={(e) => setEditFormData({ ...editFormData, bill_to_state: e.target.value })}
+                      />
+                    </div>
+                    <div className="form-group">
+                      <label>Bill-to ZIP code</label>
+                      <input
+                        type="text"
+                        value={editFormData.bill_to_zip_code}
+                        onChange={(e) => setEditFormData({ ...editFormData, bill_to_zip_code: e.target.value })}
+                      />
+                    </div>
+                    <div className="form-group">
+                      <label>Bill-to Country</label>
+                      <input
+                        type="text"
+                        value={editFormData.bill_to_country}
+                        onChange={(e) => setEditFormData({ ...editFormData, bill_to_country: e.target.value })}
+                      />
+                    </div>
+                  </div>
+                </>
+              )}
+
               <div className="form-group">
                 <label>Payment terms</label>
                 <input
@@ -409,7 +575,7 @@ function CustomerProfile({ customerId, onClose }: CustomerProfileProps) {
               </div>
 
               <div className="info-section">
-                <h3>Address</h3>
+                <h3>Headquarters address</h3>
                 <div className="address-display">
                   {customer.address && <div className="address-street">{customer.address}</div>}
                   {(customer.city || customer.state || customer.zip_code || customer.country) && (
@@ -421,6 +587,29 @@ function CustomerProfile({ customerId, onClose }: CustomerProfileProps) {
                   {!customer.address && !customer.city && !customer.state && !customer.zip_code && !customer.country && (
                     <div className="text-muted">No address on file</div>
                   )}
+                </div>
+              </div>
+
+              <div className="info-section">
+                <h3>Bill-to address</h3>
+                <div className="address-display">
+                  {(() => {
+                    const hqStr = [customer.address, customer.city, customer.state, customer.zip_code, customer.country].filter(Boolean).join(' ')
+                    const billStr = [customer.bill_to_address, customer.bill_to_city, customer.bill_to_state, customer.bill_to_zip_code, customer.bill_to_country].filter(Boolean).join(' ')
+                    const sameAsHq = billStr ? hqStr.trim() === billStr.trim() : !billStr
+                    if (sameAsHq) return <div className="text-muted">Same as headquarters</div>
+                    return (
+                      <>
+                        {customer.bill_to_address && <div className="address-street">{customer.bill_to_address}</div>}
+                        {(customer.bill_to_city || customer.bill_to_state || customer.bill_to_zip_code || customer.bill_to_country) && (
+                          <div className="address-city-state">
+                            {[customer.bill_to_city, customer.bill_to_state, customer.bill_to_zip_code].filter(Boolean).join(', ')}
+                            {customer.bill_to_country ? ` — ${customer.bill_to_country}` : ''}
+                          </div>
+                        )}
+                      </>
+                    )
+                  })()}
                 </div>
               </div>
 
@@ -476,6 +665,7 @@ function CustomerProfile({ customerId, onClose }: CustomerProfileProps) {
                     <th>Item Name</th>
                     <th>Unit Price</th>
                     <th>Unit of Measure</th>
+                    <th>Incoterms</th>
                     <th>Effective Date</th>
                     <th>Expiry Date</th>
                     <th>Status</th>
@@ -485,7 +675,7 @@ function CustomerProfile({ customerId, onClose }: CustomerProfileProps) {
                 <tbody>
                   {pricing.length === 0 ? (
                     <tr>
-                      <td colSpan={8} className="no-data">No pricing records found</td>
+                      <td colSpan={9} className="no-data">No pricing records found</td>
                     </tr>
                   ) : (
                     pricing.map((p) => (
@@ -494,6 +684,7 @@ function CustomerProfile({ customerId, onClose }: CustomerProfileProps) {
                         <td>{p.item?.name || 'N/A'}</td>
                         <td>{formatCurrency(p.unit_price)}</td>
                         <td>{p.unit_of_measure}</td>
+                        <td>{[p.incoterms, p.incoterms_place].filter(Boolean).join(' ') || '—'}</td>
                         <td>{p.effective_date}</td>
                         <td>{p.expiry_date || 'N/A'}</td>
                         <td>{p.is_active ? 'Active' : 'Inactive'}</td>
@@ -596,28 +787,48 @@ function CustomerProfile({ customerId, onClose }: CustomerProfileProps) {
                 <thead>
                   <tr>
                     <th>Name</th>
+                    <th>Type</th>
                     <th>Title</th>
                     <th>Email</th>
                     <th>Phone</th>
                     <th>Mobile</th>
                     <th>Primary</th>
+                    <th>A/P contact</th>
+                    <th>Purchasing contact</th>
                     <th>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   {contacts.length === 0 ? (
                     <tr>
-                      <td colSpan={7} className="no-data">No contacts found</td>
+                      <td colSpan={10} className="no-data">No contacts found</td>
                     </tr>
                   ) : (
                     contacts.map((contact) => (
                       <tr key={contact.id}>
                         <td>{contact.full_name}</td>
+                        <td>{contact.contact_type ? String(contact.contact_type).charAt(0).toUpperCase() + String(contact.contact_type).slice(1) : 'General'}</td>
                         <td>{contact.title || 'N/A'}</td>
-                        <td>{contact.email || 'N/A'}</td>
+                        <td>{(contact.emails && contact.emails.length > 0) ? contact.emails.join(', ') : 'N/A'}</td>
                         <td>{contact.phone || 'N/A'}</td>
                         <td>{contact.mobile || 'N/A'}</td>
                         <td>{contact.is_primary ? 'Yes' : 'No'}</td>
+                        <td>
+                          <input
+                            type="checkbox"
+                            checked={!!contact.is_ap_contact}
+                            onChange={() => handleToggleContactFlag(contact, 'is_ap_contact')}
+                            title="Receives invoices when issued"
+                          />
+                        </td>
+                        <td>
+                          <input
+                            type="checkbox"
+                            checked={!!contact.is_purchasing_contact}
+                            onChange={() => handleToggleContactFlag(contact, 'is_purchasing_contact')}
+                            title="Receives sales order confirmations when issued"
+                          />
+                        </td>
                         <td>
                           <button 
                             className="btn btn-sm btn-secondary"
@@ -665,7 +876,7 @@ function CustomerProfile({ customerId, onClose }: CustomerProfileProps) {
                     <div key={call.id} className="sales-call-card">
                       <div className="call-header">
                         <div>
-                          <strong>{new Date(call.call_date).toLocaleString()}</strong>
+                          <strong>{formatAppDateTime(call.call_date)}</strong>
                           <span className="call-type">{call.call_type}</span>
                         </div>
                         {call.contact_name && <div>Contact: {call.contact_name}</div>}
@@ -674,7 +885,7 @@ function CustomerProfile({ customerId, onClose }: CustomerProfileProps) {
                       <div className="call-notes">{call.notes}</div>
                       {call.follow_up_required && (
                         <div className="follow-up">
-                          <strong>Follow-up required:</strong> {call.follow_up_date ? new Date(call.follow_up_date).toLocaleDateString() : 'Date not set'}
+                          <strong>Follow-up required:</strong> {call.follow_up_date ? formatAppDate(call.follow_up_date) : 'Date not set'}
                         </div>
                       )}
                       <div className="call-actions">

@@ -25,8 +25,8 @@
 }
 
 .batch-table thead {
-  background-color: #2c3e50;
-  color: white;
+  background-color: var(--app-header-bg);
+  color: var(--app-header-text);
 }
 
 .batch-table th {
@@ -34,6 +34,8 @@
   text-align: left;
   font-weight: 600;
   font-size: 0.9rem;
+  color: var(--app-header-text);
+  background-color: var(--app-header-bg);
 }
 
 .batch-table th.sortable {
@@ -41,7 +43,7 @@
   user-select: none;
 }
 .batch-table th.sortable:hover {
-  background-color: rgba(255, 255, 255, 0.15);
+  background-color: var(--table-header-hover-bg);
 }
 
 .batch-table td {
@@ -56,6 +58,32 @@
 .batch-number {
   font-weight: 600;
   color: #3498db;
+}
+
+.batch-number-cell-god {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.batch-number-input {
+  min-width: 10rem;
+  max-width: 16rem;
+  padding: 0.25rem 0.5rem;
+  font: inherit;
+  font-weight: 600;
+  color: #1a5276;
+  border: 1px solid #85c1e9;
+  border-radius: 4px;
+  background: #fff;
+}
+
+.batch-number-pdf-link {
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: #0066cc;
+  text-decoration: underline;
 }
 
 .status-badge {

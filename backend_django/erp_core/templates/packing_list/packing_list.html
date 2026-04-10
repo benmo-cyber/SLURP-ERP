@@ -14,13 +14,21 @@
     .title-right h1 { margin: 0 0 6px 0; font-size: 18pt; }
     .bill-ship-table { width: 100%; border-collapse: collapse; margin-bottom: 14px; }
     .bill-ship-table td { vertical-align: top; width: 50%; padding: 0 8px 0 0; font-size: 9pt; }
+    .addr-block { margin-top: 4px; }
+    .addr-line { margin: 0 0 3px 0; line-height: 1.35; }
     .meta-table { width: 100%; border-collapse: collapse; margin-bottom: 12px; font-size: 9pt; }
     .meta-table td { padding: 2px 8px 2px 0; }
+    .pieces-dim-table { width: 100%; border-collapse: collapse; margin-bottom: 14px; font-size: 9pt; }
+    .pieces-dim-table th, .pieces-dim-table td { border: 0.5px solid #333; padding: 5px 6px; text-align: left; }
+    .pieces-dim-table th { background: #e8e8e8; font-weight: bold; }
+    .pieces-dim-table .col-piece { width: 12%; }
+    .pieces-dim-table .col-weight { width: 22%; }
     .items-table { width: 100%; border-collapse: collapse; font-size: 9pt; }
     .items-table th, .items-table td { border: 0.5px solid #333; padding: 5px 6px; text-align: left; }
     .items-table th { background: #e8e8e8; font-weight: bold; }
-    .items-table .col-qty { text-align: right; width: 15%; }
-    .items-table .col-sku { width: 25%; }
+    .items-table .col-qty { text-align: right; width: 12%; }
+    .items-table .col-sku { width: 18%; }
+    .items-table .col-lots { font-size: 8.5pt; line-height: 1.3; word-wrap: break-word; max-width: 2.6in; }
   </style>
 </head>
 <body>
@@ -42,24 +50,70 @@
 
   <table class="bill-ship-table">
     <tr>
-      <td><strong>Ship To:</strong><br/><pre style="margin: 0; font-family: inherit; white-space: pre-wrap;">{{ ship_to_text }}</pre></td>
-      <td><strong>Bill To:</strong><br/><pre style="margin: 0; font-family: inherit; white-space: pre-wrap;">{{ bill_to_text }}</pre></td>
+      <td>
+        <strong>Ship To:</strong>
+        <div class="addr-block">
+          {% for line in ship_to_lines %}
+          <div class="addr-line">{{ line }}</div>
+          {% endfor %}
+        </div>
+      </td>
+      <td>
+        <strong>Bill To:</strong>
+        <div class="addr-block">
+          {% for line in bill_to_lines %}
+          <div class="addr-line">{{ line }}</div>
+          {% endfor %}
+        </div>
+      </td>
     </tr>
   </table>
 
   <table class="meta-table">
     <tr><td><strong>Date:</strong></td><td>{{ date_str }}</td><td><strong>Order Date:</strong></td><td>{{ order_date_str }}</td></tr>
     <tr><td><strong>Ship Date:</strong></td><td>{{ ship_date_str }}</td><td><strong>PO / SO #:</strong></td><td>{{ po_so_str }}</td></tr>
-    {% if dimensions != '—' or pieces != '—' %}
-    <tr><td><strong>Dimensions:</strong></td><td>{{ dimensions }}</td><td><strong>Pieces:</strong></td><td>{{ pieces }}</td></tr>
+    {% if carrier and carrier != '—' %}
+    <tr><td><strong>Carrier:</strong></td><td colspan="3">{{ carrier }}</td></tr>
+    {% endif %}
+    {% if tracking_number and tracking_number != '—' %}
+    <tr><td><strong>Tracking #:</strong></td><td colspan="3">{{ tracking_number }}</td></tr>
+    {% endif %}
+    {% if pieces and pieces != '—' %}
+    <tr><td><strong>Pieces:</strong></td><td colspan="3">{{ pieces }}</td></tr>
     {% endif %}
   </table>
+
+  {% if piece_dimension_rows and piece_dimension_rows|length > 0 %}
+  <table class="pieces-dim-table">
+    <thead>
+      <tr>
+        <th class="col-piece">Piece</th>
+        <th>Dimensions</th>
+        <th class="col-weight">Weight</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in piece_dimension_rows %}
+      <tr>
+        <td>{{ row.piece_num }}</td>
+        <td>{{ row.dimensions }}</td>
+        <td>{{ row.weight }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% elif dimensions and dimensions != '—' %}
+  <table class="meta-table">
+    <tr><td><strong>Dimensions (summary):</strong></td><td colspan="3">{{ dimensions }}</td></tr>
+  </table>
+  {% endif %}
 
   <table class="items-table">
     <thead>
       <tr>
         <th class="col-sku">SKU / Item</th>
         <th>Description</th>
+        <th class="col-lots">Lot(s)</th>
         <th class="col-qty">Quantity</th>
       </tr>
     </thead>
@@ -68,6 +122,7 @@
       <tr>
         <td class="col-sku">{{ row.sku }}</td>
         <td>{{ row.description }}</td>
+        <td class="col-lots">{{ row.lots|default('—') }}</td>
         <td class="col-qty">{{ row.quantity }}</td>
       </tr>
       {% endfor %}

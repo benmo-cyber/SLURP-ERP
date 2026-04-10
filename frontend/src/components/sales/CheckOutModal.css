@@ -77,20 +77,33 @@
 
 .unit-toggle label {
   font-weight: 500;
+  color: #111827;
 }
 
 .unit-toggle button {
   padding: 5px 15px;
-  border: 1px solid #ddd;
+  border: 1px solid #cbd5e1;
   background: white;
+  color: #111827;
   cursor: pointer;
   border-radius: 4px;
 }
 
 .unit-toggle button.active {
-  background: #007bff;
-  color: white;
-  border-color: #007bff;
+  background: #dbeafe;
+  color: #111827;
+  border-color: #2563eb;
+  font-weight: 600;
+}
+
+/* Ensure step-2 unit toggle wins over global .btn or app header button styles */
+.checkout-modal .unit-toggle button {
+  color: #111827;
+}
+.checkout-modal .unit-toggle button.active {
+  background: #dbeafe !important;
+  color: #111827 !important;
+  border-color: #2563eb !important;
 }
 
 .allocation-item {
@@ -290,4 +303,61 @@
   .checkout-actions button {
     width: 100%;
   }
+}
+
+.piece-dimensions-block {
+  margin-top: 8px;
+}
+
+.piece-dimensions-heading {
+  display: block;
+  font-weight: 600;
+  margin-bottom: 6px;
+  color: #333;
+}
+
+.piece-handling-unit {
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.piece-handling-unit:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.piece-handling-unit-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #374151;
+  margin-bottom: 8px;
+}
+
+.piece-handling-unit-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+@media (max-width: 640px) {
+  .piece-handling-unit-fields {
+    grid-template-columns: 1fr;
+  }
+}
+
+.piece-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.piece-field label {
+  font-size: 13px;
+  font-weight: 500;
+  color: #374151;
+}
+
+.piece-field .form-input {
+  max-width: 100%;
 }

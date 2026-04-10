@@ -116,7 +116,7 @@ function ReverseCheckIn({ onClose, onSuccess }: ReverseCheckInProps) {
 
         <div className="modal-body">
           <p className="warning-text">
-            Are you sure you want to UNFK? Once UNFK'd you cannot RFK
+            Removes the receipt lot and rolls back PO received quantity when allowed. Lots that are allocated or used in production cannot be reversed here.
           </p>
 
           <div className="form-group">
@@ -157,7 +157,7 @@ function ReverseCheckIn({ onClose, onSuccess }: ReverseCheckInProps) {
 
       {showConfirmDialog && (
         <ConfirmDialog
-          message="Are you sure you want to UNFK? Once UNFK'd you cannot RFK"
+          message="Reverse check-in for this lot? The receipt will be removed and cannot be restored from this screen."
           onConfirm={confirmReverse}
           onCancel={cancelReverse}
         />

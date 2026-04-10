@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { getBankReconciliations, createBankReconciliation, getAccounts } from '../../api/finance'
-import { useBackdatedEntry } from '../../context/BackdatedEntryContext'
+import { useGodMode } from '../../context/GodModeContext'
+import { formatAppDate } from '../../utils/appDateFormat'
 import './BankReconciliation.css'
 
 interface BankReconRecord {
@@ -15,6 +16,7 @@ interface BankReconRecord {
 }
 
 const BankReconciliation: React.FC = () => {
+  const { maxDateForEntry } = useGodMode()
   const [list, setList] = useState<BankReconRecord[]>([])
   const [accounts, setAccounts] = useState<{ id: number; account_number: string; name: string }[]>([])
   const [loading, setLoading] = useState(true)
@@ -63,7 +65,7 @@ const BankReconciliation: React.FC = () => {
   }
 
   const formatCurrency = (n: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n)
-  const formatDate = (d: string) => d ? new Date(d).toLocaleDateString() : ''
+  const formatDate = (d: string) => (d ? formatAppDate(d) : '')
 
   return (
     <div className="bank-reconciliation">

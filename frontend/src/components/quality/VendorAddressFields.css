@@ -1,0 +1,61 @@
+.vendor-address-fieldset {
+  border: 1px solid #d8dee6;
+  border-radius: 8px;
+  padding: 1rem 1.25rem 1.25rem;
+  margin: 0 0 1.25rem;
+  background: #fafbfd;
+}
+
+.vendor-address-legend {
+  padding: 0 0.35rem;
+  font-weight: 600;
+  font-size: 1rem;
+  color: #2c3e50;
+}
+
+.vendor-address-intl-hint {
+  margin: 0 0 1rem;
+  font-size: 0.88rem;
+  line-height: 1.45;
+  color: #4a5568;
+}
+
+.vendor-address-fieldset .form-group textarea {
+  width: 100%;
+  min-height: 2.75rem;
+  resize: vertical;
+  font-family: inherit;
+  font-size: 0.95rem;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  box-sizing: border-box;
+}
+
+.vendor-address-fieldset .form-group input[type='text'] {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.vendor-address-row-triple {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+}
+
+@media (max-width: 640px) {
+  .vendor-address-row-triple {
+    grid-template-columns: 1fr;
+  }
+}
+
+.vendor-address-fieldset .form-hint {
+  display: block;
+  margin-top: 0.25rem;
+  font-size: 0.8rem;
+  color: #666;
+}
+
+.vendor-address-postal-only {
+  max-width: 28rem;
+}

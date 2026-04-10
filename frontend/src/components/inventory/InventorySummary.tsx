@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { getItems, getLots } from '../../api/inventory'
 import { formatNumber } from '../../utils/formatNumber'
+import { formatAppDate } from '../../utils/appDateFormat'
 import './InventorySummary.css'
 
 interface Item {
@@ -127,8 +128,8 @@ function InventorySummary() {
                             <td>{lot.lot_number}</td>
                             <td>{formatNumber(lot.quantity, 0)}</td>
                             <td>{formatNumber(lot.quantity_remaining, 0)}</td>
-                            <td>{new Date(lot.received_date).toLocaleDateString()}</td>
-                            <td>{lot.expiration_date ? new Date(lot.expiration_date).toLocaleDateString() : '-'}</td>
+                            <td>{formatAppDate(lot.received_date)}</td>
+                            <td>{lot.expiration_date ? formatAppDate(lot.expiration_date) : '-'}</td>
                           </tr>
                         ))}
                       </tbody>

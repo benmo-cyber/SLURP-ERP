@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { getLotDepletionLogs, LotDepletionLog } from '../../api/inventory'
 import { formatNumber } from '../../utils/formatNumber'
+import { formatAppDateTime } from '../../utils/appDateFormat'
 import './LotDepletionLogs.css'
 
 function LotDepletionLogs() {
@@ -57,16 +58,7 @@ function LotDepletionLogs() {
     setTimeout(loadLogs, 100)
   }
 
-  const formatDate = (dateString: string) => {
-    const date = new Date(dateString)
-    return date.toLocaleString('en-US', {
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit'
-    })
-  }
+  const formatDate = (dateString: string) => formatAppDateTime(dateString)
 
   const getMethodBadgeClass = (method: string) => {
     const classes: { [key: string]: string } = {

@@ -5,10 +5,13 @@ __pycache__/
 *.so
 .Python
 venv/
+.venv*/
 env/
 ENV/
 *.db
 *.sqlite3
+# Repo-root SQLite (settings: wwi_erp.db) — all ERP + local auth data
+/wwi_erp.db
 
 # Node
 node_modules/
@@ -36,3 +39,15 @@ Thumbs.db
 Sensitive/
 *.env
 .env
+
+# User uploads (PDFs, FPS files, etc.) — folder exists in git via .gitkeep only
+backend_django/media/**
+!backend_django/media/.gitkeep
+
+# Local legacy/sample XML (copy template from data/sample_import_template.xml)
+data/private_sample_data/**
+!data/private_sample_data/README.md
+
+# Private exports before git push — copy zips/JSON somewhere safe; not committed
+data/private_backups/**
+!data/private_backups/README.md

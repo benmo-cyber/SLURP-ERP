@@ -14,7 +14,9 @@ os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'wwi_erp.settings')
 django.setup()
 
 from erp_core.models import PurchaseOrder, SalesOrder, Invoice
-from erp_core.pdf_generator import generate_purchase_order_pdf, generate_invoice_pdf, generate_sales_order_pdf
+from erp_core.po_pdf_html import generate_po_pdf_from_html
+from erp_core.invoice_pdf_html import generate_invoice_pdf_from_html
+from erp_core.sales_order_pdf_html import generate_sales_order_pdf_from_html
 import tempfile
 import subprocess
 
@@ -55,7 +57,10 @@ def main():
     if po:
         print(f"Generating purchase order PDF for {po.po_number}...")
         try:
-            po_pdf = generate_purchase_order_pdf(po)
+            po_pdf = generate_po_pdf_from_html(po)
+            if not po_pdf:
+                print(f"  [ERROR] PO HTML PDF returned no data")
+                raise RuntimeError("PO PDF failed")
             po_path = os.path.join(temp_dir, f"Purchase_Order_{po.po_number}.pdf")
             with open(po_path, 'wb') as f:
                 f.write(po_pdf)
@@ -72,7 +77,7 @@ def main():
     if so:
         print(f"\nGenerating sales order PDF for {so.so_number}...")
         try:
-            so_pdf = generate_sales_order_pdf(so)
+            so_pdf = generate_sales_order_pdf_from_html(so)
             so_path = os.path.join(temp_dir, f"Sales_Order_{so.so_number}.pdf")
             with open(so_path, 'wb') as f:
                 f.write(so_pdf)
@@ -89,7 +94,10 @@ def main():
     if invoice:
         print(f"\nGenerating invoice PDF for {invoice.invoice_number}...")
         try:
-            invoice_pdf = generate_invoice_pdf(invoice)
+            invoice_pdf = generate_invoice_pdf_from_html(invoice)
+            if not invoice_pdf:
+                print(f"  [ERROR] Invoice HTML PDF returned no data")
+                raise RuntimeError("Invoice PDF failed")
             invoice_path = os.path.join(temp_dir, f"Invoice_{invoice.invoice_number}.pdf")
             with open(invoice_path, 'wb') as f:
                 f.write(invoice_pdf)

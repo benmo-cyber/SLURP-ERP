@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { getItems, createLot, getItemPackSizes } from '../../api/inventory'
-import { useBackdatedEntry } from '../../context/BackdatedEntryContext'
+import { useGodMode } from '../../context/GodModeContext'
 import './CheckIn.css'
 
 interface ItemPackSize {
@@ -31,10 +31,12 @@ function CheckIn() {
     quantity: '',
     received_date: new Date().toISOString().split('T')[0],
     expiration_date: '',
+    manufacture_date: '',
     notes: '',
     pack_size_id: '',
   })
   const [availablePackSizes, setAvailablePackSizes] = useState<ItemPackSize[]>([])
+  const { maxDateForEntry } = useGodMode()
 
   useEffect(() => {
     loadItems()
@@ -68,6 +70,10 @@ function CheckIn() {
         quantity: parseFloat(formData.quantity),
         received_date: formData.received_date,
         expiration_date: formData.expiration_date || null,
+        manufacture_date:
+          formData.manufacture_date && formData.manufacture_date.trim()
+            ? new Date(formData.manufacture_date + 'T00:00:00').toISOString()
+            : null,
         notes: formData.notes || null,
       }
       if (formData.pack_size_id) {
@@ -82,6 +88,7 @@ function CheckIn() {
         quantity: '',
         received_date: new Date().toISOString().split('T')[0],
         expiration_date: '',
+        manufacture_date: '',
         notes: '',
         pack_size_id: '',
       })
@@ -132,7 +139,7 @@ function CheckIn() {
     <div className="checkin-container">
       <div className="checkin-header">
         <h2>Check In Materials</h2>
-        <p>Record inbound materials to add them to inventory</p>
+        <p>Record inbound materials to add them to inventory. Set expiration and manufacture dates when printed on the label (including distributed items).</p>
       </div>
 
       <form onSubmit={handleSubmit} className="checkin-form">
@@ -193,6 +200,15 @@ function CheckIn() {
               onChange={(e) => setFormData({ ...formData, expiration_date: e.target.value })}
             />
           </div>
+          <div className="form-group">
+            <label htmlFor="manufacture_date">Manufacture Date (Optional)</label>
+            <input
+              type="date"
+              id="manufacture_date"
+              value={formData.manufacture_date}
+              onChange={(e) => setFormData({ ...formData, manufacture_date: e.target.value })}
+            />
+          </div>
 
           {availablePackSizes.length > 0 && (
             <div className="form-group">
@@ -235,7 +251,9 @@ function CheckIn() {
               quantity: '',
               received_date: new Date().toISOString().split('T')[0],
               expiration_date: '',
+              manufacture_date: '',
               notes: '',
+              pack_size_id: '',
             })}
             className="btn btn-secondary"
             disabled={submitting}

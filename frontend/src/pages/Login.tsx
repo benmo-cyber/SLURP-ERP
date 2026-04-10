@@ -31,7 +31,14 @@ export default function Login() {
           <p className="login-subtitle">Sign in to continue</p>
         </div>
         <form onSubmit={handleSubmit} className="login-form">
-          {error && <div className="login-error">{error}</div>}
+          {error && (
+            <div className="login-error">
+              {error}
+              {error.includes('Cannot reach server') && (
+                <p className="login-error-hint">Start the backend with: <code>python manage.py runserver</code> (port 8000)</p>
+              )}
+            </div>
+          )}
           <div className="form-group">
             <label htmlFor="username">Username</label>
             <input

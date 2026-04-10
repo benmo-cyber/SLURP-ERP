@@ -1,7 +1,7 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { BrowserRouter as Router, Routes, Route, Link, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth, AuthProvider } from './context/AuthContext'
-import { BackdatedEntryProvider, useBackdatedEntry } from './context/BackdatedEntryContext'
+import { GodModeProvider, useGodMode } from './context/GodModeContext'
 import ProtectedRoute from './components/ProtectedRoute'
 import Inventory from './pages/Inventory'
 import Finance from './pages/Finance'
@@ -12,6 +12,7 @@ import Login from './pages/Login'
 import ForgotPassword from './pages/ForgotPassword'
 import ResetPassword from './pages/ResetPassword'
 import './App.css'
+import { importPrivateSampleXml } from './api/sampleImport'
 
 /** Prevent mouse wheel from changing number inputs when hovering (stops accidental scroll-to-increment). */
 function usePreventWheelOnNumberInputs() {
@@ -54,19 +55,67 @@ function Navigation() {
   )
 }
 
-function HeaderBackdatedToggle() {
-  const { canUseBackdatedEntry, backdatedEntryOn, setBackdatedEntryOn } = useBackdatedEntry()
-  if (!canUseBackdatedEntry) return null
+function HeaderGodModeToggle() {
+  const { canUseGodMode, godModeOn, setGodModeOn } = useGodMode()
+  if (!canUseGodMode) return null
   return (
-    <label className="header-backdated-toggle">
+    <label className="header-god-mode-toggle">
       <input
         type="checkbox"
-        checked={backdatedEntryOn}
-        onChange={(e) => setBackdatedEntryOn(e.target.checked)}
-        title="Allow entering past dates (e.g. received, production, ship)"
+        checked={godModeOn}
+        onChange={(e) => setGodModeOn(e.target.checked)}
+        title="God mode: set any date on forms and flows (staff only)"
       />
-      <span>Backdated entry</span>
+      <span>God mode</span>
     </label>
+  )
+}
+
+function HeaderStaffSampleImport() {
+  const { user } = useAuth()
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState<string | null>(null)
+  if (!user?.is_staff) return null
+  const run = async () => {
+    setMsg(null)
+    setBusy(true)
+    try {
+      const data = await importPrivateSampleXml() as {
+        ok?: boolean
+        message?: string
+        error?: string
+        totals?: Record<string, number>
+        files?: unknown[]
+      }
+      if (data.message) {
+        setMsg(data.message)
+      } else if (data.error) {
+        setMsg(String(data.error))
+      } else if (data.totals) {
+        setMsg(`Imported: ${JSON.stringify(data.totals)}`)
+      } else {
+        setMsg('Import finished.')
+      }
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { error?: string } } }
+      setMsg(err.response?.data?.error || (e instanceof Error ? e.message : 'Import failed'))
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <div className="header-sample-import">
+      <button
+        type="button"
+        className="header-sample-import-btn"
+        disabled={busy}
+        onClick={run}
+        title="Loads all .xml files from server folder data/private_sample_data/"
+      >
+        {busy ? 'Importing…' : 'Import sample XML'}
+      </button>
+      {msg ? <span className="header-sample-import-msg" role="status">{msg}</span> : null}
+    </div>
   )
 }
 
@@ -80,7 +129,8 @@ function HeaderUser() {
   }
   return (
     <div className="header-user">
-      <HeaderBackdatedToggle />
+      <HeaderGodModeToggle />
+      <HeaderStaffSampleImport />
       <span className="header-username">{user.username}</span>
       <span className="header-role">({user.role})</span>
       <button type="button" className="header-logout" onClick={handleLogout}>Sign out</button>
@@ -88,7 +138,18 @@ function HeaderUser() {
   )
 }
 
-function App() {
+function ConnectionBanner() {
+  const { user, error, clearError } = useAuth()
+  if (!user || !error || !error.includes('Cannot reach server')) return null
+  return (
+    <div className="connection-banner" role="alert">
+      <span>{error}</span>
+      <button type="button" className="connection-banner-dismiss" onClick={clearError} aria-label="Dismiss">×</button>
+    </div>
+  )
+}
+
+export default function App() {
   usePreventWheelOnNumberInputs()
   return (
     <Router>
@@ -100,7 +161,7 @@ function App() {
             <Route path="/reset-password" element={<ResetPassword />} />
             <Route path="/*" element={
               <ProtectedRoute>
-                <BackdatedEntryProvider>
+                <GodModeProvider>
                   <>
                     <header className="app-header">
                     <div className="header-content">
@@ -112,6 +173,7 @@ function App() {
                       <HeaderUser />
                     </div>
                   </header>
+                  <ConnectionBanner />
                   <main className="app-main">
                     <Routes>
                       <Route path="/" element={<Inventory />} />
@@ -123,7 +185,7 @@ function App() {
                     </Routes>
                   </main>
                   </>
-                </BackdatedEntryProvider>
+                </GodModeProvider>
               </ProtectedRoute>
             } />
           </Routes>
@@ -132,6 +194,4 @@ function App() {
     </Router>
   )
 }
-
-export default App
 

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { getAccounts, createJournalEntry } from '../../api/finance'
-import { useBackdatedEntry } from '../../context/BackdatedEntryContext'
+import { useGodMode } from '../../context/GodModeContext'
 import './CreateJournalEntry.css'
 
 interface Account {
@@ -34,6 +34,7 @@ function CreateJournalEntry({ onClose, onSuccess }: CreateJournalEntryProps) {
     { account_id: '', debit_credit: 'credit', amount: '', description: '' },
   ])
   const [submitting, setSubmitting] = useState(false)
+  const { maxDateForEntry } = useGodMode()
 
   useEffect(() => {
     loadAccounts()

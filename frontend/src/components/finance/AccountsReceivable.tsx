@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { getAccountsReceivable, getAccountsReceivableAging, updateAccountsReceivableEntry } from '../../api/finance'
 import PaymentEntry from './PaymentEntry'
+import { formatAppDate } from '../../utils/appDateFormat'
 import './AccountsReceivable.css'
 
 interface AccountsReceivableEntry {
@@ -19,7 +20,11 @@ interface AccountsReceivableEntry {
   sales_order?: number
 }
 
-const AccountsReceivable: React.FC = () => {
+interface AccountsReceivableProps {
+  onNavigateToTab?: (tab: string) => void
+}
+
+const AccountsReceivable: React.FC<AccountsReceivableProps> = ({ onNavigateToTab }) => {
   const [entries, setEntries] = useState<AccountsReceivableEntry[]>([])
   const [agingReport, setAgingReport] = useState<any>(null)
   const [loading, setLoading] = useState(true)
@@ -85,14 +90,20 @@ const AccountsReceivable: React.FC = () => {
     return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(amount)
   }
 
-  const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString()
-  }
+  const formatDate = (dateString: string) => formatAppDate(dateString)
 
   return (
     <div className="accounts-receivable">
       <div className="ar-header">
         <h2>Accounts Receivable</h2>
+        {onNavigateToTab && (
+          <div className="ar-related-links">
+            <span className="related-label">Related:</span>
+            <button type="button" className="link-btn" onClick={() => onNavigateToTab('invoices')}>Invoices</button>
+            <span className="related-sep">|</span>
+            <button type="button" className="link-btn" onClick={() => onNavigateToTab('reports')}>Financial Reports</button>
+          </div>
+        )}
         <div className="ar-actions">
           <button onClick={loadAgingReport} className="btn btn-secondary">
             View Aging Report

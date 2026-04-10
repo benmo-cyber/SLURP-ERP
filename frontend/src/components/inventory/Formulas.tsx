@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { getFormulas, getItems } from '../../api/inventory'
+import { formatAppDate } from '../../utils/appDateFormat'
 import './Formulas.css'
 
 type FormulaSortKey = 'finished_good' | 'version' | 'created' | null
@@ -88,7 +89,7 @@ function Formulas() {
                       ? formula.ingredients.map((ing: any) => `${ing.item?.name} (${ing.percentage}%)`).join(', ')
                       : '-'}
                   </td>
-                  <td>{new Date(formula.created_at).toLocaleDateString()}</td>
+                  <td>{formatAppDate(formula.created_at)}</td>
                 </tr>
               ))
             )}

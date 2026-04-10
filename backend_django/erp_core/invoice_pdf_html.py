@@ -3,9 +3,11 @@ Invoice PDF via Jinja2 HTML template → xhtml2pdf.
 Layout matches current ReportLab invoice: header, BILL TO/SHIP TO, comments, ref row, line items, totals, footer.
 """
 from pathlib import Path
-import base64
 import logging
-from io import BytesIO
+
+from .html_pdf_common import html_string_to_pdf_bytes
+from .invoice_helpers import format_invoice_quantity_display, unit_of_measure_for_invoice_line
+from .pdf_generator import get_batch_ticket_logo_base64_cached
 
 logger = logging.getLogger(__name__)
 
@@ -37,18 +39,19 @@ def _build_invoice_context(invoice):
 
     items = []
     try:
-        for it in invoice.items.all():
+        for it in invoice.items.select_related('item', 'sales_order_item__item').all():
             desc = (getattr(it, 'description', None) or '').strip()
             if not desc and getattr(it, 'item', None):
                 desc = (getattr(it.item, 'name', None) or getattr(it.item, 'sku', None) or '').strip()
             lot = (getattr(it, 'lot_number', None) or '').strip()
             qty = getattr(it, 'quantity', None)
+            uom = unit_of_measure_for_invoice_line(it)
             up = getattr(it, 'unit_price', None)
             total = getattr(it, 'total', None)
             if total is None and qty is not None and up is not None:
                 total = qty * up
             items.append({
-                'qty': f"{qty:.2f}" if qty is not None else '—',
+                'qty': format_invoice_quantity_display(qty, uom),
                 'description': desc or '—',
                 'lot': lot or '—',
                 'unit_price': f"${up:,.2f}" if up is not None else '—',
@@ -73,15 +76,7 @@ def _build_invoice_context(invoice):
         grand = subtotal + tax + freight
     grand = float(grand)
 
-    logo_base64 = ''
-    try:
-        from .pdf_generator import get_batch_ticket_logo_path
-        logo_path = get_batch_ticket_logo_path()
-        if logo_path and Path(logo_path).exists():
-            with open(logo_path, 'rb') as f:
-                logo_base64 = base64.b64encode(f.read()).decode('ascii')
-    except Exception:
-        pass
+    logo_base64 = get_batch_ticket_logo_base64_cached()
 
     return {
         'invoice_number': inv_num,
@@ -110,7 +105,6 @@ def generate_invoice_pdf_from_html(invoice):
     """
     try:
         from jinja2 import Environment, FileSystemLoader
-        from xhtml2pdf import pisa
     except ImportError as e:
         logger.warning("Invoice HTML→PDF requires jinja2 and xhtml2pdf: %s", e)
         return None
@@ -126,14 +120,10 @@ def generate_invoice_pdf_from_html(invoice):
         template = env.get_template("invoice.html")
         html_string = template.render(**context)
 
-        pdf_buffer = BytesIO()
-        result = pisa.CreatePDF(html_string, dest=pdf_buffer, encoding="utf-8")
-        if getattr(result, "err", 1) != 0:
-            logger.warning("Invoice xhtml2pdf errors: err=%s", getattr(result, "err", None))
-            return None
-        pdf_buffer.seek(0)
-        out = pdf_buffer.getvalue()
-        logger.info("Invoice PDF: HTML path succeeded, size=%s", len(out))
+        inv = (getattr(invoice, "invoice_number", None) or "") or ""
+        out = html_string_to_pdf_bytes(html_string, log_label=f"Invoice {inv}".strip() or "Invoice PDF")
+        if out:
+            logger.info("Invoice PDF: HTML path succeeded, size=%s", len(out))
         return out
     except Exception as e:
         logger.warning("Invoice HTML→PDF failed: %s", e, exc_info=True)

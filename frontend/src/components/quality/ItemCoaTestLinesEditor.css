@@ -1,0 +1,139 @@
+.item-coa-editor {
+  max-width: 960px;
+  width: 96vw;
+  max-height: 88vh;
+  overflow: auto;
+  background: #fff;
+  border-radius: 10px;
+  padding: 1rem 1.25rem;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.12);
+}
+
+.item-coa-editor__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  margin-bottom: 0.75rem;
+}
+
+.item-coa-editor__header h2 {
+  margin: 0;
+  font-size: 1.15rem;
+}
+
+.item-coa-editor__sub {
+  margin: 0.25rem 0 0 0;
+  font-size: 0.9rem;
+  color: #4b5563;
+}
+
+.item-coa-editor__hint {
+  margin: 0.5rem 0 0 0;
+  font-size: 0.78rem;
+  color: #6b7280;
+  line-height: 1.4;
+  max-width: 42rem;
+}
+
+.item-coa-editor__close {
+  background: none;
+  border: none;
+  font-size: 1.5rem;
+  line-height: 1;
+  cursor: pointer;
+  color: #6b7280;
+}
+
+.item-coa-editor__loading {
+  padding: 2rem;
+  text-align: center;
+  color: #6b7280;
+}
+
+.item-coa-editor__toolbar {
+  margin-bottom: 0.5rem;
+}
+
+.item-coa-editor__table-wrap {
+  overflow-x: auto;
+  margin-bottom: 1rem;
+}
+
+.item-coa-editor__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8rem;
+}
+
+.item-coa-editor__table th,
+.item-coa-editor__table td {
+  border: 1px solid #e5e7eb;
+  padding: 0.35rem 0.3rem;
+  vertical-align: middle;
+}
+
+/* Match global data-table headers (slate bar + white text) */
+.item-coa-editor__table thead {
+  background-color: var(--app-header-bg);
+  border-bottom: 2px solid var(--table-header-border);
+}
+
+.item-coa-editor__table thead th {
+  background-color: var(--app-header-bg);
+  color: var(--app-header-text);
+  text-align: left;
+  font-weight: 600;
+  border-color: var(--table-header-border);
+}
+
+.item-coa-editor__input {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 0.3rem 0.35rem;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  font-size: 0.8rem;
+}
+
+.item-coa-editor__input--narrow {
+  width: 3.5rem;
+}
+
+.item-coa-editor__select {
+  max-width: 11rem;
+  font-size: 0.75rem;
+  padding: 0.25rem;
+}
+
+.item-coa-editor__actions {
+  white-space: nowrap;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
+.item-coa-editor__empty {
+  text-align: center;
+  color: #6b7280;
+  padding: 1.25rem !important;
+}
+
+.item-coa-editor__footer {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 0.5rem;
+  border-top: 1px solid #e5e7eb;
+}
+
+.item-coa-editor .btn-sm {
+  padding: 0.2rem 0.45rem;
+  font-size: 0.75rem;
+}
+
+.item-coa-editor .btn-danger {
+  background: #fef2f2;
+  color: #b91c1c;
+  border: 1px solid #fecaca;
+}

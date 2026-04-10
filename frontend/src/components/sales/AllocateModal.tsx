@@ -2,13 +2,17 @@ import { useState, useEffect } from 'react'
 import { getSalesOrder, allocateSalesOrder } from '../../api/salesOrders'
 import { getLotsBySkuVendor } from '../../api/inventory'
 import { formatNumber } from '../../utils/formatNumber'
+import { lotAvailableForUse } from '../../utils/lotQuantities'
+import { formatAppDate } from '../../utils/appDateFormat'
 import './AllocateModal.css'
 
 interface Lot {
   id: number
   lot_number: string
   quantity_remaining: number
+  quantity_available_for_use?: number
   quantity_on_hold?: number
+  committed_to_production_qty?: number
   received_date: string
   expiration_date?: string
   status?: string
@@ -37,6 +41,7 @@ interface SalesOrderItem {
     id: number
     lot: Lot
     quantity_allocated: number
+    coa_customer_pdf_url?: string | null
   }>
 }
 
@@ -47,6 +52,7 @@ interface SalesOrder {
   expected_ship_date: string
   status: string
   items: SalesOrderItem[]
+  drop_ship?: boolean
 }
 
 interface Allocation {
@@ -67,6 +73,10 @@ interface AllocateModalProps {
   onSuccess: () => void
 }
 
+function normalizeSku(s: string): string {
+  return (s || '').trim().toUpperCase()
+}
+
 function AllocateModal({ salesOrderId, onClose, onSuccess }: AllocateModalProps) {
   const [salesOrder, setSalesOrder] = useState<SalesOrder | null>(null)
   const [loading, setLoading] = useState(false)
@@ -75,6 +85,10 @@ function AllocateModal({ salesOrderId, onClose, onSuccess }: AllocateModalProps)
   const [unitDisplay, setUnitDisplay] = useState<'lbs' | 'kg'>('lbs')
   const [saving, setSaving] = useState(false)
   const [includeOnHoldLots, setIncludeOnHoldLots] = useState(false)
+  /** Merge raw-inventory + FG lots (same SKU); required to pick vendor-labeled / pre-repack stock for distributed SKUs. */
+  const [includePreRepackLots, setIncludePreRepackLots] = useState(false)
+  /** Keys "productItemId:lotId" for lots that appear only on the raw-material path (pre-repack / vendor stock). */
+  const [prerepackLotKeys, setPrerepackLotKeys] = useState<Set<string>>(new Set())
 
   useEffect(() => {
     if (salesOrderId) {
@@ -83,15 +97,15 @@ function AllocateModal({ salesOrderId, onClose, onSuccess }: AllocateModalProps)
   }, [salesOrderId])
 
   useEffect(() => {
-    if (salesOrder) {
+    if (salesOrder && !salesOrder.drop_ship) {
       loadAvailableLots()
       initializeAllocations()
     }
   }, [salesOrder])
 
   useEffect(() => {
-    if (salesOrder) loadAvailableLots()
-  }, [includeOnHoldLots])
+    if (salesOrder && !salesOrder.drop_ship) loadAvailableLots()
+  }, [includeOnHoldLots, includePreRepackLots])
 
   const loadSalesOrder = async (id: number) => {
     try {
@@ -110,16 +124,34 @@ function AllocateModal({ salesOrderId, onClose, onSuccess }: AllocateModalProps)
     if (!salesOrder) return
 
     const lotsMap = new Map<number, Lot[]>()
-    
+    const prerepackKeys = new Set<string>()
+
     for (const item of salesOrder.items) {
       try {
-        // Get vendor from item if available, otherwise pass undefined
-        const vendor = item.item.vendor || undefined
-        const lots = await getLotsBySkuVendor(item.item.sku, vendor)
-        // Filter: remaining qty, item match; by default only accepted (available). Optionally include on_hold for ship-under-quarantine.
-        const available = lots.filter(
-          (lot: Lot) => lot.quantity_remaining > 0 && lot.item.id === item.item.id &&
-            (lot.status === 'accepted' || (includeOnHoldLots && lot.status === 'on_hold'))
+        // Do not pass Item.vendor — lots are keyed by PO vendor on the lot; Item.vendor often mismatches and hides all FG lots.
+        const fgLots = await getLotsBySkuVendor(item.item.sku, undefined, 'finished_good')
+        let combined: Lot[] = fgLots
+        if (includePreRepackLots) {
+          const rmLots = await getLotsBySkuVendor(item.item.sku, undefined, 'raw_material')
+          const fgIds = new Set(fgLots.map((l) => l.id))
+          const byId = new Map<number, Lot>()
+          for (const l of fgLots) byId.set(l.id, l)
+          for (const l of rmLots) {
+            if (!byId.has(l.id)) {
+              byId.set(l.id, l)
+              prerepackKeys.add(`${item.item.id}:${l.id}`)
+            }
+          }
+          combined = Array.from(byId.values())
+        }
+
+        const statusOk = (lot: Lot) =>
+          lot.status === 'accepted' || (includeOnHoldLots && lot.status === 'on_hold')
+        const matchesSoLine = (lot: Lot) =>
+          lot.item.id === item.item.id || normalizeSku(lot.item.sku) === normalizeSku(item.item.sku)
+        const available = combined.filter(
+          (lot: Lot) =>
+            lotAvailableForUse(lot) > 0 && matchesSoLine(lot) && statusOk(lot)
         )
         lotsMap.set(item.item.id, available)
       } catch (error) {
@@ -127,8 +159,22 @@ function AllocateModal({ salesOrderId, onClose, onSuccess }: AllocateModalProps)
         lotsMap.set(item.item.id, [])
       }
     }
-    
+
+    setPrerepackLotKeys(prerepackKeys)
     setAvailableLots(lotsMap)
+
+    // Drop allocations pointing at lots no longer listed (e.g. turning off pre-repack).
+    setAllocations((prev) => {
+      const next = new Map(prev)
+      for (const [soLineId, alloc] of next) {
+        const allowed = new Set((lotsMap.get(alloc.item_id) || []).map((l) => l.id))
+        const filtered = alloc.allocations.filter((a) => allowed.has(a.lot_id))
+        if (filtered.length !== alloc.allocations.length) {
+          next.set(soLineId, { ...alloc, allocations: filtered })
+        }
+      }
+      return next
+    })
   }
 
   const initializeAllocations = () => {
@@ -150,7 +196,7 @@ function AllocateModal({ salesOrderId, onClose, onSuccess }: AllocateModalProps)
       
       newAllocations.set(item.id, {
         item_id: item.item.id,
-        is_distributed: item.item.item_type === 'distributed',
+        is_distributed: item.item.item_type === 'distributed_item',
         allocations: existingAllocations,
         raw_materials: []
       })
@@ -216,6 +262,21 @@ function AllocateModal({ salesOrderId, onClose, onSuccess }: AllocateModalProps)
     return totalAllocated >= item.quantity_ordered
   }
 
+  const handleDropShipConfirm = async () => {
+    if (!salesOrder) return
+    try {
+      setSaving(true)
+      await allocateSalesOrder(salesOrder.id, { items: [] })
+      onSuccess()
+      onClose()
+    } catch (error: any) {
+      console.error('Failed to confirm drop ship:', error)
+      alert(error.response?.data?.error || error.response?.data?.detail || error.message || 'Request failed')
+    } finally {
+      setSaving(false)
+    }
+  }
+
   const handleSaveAllocations = async () => {
     if (!salesOrder) return
 
@@ -249,7 +310,10 @@ function AllocateModal({ salesOrderId, onClose, onSuccess }: AllocateModalProps)
         }
       }
 
-      await allocateSalesOrder(salesOrder.id, { items: itemsData })
+      await allocateSalesOrder(salesOrder.id, {
+        items: itemsData,
+        allow_prerepack_allocation: includePreRepackLots,
+      })
       alert('Allocations saved successfully!')
       await loadSalesOrder(salesOrder.id) // Reload to get updated data
       onSuccess()
@@ -281,6 +345,47 @@ function AllocateModal({ salesOrderId, onClose, onSuccess }: AllocateModalProps)
     return null
   }
 
+  if (salesOrder.drop_ship) {
+    const linesOk = salesOrder.items.every(
+      (it) => (it.quantity_allocated ?? 0) >= (it.quantity_ordered ?? 0)
+    )
+    return (
+      <div className="modal-overlay" onClick={onClose}>
+        <div className="allocate-modal" onClick={(e) => e.stopPropagation()}>
+          <div className="modal-header">
+            <h2>Drop ship — {salesOrder.so_number}</h2>
+            <button type="button" className="close-button" onClick={onClose}>×</button>
+          </div>
+          <div className="modal-content">
+            <p className="drop-ship-explain">
+              This order is <strong>drop ship</strong>: your vendor ships direct to the customer. No warehouse lots are used.
+            </p>
+            <p className="drop-ship-explain">
+              Confirm to mark lines as ready to ship (for checkout) without pulling inventory.
+            </p>
+            <div className="modal-actions" style={{ marginTop: '1rem' }}>
+              {linesOk ? (
+                <button type="button" className="btn-save" onClick={onClose}>Close</button>
+              ) : (
+                <>
+                  <button type="button" className="btn-cancel" onClick={onClose}>Cancel</button>
+                  <button
+                    type="button"
+                    className="btn-save"
+                    onClick={() => void handleDropShipConfirm()}
+                    disabled={saving}
+                  >
+                    {saving ? 'Saving…' : 'Confirm drop ship'}
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="allocate-modal" onClick={(e) => e.stopPropagation()}>
@@ -291,7 +396,7 @@ function AllocateModal({ salesOrderId, onClose, onSuccess }: AllocateModalProps)
         <div className="modal-content">
           <div className="so-info">
             <p><strong>Customer:</strong> {salesOrder.customer_name}</p>
-            <p><strong>Expected Ship Date:</strong> {salesOrder.expected_ship_date ? new Date(salesOrder.expected_ship_date).toLocaleDateString() : 'Not set'}</p>
+            <p><strong>Expected Ship Date:</strong> {salesOrder.expected_ship_date ? formatAppDate(salesOrder.expected_ship_date) : 'Not set'}</p>
           </div>
 
           <div className="unit-toggle">
@@ -318,6 +423,29 @@ function AllocateModal({ salesOrderId, onClose, onSuccess }: AllocateModalProps)
               />
               Include lots on hold (ship under quarantine)
             </label>
+            <label style={{ display: 'block', marginTop: '0.75rem' }}>
+              <input
+                type="checkbox"
+                checked={includePreRepackLots}
+                onChange={(e) => setIncludePreRepackLots(e.target.checked)}
+              />
+              Include raw / pre-repack lots (same SKU) for allocation
+            </label>
+            <p className="allocate-repack-hint" style={{ marginTop: '0.5rem', fontSize: '0.9rem', color: '#444' }}>
+              {includePreRepackLots ? (
+                <>
+                  Listing <strong>finished-good (repack output)</strong> and <strong>raw / vendor</strong> lots, like both inventory tabs combined.
+                  Use for vendor-labeled stock, pre-repack distributed lots, or receipt lots on <strong>gated finished goods</strong> (natural/synthetic colors, antioxidants) before a batch closes.
+                  This checkbox is the only bypass—saving sends the override to the server.
+                </>
+              ) : (
+                <>
+                  <strong>Distributed (repack) SKUs:</strong> only lots from completed repack appear here.
+                  <br />
+                  <strong>Gated finished goods</strong> (colors / antioxidants): only lots from a <strong>closed repack or production batch</strong> appear—receipt stock stays on the Raw tab until then.
+                </>
+              )}
+            </p>
           </div>
 
           <div className="allocation-items">
@@ -360,6 +488,7 @@ function AllocateModal({ salesOrderId, onClose, onSuccess }: AllocateModalProps)
                             <th>Lot Number</th>
                             <th>Available</th>
                             <th>Allocated</th>
+                            <th>COA</th>
                             <th>Actions</th>
                           </tr>
                         </thead>
@@ -367,13 +496,28 @@ function AllocateModal({ salesOrderId, onClose, onSuccess }: AllocateModalProps)
                           {lots.map(lot => {
                             const lotAlloc = alloc?.allocations.find(a => a.lot_id === lot.id)
                             const allocatedQty = lotAlloc?.quantity || 0
-                            const onHold = lot.quantity_on_hold ?? 0
-                            const availableQty = Math.max(0, lot.quantity_remaining - onHold)
+                            const availableQty = lotAvailableForUse(lot)
                             const maxAllocatable = Math.min(availableQty, remaining + allocatedQty)
+                            const savedAlloc = item.allocated_lots?.find((a) => a.lot.id === lot.id)
+                            const coaUrl = savedAlloc?.coa_customer_pdf_url
 
+                            const isPrerepack =
+                              includePreRepackLots && prerepackLotKeys.has(`${item.item.id}:${lot.id}`)
                             return (
-                              <tr key={lot.id} className={lot.status === 'on_hold' ? 'lot-on-hold' : ''}>
-                                <td>{lot.lot_number}{lot.status === 'on_hold' ? ' (on hold)' : ''}</td>
+                              <tr
+                                key={lot.id}
+                                className={[
+                                  lot.status === 'on_hold' ? 'lot-on-hold' : '',
+                                  isPrerepack ? 'lot-prerepack' : '',
+                                ]
+                                  .filter(Boolean)
+                                  .join(' ')}
+                              >
+                                <td>
+                                  {lot.lot_number}
+                                  {lot.status === 'on_hold' ? ' (on hold)' : ''}
+                                  {isPrerepack ? ' — pre-repack / vendor stock' : ''}
+                                </td>
                                 <td>{formatNumber(convertQuantity(availableQty, lot.item.unit_of_measure))} {unitDisplayText}</td>
                                 <td>
                                   <input
@@ -393,6 +537,21 @@ function AllocateModal({ salesOrderId, onClose, onSuccess }: AllocateModalProps)
                                     className="allocation-input"
                                   />
                                   <span className="unit-label">{unitDisplayText}</span>
+                                </td>
+                                <td>
+                                  {coaUrl ? (
+                                    <a
+                                      href={coaUrl}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="allocate-coa-link"
+                                      title="Customer COA for this allocation"
+                                    >
+                                      PDF
+                                    </a>
+                                  ) : (
+                                    <span className="allocate-coa-dash">—</span>
+                                  )}
                                 </td>
                                 <td>
                                   <button

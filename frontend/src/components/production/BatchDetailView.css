@@ -37,6 +37,25 @@
   color: #333;
 }
 
+.batch-detail-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.batch-detail-bt-input {
+  min-width: 12rem;
+  max-width: 22rem;
+  padding: 0.2rem 0.5rem;
+  font: inherit;
+  font-weight: 600;
+  color: #1a5276;
+  border: 1px solid #85c1e9;
+  border-radius: 4px;
+  background: #fff;
+}
+
 .batch-detail-content {
   padding: 1.5rem;
 }
@@ -119,15 +138,16 @@
 }
 
 .batch-lots-table thead {
-  background-color: #f8f9fa;
+  background-color: var(--app-header-bg);
 }
 
 .batch-lots-table th {
   padding: 0.75rem;
   text-align: left;
   font-weight: 600;
-  color: #333;
-  border-bottom: 2px solid #dee2e6;
+  color: var(--app-header-text);
+  background-color: var(--app-header-bg);
+  border-bottom: 2px solid var(--table-header-border);
 }
 
 .batch-lots-table td {

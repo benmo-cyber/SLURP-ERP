@@ -1,20 +1,24 @@
 import React, { useState, useEffect } from 'react'
-import { getLotDepletionLogs, getLotTransactionLogs, getPurchaseOrderLogs, getProductionLogs, getCheckInLogs, LotDepletionLog, LotTransactionLog, PurchaseOrderLog, ProductionLog, CheckInLog } from '../../api/inventory'
+import { getLotDepletionLogs, getLotTransactionLogs, getPurchaseOrderLogs, getProductionLogs, getCheckInLogs, getLotAttributeChangeLogs, LotDepletionLog, LotTransactionLog, PurchaseOrderLog, ProductionLog, CheckInLog, LotAttributeChangeLog } from '../../api/inventory'
 import { formatNumber } from '../../utils/formatNumber'
+import { formatAppDate, formatAppDateTime } from '../../utils/appDateFormat'
 import './Logs.css'
 
 interface LogsProps {
-  defaultLogType?: 'depletion' | 'transactions' | 'purchase-orders' | 'production' | 'check-ins'
+  defaultLogType?: 'depletion' | 'transactions' | 'purchase-orders' | 'production' | 'check-ins' | 'lot-attribute-changes'
 }
 
 function Logs({ defaultLogType = 'transactions' }: LogsProps) {
-  const [activeLogType, setActiveLogType] = useState<'depletion' | 'transactions' | 'purchase-orders' | 'production' | 'check-ins'>(defaultLogType)
+  const [activeLogType, setActiveLogType] = useState<
+    'depletion' | 'transactions' | 'purchase-orders' | 'production' | 'check-ins' | 'lot-attribute-changes'
+  >(defaultLogType)
   const [unitDisplay, setUnitDisplay] = useState<'lbs' | 'kg'>('lbs')
   const [depletionLogs, setDepletionLogs] = useState<LotDepletionLog[]>([])
   const [transactionLogs, setTransactionLogs] = useState<LotTransactionLog[]>([])
   const [poLogs, setPoLogs] = useState<PurchaseOrderLog[]>([])
   const [productionLogs, setProductionLogs] = useState<ProductionLog[]>([])
   const [checkInLogs, setCheckInLogs] = useState<CheckInLog[]>([])
+  const [lotAttributeChangeLogs, setLotAttributeChangeLogs] = useState<LotAttributeChangeLog[]>([])
   const [loading, setLoading] = useState(true)
   
   const [depletionFilters, setDepletionFilters] = useState({
@@ -54,6 +58,14 @@ function Logs({ defaultLogType = 'transactions' }: LogsProps) {
   const [checkInFilters, setCheckInFilters] = useState({
     item_sku: '',
     po_number: '',
+    date_from: '',
+    date_to: ''
+  })
+
+  const [lotAttributeFilters, setLotAttributeFilters] = useState({
+    lot_number: '',
+    sku: '',
+    field_name: '',
     date_from: '',
     date_to: ''
   })
@@ -110,6 +122,15 @@ function Logs({ defaultLogType = 'transactions' }: LogsProps) {
         if (checkInFilters.date_to) activeFilters.date_to = checkInFilters.date_to
         const data = await getCheckInLogs(Object.keys(activeFilters).length > 0 ? activeFilters : undefined)
         setCheckInLogs(Array.isArray(data) ? data : [])
+      } else if (activeLogType === 'lot-attribute-changes') {
+        const activeFilters: any = {}
+        if (lotAttributeFilters.lot_number) activeFilters.lot_number = lotAttributeFilters.lot_number
+        if (lotAttributeFilters.sku) activeFilters.sku = lotAttributeFilters.sku
+        if (lotAttributeFilters.field_name) activeFilters.field_name = lotAttributeFilters.field_name
+        if (lotAttributeFilters.date_from) activeFilters.date_from = lotAttributeFilters.date_from
+        if (lotAttributeFilters.date_to) activeFilters.date_to = lotAttributeFilters.date_to
+        const data = await getLotAttributeChangeLogs(Object.keys(activeFilters).length > 0 ? activeFilters : undefined)
+        setLotAttributeChangeLogs(Array.isArray(data) ? data : [])
       } else if (activeLogType === 'transactions') {
         const activeFilters: any = {}
         if (transactionFilters.lot_number) activeFilters.lot_number = transactionFilters.lot_number
@@ -129,7 +150,11 @@ function Logs({ defaultLogType = 'transactions' }: LogsProps) {
     }
   }
 
-  const handleFilterChange = (type: 'depletion' | 'transactions' | 'po' | 'production' | 'check-ins', field: string, value: string) => {
+  const handleFilterChange = (
+    type: 'depletion' | 'transactions' | 'po' | 'production' | 'check-ins' | 'lot-attribute-changes',
+    field: string,
+    value: string
+  ) => {
     if (type === 'depletion') {
       setDepletionFilters(prev => ({ ...prev, [field]: value }))
     } else if (type === 'transactions') {
@@ -140,6 +165,8 @@ function Logs({ defaultLogType = 'transactions' }: LogsProps) {
       setProductionFilters(prev => ({ ...prev, [field]: value }))
     } else if (type === 'check-ins') {
       setCheckInFilters(prev => ({ ...prev, [field]: value }))
+    } else if (type === 'lot-attribute-changes') {
+      setLotAttributeFilters(prev => ({ ...prev, [field]: value }))
     }
   }
 
@@ -158,20 +185,13 @@ function Logs({ defaultLogType = 'transactions' }: LogsProps) {
       setProductionFilters({ batch_number: '', sku: '', batch_type: '', date_from: '', date_to: '' })
     } else if (activeLogType === 'check-ins') {
       setCheckInFilters({ item_sku: '', po_number: '', date_from: '', date_to: '' })
+    } else if (activeLogType === 'lot-attribute-changes') {
+      setLotAttributeFilters({ lot_number: '', sku: '', field_name: '', date_from: '', date_to: '' })
     }
     setTimeout(loadLogs, 100)
   }
 
-  const formatDate = (dateString: string) => {
-    const date = new Date(dateString)
-    return date.toLocaleString('en-US', {
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit'
-    })
-  }
+  const formatDate = (dateString: string) => formatAppDateTime(dateString)
 
   const getMethodBadgeClass = (method: string) => {
     const classes: { [key: string]: string } = {
@@ -257,6 +277,12 @@ function Logs({ defaultLogType = 'transactions' }: LogsProps) {
           onClick={() => setActiveLogType('check-ins')}
         >
           Check-In Logs
+        </button>
+        <button
+          className={`log-type-tab ${activeLogType === 'lot-attribute-changes' ? 'active' : ''}`}
+          onClick={() => setActiveLogType('lot-attribute-changes')}
+        >
+          Lot field changes
         </button>
       </div>
 
@@ -778,6 +804,8 @@ function Logs({ defaultLogType = 'transactions' }: LogsProps) {
                 <tr>
                   <th>Checked In At</th>
                   <th>Lot Number</th>
+                  <th>Expiration (at check-in)</th>
+                  <th>Mfg (at check-in)</th>
                   <th>Vendor Lot #</th>
                   <th>SKU</th>
                   <th>Item Name</th>
@@ -798,13 +826,23 @@ function Logs({ defaultLogType = 'transactions' }: LogsProps) {
               <tbody>
                 {checkInLogs.length === 0 ? (
                   <tr>
-                    <td colSpan={17} className="no-data">No check-in logs found</td>
+                    <td colSpan={19} className="no-data">No check-in logs found</td>
                   </tr>
                 ) : (
                   checkInLogs.map((log) => (
                     <tr key={log.id}>
                       <td>{formatDate(log.checked_in_at)}</td>
                       <td><strong>{log.lot_number}</strong></td>
+                      <td>
+                        {log.expiration_date
+                          ? formatAppDate(log.expiration_date)
+                          : '-'}
+                      </td>
+                      <td>
+                        {log.manufacture_date
+                          ? formatAppDate(log.manufacture_date)
+                          : '-'}
+                      </td>
                       <td>{log.vendor_lot_number || '-'}</td>
                       <td>{log.item_sku}</td>
                       <td>{log.item_name}</td>
@@ -833,18 +871,113 @@ function Logs({ defaultLogType = 'transactions' }: LogsProps) {
         </>
       )}
 
+      {activeLogType === 'lot-attribute-changes' && (
+        <>
+          <div className="filters-section">
+            <div className="filters-grid">
+              <div className="filter-group">
+                <label>Lot number</label>
+                <input
+                  type="text"
+                  value={lotAttributeFilters.lot_number}
+                  onChange={(e) => handleFilterChange('lot-attribute-changes', 'lot_number', e.target.value)}
+                  placeholder="Filter by internal lot #"
+                />
+              </div>
+              <div className="filter-group">
+                <label>SKU</label>
+                <input
+                  type="text"
+                  value={lotAttributeFilters.sku}
+                  onChange={(e) => handleFilterChange('lot-attribute-changes', 'sku', e.target.value)}
+                  placeholder="Filter by item SKU"
+                />
+              </div>
+              <div className="filter-group">
+                <label>Field</label>
+                <input
+                  type="text"
+                  value={lotAttributeFilters.field_name}
+                  onChange={(e) => handleFilterChange('lot-attribute-changes', 'field_name', e.target.value)}
+                  placeholder="e.g. expiration_date"
+                />
+              </div>
+              <div className="filter-group">
+                <label>Date From</label>
+                <input
+                  type="datetime-local"
+                  value={lotAttributeFilters.date_from}
+                  onChange={(e) => handleFilterChange('lot-attribute-changes', 'date_from', e.target.value)}
+                />
+              </div>
+              <div className="filter-group">
+                <label>Date To</label>
+                <input
+                  type="datetime-local"
+                  value={lotAttributeFilters.date_to}
+                  onChange={(e) => handleFilterChange('lot-attribute-changes', 'date_to', e.target.value)}
+                />
+              </div>
+            </div>
+            <div className="filter-actions">
+              <button onClick={handleApplyFilters} className="btn-apply">Apply Filters</button>
+              <button onClick={handleClearFilters} className="btn-clear">Clear Filters</button>
+            </div>
+          </div>
+
+          <div className="logs-table-wrapper">
+            <table className="logs-table">
+              <thead>
+                <tr>
+                  <th>Changed At</th>
+                  <th>Lot #</th>
+                  <th>SKU</th>
+                  <th>Field</th>
+                  <th>Previous value</th>
+                  <th>New value</th>
+                  <th>Reason</th>
+                  <th>Changed by</th>
+                </tr>
+              </thead>
+              <tbody>
+                {lotAttributeChangeLogs.length === 0 ? (
+                  <tr>
+                    <td colSpan={8} className="no-data">No lot field change logs found</td>
+                  </tr>
+                ) : (
+                  lotAttributeChangeLogs.map((log) => (
+                    <tr key={log.id}>
+                      <td>{formatDate(log.changed_at)}</td>
+                      <td><strong>{log.lot_number || '-'}</strong></td>
+                      <td>{log.item_sku || '-'}</td>
+                      <td><code>{log.field_name}</code></td>
+                      <td>{log.old_value || '—'}</td>
+                      <td>{log.new_value || '—'}</td>
+                      <td className="notes-cell">{log.reason || '—'}</td>
+                      <td>{log.changed_by || '—'}</td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+
       <div className="logs-summary">
         <p>Total {
           activeLogType === 'depletion' ? 'depletion' : 
           activeLogType === 'purchase-orders' ? 'purchase order' : 
           activeLogType === 'production' ? 'production' :
           activeLogType === 'check-ins' ? 'check-in' :
+          activeLogType === 'lot-attribute-changes' ? 'lot field change' :
           'transaction'
         } logs: <strong>
           {activeLogType === 'depletion' ? depletionLogs.length : 
            activeLogType === 'purchase-orders' ? poLogs.length : 
            activeLogType === 'production' ? productionLogs.length :
            activeLogType === 'check-ins' ? checkInLogs.length :
+           activeLogType === 'lot-attribute-changes' ? lotAttributeChangeLogs.length :
            transactionLogs.length}
         </strong></p>
       </div>

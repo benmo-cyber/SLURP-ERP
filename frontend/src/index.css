@@ -4,6 +4,13 @@
   box-sizing: border-box;
 }
 
+:root {
+  --app-header-bg: #2c3e50;
+  --app-header-text: #ffffff;
+  --table-header-hover-bg: #34495e;
+  --table-header-border: rgba(255, 255, 255, 0.15);
+}
+
 body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
     'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
@@ -21,8 +28,8 @@ body {
 }
 
 header {
-  background-color: #2c3e50;
-  color: white;
+  background-color: var(--app-header-bg);
+  color: var(--app-header-text);
   padding: 1rem 2rem;
 }
 
@@ -98,4 +105,26 @@ input[type="number"]::-webkit-inner-spin-button {
 .number-input::-webkit-inner-spin-button {
   -webkit-appearance: none;
   margin: 0;
+}
+
+/*
+ * Sticky table headers – stay visible when scrolling.
+ * Put horizontal/vertical padding on a non-scrolling wrapper inside overflow-y:auto
+ * (e.g. .page-main > *), not on the scroll container itself—otherwise tbody rows can
+ * scroll through the padded band above a stuck header.
+ */
+table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--app-header-bg);
+  color: var(--app-header-text);
+  box-shadow: 0 1px 0 0 var(--table-header-border);
+}
+
+/* Match app header; overrides per-table gray hover rules */
+table thead th.sortable:hover,
+table thead th.sortable-header:hover {
+  background: var(--table-header-hover-bg) !important;
+  color: var(--app-header-text) !important;
 }

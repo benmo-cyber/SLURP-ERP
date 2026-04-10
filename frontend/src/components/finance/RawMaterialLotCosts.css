@@ -1,0 +1,220 @@
+.rm-lot-costs {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 0 1rem 2rem;
+}
+
+.rm-lot-costs.loading {
+  padding: 2rem;
+  text-align: center;
+  color: #6b7280;
+}
+
+.rm-lot-costs-header {
+  background: #2c3e50;
+  color: #fff;
+  padding: 1.25rem 1.5rem;
+  border-radius: 8px;
+  margin-bottom: 1.25rem;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.08);
+}
+
+.rm-lot-costs-header h2 {
+  margin: 0 0 0.5rem 0;
+  font-size: 1.35rem;
+  font-weight: 600;
+}
+
+.rm-lot-costs-lede {
+  margin: 0;
+  font-size: 0.875rem;
+  line-height: 1.45;
+  opacity: 0.92;
+  max-width: 52rem;
+}
+
+.rm-lot-costs-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
+.rm-lot-costs-unit-toggle {
+  display: flex;
+  border: 1px solid rgba(255, 255, 255, 0.45);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.rm-lot-costs-unit-toggle button {
+  padding: 0.4rem 0.85rem;
+  border: none;
+  background: transparent;
+  color: #fff;
+  cursor: pointer;
+  font-size: 0.8rem;
+}
+
+.rm-lot-costs-unit-toggle button.active {
+  background: rgba(255, 255, 255, 0.2);
+  font-weight: 600;
+}
+
+.rm-lot-costs-search {
+  flex: 1;
+  min-width: 12rem;
+  max-width: 24rem;
+  padding: 0.45rem 0.65rem;
+  border-radius: 6px;
+  border: 1px solid #e5e7eb;
+  font-size: 0.875rem;
+}
+
+.rm-lot-costs-refresh {
+  padding: 0.45rem 1rem;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  background: transparent;
+  color: #fff;
+  cursor: pointer;
+  font-size: 0.875rem;
+}
+
+.rm-lot-costs-refresh:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.rm-lot-costs-empty {
+  color: #6b7280;
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.rm-lot-costs-table-wrap {
+  overflow-x: auto;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.rm-lot-costs-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8125rem;
+}
+
+.rm-lot-costs-table th,
+.rm-lot-costs-table td {
+  padding: 0.65rem 0.75rem;
+  text-align: left;
+  border-bottom: 1px solid #f3f4f6;
+}
+
+.rm-lot-costs-table thead th {
+  background: var(--app-header-bg);
+  font-weight: 600;
+  color: var(--app-header-text);
+}
+
+.col-expand {
+  width: 2.5rem;
+}
+
+.rm-lot-costs-expand {
+  border: none;
+  background: #f3f4f6;
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 4px;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.rm-lot-costs-ap-badge {
+  display: inline-block;
+  padding: 0.15rem 0.45rem;
+  border-radius: 4px;
+  font-size: 0.75rem;
+}
+
+.rm-lot-costs-ap-over {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.rm-lot-costs-ap-under {
+  background: #d1fae5;
+  color: #065f46;
+}
+
+.rm-lot-costs-ap-ok {
+  background: #e5e7eb;
+  color: #374151;
+}
+
+.rm-lot-costs-detail-row td {
+  background: #fafafa;
+  padding: 0 !important;
+  vertical-align: top;
+}
+
+.rm-lot-costs-profile {
+  padding: 1rem 1.25rem 1.25rem;
+}
+
+.rm-lot-costs-profile-loading {
+  padding: 1rem;
+  color: #6b7280;
+}
+
+.rm-lot-costs-msg {
+  margin: 0 0 0.75rem 0;
+  color: #6b7280;
+  font-size: 0.875rem;
+}
+
+.rm-lot-costs-lot-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.78rem;
+}
+
+.rm-lot-costs-lot-table th,
+.rm-lot-costs-lot-table td {
+  padding: 0.45rem 0.5rem;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.rm-lot-costs-lot-table thead th {
+  background: var(--app-header-bg);
+  color: var(--app-header-text);
+  font-weight: 600;
+}
+
+.rm-lot-costs-cmp-over {
+  color: #b91c1c;
+  font-weight: 500;
+}
+
+.rm-lot-costs-cmp-under {
+  color: #047857;
+  font-weight: 500;
+}
+
+.rm-lot-costs-cmp-ok {
+  color: #1f2937;
+}
+
+.rm-lot-costs-mfd {
+  font-size: 0.7rem;
+  white-space: nowrap;
+  color: #4b5563;
+}
+
+.rm-lot-costs-footnote {
+  margin: 0.75rem 0 0 0;
+  font-size: 0.72rem;
+  color: #9ca3af;
+}

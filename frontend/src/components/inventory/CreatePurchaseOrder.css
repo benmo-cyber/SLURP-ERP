@@ -157,14 +157,15 @@
   padding: 0.5rem;
   text-align: left;
   border-bottom: 1px solid #ddd;
-  vertical-align: middle;
 }
 
-.po-items-table th {
+.po-items-table thead th {
+  vertical-align: bottom;
   white-space: nowrap;
 }
 
-.po-items-table td {
+.po-items-table tbody td {
+  vertical-align: top;
   overflow: hidden;
   word-wrap: break-word;
 }
@@ -174,23 +175,25 @@
   word-break: break-word;
 }
 
-.po-items-table td:nth-child(7) {
+.po-items-table td:nth-child(8) {
   text-align: right;
   white-space: nowrap;
 }
 
 .po-items-table th {
-  background-color: #f5f5f5;
+  background-color: var(--app-header-bg);
+  color: var(--app-header-text);
   font-weight: 600;
 }
 
-.po-items-table th:nth-child(1) { width: 12%; } /* SKU */
-.po-items-table th:nth-child(2) { width: 15%; } /* Vendor */
-.po-items-table th:nth-child(3) { width: 30%; } /* Description */
-.po-items-table th:nth-child(4) { width: 12%; } /* Unit of Measure */
-.po-items-table th:nth-child(5) { width: 12%; } /* Unit Cost */
-.po-items-table th:nth-child(6) { width: 12%; } /* Qty */
-.po-items-table th:nth-child(7) { width: 7%; }  /* Amount */
+.po-items-table th:nth-child(1) { width: 11%; } /* SKU */
+.po-items-table th:nth-child(2) { width: 12%; } /* Vendor */
+.po-items-table th:nth-child(3) { width: 22%; } /* Description */
+.po-items-table th:nth-child(4) { width: 10%; } /* Unit of Measure */
+.po-items-table th:nth-child(5) { width: 10%; } /* Unit cost */
+.po-items-table th:nth-child(6) { width: 9%; } /* Qty */
+.po-items-table th:nth-child(7) { width: 14%; } /* Line notes */
+.po-items-table th:nth-child(8) { width: 12%; } /* Amount */
 
 .po-items-table input,
 .po-items-table select {
@@ -220,6 +223,10 @@
   min-width: 100px;
   font-size: 13px;
   max-width: 100%;
+}
+
+.po-line-notes-input {
+  font-size: 13px;
 }
 
 .unit-toggle-group {
@@ -268,8 +275,25 @@
 
 .quantity-input-wrapper {
   display: flex;
-  align-items: center;
-  gap: 0.5rem;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.2rem;
+  min-width: 5.5rem;
+}
+
+/* Input aligns with Unit cost / Notes; hint sits below without shifting input vs neighbors */
+.quantity-input-wrapper .number-input {
+  flex-shrink: 0;
+}
+
+.po-qty-pack-hint {
+  display: block;
+  font-size: 0.62rem;
+  line-height: 1.25;
+  color: #5a6c7d;
+  max-width: 14rem;
+  font-weight: 500;
+  margin-top: 0;
 }
 
 .po-items-table tfoot {
@@ -288,5 +312,39 @@
   margin-top: 2rem;
   padding-top: 1rem;
   border-top: 1px solid #ddd;
+}
+
+.notify-party-contacts-multi .notify-party-checkboxes {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-top: 4px;
+}
+
+.notify-party-checkbox {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  cursor: pointer;
+  font-weight: normal;
+}
+
+.notify-party-checkbox input {
+  width: auto;
+  margin: 0;
+  margin-top: 0.2rem;
+}
+
+.notify-party-emails {
+  color: #333;
+  margin-top: 0.25rem;
+  font-size: 0.9em;
+}
+
+.notify-party-notes {
+  margin-top: 0.25rem;
+  color: #555;
+  font-style: italic;
+  font-size: 0.9em;
 }
 

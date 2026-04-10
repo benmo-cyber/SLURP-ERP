@@ -3,10 +3,11 @@ Batch ticket PDF via Jinja2 HTML template → xhtml2pdf.
 Layout matches the current flowable (BP-13) exactly: same sections, labels, tables, two pages.
 """
 from pathlib import Path
-import base64
 import logging
 import re
-from io import BytesIO
+
+from .html_pdf_common import html_string_to_pdf_bytes
+from .pdf_generator import get_logo_base64_cached
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +20,77 @@ CONFIDENTIALITY_FOOTER = (
 )
 BATCH_TICKET_UPDATED = "Batch Ticket – Updated 02/06/2026 (GDM) – Reviewed by GM – Effective Date 02/06/2026 (BP-13)"
 
+LB_PER_KG = 2.20462
+
+
+def _normalize_mass_unit_param(value):
+    """Map query param / saved field to native | lbs | kg."""
+    if value is None:
+        return 'native'
+    v = str(value).strip().lower()
+    if not v:
+        return 'native'
+    if v in ('lb', 'lbs', 'pound', 'pounds'):
+        return 'lbs'
+    if v in ('kg', 'kgs', 'kilogram', 'kilograms'):
+        return 'kg'
+    if v in ('native', 'item', 'items', 'original'):
+        return 'native'
+    return 'native'
+
+
+def _format_qty_display_number(qty):
+    q = float(qty)
+    if abs(q - round(q)) <= 0.01:
+        return str(int(round(q)))
+    return f'{q:.2f}'
+
+
+def _mass_line_display(qty, native_uom, mass_unit):
+    """
+    Match production UI: convert mass between lbs/kg; leave count (ea) unchanged.
+    Returns (qty_str, uom_label).
+    """
+    u = (native_uom or 'lbs').strip().lower()
+    if u in ('ea', 'each', 'e.a.'):
+        return _format_qty_display_number(qty), 'ea'
+    if mass_unit == 'native':
+        label = 'lbs' if u in ('lb', 'lbs') else ('kg' if u == 'kg' else (native_uom or 'lbs')[:10])
+        return _format_qty_display_number(qty), label[:10]
+    q = float(qty)
+    if mass_unit == 'lbs':
+        if u == 'kg':
+            return _format_qty_display_number(q * LB_PER_KG), 'lbs'
+        return _format_qty_display_number(q), 'lbs'
+    # kg
+    if u in ('lbs', 'lb'):
+        return _format_qty_display_number(q / LB_PER_KG), 'kg'
+    return _format_qty_display_number(q), 'kg'
+
+
+def _production_totals_display_from_lbs(qty_lbs, mass_unit, fg_uom):
+    """
+    quantity_produced / quantity_actual / variance / wastes / spills are stored in lbs;
+    wastes & spills explain shortfall vs ticket; they do not reduce quantity_actual on the output lot
+    for production batches (not repack).
+    """
+    fg = (fg_uom or 'lbs').strip().lower()
+    q = float(qty_lbs)
+    if mass_unit == 'native':
+        if fg in ('kg',):
+            return _format_qty_display_number(q / LB_PER_KG), 'kg'
+        if fg in ('lbs', 'lb', 'ea'):
+            return _format_qty_display_number(q), 'lbs' if fg != 'lb' else 'lbs'
+        return _format_qty_display_number(q), (fg_uom or 'lbs')[:10]
+    if mass_unit == 'lbs':
+        return _format_qty_display_number(q), 'lbs'
+    return _format_qty_display_number(q / LB_PER_KG), 'kg'
+
+
+def _repack_header_display(qty, fg_uom, mass_unit):
+    """Repack: quantity_produced is already in finished good native UoM."""
+    return _mass_line_display(qty, fg_uom or 'lbs', mass_unit)
+
 
 def _is_indirect_material(item):
     if item is None:
@@ -27,39 +99,56 @@ def _is_indirect_material(item):
     return t == 'indirect_material' or 'indirect' in t
 
 
-def _build_batch_ticket_context(batch):
-    """Build template context from batch. Matches data used by flowable in batch_ticket_pdf.py."""
+def _build_batch_ticket_context(batch, mass_unit='native'):
+    """
+    Build template context from batch. Matches data used by flowable in batch_ticket_pdf.py.
+
+    mass_unit: 'native' (each line uses item / FG UoM as stored), 'lbs', or 'kg' — same idea as
+    the production UI display toggle so PDF pick list and batch totals can match the screen.
+    """
     if not getattr(batch, 'finished_good_item', None):
         return None
     fg = batch.finished_good_item
+    mu = _normalize_mass_unit_param(mass_unit)
     base_unit = fg.unit_of_measure or 'lbs'
 
-    def convert_from_lbs_to_base(quantity_in_lbs):
-        if base_unit in ('lbs', 'ea'):
-            return quantity_in_lbs
-        if base_unit == 'kg':
-            return quantity_in_lbs / 2.20462
-        return quantity_in_lbs
-
     if batch.batch_type == 'repack':
-        quantity_produced_display = batch.quantity_produced
+        bqs, bu = _repack_header_display(batch.quantity_produced, base_unit, mu)
+        batch_size_str = f'{bqs} {bu}'
     else:
-        quantity_produced_display = convert_from_lbs_to_base(batch.quantity_produced)
-
-    if abs(quantity_produced_display - round(quantity_produced_display)) <= 0.02:
-        batch_size_str = f"{int(round(quantity_produced_display))} {base_unit}"
-    else:
-        batch_size_str = f"{quantity_produced_display:.2f} {base_unit}"
+        bqs, bu = _production_totals_display_from_lbs(batch.quantity_produced, mu, base_unit)
+        batch_size_str = f'{bqs} {bu}'
     batch_size_str = batch_size_str[:20]
 
     pack_size_str = ''
     if getattr(fg, 'pack_size', None) is not None:
-        pack_size_str = f"{fg.pack_size} {base_unit}"
+        ps_u = (base_unit or 'lbs').strip().lower()
+        pv = float(fg.pack_size)
+        if mu == 'lbs' and ps_u == 'kg':
+            pv = pv * LB_PER_KG
+            ps_u = 'lbs'
+        elif mu == 'kg' and ps_u in ('lbs', 'lb'):
+            pv = pv / LB_PER_KG
+            ps_u = 'kg'
+        pack_size_str = f'{_format_qty_display_number(pv)} {ps_u}'
     elif getattr(fg, 'pack_sizes', None) and fg.pack_sizes.filter(is_active=True).exists():
         ps = fg.pack_sizes.filter(is_active=True).first()
-        pack_size_str = f"{ps.pack_size} {ps.pack_size_unit}"
+        pu = (ps.pack_size_unit or 'lbs').strip().lower()
+        pv = float(ps.pack_size)
+        if mu == 'lbs' and pu == 'kg':
+            pv = pv * LB_PER_KG
+            pu = 'lbs'
+        elif mu == 'kg' and pu in ('lbs', 'lb'):
+            pv = pv / LB_PER_KG
+            pu = 'kg'
+        pack_size_str = f'{_format_qty_display_number(pv)} {pu}'
 
     prod_date_str = batch.production_date.strftime('%m/%d/%Y') if batch.production_date else ''
+
+    campaign_lot_code = ''
+    camp = getattr(batch, 'campaign', None)
+    if camp is not None and getattr(camp, 'campaign_code', None):
+        campaign_lot_code = (camp.campaign_code or '')[:48]
 
     qc_info = {}
     if getattr(batch, 'notes', None):
@@ -100,13 +189,13 @@ def _build_batch_ticket_context(batch):
         vendor_lot = (lot.vendor_lot_number or lot.lot_number or '—').strip()
         uom = (getattr(item, 'unit_of_measure', None) or 'lbs').strip() or 'lbs'
         qty = batch_input.quantity_used  # stored in item's UoM
-        qty_str = f"{int(round(qty))}" if abs(qty - round(qty)) <= 0.01 else f"{qty:.2f}"
+        qty_str, uom_out = _mass_line_display(qty, uom, mu)
         pick_rows.append({
             'sku': (item.sku or '')[:18],
             'vendor': vendor[:14],
             'vendor_lot': vendor_lot[:12],
             'qty': qty_str,
-            'uom': uom[:10],
+            'uom': uom_out[:10],
             'pick_init': '',
             'prod_init': '',
             'wildwood_lot': (lot.lot_number or '')[:14],
@@ -127,38 +216,48 @@ def _build_batch_ticket_context(batch):
     for batch_output in batch.outputs.select_related('lot__item').all():
         lot = batch_output.lot
         item = lot.item
-        qty = batch_output.quantity_produced
-        if batch.batch_type != 'repack':
-            qty = convert_from_lbs_to_base(qty)
-        qty_str = f"{qty:.2f}" if qty != int(qty) else str(int(qty))
+        out_u = (getattr(item, 'unit_of_measure', None) or base_unit or 'lbs').strip() or 'lbs'
+        if batch.batch_type == 'repack':
+            oqs, ou = _mass_line_display(batch_output.quantity_produced, out_u, mu)
+            qty_str = f'{oqs} {ou}'
+        else:
+            oqs, ou = _mass_line_display(batch_output.quantity_produced, 'lbs', mu)
+            qty_str = f'{oqs} {ou}'
         packaging_desc = (getattr(item, 'description', None) or item.name or item.sku or '').strip() or (item.name or item.sku or '')
         pack_rows.append({'packaging': packaging_desc, 'lot': lot.lot_number or '', 'qty': qty_str, 'pick_init': '', 'pack_init': '', 'amount_unused': ''})
     if not pack_rows:
         pack_rows = [{'packaging': '', 'lot': '', 'qty': '', 'pick_init': '', 'pack_init': '', 'amount_unused': ''}]
 
+    def _fmt_closed_qty(val):
+        if batch.batch_type == 'repack':
+            return _mass_line_display(val, base_unit, mu)
+        return _production_totals_display_from_lbs(val, mu, base_unit)
+
     yield_val = ''
     if getattr(batch, 'status', None) == 'closed' and getattr(batch, 'quantity_actual', None):
-        yield_val = f"{convert_from_lbs_to_base(batch.quantity_actual):.2f} {base_unit}"
+        yq, yu = _fmt_closed_qty(batch.quantity_actual)
+        yield_val = f'{yq} {yu}'
     loss_val = ''
     if getattr(batch, 'status', None) == 'closed' and getattr(batch, 'variance', None) is not None:
-        loss_val = f"{convert_from_lbs_to_base(batch.variance):.2f} {base_unit}"
-    spill_val = f"{convert_from_lbs_to_base(batch.spills):.2f}" if getattr(batch, 'spills', None) else ''
-    waste_val = f"{convert_from_lbs_to_base(batch.wastes):.2f}" if getattr(batch, 'wastes', None) else ''
+        v = float(batch.variance)
+        lq, lu = _fmt_closed_qty(abs(v))
+        loss_val = f'{"-" if v < 0 else ""}{lq} {lu}'
+    spill_val = ''
+    if getattr(batch, 'spills', None):
+        sq, su = _fmt_closed_qty(batch.spills)
+        spill_val = f'{sq} {su}'
+    waste_val = ''
+    if getattr(batch, 'wastes', None):
+        wq, wu = _fmt_closed_qty(batch.wastes)
+        waste_val = f'{wq} {wu}'
 
-    logo_base64 = ''
-    try:
-        from .pdf_generator import get_logo_path
-        logo_path = get_logo_path()
-        if logo_path and Path(logo_path).exists():
-            with open(logo_path, 'rb') as f:
-                logo_base64 = base64.b64encode(f.read()).decode('ascii')
-    except Exception:
-        pass
+    logo_base64 = get_logo_base64_cached()
 
     return {
         'product_id': str(fg.id),
         'sku': (fg.sku or '')[:30],
         'batch_number': (batch.batch_number or '')[:24],
+        'campaign_lot_code': campaign_lot_code,
         'batch_size': batch_size_str,
         'pack_size': (pack_size_str or '')[:20],
         'prod_date': (prod_date_str or '')[:16],
@@ -177,19 +276,29 @@ def _build_batch_ticket_context(batch):
     }
 
 
-def generate_batch_ticket_pdf_from_html(batch):
+def generate_batch_ticket_pdf_from_html(batch, mass_unit=None):
     """
     Render batch ticket HTML template with Jinja2, convert to PDF with xhtml2pdf.
-    Returns (pdf_bytes, filename) or (None, None) on failure.
+    Resolution order (so PDF matches the unit chosen when the batch was created):
+    1) batch.batch_ticket_mass_unit if set (lbs / kg / native)
+    2) optional mass_unit query override (legacy / batches with no saved preference)
+    3) native (each line in its item UoM)
     """
     try:
         from jinja2 import Environment, FileSystemLoader
-        from xhtml2pdf import pisa
     except ImportError as e:
         logger.warning("Batch ticket HTML→PDF requires jinja2 and xhtml2pdf: %s", e)
         return None, None
 
-    context = _build_batch_ticket_context(batch)
+    saved = getattr(batch, 'batch_ticket_mass_unit', None)
+    if saved is not None and str(saved).strip():
+        eff_mu = _normalize_mass_unit_param(saved)
+    elif mass_unit is not None and str(mass_unit).strip():
+        eff_mu = _normalize_mass_unit_param(mass_unit)
+    else:
+        eff_mu = 'native'
+
+    context = _build_batch_ticket_context(batch, mass_unit=eff_mu)
     if not context:
         return None, None
 
@@ -203,13 +312,10 @@ def generate_batch_ticket_pdf_from_html(batch):
         template = env.get_template("batch_ticket.html")
         html_string = template.render(**context)
 
-        pdf_buffer = BytesIO()
-        result = pisa.CreatePDF(html_string, dest=pdf_buffer, encoding="utf-8")
-        if getattr(result, "err", 1) != 0:
-            logger.warning("Batch ticket xhtml2pdf errors: err=%s", getattr(result, "err", None))
+        bn = (getattr(batch, "batch_number", None) or "") or ""
+        pdf_bytes = html_string_to_pdf_bytes(html_string, log_label=f"Batch ticket {bn}".strip() or "Batch ticket PDF")
+        if not pdf_bytes:
             return None, None
-        pdf_buffer.seek(0)
-        pdf_bytes = pdf_buffer.getvalue()
         status_prefix = getattr(batch, 'status', 'draft').replace('_', '-')
         filename = f"{status_prefix}({batch.batch_number}).pdf"
         logger.info("Batch ticket PDF: HTML path succeeded, size=%s", len(pdf_bytes))

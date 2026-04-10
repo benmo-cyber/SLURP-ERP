@@ -2,6 +2,7 @@
 .fiscal-periods-desc { color: #666; margin-bottom: 1rem; font-size: 0.9rem; }
 .fiscal-periods-table { width: 100%; border-collapse: collapse; }
 .fiscal-periods-table th, .fiscal-periods-table td { padding: 0.5rem; text-align: left; border-bottom: 1px solid #eee; }
+.fiscal-periods-table thead th { background: var(--app-header-bg); color: var(--app-header-text); border-bottom: 1px solid var(--table-header-border); }
 .badge.closed { color: #0a0; }
 .badge.open { color: #07c; }
 .btn-sm { padding: 0.25rem 0.5rem; font-size: 0.85rem; }

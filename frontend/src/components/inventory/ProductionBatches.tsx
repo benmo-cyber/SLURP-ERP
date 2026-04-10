@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { getProductionBatches } from '../../api/inventory'
+import { formatAppDate } from '../../utils/appDateFormat'
 import './ProductionBatches.css'
 
 function ProductionBatches() {
@@ -57,7 +58,7 @@ function ProductionBatches() {
                   <td>{batch.batch_number}</td>
                   <td>{batch.finished_good_item?.name || '-'}</td>
                   <td>{batch.quantity_produced}</td>
-                  <td>{new Date(batch.production_date).toLocaleDateString()}</td>
+                  <td>{formatAppDate(batch.production_date)}</td>
                   <td>{batch.closed_date ? 'Closed' : 'Open'}</td>
                 </tr>
               ))

@@ -1,7 +1,9 @@
 import { api, API_BASE_URL } from './client'
 
-export const getSalesOrders = async () => {
-  const response = await api.get('/sales-orders/')
+export const getSalesOrders = async (params?: Record<string, string>) => {
+  const search = params ? new URLSearchParams(params).toString() : ''
+  const url = search ? `/sales-orders/?${search}` : '/sales-orders/'
+  const response = await api.get(url)
   return response.data.results || response.data
 }
 
@@ -41,13 +43,24 @@ export const shipSalesOrder = async (
   data: {
     ship_date: string
     items: Array<{ item_id: number; quantity: number }>
-    dimensions?: string
-    pieces?: number
+    /** One dimension string per handling unit; length must match `pieces`. */
+    piece_dimensions: string[]
+    /** One weight string per handling unit (e.g. "45 lbs"); length must match `pieces`. */
+    piece_weights: string[]
+    pieces: number
     tracking_number?: string
-    carrier?: string
-  }
+    carrier: string
+  },
+  options?: { idempotencyKey?: string }
 ) => {
-  const response = await api.post(`/sales-orders/${id}/ship/`, data)
+  const idempotencyKey =
+    options?.idempotencyKey ??
+    (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(36).slice(2)}`)
+  const response = await api.post(`/sales-orders/${id}/ship/`, data, {
+    headers: { 'X-Idempotency-Key': idempotencyKey },
+  })
   return response.data
 }
 
@@ -56,8 +69,14 @@ export const cancelSalesOrder = async (id: number) => {
   return response.data
 }
 
-export const issueSalesOrder = async (id: number) => {
-  const response = await api.post(`/sales-orders/${id}/issue/`)
+export type IssueSalesOrderPayload = {
+  /** YYYY-MM-DD or ISO datetime — staff God mode only (server enforces) */
+  issue_date?: string
+  order_date?: string
+}
+
+export const issueSalesOrder = async (id: number, payload?: IssueSalesOrderPayload) => {
+  const response = await api.post(`/sales-orders/${id}/issue/`, payload ?? {})
   return response.data
 }
 
@@ -68,6 +87,14 @@ export const getPackingListUrl = (salesOrderId: number) =>
 /** Open packing list for a sales order in a new tab (same pattern as invoice PDF). */
 export const openPackingList = async (salesOrderId: number): Promise<void> => {
   window.open(getPackingListUrl(salesOrderId), '_blank', 'noopener,noreferrer')
+}
+
+/** Pick list URL: allocated lots and quantities (warehouse pull list). Requires allocation. */
+export const getPickListUrl = (salesOrderId: number) =>
+  `${API_BASE_URL.replace(/\/$/, '')}/sales-orders/${salesOrderId}/pick-list/`
+
+export const openPickList = (salesOrderId: number): void => {
+  window.open(getPickListUrl(salesOrderId), '_blank', 'noopener,noreferrer')
 }
 
 /** Packing list URL for a specific shipment (one PDF per release). */

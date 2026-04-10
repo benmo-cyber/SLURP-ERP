@@ -104,11 +104,13 @@ function CriticalControlPoints() {
   return (
     <div className="critical-control-points">
       <div className="ccp-header">
-        <h2>Critical Control Points (CCPs)</h2>
-        <p className="ccp-description">
-          CCPs appear on batch ticket pre-production checks: &quot;Has [CCP] been inspected and installed properly?&quot;
-          Assign a CCP to a finished good in Edit Formula.
-        </p>
+        <div>
+          <h2>Critical Control Points (CCPs)</h2>
+          <p className="ccp-description">
+            CCPs appear on batch ticket pre-production checks: &quot;Has [CCP] been inspected and installed properly?&quot;
+            Assign a CCP to a finished good when creating it or in Edit Formula.
+          </p>
+        </div>
         <button
           type="button"
           className="btn btn-primary"
@@ -136,52 +138,56 @@ function CriticalControlPoints() {
         </div>
       )}
 
-      <table className="ccp-table">
-        <thead>
-          <tr>
-            <th>Name</th>
-            <th style={{ width: '140px' }}>Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          {list.length === 0 && !showAdd && (
+      <div className="ccp-card">
+        <table className="ccp-table">
+          <thead>
             <tr>
-              <td colSpan={2} className="ccp-empty">No CCPs yet. Add one to use on formulas and batch tickets.</td>
+              <th>Name</th>
+              <th style={{ width: '160px' }}>Actions</th>
             </tr>
-          )}
-          {list.map((ccp) => (
-            <tr key={ccp.id}>
-              <td>
-                {editingId === ccp.id ? (
-                  <input
-                    type="text"
-                    value={editName}
-                    onChange={(e) => setEditName(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && saveEdit()}
-                  />
-                ) : (
-                  ccp.name
-                )}
-              </td>
-              <td>
-                {editingId === ccp.id ? (
-                  <>
-                    <button type="button" className="btn btn-primary btn-sm" onClick={saveEdit} disabled={submitting || !editName.trim()}>
-                      Save
-                    </button>
-                    <button type="button" className="btn btn-secondary btn-sm" onClick={cancelEdit}>Cancel</button>
-                  </>
-                ) : (
-                  <>
-                    <button type="button" className="btn btn-secondary btn-sm" onClick={() => startEdit(ccp)}>Edit</button>
-                    <button type="button" className="btn btn-danger btn-sm" onClick={() => setDeleteConfirm(ccp)}>Delete</button>
-                  </>
-                )}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {list.length === 0 && !showAdd && (
+              <tr>
+                <td colSpan={2} className="ccp-empty">No CCPs yet. Add one to use on formulas and batch tickets.</td>
+              </tr>
+            )}
+            {list.map((ccp) => (
+              <tr key={ccp.id}>
+                <td>
+                  {editingId === ccp.id ? (
+                    <input
+                      type="text"
+                      value={editName}
+                      onChange={(e) => setEditName(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && saveEdit()}
+                    />
+                  ) : (
+                    ccp.name
+                  )}
+                </td>
+                <td>
+                  <div className="ccp-actions">
+                    {editingId === ccp.id ? (
+                      <>
+                        <button type="button" className="btn btn-primary btn-sm" onClick={saveEdit} disabled={submitting || !editName.trim()}>
+                          Save
+                        </button>
+                        <button type="button" className="btn btn-secondary btn-sm" onClick={cancelEdit}>Cancel</button>
+                      </>
+                    ) : (
+                      <>
+                        <button type="button" className="btn btn-secondary btn-sm" onClick={() => startEdit(ccp)}>Edit</button>
+                        <button type="button" className="btn btn-danger btn-sm" onClick={() => setDeleteConfirm(ccp)}>Delete</button>
+                      </>
+                    )}
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
 
       {deleteConfirm && (
         <ConfirmDialog

@@ -16,20 +16,28 @@
     .po-title-box { background: #e8eef4; padding: 8px 14px 10px 14px; text-align: right; }
     .po-title { font-size: 18pt; font-weight: bold; color: #1e3a5f; letter-spacing: 0.5px; margin: 0; }
     .po-status { font-size: 8pt; color: #555; margin: 0; }
-    /* PO details: compact two-column list */
-    .meta-table { width: 100%; border-collapse: collapse; font-size: 8pt; margin-bottom: 6px; table-layout: fixed; max-width: 420px; }
-    .meta-table th { text-align: left; padding: 3px 6px; border: 1px solid #bbb; background: #e8eef4; font-weight: bold; color: #333; width: 100px; }
-    .meta-table td { padding: 3px 6px; border: 1px solid #bbb; background: #fff; }
+    /* PO details: same font size as line items / vendor tables (8pt) */
+    .meta-table { width: 400px; border-collapse: collapse; font-size: 8pt; margin-bottom: 6px; table-layout: fixed; }
+    .meta-table th { text-align: left; padding: 4px 6px; border: 1px solid #bbb; background: #e8eef4; font-weight: bold; color: #333; width: 110px; vertical-align: middle; font-size: 8pt; }
+    .meta-table td { padding: 4px 6px; border: 1px solid #bbb; background: #fff; width: 290px; white-space: normal; vertical-align: middle; font-size: 8pt; }
     /* Section titles: compact */
     .section-title { font-size: 10pt; font-weight: bold; color: #1e3a5f; margin: 8px 0 4px 0; text-transform: uppercase; border-bottom: 2px solid #1e3a5f; padding-bottom: 2px; }
     /* Vendor / Bill To / Ship To: compact */
     .details-table { width: 100%; border-collapse: collapse; margin-bottom: 6px; table-layout: fixed; font-size: 8pt; }
     .details-table th { background: #1e3a5f; color: #fff; padding: 4px 6px; border: 1px solid #1e3a5f; text-align: left; font-weight: bold; }
     .details-table td { padding: 4px 6px; border: 1px solid #bbb; vertical-align: top; background: #fff; line-height: 1.25; }
-    /* Line items: compact rows */
+    /* Line items: Description column wide so product names don't wrap */
     .items-table { width: 100%; border-collapse: collapse; margin-bottom: 6px; font-size: 8pt; table-layout: fixed; }
-    .items-table th { background: #c5d4e8; color: #333; padding: 2px 6px; border: 1px solid #bbb; font-weight: bold; }
-    .items-table td { padding: 2px 6px; border: 1px solid #bbb; }
+    .items-table th { background: #c5d4e8; color: #333; padding: 4px 6px; border: 1px solid #bbb; font-weight: bold; }
+    .items-table td { padding: 4px 6px; border: 1px solid #bbb; }
+    .items-table .col-num { width: 3%; }
+    /* nowrap + fixed table layout can make xhtml2pdf layout extremely slow or hang */
+    .items-table .col-desc { width: 38%; white-space: normal; word-wrap: break-word; }
+    .items-table .col-qty { width: 10%; }
+    .items-table .col-unit { width: 8%; }
+    .items-table .col-price { width: 12%; }
+    .items-table .col-tax { width: 8%; }
+    .items-table .col-total { width: 12%; }
     .items-table .row-alt { background: #eef2f7; }
     .items-table .num, .items-table .money { text-align: right; }
     /* Summary: compact */
@@ -53,7 +61,7 @@
       <tr>
         <td class="header-logo-cell">
           {% if logo_base64 %}
-          <img src="data:image/png;base64,{{ logo_base64 }}" alt="" style="width: 240px; height: 240px; margin-bottom: 4px;" />
+          <img src="data:image/png;base64,{{ logo_base64 }}" alt="" style="width: 150px; height: 150px; margin-bottom: 4px;" />
           {% endif %}
           <div class="company-addr">6431 Michels Drive<br />Washington, MO 63090</div>
         </td>
@@ -68,12 +76,29 @@
   </div>
 
   <table class="meta-table">
-    <tr><th>PO Number</th><td>{{ po_number }}</td></tr>
-    <tr><th>PO Date</th><td>{{ po_date }}</td></tr>
-    <tr><th>Delivery Date</th><td>{{ delivery_date }}</td></tr>
-    <tr><th>Payment Terms</th><td>{{ payment_terms }}</td></tr>
-    <tr><th>Ship Via</th><td>{{ ship_via }}</td></tr>
+    <tr><th>PO Number</th><td>{{ po_number or '—' }}</td></tr>
+    <tr><th>PO Date</th><td>{{ po_date or '—' }}</td></tr>
+    <tr><th>Delivery Date</th><td>{{ delivery_date or '—' }}</td></tr>
+    <tr><th>Payment Terms</th><td>{{ payment_terms or '—' }}</td></tr>
+    <tr><th>Ship Via</th><td>{{ ship_via or '—' }}</td></tr>
   </table>
+
+  {% if notify_parties %}
+  <div class="section-title">Notify Party</div>
+  <table class="details-table notify-party-table">
+    <tr>
+      <th>Notify Party (importation contact)</th>
+    </tr>
+    {% for np in notify_parties %}
+    <tr>
+      <td>
+        <strong>{{ np.vendor_name }}{% if np.location_label %} — {{ np.location_label }}{% endif %}</strong><br />
+        {{ np.name }}{% for addr in np.emails %}<br />{{ addr }}{% endfor %}{% if np.phone %}<br />{{ np.phone }}{% endif %}{% if np.notes %}<br /><em>Notes: {{ np.notes }}</em>{% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% endif %}
 
   <div class="section-title">Vendor &amp; Shipping Details</div>
   <table class="details-table">
@@ -93,25 +118,25 @@
   <table class="items-table">
     <thead>
       <tr>
-        <th>#</th>
-        <th>Description</th>
-        <th class="num">Qty</th>
-        <th>Unit</th>
-        <th class="money">Unit Price</th>
-        <th class="num">Tax %</th>
-        <th class="money">Line Total</th>
+        <th class="col-num">#</th>
+        <th class="col-desc">Description</th>
+        <th class="col-qty num">Qty</th>
+        <th class="col-unit">Unit</th>
+        <th class="col-price money">Unit Price</th>
+        <th class="col-tax num">Tax %</th>
+        <th class="col-total money">Line Total</th>
       </tr>
     </thead>
     <tbody>
       {% for item in line_items %}
       <tr class="{{ 'row-alt' if loop.index % 2 == 0 else '' }}">
-        <td>{{ item.num }}</td>
-        <td>{{ item.description }}</td>
-        <td class="num">{{ item.qty }}</td>
-        <td>{{ item.unit }}</td>
-        <td class="money">{{ item.unit_price }}</td>
-        <td class="num">{{ item.tax_pct }}</td>
-        <td class="money">{{ item.line_total }}</td>
+        <td class="col-num">{{ item.num }}</td>
+        <td class="col-desc">{{ item.description }}</td>
+        <td class="col-qty num">{{ item.qty }}</td>
+        <td class="col-unit">{{ item.unit }}</td>
+        <td class="col-price money">{{ item.unit_price }}</td>
+        <td class="col-tax num">{{ item.tax_pct }}</td>
+        <td class="col-total money">{{ item.line_total }}</td>
       </tr>
       {% endfor %}
     </tbody>

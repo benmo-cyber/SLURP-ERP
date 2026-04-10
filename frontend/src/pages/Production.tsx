@@ -97,7 +97,7 @@ function Production() {
           <ProductionBatchList
             key={refreshKey}
             onCloseBatch={handleCloseBatch}
-            onUnfkBatch={handleUnfkBatch}
+            onReverseBatch={handleUnfkBatch}
             onAdjustBatch={handleAdjustBatch}
           />
         </main>
@@ -134,7 +134,7 @@ function Production() {
 
       {showUnfkConfirm && (
         <ConfirmDialog
-          message="Are you sure you want to UNFK? Once UNFK'd you cannot RFK"
+          message="Reverse this batch ticket? Inventory changes from this batch will be rolled back and the batch will be removed. This cannot be undone."
           onConfirm={confirmUnfk}
           onCancel={() => {
             setShowUnfkConfirm(false)

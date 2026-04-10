@@ -1,5 +1,9 @@
 """
-PDF generation for invoices, purchase orders, and sales orders
+Legacy ReportLab PDF builders (invoices, POs, sales orders).
+
+Production PDFs use **Jinja2 HTML templates → xhtml2pdf** via `html_pdf_common.html_string_to_pdf_bytes`
+(in-process by default; see `HTML_PDF_USE_SUBPROCESS` in settings) and the `*_pdf_html.py` modules.
+This module remains for reference/tests only unless imported explicitly.
 """
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.units import inch
@@ -11,6 +15,7 @@ from reportlab.lib.utils import ImageReader
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from io import BytesIO
+import base64
 from django.utils import timezone
 from datetime import datetime
 from pathlib import Path
@@ -129,6 +134,37 @@ def get_batch_ticket_logo_path():
     if p and os.path.exists(p):
         return p
     return None
+
+
+# One base64 string per resolved path — avoids re-reading PNG on every PDF request.
+_LOGO_B64_BY_PATH: dict[str, str] = {}
+
+
+def logo_file_base64_cached(absolute_path: str | None) -> str:
+    if not absolute_path:
+        return ""
+    try:
+        key = str(Path(absolute_path).resolve())
+    except Exception:
+        key = absolute_path
+    if key in _LOGO_B64_BY_PATH:
+        return _LOGO_B64_BY_PATH[key]
+    try:
+        with open(key, "rb") as fh:
+            _LOGO_B64_BY_PATH[key] = base64.b64encode(fh.read()).decode("ascii")
+    except OSError:
+        return ""
+    return _LOGO_B64_BY_PATH[key]
+
+
+def get_batch_ticket_logo_base64_cached() -> str:
+    """Same logo as PO/invoice HTML PDFs; read once per process per path."""
+    return logo_file_base64_cached(get_batch_ticket_logo_path())
+
+
+def get_logo_base64_cached() -> str:
+    """Logo used by batch ticket HTML PDF; read once per process per path."""
+    return logo_file_base64_cached(get_logo_path())
 
 
 def _ensure_po_logo_in_template_dir():
@@ -363,7 +399,8 @@ def generate_invoice_pdf(invoice):
 
     # ----- Line items: same light gray header, thin borders, 9pt throughout -----
     try:
-        items = list(invoice.items.all())
+        from .invoice_helpers import format_invoice_quantity_display, unit_of_measure_for_invoice_line
+        items = list(invoice.items.select_related('item', 'sales_order_item__item').all())
     except Exception:
         items = []
     row_headers = ['QUANTITY', 'DESCRIPTION', 'LOT #', 'UNIT PRICE', 'TOTAL']
@@ -374,12 +411,13 @@ def generate_invoice_pdf(invoice):
             desc = (getattr(it.item, 'name', None) or getattr(it.item, 'sku', None) or '').strip()
         lot = (getattr(it, 'lot_number', None) or '').strip()
         qty = getattr(it, 'quantity', None)
+        uom = unit_of_measure_for_invoice_line(it)
         up = getattr(it, 'unit_price', None)
         total = getattr(it, 'total', None)
         if total is None and qty is not None and up is not None:
             total = qty * up
         rows.append([
-            f"{qty:.2f}" if qty is not None else '—',
+            format_invoice_quantity_display(qty, uom),
             desc or '—',
             lot or '—',
             f"${up:,.2f}" if up is not None else '—',
@@ -387,7 +425,7 @@ def generate_invoice_pdf(invoice):
         ])
     if len(rows) == 1:
         rows.append(['—', '—', '—', '—', '—'])
-    items_tbl = Table(rows, colWidths=[0.75*inch, 2.5*inch, 1.0*inch, 0.9*inch, 0.9*inch])
+    items_tbl = Table(rows, colWidths=[0.95*inch, 2.35*inch, 1.0*inch, 0.9*inch, 0.9*inch])
     items_tbl.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, 0), header_bg),
         ('TEXTCOLOR', (0, 0), (-1, -1), black),
@@ -517,49 +555,94 @@ def generate_purchase_order_pdf(purchase_order):
     except Exception:
         pass
     requested_by = getattr(purchase_order, 'requested_by', None) or '—'
-    meta_labels = ['PO Number', 'PO Date', 'Requested By', 'Delivery Date', 'Payment Terms', 'Ship Via']
-    meta_values = [
-        purchase_order.po_number or '—',
-        order_date_str,
-        requested_by,
-        delivery_str,
-        payment_terms,
-        ship_via,
+    # 6 rows x 2 cols (Label | Value) so value column is wide and text does not wrap
+    meta_data = [
+        ['PO Number', purchase_order.po_number or '—'],
+        ['PO Date', order_date_str],
+        ['Requested By', requested_by],
+        ['Delivery Date', delivery_str],
+        ['Payment Terms', payment_terms],
+        ['Ship Via', ship_via],
     ]
-    meta_tbl = Table([
-        meta_labels[:3], meta_values[:3],
-        meta_labels[3:], meta_values[3:],
-    ], colWidths=[1.05*inch, 1.6*inch, 1.05*inch])
+    meta_tbl = Table(
+        meta_data,
+        colWidths=[1.15*inch, 2.85*inch],  # wide value column so dates/numbers stay on one line
+        rowHeights=[16, 16, 16, 16, 16, 16],
+    )
     meta_tbl.setStyle(TableStyle([
         ('FONTSIZE', (0, 0), (-1, -1), font_8),
         ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
         ('FONTNAME', (1, 0), (1, -1), 'Helvetica'),
         ('TEXTCOLOR', (0, 0), (-1, -1), black),
-        ('TOPPADDING', (0, 0), (-1, -1), 6),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
-        ('LEFTPADDING', (0, 0), (-1, -1), 6),
-        ('RIGHTPADDING', (0, 0), (-1, -1), 6),
+        ('TOPPADDING', (0, 0), (-1, -1), 4),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+        ('LEFTPADDING', (0, 0), (-1, -1), 5),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 5),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
         ('BOX', (0, 0), (-1, -1), 0.75, border_color),
         ('INNERGRID', (0, 0), (-1, -1), 0.5, border_light),
     ]))
     story.append(meta_tbl)
     story.append(Spacer(1, space_md))
 
+    section_style = ParagraphStyle('POSection', parent=styles['Normal'], fontSize=font_10, fontName='Helvetica-Bold', textColor=black, spaceAfter=4)
+    label_style = ParagraphStyle('POLabel', parent=styles['Normal'], fontSize=font_9, fontName='Helvetica-Bold', textColor=black)
+    value_style = ParagraphStyle('POValue', parent=styles['Normal'], fontSize=font_10, textColor=black)
+
+    # ----- NOTIFY PARTY (if any contacts set) -----
+    np_contacts = getattr(purchase_order, 'notify_party_contacts', None)
+    if np_contacts:
+        story.append(Paragraph('NOTIFY PARTY', section_style))
+        for np_contact in np_contacts.all():
+            np_lines = [np_contact.name or '—']
+            if getattr(np_contact, 'vendor', None):
+                np_vendor = np_contact.vendor.name or ''
+                if getattr(np_contact, 'location_label', None):
+                    np_vendor += f" — {np_contact.location_label}"
+                if np_vendor:
+                    np_lines.insert(0, np_vendor)
+            for em in getattr(np_contact, 'emails', None) or []:
+                s = str(em).strip()
+                if s:
+                    np_lines.append(s)
+            if getattr(np_contact, 'phone', None) and np_contact.phone:
+                np_lines.append(np_contact.phone)
+            if getattr(np_contact, 'notes', None) and np_contact.notes:
+                np_lines.append(f"Notes: {np_contact.notes}")
+            np_text = '<br/>'.join(np_lines)
+            np_tbl = Table([
+                [Paragraph('Notify Party (importation contact)', label_style)],
+                [Paragraph(np_text, value_style)],
+            ], colWidths=[6.3*inch])
+            np_tbl.setStyle(TableStyle([
+                ('TOPPADDING', (0, 0), (-1, -1), 6),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+                ('LEFTPADDING', (0, 0), (-1, -1), 6),
+                ('RIGHTPADDING', (0, 0), (-1, -1), 6),
+                ('BOX', (0, 0), (-1, -1), 0.75, border_color),
+                ('INNERGRID', (0, 0), (-1, -1), 0.5, border_light),
+                ('BACKGROUND', (0, 0), (-1, 0), header_bg),
+            ]))
+            story.append(np_tbl)
+            story.append(Spacer(1, space_md))
+
     # ----- VENDOR & SHIPPING DETAILS: three columns (Vendor/Supplier | Bill To | Ship To) -----
     vendor_name = purchase_order.vendor_customer_name or '—'
     vendor_addr1 = (purchase_order.vendor_address or '').strip() or '—'
     vendor_csz = ', '.join(filter(None, [purchase_order.vendor_city, purchase_order.vendor_state, purchase_order.vendor_zip]))
     vendor_addr2 = vendor_csz or '—'
+    # Company address used for Bill To and for consistent Ship To when same location
+    company_addr_line1 = '6431 Michels Drive'
+    company_addr_line2 = 'Washington, MO 63090'
     bill_to_name = 'Wildwood Ingredients, LLC'
-    bill_to_addr1 = '6431 Michels Drive'
-    bill_to_addr2 = 'Washington, MO 63090'
+    bill_to_addr1 = company_addr_line1
+    bill_to_addr2 = company_addr_line2
     ship_to_name = purchase_order.ship_to_name or '—'
-    ship_to_addr1 = (purchase_order.ship_to_address or '').strip() or '—'
+    raw_ship_addr1 = (purchase_order.ship_to_address or '').strip() or '—'
+    # Normalize "Michels Dr." to "Michels Drive" for consistency with Bill To
+    ship_to_addr1 = raw_ship_addr1 if raw_ship_addr1 not in ('6431 Michels Dr.', '6431 Michels Drive') else company_addr_line1
     ship_to_csz = ', '.join(filter(None, [purchase_order.ship_to_city, purchase_order.ship_to_state, purchase_order.ship_to_zip]))
     ship_to_addr2 = ship_to_csz or '—'
-    section_style = ParagraphStyle('POSection', parent=styles['Normal'], fontSize=font_10, fontName='Helvetica-Bold', textColor=black, spaceAfter=4)
-    label_style = ParagraphStyle('POLabel', parent=styles['Normal'], fontSize=font_9, fontName='Helvetica-Bold', textColor=black)
-    value_style = ParagraphStyle('POValue', parent=styles['Normal'], fontSize=font_10, textColor=black)
     story.append(Paragraph('VENDOR & SHIPPING DETAILS', section_style))
     details_data = [
         [Paragraph('Vendor / Supplier', label_style), Paragraph('Bill To', label_style), Paragraph('Ship To', label_style)],
@@ -606,23 +689,36 @@ def generate_purchase_order_pdf(purchase_order):
     for idx, po_item in enumerate(purchase_order.items.select_related('item').all(), 1):
         item = po_item.item
         if use_vendor_display and item:
-            desc = item.vendor_item_name or item.name or (po_item.notes or '—') or '—'
+            base = (item.vendor_item_name or item.name or (po_item.notes or '—') or '—').strip()
+            num = (getattr(item, 'vendor_item_number', None) or '').strip()
+            if not num and item.id in vendor_item_number_by_item_id:
+                num = (vendor_item_number_by_item_id[item.id] or '').strip()
+            desc = f"{base} ({num})" if num and base else base
         else:
             desc = (item.name if item else (po_item.notes or '—')) or '—'
-        uom = (item.unit_of_measure if item else 'lbs') or 'lbs'
+            if item:
+                num = (getattr(item, 'vendor_item_number', None) or '').strip()
+                if not num and item.id in vendor_item_number_by_item_id:
+                    num = (vendor_item_number_by_item_id[item.id] or '').strip()
+                if num:
+                    desc = f"{desc} ({num})"
+        uom = (getattr(po_item, 'order_uom', None) or '').strip() or ((item.unit_of_measure if item else 'lbs') or 'lbs')
         qty = po_item.quantity_ordered
         up = po_item.unit_price or 0
         line_total = qty * up
+        tax_pct = getattr(po_item, 'tax', None)
+        tax_display = f"{tax_pct:.1f}%" if tax_pct is not None and tax_pct != 0 else '0%'
         items_rows.append([
             str(idx),
             desc[:60] + ('…' if len(desc) > 60 else ''),
             f"{qty:,.2f}",
             uom,
             f"${up:,.2f}",
-            '—',
+            tax_display,
             f"${line_total:,.2f}",
         ])
-    col_w = [0.35*inch, 2.0*inch, 0.55*inch, 0.45*inch, 0.7*inch, 0.5*inch, 0.75*inch]
+    # Description column wide so product names (e.g. Natural Red D1300) don't wrap
+    col_w = [0.32*inch, 2.55*inch, 0.5*inch, 0.42*inch, 0.62*inch, 0.42*inch, 0.72*inch]
     items_tbl = Table(items_rows, colWidths=col_w)
     items_tbl.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, 0), header_bg),
@@ -661,17 +757,19 @@ def generate_purchase_order_pdf(purchase_order):
         ['Discount', f"-${discount:,.2f}"],
         ['Total', f"${total:,.2f}"],
     ]
-    summary_tbl = Table(summary_rows, colWidths=[1.2*inch, 1.4*inch])
+    summary_tbl = Table(summary_rows, colWidths=[1.4*inch, 1.6*inch])
     summary_tbl.setStyle(TableStyle([
         ('FONTSIZE', (0, 0), (-1, -2), font_10),
         ('FONTSIZE', (0, -1), (-1, -1), font_10),
         ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
         ('TEXTCOLOR', (0, 0), (-1, -1), black),
+        ('ALIGN', (0, 0), (0, -1), 'LEFT'),
         ('ALIGN', (1, 0), (1, -1), 'RIGHT'),
-        ('TOPPADDING', (0, 0), (-1, -1), 5),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
-        ('LEFTPADDING', (0, 0), (-1, -1), 6),
-        ('RIGHTPADDING', (0, 0), (-1, -1), 6),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('TOPPADDING', (0, 0), (-1, -1), 6),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+        ('LEFTPADDING', (0, 0), (-1, -1), 8),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 8),
         ('BOX', (0, 0), (-1, -1), 0.75, border_color),
         ('INNERGRID', (0, 0), (-1, -1), 0.5, border_light),
         ('LINEABOVE', (0, -1), (-1, -1), 1.5, black),

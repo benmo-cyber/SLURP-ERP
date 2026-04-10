@@ -43,6 +43,14 @@
   border-bottom: 2px solid #3498db;
 }
 
+.rd-formula-prefill-section .form-hint {
+  margin-bottom: 0.75rem;
+}
+
+.rd-formula-select {
+  max-width: 400px;
+}
+
 .form-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
@@ -62,6 +70,27 @@
   margin-bottom: 0.5rem;
   font-weight: 500;
   color: #2c3e50;
+}
+
+.form-group .form-hint,
+.form-hint {
+  margin-top: 0.35rem;
+  font-size: 0.8rem;
+  color: #6b7280;
+}
+
+.qc-section {
+  margin-bottom: 2rem;
+}
+
+.qc-note {
+  margin: 0.75rem 0 0 0;
+  padding: 0.75rem 1rem;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 6px;
+  font-size: 0.875rem;
+  color: #1e40af;
 }
 
 .form-group input,

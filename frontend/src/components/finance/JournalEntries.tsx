@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { getJournalEntries } from '../../api/finance'
 import CreateJournalEntry from './CreateJournalEntry'
+import { formatAppDate } from '../../utils/appDateFormat'
 import './JournalEntries.css'
 
 type EntrySortKey = 'entry_number' | 'entry_date' | 'description' | 'reference_number' | 'created_at' | null
@@ -87,11 +88,11 @@ function JournalEntries() {
               sortedEntries.map((entry) => (
                 <tr key={entry.id}>
                   <td className="entry-number">{entry.entry_number}</td>
-                  <td>{new Date(entry.entry_date).toLocaleDateString()}</td>
+                  <td>{formatAppDate(entry.entry_date)}</td>
                   <td>{entry.description}</td>
                   <td>{entry.reference_number || '-'}</td>
                   <td>{entry.lines?.length || 0} lines</td>
-                  <td>{new Date(entry.created_at).toLocaleDateString()}</td>
+                  <td>{formatAppDate(entry.created_at)}</td>
                 </tr>
               ))
             )}

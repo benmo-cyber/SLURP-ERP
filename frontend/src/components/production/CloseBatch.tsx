@@ -146,7 +146,7 @@ function CloseBatch({ batch, onClose, onSuccess }: CloseBatchProps) {
     try {
       setSubmitting(true)
       
-      // Convert input values back to original unit (lbs) for backend
+      // Convert input values back to original unit (lbs/kg as stored on batch) for backend
       const qtyActual = typeof formData.quantity_actual === 'string' ? (formData.quantity_actual === '' ? 0 : parseFloat(formData.quantity_actual)) : formData.quantity_actual
       const wastesVal = typeof formData.wastes === 'string' ? (formData.wastes === '' ? 0 : parseFloat(formData.wastes)) : formData.wastes
       const spillsVal = typeof formData.spills === 'string' ? (formData.spills === '' ? 0 : parseFloat(formData.spills)) : formData.spills
@@ -154,8 +154,24 @@ function CloseBatch({ batch, onClose, onSuccess }: CloseBatchProps) {
       const quantityActualInLbs = convertFromDisplay(qtyActual || 0, finishedGoodUnit)
       const wastesInLbs = convertFromDisplay(wastesVal || 0, finishedGoodUnit)
       const spillsInLbs = convertFromDisplay(spillsVal || 0, finishedGoodUnit)
+
+      const ticketNative = Number(batch.quantity_produced) || 0
+      const tol = 0.05
+      if (ticketNative - quantityActualInLbs > tol) {
+        const shortfall = ticketNative - quantityActualInLbs
+        const explained = wastesInLbs + spillsInLbs
+        if (Math.abs(explained - shortfall) > tol) {
+          alert(
+            `When production is below the batch ticket, wastes + spills must explain the shortfall.\n\n` +
+              `Target − produced = ${shortfall.toFixed(2)} ${finishedGoodUnit}\n` +
+              `wastes + spills = ${explained.toFixed(2)} ${finishedGoodUnit}`
+          )
+          setSubmitting(false)
+          return
+        }
+      }
       
-      // Calculate variance (both should be in same unit)
+      // Variance = produced − target (stored on batch; serializer recalculates on close)
       const variance = quantityActualInLbs - batch.quantity_produced
       
       // Store QC info in notes
@@ -217,8 +233,15 @@ function CloseBatch({ batch, onClose, onSuccess }: CloseBatchProps) {
     }
   }
 
-  // Calculate variance in display units for display
-  const varianceInDisplay = convertQuantity(parseFloat(formData.quantity_actual.toString()) || 0, finishedGoodUnit) - convertQuantity(batch.quantity_produced, finishedGoodUnit)
+  // Variance (produced − batch ticket) in display units
+  const qtyActNative =
+    formData.quantity_actual === ''
+      ? 0
+      : typeof formData.quantity_actual === 'string'
+        ? parseFloat(formData.quantity_actual) || 0
+        : Number(formData.quantity_actual) || 0
+  const varianceNative = qtyActNative - (Number(batch.quantity_produced) || 0)
+  const varianceInDisplay = convertQuantity(varianceNative, finishedGoodUnit)
 
   return (
     <div className="modal-overlay" onClick={onClose}>
@@ -254,16 +277,20 @@ function CloseBatch({ batch, onClose, onSuccess }: CloseBatchProps) {
               <span>{batch.finished_good_item.name}</span>
             </div>
             <div className="info-item">
-              <label>Quantity to Produce:</label>
+              <label>Batch ticket (target):</label>
               <span>{formatNumber(convertQuantity(batch.quantity_produced, finishedGoodUnit))} {getDisplayUnit()}</span>
             </div>
           </div>
 
           <div className="form-section">
             <h3>Production Results</h3>
+            <p className="close-batch-section-hint">
+              Enter total weight produced — that amount is added to inventory. Variance compares produced to the batch
+              ticket. If you are short, split the shortfall between Wastes and Spills to explain it (totals must match).
+            </p>
             <div className="form-grid">
               <div className="form-group">
-                <label>Quantity Produced ({getDisplayUnit()}) *</label>
+                <label>Quantity produced — total ({getDisplayUnit()}) *</label>
                 <input
                   type="number"
                   step="0.01"
@@ -284,17 +311,22 @@ function CloseBatch({ batch, onClose, onSuccess }: CloseBatchProps) {
               </div>
 
               <div className="form-group">
-                <label>Variance</label>
+                <label>Variance (produced − target)</label>
                 <input
-                  type="number"
-                  value={formatNumber(varianceInDisplay)}
+                  type="text"
+                  readOnly
+                  value={
+                    varianceInDisplay >= 0
+                      ? `+${formatNumber(Math.abs(varianceInDisplay))} ${getDisplayUnit()}`
+                      : `−${formatNumber(Math.abs(varianceInDisplay))} ${getDisplayUnit()} short`
+                  }
                   disabled
                   className={varianceInDisplay >= 0 ? 'positive' : 'negative'}
                 />
               </div>
 
               <div className="form-group">
-                <label>Wastes ({getDisplayUnit()})</label>
+                <label>Wastes — explain shortfall ({getDisplayUnit()})</label>
                 <input
                   type="number"
                   step="0.01"
@@ -314,7 +346,7 @@ function CloseBatch({ batch, onClose, onSuccess }: CloseBatchProps) {
               </div>
 
               <div className="form-group">
-                <label>Spills ({getDisplayUnit()})</label>
+                <label>Spills — explain shortfall ({getDisplayUnit()})</label>
                 <input
                   type="number"
                   step="0.01"

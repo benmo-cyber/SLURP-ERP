@@ -72,6 +72,16 @@
   padding: 0.5rem 0.75rem;
   border-radius: 6px;
   margin-bottom: 1rem;
+}
+.login-error .login-error-hint {
+  margin: 0.5rem 0 0 0;
+  font-size: 0.85rem;
+  color: #666;
+}
+.login-error code {
+  background: rgba(0,0,0,0.06);
+  padding: 0.1rem 0.3rem;
+  border-radius: 3px;
   font-size: 0.9rem;
 }
 

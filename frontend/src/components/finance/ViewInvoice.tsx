@@ -1,7 +1,9 @@
 import { useState, useEffect } from 'react'
-import { getInvoice, updateInvoice } from '../../api/invoices'
+import { getInvoice, updateInvoice, patchInvoice } from '../../api/invoices'
+import { useGodMode } from '../../context/GodModeContext'
 import { openPackingListForShipment } from '../../api/salesOrders'
 import { formatCurrency } from '../../utils/formatNumber'
+import { formatAppDate } from '../../utils/appDateFormat'
 import './ViewInvoice.css'
 
 interface Invoice {
@@ -67,6 +69,7 @@ function ViewInvoice({ invoiceId, onClose, onSuccess }: ViewInvoiceProps) {
       const data = await getInvoice(invoiceId)
       setInvoice(data)
       setFormData({
+        invoice_number: data.invoice_number || '',
         status: data.status,
         tracking_number: data.sales_order?.tracking_number || '',
         notes: data.notes || '',
@@ -173,7 +176,16 @@ function ViewInvoice({ invoiceId, onClose, onSuccess }: ViewInvoiceProps) {
               <div className="detail-grid">
                 <div className="detail-item">
                   <label>Invoice Number:</label>
-                  <span>{invoice.invoice_number}</span>
+                  {editing && godModeOn && canUseGodMode ? (
+                    <input
+                      type="text"
+                      value={formData.invoice_number}
+                      onChange={(e) => setFormData({ ...formData, invoice_number: e.target.value })}
+                      className="invoice-number-input"
+                    />
+                  ) : (
+                    <span>{invoice.invoice_number}</span>
+                  )}
                 </div>
                 <div className="detail-item">
                   <label>Status:</label>
@@ -195,11 +207,11 @@ function ViewInvoice({ invoiceId, onClose, onSuccess }: ViewInvoiceProps) {
                 </div>
                 <div className="detail-item">
                   <label>Invoice Date:</label>
-                  <span>{new Date(invoice.invoice_date).toLocaleDateString()}</span>
+                  <span>{formatAppDate(invoice.invoice_date)}</span>
                 </div>
                 <div className="detail-item">
                   <label>Due Date:</label>
-                  <span>{new Date(invoice.due_date).toLocaleDateString()}</span>
+                  <span>{formatAppDate(invoice.due_date)}</span>
                 </div>
               </div>
             </div>

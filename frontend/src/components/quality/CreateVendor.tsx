@@ -1,6 +1,32 @@
 import { useState } from 'react'
 import { createVendor } from '../../api/quality'
+import { VendorAddressFields } from './VendorAddressFields'
 import './CreateVendor.css'
+
+/** DRF returns field errors (e.g. duplicate name), not always `detail`. */
+function formatApiError(err: unknown): string {
+  const e = err as { response?: { data?: Record<string, unknown> }; message?: string }
+  const d = e?.response?.data
+  if (!d) return e?.message || 'Request failed'
+  if (typeof d === 'string') return d
+  if (typeof d.error === 'string') return d.error
+  if (typeof d.detail === 'string') return d.detail
+  if (Array.isArray(d.detail)) return JSON.stringify(d.detail)
+  if (typeof d.message === 'string') return d.message
+  if (Array.isArray(d.non_field_errors)) return (d.non_field_errors as string[]).join(' ')
+  const parts: string[] = []
+  for (const [key, val] of Object.entries(d)) {
+    if (['detail', 'message', 'error', 'non_field_errors'].includes(key)) continue
+    if (Array.isArray(val)) parts.push(`${key}: ${val.join(', ')}`)
+    else if (val != null) parts.push(`${key}: ${String(val)}`)
+  }
+  if (parts.length) return parts.join('; ')
+  try {
+    return JSON.stringify(d)
+  } catch {
+    return 'Request failed'
+  }
+}
 
 interface CreateVendorProps {
   onClose: () => void
@@ -15,6 +41,7 @@ function CreateVendor({ onClose, onSuccess }: CreateVendorProps) {
     email: '',
     phone: '',
     street_address: '',
+    address: '',
     city: '',
     state: '',
     zip_code: '',
@@ -42,6 +69,7 @@ function CreateVendor({ onClose, onSuccess }: CreateVendorProps) {
         email: formData.email || null,
         phone: formData.phone || null,
         street_address: formData.street_address || null,
+        address: formData.address || null,
         city: formData.city || null,
         state: formData.state || null,
         zip_code: formData.zip_code || null,
@@ -53,9 +81,9 @@ function CreateVendor({ onClose, onSuccess }: CreateVendorProps) {
       
       alert('Vendor created successfully!')
       onSuccess()
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Failed to create vendor:', error)
-      alert(error.response?.data?.detail || error.message || 'Failed to create vendor')
+      alert(formatApiError(error))
     } finally {
       setSubmitting(false)
     }
@@ -132,52 +160,18 @@ function CreateVendor({ onClose, onSuccess }: CreateVendorProps) {
             </div>
           </div>
 
-          <div className="form-group">
-            <label>Street Address</label>
-            <input
-              type="text"
-              value={formData.street_address}
-              onChange={(e) => setFormData({ ...formData, street_address: e.target.value })}
-            />
-          </div>
-
-          <div className="form-row">
-            <div className="form-group">
-              <label>City</label>
-              <input
-                type="text"
-                value={formData.city}
-                onChange={(e) => setFormData({ ...formData, city: e.target.value })}
-              />
-            </div>
-            <div className="form-group">
-              <label>State</label>
-              <input
-                type="text"
-                value={formData.state}
-                onChange={(e) => setFormData({ ...formData, state: e.target.value })}
-              />
-            </div>
-          </div>
-
-          <div className="form-row">
-            <div className="form-group">
-              <label>ZIP Code</label>
-              <input
-                type="text"
-                value={formData.zip_code}
-                onChange={(e) => setFormData({ ...formData, zip_code: e.target.value })}
-              />
-            </div>
-            <div className="form-group">
-              <label>Country</label>
-              <input
-                type="text"
-                value={formData.country}
-                onChange={(e) => setFormData({ ...formData, country: e.target.value })}
-              />
-            </div>
-          </div>
+          <VendorAddressFields
+            idPrefix="create-vendor"
+            values={{
+              street_address: formData.street_address,
+              address: formData.address,
+              city: formData.city,
+              state: formData.state,
+              zip_code: formData.zip_code,
+              country: formData.country,
+            }}
+            onChange={(patch) => setFormData({ ...formData, ...patch })}
+          />
 
           <div className="form-group">
             <label>Notes</label>

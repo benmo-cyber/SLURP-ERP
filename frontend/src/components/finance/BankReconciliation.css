@@ -6,5 +6,6 @@
 .form-actions { margin-top: 1rem; display: flex; gap: 0.5rem; }
 .bank-recon-table { width: 100%; border-collapse: collapse; }
 .bank-recon-table th, .bank-recon-table td { padding: 0.5rem; text-align: left; border-bottom: 1px solid #eee; }
+.bank-recon-table thead th { background: var(--app-header-bg); color: var(--app-header-text); border-bottom: 1px solid var(--table-header-border); }
 .bank-recon-table th { font-weight: 600; }
 .empty-state { color: #666; margin-top: 1rem; }

@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { getLots, getItems } from '../../api/inventory'
+import { formatAppDate } from '../../utils/appDateFormat'
 import './Lots.css'
 
 type LotsSortKey = 'lot_number' | 'item' | 'quantity' | 'quantity_remaining' | 'received_date' | 'expiration_date' | null
@@ -83,8 +84,8 @@ function Lots() {
                   <td>{lot.item?.name || '-'}</td>
                   <td>{lot.quantity}</td>
                   <td>{lot.quantity_remaining}</td>
-                  <td>{new Date(lot.received_date).toLocaleDateString()}</td>
-                  <td>{lot.expiration_date ? new Date(lot.expiration_date).toLocaleDateString() : '-'}</td>
+                  <td>{formatAppDate(lot.received_date)}</td>
+                  <td>{lot.expiration_date ? formatAppDate(lot.expiration_date) : '-'}</td>
                 </tr>
               ))
             )}

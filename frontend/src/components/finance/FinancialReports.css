@@ -7,7 +7,48 @@
 }
 
 .reports-header h2 {
-  margin-bottom: 15px;
+  margin-bottom: 8px;
+}
+
+.reports-related-links {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.reports-related-links .related-label,
+.invoices-related-links .related-label,
+.ar-related-links .related-label {
+  font-size: 0.875rem;
+  color: #6b7280;
+  font-weight: 500;
+}
+
+.reports-related-links .link-btn,
+.invoices-related-links .link-btn,
+.ar-related-links .link-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 0.875rem;
+  color: #2563eb;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.reports-related-links .link-btn:hover,
+.invoices-related-links .link-btn:hover,
+.ar-related-links .link-btn:hover {
+  color: #1d4ed8;
+}
+
+.reports-related-links .related-sep,
+.invoices-related-links .related-sep,
+.ar-related-links .related-sep {
+  color: #d1d5db;
+  font-size: 0.875rem;
 }
 
 .report-filters {
@@ -49,10 +90,11 @@
 }
 
 .financial-table th {
-  background: #f8f9fa;
+  background: var(--app-header-bg);
+  color: var(--app-header-text);
   padding: 12px;
   text-align: left;
-  border-bottom: 2px solid #dee2e6;
+  border-bottom: 2px solid var(--table-header-border);
   font-weight: 600;
 }
 

@@ -79,15 +79,16 @@
 }
 
 .pl-table thead {
-  background: #f8f9fa;
+  background: var(--app-header-bg);
 }
 
 .pl-table th {
   padding: 12px;
   text-align: left;
   font-weight: 600;
-  color: #333;
-  border-bottom: 2px solid #e0e0e0;
+  color: var(--app-header-text);
+  background: var(--app-header-bg);
+  border-bottom: 2px solid var(--table-header-border);
 }
 
 .pl-table td {

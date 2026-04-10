@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { getSalesOrders } from '../../api/inventory'
+import { formatAppDate } from '../../utils/appDateFormat'
 import './SalesOrders.css'
 
 function SalesOrders() {
@@ -59,8 +60,8 @@ function SalesOrders() {
                   <td>
                     <span className={`badge badge-${order.status}`}>{order.status}</span>
                   </td>
-                  <td>{new Date(order.order_date).toLocaleDateString()}</td>
-                  <td>{order.expected_ship_date ? new Date(order.expected_ship_date).toLocaleDateString() : '-'}</td>
+                  <td>{formatAppDate(order.order_date)}</td>
+                  <td>{order.expected_ship_date ? formatAppDate(order.expected_ship_date) : '-'}</td>
                 </tr>
               ))
             )}

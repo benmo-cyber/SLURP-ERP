@@ -1,6 +1,17 @@
-import { useState, useEffect } from 'react'
-import { getSalesOrders, deleteSalesOrder, updateSalesOrder, patchSalesOrder, issueSalesOrder } from '../../api/salesOrders'
+import { useState, useEffect, useMemo } from 'react'
+import { useGodMode } from '../../context/GodModeContext'
+import {
+  getSalesOrders,
+  deleteSalesOrder,
+  updateSalesOrder,
+  patchSalesOrder,
+  issueSalesOrder,
+  openPackingList,
+  openPackingListForShipment,
+  openPickList,
+} from '../../api/salesOrders'
 import { formatNumber } from '../../utils/formatNumber'
+import { formatAppDate } from '../../utils/appDateFormat'
 import AllocateModal from './AllocateModal'
 import './SalesOrdersList.css'
 
@@ -18,15 +29,33 @@ interface SalesOrder {
   expected_ship_date?: string
   actual_ship_date?: string
   grand_total?: number
+  drop_ship?: boolean
   items?: Array<{
     id: number
     item: {
       sku: string
       name: string
+      unit_of_measure?: string
     }
     quantity_ordered: number
     quantity_allocated: number
     unit_price: number
+    allocated_lots?: Array<{
+      id: number
+      quantity_allocated: number
+      coa_customer_pdf_url?: string | null
+      lot?: {
+        id: number
+        lot_number?: string | null
+        vendor_lot_number?: string | null
+      }
+    }>
+  }>
+  shipments?: Array<{
+    id: number
+    ship_date: string
+    expected_ship_date?: string | null
+    tracking_number?: string
   }>
 }
 
@@ -34,6 +63,42 @@ interface SalesOrdersListProps {
   refreshKey?: number
   onSelectOrder?: (order: SalesOrder) => void
   onEditOrder?: (order: SalesOrder) => void
+}
+
+type CustomerCoaRow = {
+  key: number
+  sku: string
+  lotLabel: string
+  qty: number
+  uom: string
+  url: string | null | undefined
+}
+
+function customerCoaRowsForOrder(order: SalesOrder): CustomerCoaRow[] {
+  const rows: CustomerCoaRow[] = []
+  for (const item of order.items ?? []) {
+    const uom = (item.item?.unit_of_measure || 'lbs').toLowerCase()
+    for (const al of item.allocated_lots ?? []) {
+      const lotLabel = ((al.lot?.lot_number || al.lot?.vendor_lot_number || '—') as string).trim()
+      rows.push({
+        key: al.id,
+        sku: item.item?.sku || '—',
+        lotLabel,
+        qty: al.quantity_allocated,
+        uom,
+        url: al.coa_customer_pdf_url,
+      })
+    }
+  }
+  return rows
+}
+
+function customerCoaOpenTitle(sku: string, lotLabel: string) {
+  return `Open customer COA PDF for this sales order (${sku} · lot ${lotLabel})`
+}
+
+function customerCoaPendingTitle(sku: string, lotLabel: string) {
+  return `Customer COA not ready for ${sku} · ${lotLabel}. Appears when the customer copy is generated for this allocation.`
 }
 
 function SalesOrdersList({ refreshKey = 0, onSelectOrder, onEditOrder }: SalesOrdersListProps) {
@@ -46,6 +111,19 @@ function SalesOrdersList({ refreshKey = 0, onSelectOrder, onEditOrder }: SalesOr
   const [editingShipDate, setEditingShipDate] = useState<string>('')
   const [issuingId, setIssuingId] = useState<number | null>(null)
   const [allocatingSOId, setAllocatingSOId] = useState<number | null>(null)
+  const [issueModalOrder, setIssueModalOrder] = useState<SalesOrder | null>(null)
+  const [issueDateValue, setIssueDateValue] = useState('')
+  const { godModeOn, canUseGodMode, maxDateForEntry, minDateForEntry } = useGodMode()
+  const todayYmd = useMemo(() => {
+    const d = new Date()
+    return (
+      d.getFullYear() +
+      '-' +
+      String(d.getMonth() + 1).padStart(2, '0') +
+      '-' +
+      String(d.getDate()).padStart(2, '0')
+    )
+  }, [])
   type SOSortKey = 'so_number' | 'customer_name' | 'status' | 'order_date' | 'expected_ship_date' | 'grand_total' | null
   const [sort, setSort] = useState<{ key: SOSortKey; dir: 'asc' | 'desc' }>({ key: 'order_date', dir: 'desc' })
 
@@ -93,13 +171,19 @@ function SalesOrdersList({ refreshKey = 0, onSelectOrder, onEditOrder }: SalesOr
     }
   }
 
+  const formatStatusLabel = (status: string) => (status || '').replace(/_/g, ' ')
+
   const getStatusBadgeClass = (status: string) => {
     switch (status.toLowerCase()) {
       case 'draft':
         return 'badge-draft'
       case 'allocated':
         return 'badge-allocated'
+      case 'issued':
+      case 'ready_for_shipment':
+        return 'badge-issued'
       case 'shipped':
+      case 'completed':
         return 'badge-shipped'
       case 'cancelled':
         return 'badge-cancelled'
@@ -142,11 +226,32 @@ function SalesOrdersList({ refreshKey = 0, onSelectOrder, onEditOrder }: SalesOr
     setEditingShipDate('')
   }
 
+  const submitIssueFromModal = async () => {
+    if (!issueModalOrder) return
+    try {
+      setIssuingId(issueModalOrder.id)
+      await issueSalesOrder(issueModalOrder.id, { issue_date: issueDateValue })
+      setIssueModalOrder(null)
+      await loadOrders()
+    } catch (err: any) {
+      console.error('Failed to issue sales order:', err)
+      alert(`Failed to issue sales order: ${err.response?.data?.error || err.response?.data?.detail || err.message}`)
+    } finally {
+      setIssuingId(null)
+    }
+  }
+
   const handleIssue = async (e: React.MouseEvent, order: SalesOrder) => {
     e.stopPropagation()
     
     if (order.status !== 'draft') {
       alert(`Cannot issue a ${order.status} sales order. Only draft orders can be issued.`)
+      return
+    }
+
+    if (godModeOn && canUseGodMode) {
+      setIssueModalOrder(order)
+      setIssueDateValue(order.order_date ? order.order_date.slice(0, 10) : todayYmd)
       return
     }
 
@@ -180,6 +285,19 @@ function SalesOrdersList({ refreshKey = 0, onSelectOrder, onEditOrder }: SalesOr
     if (!order.items || order.items.length === 0) return false
     return order.items.every(item => item.quantity_allocated >= item.quantity_ordered)
   }
+
+  /** Packing list PDF uses carrier, tracking, pieces, dimensions & weights from checkout — enable only after at least one shipment. */
+  const canOpenOrderPackingList = (order: SalesOrder): boolean =>
+    Boolean(order.shipments && order.shipments.length > 0)
+
+  const packingListDisabledTitle =
+    'Complete checkout first. Carrier, tracking, pieces, per-piece dimensions and weights are saved to the packing list. Then open Pack list or a Release link.'
+
+  const canOpenPickList = (order: SalesOrder): boolean =>
+    Boolean(order.items?.some((it) => (it.quantity_allocated ?? 0) > 0))
+
+  const pickListDisabledTitle =
+    'Allocate inventory first. The pick list shows each SKU, Wildwood lot number, and quantity to pull from the warehouse.'
 
   const handleDelete = async (e: React.MouseEvent, order: SalesOrder) => {
     e.stopPropagation()
@@ -215,24 +333,75 @@ function SalesOrdersList({ refreshKey = 0, onSelectOrder, onEditOrder }: SalesOr
     }
   }
 
+  const issueModal = issueModalOrder ? (
+      <div
+        className="modal-overlay"
+        style={{
+          position: 'fixed',
+          inset: 0,
+          background: 'rgba(0,0,0,0.45)',
+          zIndex: 1000,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+        onClick={() => setIssueModalOrder(null)}
+      >
+        <div
+          style={{ background: 'white', padding: '1.5rem', borderRadius: 8, maxWidth: 420 }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <h3 style={{ marginTop: 0 }}>Issue sales order</h3>
+          <p style={{ marginBottom: '0.75rem' }}>Choose the order / issue date (shown on documents).</p>
+          <div className="form-group">
+            <label htmlFor="so-issue-date">Order date</label>
+            <input
+              id="so-issue-date"
+              type="date"
+              value={issueDateValue}
+              onChange={(e) => setIssueDateValue(e.target.value)}
+              max={maxDateForEntry}
+              min={minDateForEntry}
+            />
+          </div>
+          <div style={{ marginTop: '1rem', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <button type="button" className="btn btn-primary" onClick={() => void submitIssueFromModal()}>
+              Issue SO
+            </button>
+            <button type="button" className="btn btn-secondary" onClick={() => setIssueModalOrder(null)}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      </div>
+    ) : null
+
   if (loading) {
     return (
-      <div className="sales-orders-list">
-        <div className="loading">Loading sales orders...</div>
-      </div>
+      <>
+        {issueModal}
+        <div className="sales-orders-list">
+          <div className="loading">Loading sales orders...</div>
+        </div>
+      </>
     )
   }
 
   if (error) {
     return (
-      <div className="sales-orders-list">
-        <div className="error-message">{error}</div>
-        <button onClick={loadOrders} className="btn btn-secondary">Retry</button>
-      </div>
+      <>
+        {issueModal}
+        <div className="sales-orders-list">
+          <div className="error-message">{error}</div>
+          <button onClick={loadOrders} className="btn btn-secondary">Retry</button>
+        </div>
+      </>
     )
   }
 
   return (
+    <>
+      {issueModal}
     <div className="sales-orders-list">
       <div className="orders-header">
         <h2>Sales Orders</h2>
@@ -241,24 +410,25 @@ function SalesOrdersList({ refreshKey = 0, onSelectOrder, onEditOrder }: SalesOr
         </div>
       </div>
 
-      <div className="orders-table-container">
+      <div className="orders-table-container table-wrapper">
         <table className="orders-table">
           <thead>
             <tr>
-              <th className="sortable" onClick={() => handleSort('so_number')}>SO Number {sort.key === 'so_number' && (sort.dir === 'asc' ? '↑' : '↓')}</th>
-              <th className="sortable" onClick={() => handleSort('customer_name')}>Customer {sort.key === 'customer_name' && (sort.dir === 'asc' ? '↑' : '↓')}</th>
-              <th className="sortable" onClick={() => handleSort('status')}>Status {sort.key === 'status' && (sort.dir === 'asc' ? '↑' : '↓')}</th>
-              <th className="sortable" onClick={() => handleSort('order_date')}>Order Date {sort.key === 'order_date' && (sort.dir === 'asc' ? '↑' : '↓')}</th>
-              <th className="sortable" onClick={() => handleSort('expected_ship_date')}>Expected Ship Date {sort.key === 'expected_ship_date' && (sort.dir === 'asc' ? '↑' : '↓')}</th>
-              <th>Items</th>
-              <th className="sortable" onClick={() => handleSort('grand_total')}>Total {sort.key === 'grand_total' && (sort.dir === 'asc' ? '↑' : '↓')}</th>
-              <th>Actions</th>
+              <th className="sortable sortable-header" onClick={() => handleSort('so_number')}>SO # {sort.key === 'so_number' && (sort.dir === 'asc' ? '↑' : '↓')}</th>
+              <th className="sortable sortable-header" onClick={() => handleSort('customer_name')}>Customer {sort.key === 'customer_name' && (sort.dir === 'asc' ? '↑' : '↓')}</th>
+              <th className="sortable sortable-header" onClick={() => handleSort('status')}>Status {sort.key === 'status' && (sort.dir === 'asc' ? '↑' : '↓')}</th>
+              <th className="sortable sortable-header" onClick={() => handleSort('order_date')}>Order date {sort.key === 'order_date' && (sort.dir === 'asc' ? '↑' : '↓')}</th>
+              <th className="sortable sortable-header" onClick={() => handleSort('expected_ship_date')}>Exp. ship {sort.key === 'expected_ship_date' && (sort.dir === 'asc' ? '↑' : '↓')}</th>
+              <th>Line items</th>
+              <th className="sortable sortable-header" onClick={() => handleSort('grand_total')}>Total {sort.key === 'grand_total' && (sort.dir === 'asc' ? '↑' : '↓')}</th>
+              <th className="so-shipping-th">Shipping</th>
+              <th className="so-actions-th">Actions</th>
             </tr>
           </thead>
           <tbody>
             {orders.length === 0 ? (
               <tr>
-                <td colSpan={8} className="empty-state">
+                <td colSpan={9} className="empty-state">
                   No sales orders found.
                 </td>
               </tr>
@@ -287,12 +457,15 @@ function SalesOrdersList({ refreshKey = 0, onSelectOrder, onEditOrder }: SalesOr
                       )}
                     </div>
                   </td>
-                  <td>
+                  <td className="so-status-td">
                     <span className={`badge ${getStatusBadgeClass(order.status)}`}>
-                      {order.status}
+                      {formatStatusLabel(order.status)}
                     </span>
+                    {order.drop_ship && (
+                      <span className="badge badge-drop-ship" title="Drop ship">DS</span>
+                    )}
                   </td>
-                  <td>{new Date(order.order_date).toLocaleDateString()}</td>
+                  <td>{formatAppDate(order.order_date)}</td>
                   <td>
                     {editingShipDateId === order.id ? (
                       <div className="ship-date-edit">
@@ -325,97 +498,219 @@ function SalesOrdersList({ refreshKey = 0, onSelectOrder, onEditOrder }: SalesOr
                         title="Click to edit"
                       >
                         {order.expected_ship_date 
-                          ? new Date(order.expected_ship_date).toLocaleDateString() 
+                          ? formatAppDate(order.expected_ship_date) 
                           : '-'}
                       </span>
                     )}
                   </td>
-                  <td>
+                  <td className="so-items-td">
                     {order.items && order.items.length > 0 ? (
-                      <div className="items-list">
-                        {order.items.map((item, idx) => (
-                          <div key={idx} className="item-line">
-                            <span className="item-sku">{item.item?.sku || 'N/A'}</span>
-                            <span className="item-quantity">{formatNumber(item.quantity_ordered)}</span>
-                            {item.quantity_allocated > 0 && (
-                              <span className="allocated-badge">
-                                ({formatNumber(item.quantity_allocated)} allocated)
-                              </span>
-                            )}
-                          </div>
-                        ))}
+                      <div className="so-items-list">
+                        {order.items.map((item, idx) => {
+                          const alloc = item.quantity_allocated ?? 0
+                          const ordered = item.quantity_ordered ?? 0
+                          const fully = alloc >= ordered && ordered > 0
+                          const uom = (item.item?.unit_of_measure || 'lbs').toLowerCase()
+                          const lotLabel = (lot: { lot_number?: string | null; vendor_lot_number?: string | null } | undefined) =>
+                            ((lot?.lot_number || lot?.vendor_lot_number || '—') as string).trim()
+                          return (
+                            <div key={item.id ?? idx} className="so-item-block">
+                              <div className="so-item-row">
+                                <span className="so-item-sku">{item.item?.sku || '—'}</span>
+                                <span className="so-item-name" title={item.item?.name || ''}>
+                                  {item.item?.name || '—'}
+                                </span>
+                                <span className="so-item-qty">
+                                  {formatNumber(ordered)}
+                                  <span className="so-item-uom">{uom}</span>
+                                </span>
+                              </div>
+                              {alloc > 0 && (
+                                <div className={`so-item-alloc ${fully ? 'so-item-alloc--full' : ''}`}>
+                                  {formatNumber(alloc)} {uom} allocated
+                                  {fully ? ' · complete' : ''}
+                                </div>
+                              )}
+                              {item.allocated_lots &&
+                                item.allocated_lots.length > 0 &&
+                                (alloc > 0 || order.status === 'completed') && (
+                                <ul className="so-alloc-lots">
+                                  {item.allocated_lots.map((al) => (
+                                    <li key={al.id} className="so-alloc-lot-row">
+                                      <span className="so-alloc-lot-text">
+                                        {lotLabel(al.lot)} · {formatNumber(al.quantity_allocated)} {uom}
+                                        {order.status === 'completed' && (al.quantity_allocated ?? 0) <= 0
+                                          ? ' · shipped'
+                                          : ''}
+                                      </span>
+                                      {al.coa_customer_pdf_url ? (
+                                        <a
+                                          href={al.coa_customer_pdf_url}
+                                          target="_blank"
+                                          rel="noopener noreferrer"
+                                          className="so-coa-link"
+                                          onClick={(e) => e.stopPropagation()}
+                                          title={customerCoaOpenTitle(item.item?.sku || '—', lotLabel(al.lot))}
+                                        >
+                                          COA
+                                        </a>
+                                      ) : (
+                                        <span
+                                          className="so-coa-missing"
+                                          title={customerCoaPendingTitle(item.item?.sku || '—', lotLabel(al.lot))}
+                                        >
+                                          COA
+                                        </span>
+                                      )}
+                                    </li>
+                                  ))}
+                                </ul>
+                              )}
+                            </div>
+                          )
+                        })}
                       </div>
                     ) : (
-                      '-'
+                      <span className="so-items-empty">—</span>
                     )}
                   </td>
                   <td className="total-column">
-                    {order.items && order.items.length > 0 ? (
-                      <div className="totals-list">
-                        {order.items.map((item, idx) => (
-                          <div key={idx} className="total-line">
-                            {formatNumber(item.quantity_ordered)} × ${formatNumber(item.unit_price || 0, 2)} = ${formatNumber((item.quantity_ordered || 0) * (item.unit_price || 0), 2)}
-                          </div>
-                        ))}
-                        {order.grand_total !== undefined && order.grand_total !== null && (
-                          <div className="grand-total">
-                            Total: ${formatNumber(order.grand_total, 2)}
-                          </div>
-                        )}
-                      </div>
-                    ) : (
-                      order.grand_total !== undefined && order.grand_total !== null
-                        ? `$${formatNumber(order.grand_total, 2)}`
-                        : '-'
-                    )}
+                    {order.grand_total !== undefined && order.grand_total !== null
+                      ? `$${formatNumber(order.grand_total, 2)}`
+                      : '-'}
                   </td>
-                  <td className="actions-column">
-                    <div className="action-buttons">
+                  <td className="so-shipping-td" onClick={(e) => e.stopPropagation()}>
+                    <div className="so-shipping-cell">
+                      <div className="so-shipping-buttons">
+                        <button
+                          type="button"
+                          className="so-act-btn so-act-btn--pick"
+                          disabled={!canOpenPickList(order)}
+                          onClick={() => {
+                            if (!canOpenPickList(order)) return
+                            openPickList(order.id)
+                          }}
+                          title={canOpenPickList(order) ? 'Pick list: lots and quantities to pull from the warehouse' : pickListDisabledTitle}
+                        >
+                          Pick list
+                        </button>
+                        <button
+                          type="button"
+                          className="so-act-btn so-act-btn--ship"
+                          disabled={!canOpenOrderPackingList(order)}
+                          onClick={() => {
+                            if (!canOpenOrderPackingList(order)) return
+                            void openPackingList(order.id)
+                          }}
+                          title={
+                            canOpenOrderPackingList(order)
+                              ? 'Packing list (full order summary)'
+                              : packingListDisabledTitle
+                          }
+                        >
+                          Pack list
+                        </button>
+                      </div>
+                      {order.shipments && order.shipments.length > 0 && (
+                        <div className="so-pl-releases">
+                          {order.shipments.map((s, idx) => (
+                            <button
+                              key={s.id}
+                              type="button"
+                              className="so-pl-release-link"
+                              onClick={() => openPackingListForShipment(s.id)}
+                              title={`Packing list for shipment ${idx + 1}${s.ship_date ? ` (${String(s.ship_date).slice(0, 10)})` : ''}`}
+                            >
+                              Release {idx + 1}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                      {(() => {
+                        const coaRows = customerCoaRowsForOrder(order)
+                        if (coaRows.length === 0) return null
+                        return (
+                          <div className="so-order-coas">
+                            {coaRows.map((row) =>
+                              row.url ? (
+                                <a
+                                  key={row.key}
+                                  href={row.url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="so-act-btn so-act-btn--coa"
+                                  onClick={(e) => e.stopPropagation()}
+                                  title={customerCoaOpenTitle(row.sku, row.lotLabel)}
+                                >
+                                  COA
+                                </a>
+                              ) : (
+                                <span
+                                  key={row.key}
+                                  className="so-act-btn so-act-btn--coa so-act-btn--coa-missing"
+                                  title={customerCoaPendingTitle(row.sku, row.lotLabel)}
+                                >
+                                  COA
+                                </span>
+                              ),
+                            )}
+                          </div>
+                        )
+                      })()}
+                    </div>
+                  </td>
+                  <td className="actions-column" onClick={(e) => e.stopPropagation()}>
+                    <div className="so-action-buttons">
                       {order.status === 'draft' && (
                         <>
                           <button
-                            className="btn-action btn-allocate"
+                            type="button"
+                            className="so-act-btn so-act-btn--primary"
                             onClick={(e) => handleAllocate(e, order)}
-                            title={isFullyAllocated(order) ? 'Re-allocate' : 'Allocate'}
+                            title={isFullyAllocated(order) ? 'Re-allocate inventory' : 'Allocate inventory'}
                           >
-                            {isFullyAllocated(order) ? 'Re-allocate' : 'Allocate'}
+                            {isFullyAllocated(order) ? 'Re-alloc' : 'Allocate'}
                           </button>
                           <button
-                            className="btn-icon btn-issue"
+                            type="button"
+                            className="so-act-btn so-act-btn--issue"
                             onClick={(e) => handleIssue(e, order)}
                             disabled={issuingId === order.id}
-                            title="Issue"
+                            title="Issue sales order"
                           >
-                            {issuingId === order.id ? '⏳' : '📋'}
+                            {issuingId === order.id ? '…' : 'Issue'}
                           </button>
                         </>
                       )}
                       {(order.status === 'allocated' || order.status === 'issued' || order.status === 'ready_for_shipment') && (
                         <button
-                          className="btn-action btn-allocate"
+                          type="button"
+                          className="so-act-btn so-act-btn--primary"
                           onClick={(e) => handleAllocate(e, order)}
-                          title={isFullyAllocated(order) ? 'Re-allocate' : 'Allocate'}
+                          title={isFullyAllocated(order) ? 'Re-allocate inventory' : 'Allocate inventory'}
                         >
-                          {isFullyAllocated(order) ? 'Re-allocate' : 'Allocate'}
+                          {isFullyAllocated(order) ? 'Re-alloc' : 'Allocate'}
                         </button>
                       )}
                       {onEditOrder && (order.status === 'draft' || order.status === 'allocated' || order.status === 'issued') && (
                         <button
-                          className="btn-icon btn-edit"
+                          type="button"
+                          className="so-act-btn so-act-btn--muted"
                           onClick={(e) => handleEdit(e, order)}
-                          title="Edit"
+                          title="Edit sales order"
                         >
-                          ✏️
+                          Edit
                         </button>
                       )}
                       {(order.status === 'draft' || order.status === 'allocated') && (
                         <button
-                          className="btn-icon btn-delete"
+                          type="button"
+                          className="so-act-btn so-act-btn--danger"
                           onClick={(e) => handleDelete(e, order)}
                           disabled={deletingId === order.id}
-                          title="Delete"
+                          title="Delete sales order"
                         >
-                          {deletingId === order.id ? '⏳' : '🗑️'}
+                          {deletingId === order.id ? '…' : 'Delete'}
                         </button>
                       )}
                     </div>
@@ -444,16 +739,17 @@ function SalesOrdersList({ refreshKey = 0, onSelectOrder, onEditOrder }: SalesOr
             </div>
           </div>
 
-          <div className="orders-table-container">
+          <div className="orders-table-container table-wrapper">
             <table className="orders-table">
               <thead>
                 <tr>
-                  <th className="sortable" onClick={() => handleSort('so_number')}>SO Number {sort.key === 'so_number' && (sort.dir === 'asc' ? '↑' : '↓')}</th>
-                  <th className="sortable" onClick={() => handleSort('customer_name')}>Customer {sort.key === 'customer_name' && (sort.dir === 'asc' ? '↑' : '↓')}</th>
-                  <th className="sortable" onClick={() => handleSort('order_date')}>Order Date {sort.key === 'order_date' && (sort.dir === 'asc' ? '↑' : '↓')}</th>
-                  <th>Ship Dates</th>
-                  <th>Items</th>
-                  <th className="sortable" onClick={() => handleSort('grand_total')}>Total {sort.key === 'grand_total' && (sort.dir === 'asc' ? '↑' : '↓')}</th>
+                  <th className="sortable sortable-header" onClick={() => handleSort('so_number')}>SO # {sort.key === 'so_number' && (sort.dir === 'asc' ? '↑' : '↓')}</th>
+                  <th className="sortable sortable-header" onClick={() => handleSort('customer_name')}>Customer {sort.key === 'customer_name' && (sort.dir === 'asc' ? '↑' : '↓')}</th>
+                  <th className="sortable sortable-header" onClick={() => handleSort('order_date')}>Order date {sort.key === 'order_date' && (sort.dir === 'asc' ? '↑' : '↓')}</th>
+                  <th>Ship dates</th>
+                  <th>Line items</th>
+                  <th className="so-shipping-th">Shipping</th>
+                  <th className="sortable sortable-header" onClick={() => handleSort('grand_total')}>Total {sort.key === 'grand_total' && (sort.dir === 'asc' ? '↑' : '↓')}</th>
                 </tr>
               </thead>
               <tbody>
@@ -477,13 +773,13 @@ function SalesOrdersList({ refreshKey = 0, onSelectOrder, onEditOrder }: SalesOr
                         )}
                       </div>
                     </td>
-                    <td>{new Date(order.order_date).toLocaleDateString()}</td>
+                    <td>{formatAppDate(order.order_date)}</td>
                     <td>
                       {order.shipments && order.shipments.length > 0 ? (
                         <div className="ship-dates-list">
                           {order.shipments.map((shipment, idx) => (
                             <div key={shipment.id} className="ship-date-item">
-                              {new Date(shipment.ship_date).toLocaleDateString()}
+                              {formatAppDate(shipment.ship_date)}
                               {shipment.tracking_number && (
                                 <span className="tracking-number"> ({shipment.tracking_number})</span>
                               )}
@@ -491,22 +787,151 @@ function SalesOrdersList({ refreshKey = 0, onSelectOrder, onEditOrder }: SalesOr
                           ))}
                         </div>
                       ) : (
-                        order.actual_ship_date ? new Date(order.actual_ship_date).toLocaleDateString() : '-'
+                        order.actual_ship_date ? formatAppDate(order.actual_ship_date) : '-'
                       )}
                     </td>
-                    <td>
+                    <td className="so-items-td">
                       {order.items && order.items.length > 0 ? (
-                        <div className="items-list">
-                          {order.items.map((item, idx) => (
-                            <div key={idx} className="item-line">
-                              <span className="item-sku">{item.item?.sku || 'N/A'}</span>
-                              <span className="item-quantity">{formatNumber(item.quantity_ordered)}</span>
-                            </div>
-                          ))}
+                        <div className="so-items-list">
+                          {order.items.map((item, idx) => {
+                            const uom = (item.item?.unit_of_measure || 'lbs').toLowerCase()
+                            const alloc = item.quantity_allocated ?? 0
+                            const lotLabel = (lot: { lot_number?: string | null; vendor_lot_number?: string | null } | undefined) =>
+                              ((lot?.lot_number || lot?.vendor_lot_number || '—') as string).trim()
+                            return (
+                              <div key={item.id ?? idx} className="so-item-block so-item-block--compact">
+                                <div className="so-item-row">
+                                  <span className="so-item-sku">{item.item?.sku || '—'}</span>
+                                  <span className="so-item-name" title={item.item?.name || ''}>
+                                    {item.item?.name || '—'}
+                                  </span>
+                                  <span className="so-item-qty">
+                                    {formatNumber(item.quantity_ordered)}
+                                    <span className="so-item-uom">{uom}</span>
+                                  </span>
+                                </div>
+                                {item.allocated_lots &&
+                                  item.allocated_lots.length > 0 &&
+                                  (alloc > 0 || order.status === 'completed') && (
+                                  <ul className="so-alloc-lots">
+                                    {item.allocated_lots.map((al) => (
+                                      <li key={al.id} className="so-alloc-lot-row">
+                                        <span className="so-alloc-lot-text">
+                                          {lotLabel(al.lot)} · {formatNumber(al.quantity_allocated)} {uom}
+                                          {order.status === 'completed' && (al.quantity_allocated ?? 0) <= 0
+                                            ? ' · shipped'
+                                            : ''}
+                                        </span>
+                                        {al.coa_customer_pdf_url ? (
+                                          <a
+                                            href={al.coa_customer_pdf_url}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="so-coa-link"
+                                            onClick={(e) => e.stopPropagation()}
+                                            title={customerCoaOpenTitle(item.item?.sku || '—', lotLabel(al.lot))}
+                                          >
+                                            COA
+                                          </a>
+                                        ) : (
+                                          <span
+                                            className="so-coa-missing"
+                                            title={customerCoaPendingTitle(item.item?.sku || '—', lotLabel(al.lot))}
+                                          >
+                                            COA
+                                          </span>
+                                        )}
+                                      </li>
+                                    ))}
+                                  </ul>
+                                )}
+                              </div>
+                            )
+                          })}
                         </div>
                       ) : (
-                        '-'
+                        <span className="so-items-empty">—</span>
                       )}
+                    </td>
+                    <td className="so-shipping-td" onClick={(e) => e.stopPropagation()}>
+                      <div className="so-shipping-cell">
+                        <div className="so-shipping-buttons">
+                          <button
+                            type="button"
+                            className="so-act-btn so-act-btn--pick"
+                            disabled={!canOpenPickList(order)}
+                            onClick={() => {
+                              if (!canOpenPickList(order)) return
+                              openPickList(order.id)
+                            }}
+                            title={canOpenPickList(order) ? 'Pick list: lots and quantities' : pickListDisabledTitle}
+                          >
+                            Pick list
+                          </button>
+                          <button
+                            type="button"
+                            className="so-act-btn so-act-btn--ship"
+                            disabled={!canOpenOrderPackingList(order)}
+                            onClick={() => {
+                              if (!canOpenOrderPackingList(order)) return
+                              void openPackingList(order.id)
+                            }}
+                            title={
+                              canOpenOrderPackingList(order)
+                                ? 'Packing list (full order summary)'
+                                : packingListDisabledTitle
+                            }
+                          >
+                            Pack list
+                          </button>
+                        </div>
+                        {order.shipments && order.shipments.length > 0 && (
+                          <div className="so-pl-releases">
+                            {order.shipments.map((s, idx) => (
+                              <button
+                                key={s.id}
+                                type="button"
+                                className="so-pl-release-link"
+                                onClick={() => openPackingListForShipment(s.id)}
+                                title={`Packing list for shipment ${idx + 1}`}
+                              >
+                                Release {idx + 1}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                        {(() => {
+                          const coaRows = customerCoaRowsForOrder(order)
+                          if (coaRows.length === 0) return null
+                          return (
+                            <div className="so-order-coas">
+                              {coaRows.map((row) =>
+                                row.url ? (
+                                  <a
+                                    key={row.key}
+                                    href={row.url}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="so-act-btn so-act-btn--coa"
+                                    onClick={(e) => e.stopPropagation()}
+                                    title={customerCoaOpenTitle(row.sku, row.lotLabel)}
+                                  >
+                                    COA
+                                  </a>
+                                ) : (
+                                  <span
+                                    key={row.key}
+                                    className="so-act-btn so-act-btn--coa so-act-btn--coa-missing"
+                                    title={customerCoaPendingTitle(row.sku, row.lotLabel)}
+                                  >
+                                    COA
+                                  </span>
+                                ),
+                              )}
+                            </div>
+                          )
+                        })()}
+                      </div>
                     </td>
                     <td className="total-column">
                       {order.grand_total !== undefined && order.grand_total !== null
@@ -521,6 +946,7 @@ function SalesOrdersList({ refreshKey = 0, onSelectOrder, onEditOrder }: SalesOr
         </div>
       )}
     </div>
+    </>
   )
 }
 

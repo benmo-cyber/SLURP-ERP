@@ -106,8 +106,22 @@
 .inventory-main {
   flex: 1;
   min-width: 0;
-  padding: 1.5rem 2rem;
+  width: 100%;
+  padding: 0;
   overflow-y: auto;
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Margin (not padding) so child root padding (e.g. .purchase-order-list) is preserved */
+.inventory-main > * {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  max-width: 100%;
+  margin: 1.5rem 2rem;
+  box-sizing: border-box;
 }
 
 @media (max-width: 768px) {
@@ -155,8 +169,8 @@
     border-left: none;
     border-radius: 6px;
   }
-  .inventory-main {
-    padding: 1rem;
+  .inventory-main > * {
+    margin: 1rem;
   }
 }
 

@@ -1,9 +1,13 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useCallback } from 'react'
 import { createPurchaseOrder } from '../../api/purchaseOrders'
-import { getVendors } from '../../api/quality'
+import { getSalesOrder, getSalesOrders } from '../../api/salesOrders'
+import { getShipToLocation } from '../../api/customers'
+import { getVendors, getVendorContacts } from '../../api/quality'
+import { getServiceVendorTypeLabel } from '../../constants/serviceVendorTypes'
 import { getItems } from '../../api/inventory'
 import { getCostMasterByProductCode } from '../../api/costMaster'
 import { formatCurrency } from '../../utils/formatNumber'
+import { useGodMode } from '../../context/GodModeContext'
 import './CreatePurchaseOrder.css'
 
 interface Vendor {
@@ -17,6 +21,16 @@ interface Vendor {
   approval_status?: string
 }
 
+interface ItemPackSizeRow {
+  id?: number
+  pack_size: number
+  pack_size_unit: string
+  description?: string | null
+  is_default?: boolean
+  is_active?: boolean
+  pack_size_display?: string
+}
+
 interface Item {
   id: number
   name: string
@@ -24,8 +38,108 @@ interface Item {
   unit_of_measure: string
   price?: number
   pack_size?: number
+  default_pack_size?: ItemPackSizeRow | null
+  pack_sizes?: ItemPackSizeRow[]
   vendor_item_name?: string
+  vendor_item_number?: string | null
   display_name_for_vendor?: string
+}
+
+/** One-line hint for PO qty column: default pack size or list from item master. */
+function formatPackSizeHint(catalogItem: Item | undefined): string | null {
+  if (!catalogItem) return null
+  const fmt = (p: ItemPackSizeRow) => {
+    const base = (p.pack_size_display || '').trim() || `${p.pack_size} ${p.pack_size_unit}`
+    const d = (p.description || '').trim()
+    return d ? `${base} — ${d}` : base
+  }
+  if (catalogItem.default_pack_size) {
+    return `Pack size: ${fmt(catalogItem.default_pack_size)} (default)`
+  }
+  const list = (catalogItem.pack_sizes || []).filter((p) => p.is_active !== false)
+  if (list.length > 0) {
+    const parts = list.slice(0, 5).map(fmt)
+    const more = list.length > 5 ? ` (+${list.length - 5} more)` : ''
+    return `Pack sizes: ${parts.join(' · ')}${more}`
+  }
+  if (catalogItem.pack_size != null && catalogItem.pack_size > 0) {
+    return `Pack size (legacy): ${catalogItem.pack_size}`
+  }
+  return null
+}
+
+function vendorDescriptionForPoLine(item: Item): string {
+  const name = item.display_name_for_vendor || item.vendor_item_name || item.name
+  const num = (item.vendor_item_number || '').trim()
+  return num ? `${name} (${num})` : name
+}
+
+/** Round money to 2 decimal places (matches unit cost input step="0.01"). */
+function roundMoney2(n: number): number {
+  return Number.parseFloat(n.toFixed(2))
+}
+
+/** Default ship-to when not drop-shipping (Wildwood warehouse). */
+const DEFAULT_WW_SHIP_TO = {
+  ship_to_name: 'Wildwood Ingredients, LLC',
+  ship_to_address: '6431 Michels Dr.',
+  ship_to_city: 'Washington',
+  ship_to_state: 'MO',
+  ship_to_zip: '63090',
+  ship_to_country: 'USA',
+} as const
+
+/**
+ * Match backend apply_sales_order_ship_to_to_purchase_order — ship-to for vendor drop ship PO.
+ */
+function shipToFieldsFromSalesOrder(so: {
+  customer_name?: string
+  customer?: { name?: string } | null
+  ship_to_location?: {
+    location_name?: string
+    address?: string
+    city?: string
+    state?: string | null
+    zip_code?: string
+    country?: string
+  } | null
+  customer_address?: string | null
+  customer_city?: string | null
+  customer_state?: string | null
+  customer_zip?: string | null
+  customer_country?: string | null
+}): {
+  ship_to_name: string
+  ship_to_address: string
+  ship_to_city: string
+  ship_to_state: string
+  ship_to_zip: string
+  ship_to_country: string
+} {
+  const loc = so.ship_to_location
+  const custName = so.customer?.name || so.customer_name || ''
+  if (loc) {
+    const name = custName
+      ? `${custName} — ${loc.location_name || 'Ship-to'}`
+      : (loc.location_name || 'Ship-to')
+    return {
+      ship_to_name: name.slice(0, 255),
+      ship_to_address: (loc.address || '').replace(/\n/g, ' ').trim().slice(0, 255),
+      ship_to_city: (loc.city || '').slice(0, 255),
+      ship_to_state: (loc.state || '').slice(0, 100),
+      ship_to_zip: String(loc.zip_code || '').slice(0, 20),
+      ship_to_country: (loc.country || 'USA').slice(0, 100),
+    }
+  }
+  const fallbackName = (so.customer_name || so.customer?.name || 'Ship-to').slice(0, 255)
+  return {
+    ship_to_name: fallbackName,
+    ship_to_address: (so.customer_address || '').replace(/\n/g, ' ').trim().slice(0, 255),
+    ship_to_city: (so.customer_city || '').slice(0, 255),
+    ship_to_state: (so.customer_state || '').slice(0, 100),
+    ship_to_zip: String(so.customer_zip || '').slice(0, 20),
+    ship_to_country: (so.customer_country || 'USA').slice(0, 100),
+  }
 }
 
 interface POItem {
@@ -47,6 +161,18 @@ interface CreatePurchaseOrderProps {
 }
 
 function CreatePurchaseOrder({ onClose, onSuccess }: CreatePurchaseOrderProps) {
+  const { godModeOn, canUseGodMode, maxDateForEntry, minDateForEntry } = useGodMode()
+  const todayYmd = useCallback(() => {
+    const d = new Date()
+    return (
+      d.getFullYear() +
+      '-' +
+      String(d.getMonth() + 1).padStart(2, '0') +
+      '-' +
+      String(d.getDate()).padStart(2, '0')
+    )
+  }, [])
+
   const [vendors, setVendors] = useState<Vendor[]>([])
   const [items, setItems] = useState<Item[]>([])
   const [loading, setLoading] = useState(false)
@@ -55,16 +181,12 @@ function CreatePurchaseOrder({ onClose, onSuccess }: CreatePurchaseOrderProps) {
   const [formData, setFormData] = useState({
     order_number: '',
     vendor_id: '',
+    order_date: todayYmd(),
     required_date: '',
     expected_delivery_date: '',
     shipping_terms: '',
     shipping_method: '',
-    ship_to_name: 'Wildwood Ingredients, LLC',
-    ship_to_address: '6431 Michels Dr.',
-    ship_to_city: 'Washington',
-    ship_to_state: 'MO',
-    ship_to_zip: '63090',
-    ship_to_country: 'USA',
+    ...DEFAULT_WW_SHIP_TO,
     vendor_address: '',
     vendor_city: '',
     vendor_state: '',
@@ -74,16 +196,115 @@ function CreatePurchaseOrder({ onClose, onSuccess }: CreatePurchaseOrderProps) {
     discount: 0,
     shipping_cost: 0,
     notes: '',
+    drop_ship: false,
+    fulfillment_sales_order_id: '' as string,
   })
 
   const [poItems, setPoItems] = useState<POItem[]>([
     { item_id: null, sku: null, vendor: null, description: '', unit_cost: '', unit_of_measure: '', quantity: '', notes: '', original_unit: '', costMasterData: null }
   ])
+  const [notifyPartyServiceVendorId, setNotifyPartyServiceVendorId] = useState<string>('')
+  const [notifyPartyContacts, setNotifyPartyContacts] = useState<
+    { id: number; name: string; email?: string; emails?: string[]; phone?: string; location_label?: string; notes?: string }[]
+  >([])
+  const [notifyPartyContactIds, setNotifyPartyContactIds] = useState<number[]>([])
+  const [linkableSalesOrders, setLinkableSalesOrders] = useState<
+    { id: number; so_number: string; customer_name: string; status: string; drop_ship?: boolean }[]
+  >([])
+  const [fulfillmentSoLoading, setFulfillmentSoLoading] = useState(false)
+
+  const handleFulfillmentSoChange = async (raw: string) => {
+    if (!raw) {
+      setFormData((prev) => ({
+        ...prev,
+        fulfillment_sales_order_id: '',
+        ...DEFAULT_WW_SHIP_TO,
+      }))
+      return
+    }
+    setFulfillmentSoLoading(true)
+    try {
+      const soRaw = await getSalesOrder(parseInt(raw, 10))
+      let loc: unknown = soRaw.ship_to_location
+      if (typeof loc === 'number') {
+        try {
+          loc = await getShipToLocation(loc)
+        } catch {
+          loc = null
+        }
+      }
+      const so = {
+        ...soRaw,
+        ship_to_location:
+          loc && typeof loc === 'object'
+            ? (loc as {
+                location_name?: string
+                address?: string
+                city?: string
+                state?: string | null
+                zip_code?: string
+                country?: string
+              })
+            : null,
+      }
+      const st = shipToFieldsFromSalesOrder(so)
+      setFormData((prev) => ({
+        ...prev,
+        fulfillment_sales_order_id: raw,
+        ...st,
+      }))
+    } catch (err) {
+      console.error(err)
+      alert('Could not load that sales order to fill ship-to. Try again or enter ship-to manually.')
+      setFormData((prev) => ({ ...prev, fulfillment_sales_order_id: '' }))
+    } finally {
+      setFulfillmentSoLoading(false)
+    }
+  }
 
   useEffect(() => {
     loadVendors()
     loadItems()
+    getSalesOrders({ drop_ship: 'true' })
+      .then((data) => {
+        const list = Array.isArray(data) ? data : ((data as { results?: unknown[] }).results ?? [])
+        setLinkableSalesOrders(
+          (
+            list as {
+              id: number
+              so_number: string
+              customer_name: string
+              status: string
+              drop_ship?: boolean
+            }[]
+          ).filter((so) => so.status !== 'completed' && so.status !== 'cancelled')
+        )
+      })
+      .catch(() => setLinkableSalesOrders([]))
   }, [])
+
+  useEffect(() => {
+    if (!notifyPartyServiceVendorId) {
+      setNotifyPartyContacts([])
+      setNotifyPartyContactIds([])
+      return
+    }
+    getVendorContacts(parseInt(notifyPartyServiceVendorId, 10))
+      .then((list: any[]) => {
+        setNotifyPartyContacts(Array.isArray(list) ? list : [])
+        setNotifyPartyContactIds([])
+      })
+      .catch(() => {
+        setNotifyPartyContacts([])
+        setNotifyPartyContactIds([])
+      })
+  }, [notifyPartyServiceVendorId])
+
+  const toggleNotifyPartyContact = (contactId: number) => {
+    setNotifyPartyContactIds(prev =>
+      prev.includes(contactId) ? prev.filter(id => id !== contactId) : [...prev, contactId]
+    )
+  }
 
   // Memoize vendor options to prevent unnecessary re-renders
   const vendorOptions = useMemo(() => {
@@ -243,7 +464,7 @@ function CreatePurchaseOrder({ onClose, onSuccess }: CreatePurchaseOrderProps) {
         
         if (matchingItem) {
           // Use vendor_item_name if available, otherwise use name (WWI name)
-          const displayName = (matchingItem as any).display_name_for_vendor || matchingItem.vendor_item_name || matchingItem.name
+          const displayName = vendorDescriptionForPoLine(matchingItem)
           updated[index] = {
             ...updated[index],
             item_id: matchingItem.id,
@@ -277,7 +498,7 @@ function CreatePurchaseOrder({ onClose, onSuccess }: CreatePurchaseOrderProps) {
         
         if (matchingItem) {
           // Use vendor_item_name if available, otherwise use name (WWI name)
-          const displayName = (matchingItem as any).display_name_for_vendor || matchingItem.vendor_item_name || matchingItem.name
+          const displayName = vendorDescriptionForPoLine(matchingItem)
           // Update with the matching item - use the selected vendor name
           const vendorValue = String(vendorName).trim()
           updated[index] = { 
@@ -326,43 +547,52 @@ function CreatePurchaseOrder({ onClose, onSuccess }: CreatePurchaseOrderProps) {
       
       // Only allow toggle for lbs/kg items
       if (currentItem.item_id && (oldUnit === 'lbs' || oldUnit === 'kg') && (newUnit === 'lbs' || newUnit === 'kg')) {
-        let newPrice = currentItem.unit_cost
-        
+        const parsedLineCost =
+          typeof currentItem.unit_cost === 'string'
+            ? parseFloat(currentItem.unit_cost)
+            : Number(currentItem.unit_cost)
+
+        let newPrice: number | string = currentItem.unit_cost
+
         // Recalculate unit cost based on cost master data
         if (currentItem.costMasterData) {
           const costMaster = currentItem.costMasterData
-          
+
           if (newUnit === 'lbs' && costMaster.price_per_lb) {
             newPrice = costMaster.price_per_lb
           } else if (newUnit === 'kg' && costMaster.price_per_kg) {
             newPrice = costMaster.price_per_kg
           } else if (newUnit === 'lbs' && costMaster.price_per_kg) {
-            // Convert kg to lbs
             newPrice = costMaster.price_per_kg / 2.20462
           } else if (newUnit === 'kg' && costMaster.price_per_lb) {
-            // Convert lbs to kg
             newPrice = costMaster.price_per_lb * 2.20462
           } else {
-            // Fallback: convert from current price
             if (oldUnit === 'lbs' && newUnit === 'kg') {
-              newPrice = currentItem.unit_cost * 2.20462
+              newPrice = Number.isFinite(parsedLineCost) ? parsedLineCost * 2.20462 : NaN
             } else if (oldUnit === 'kg' && newUnit === 'lbs') {
-              newPrice = currentItem.unit_cost / 2.20462
+              newPrice = Number.isFinite(parsedLineCost) ? parsedLineCost / 2.20462 : NaN
             }
           }
         } else {
-          // No cost master data, convert the current price
           if (oldUnit === 'lbs' && newUnit === 'kg') {
-            newPrice = currentItem.unit_cost * 2.20462
+            newPrice = Number.isFinite(parsedLineCost) ? parsedLineCost * 2.20462 : NaN
           } else if (oldUnit === 'kg' && newUnit === 'lbs') {
-            newPrice = currentItem.unit_cost / 2.20462
+            newPrice = Number.isFinite(parsedLineCost) ? parsedLineCost / 2.20462 : NaN
           }
         }
-        
+
+        const rawNum =
+          typeof newPrice === 'number'
+            ? newPrice
+            : typeof newPrice === 'string' && newPrice !== ''
+              ? parseFloat(newPrice)
+              : NaN
+        const unitCostRounded = Number.isFinite(rawNum) ? roundMoney2(rawNum) : newPrice
+
         updated[index] = {
           ...currentItem,
           unit_of_measure: newUnit,
-          unit_cost: newPrice
+          unit_cost: unitCostRounded
         }
         
         setPoItems(updated)
@@ -400,7 +630,7 @@ function CreatePurchaseOrder({ onClose, onSuccess }: CreatePurchaseOrderProps) {
     
     // Priority 1: Use the item's price directly (this is vendor-specific and most accurate)
     if (item.price && item.price > 0) {
-      priceToSet = item.price
+      priceToSet = roundMoney2(item.price)
       priceSet = true
     }
     
@@ -464,11 +694,13 @@ function CreatePurchaseOrder({ onClose, onSuccess }: CreatePurchaseOrderProps) {
     
     // Update price if we found one - use functional update to preserve all fields including vendor
     if (priceSet) {
+      const unitCostFinal =
+        typeof priceToSet === 'number' && Number.isFinite(priceToSet) ? roundMoney2(priceToSet) : priceToSet
       setPoItems(prev => {
         const updated = [...prev]
-        updated[index] = { 
-          ...updated[index], 
-          unit_cost: priceToSet,
+        updated[index] = {
+          ...updated[index],
+          unit_cost: unitCostFinal,
           costMasterData: costMasterData,
           // Preserve vendor if it was passed
           vendor: vendorValue !== undefined ? vendorValue : updated[index].vendor
@@ -549,22 +781,40 @@ function CreatePurchaseOrder({ onClose, onSuccess }: CreatePurchaseOrderProps) {
     try {
       setLoading(true)
       
-      const payload = {
+      const payload: Record<string, unknown> = {
         ...formData,
         vendor_id: parseInt(formData.vendor_id),
-        order_number: formData.order_number || null, // null for auto-generation
-        // Set required_date from expected_delivery_date if not provided
+        order_number: formData.order_number || null,
+        po_number: formData.order_number?.trim() || null,
         required_date: formData.required_date || formData.expected_delivery_date || null,
         expected_delivery_date: formData.expected_delivery_date || formData.required_date || null,
-        items: validItems.map(item => ({
+        notify_party_contact_ids: notifyPartyContactIds.length ? notifyPartyContactIds : undefined,
+        drop_ship: formData.drop_ship,
+        fulfillment_sales_order:
+          formData.drop_ship && formData.fulfillment_sales_order_id
+            ? parseInt(String(formData.fulfillment_sales_order_id), 10)
+            : null,
+        items: validItems.map((item) => ({
           item_id: item.item_id,
-          unit_cost: item.unit_cost || 0,
+          unit_cost: roundMoney2(
+            typeof item.unit_cost === 'string'
+              ? parseFloat(item.unit_cost) || 0
+              : (item.unit_cost as number) || 0
+          ),
           quantity: item.quantity,
-          notes: '', // Notes field removed from UI
+          order_uom: (item.unit_of_measure || '').trim() || null,
+          notes: (item.notes || '').trim() || '',
         })),
         discount: formData.discount || 0,
         shipping_cost: formData.shipping_cost || 0,
         status: 'draft',
+      }
+      delete payload.fulfillment_sales_order_id
+
+      if (godModeOn && canUseGodMode && formData.order_date) {
+        payload.order_date = `${formData.order_date}T12:00:00`
+      } else {
+        delete payload.order_date
       }
 
       console.log('Sending purchase order payload:', JSON.stringify(payload, null, 2))
@@ -601,12 +851,18 @@ function CreatePurchaseOrder({ onClose, onSuccess }: CreatePurchaseOrderProps) {
               <h2>PURCHASE ORDER</h2>
               <div className="po-header-info">
                 <div className="form-group">
-                  <label>Date</label>
-                  <input
-                    type="date"
-                    value={new Date().toISOString().split('T')[0]}
-                    readOnly
-                  />
+                  <label>PO date</label>
+                  {godModeOn && canUseGodMode ? (
+                    <input
+                      type="date"
+                      value={formData.order_date}
+                      onChange={(e) => setFormData({ ...formData, order_date: e.target.value })}
+                      max={maxDateForEntry}
+                      min={minDateForEntry}
+                    />
+                  ) : (
+                    <input type="date" value={todayYmd()} readOnly />
+                  )}
                 </div>
                 <div className="form-group">
                   <label>Order # (leave blank for auto-generation)</label>
@@ -707,6 +963,57 @@ function CreatePurchaseOrder({ onClose, onSuccess }: CreatePurchaseOrderProps) {
               <div className="ship-to-section">
                 <h3>Ship to</h3>
                 <div className="form-group">
+                  <label className="checkbox-label" style={{ display: 'flex', alignItems: 'flex-start', gap: '0.5rem', cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={formData.drop_ship}
+                      onChange={(e) => {
+                        const v = e.target.checked
+                        setFormData((prev) => ({
+                          ...prev,
+                          drop_ship: v,
+                          fulfillment_sales_order_id: v ? prev.fulfillment_sales_order_id : '',
+                          ...(v ? {} : DEFAULT_WW_SHIP_TO),
+                        }))
+                      }}
+                    />
+                    <span>
+                      <strong>Drop ship</strong> — vendor ships direct to customer (not to Wildwood). Ship-to below can be filled from a linked sales order.
+                    </span>
+                  </label>
+                  <p className="form-hint" style={{ marginTop: 6 }}>
+                    Do not check in inventory against this PO. Link the sales order you created from the customer PO so the vendor ship-to matches.
+                  </p>
+                </div>
+                {formData.drop_ship && (
+                  <div className="form-group">
+                    <label>Fulfillment sales order</label>
+                    <select
+                      value={formData.fulfillment_sales_order_id}
+                      onChange={(e) => void handleFulfillmentSoChange(e.target.value)}
+                      disabled={fulfillmentSoLoading}
+                      style={{ width: '100%' }}
+                    >
+                      <option value="">— Select sales order —</option>
+                      {linkableSalesOrders.map((so) => (
+                        <option key={so.id} value={so.id}>
+                          {so.so_number} — {so.customer_name || 'Customer'} ({so.status})
+                        </option>
+                      ))}
+                    </select>
+                    {fulfillmentSoLoading && (
+                      <p className="form-hint" style={{ marginTop: 6 }}>
+                        Loading ship-to from sales order…
+                      </p>
+                    )}
+                    {linkableSalesOrders.length === 0 && (
+                      <p className="form-hint" style={{ marginTop: 6 }}>
+                        Only sales orders marked <strong>Drop ship</strong> (and not completed/cancelled) can be linked. Create or edit the SO on Sales and enable Drop ship first.
+                      </p>
+                    )}
+                  </div>
+                )}
+                <div className="form-group">
                   <label>Name</label>
                   <input
                     type="text"
@@ -756,6 +1063,54 @@ function CreatePurchaseOrder({ onClose, onSuccess }: CreatePurchaseOrderProps) {
                     onChange={(e) => setFormData({ ...formData, ship_to_country: e.target.value })}
                   />
                 </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="po-form-section">
+            <h3>Notify party</h3>
+            <p className="form-hint" style={{ marginBottom: 8 }}>Optional: select one or more contacts that handle importation (e.g. customs broker by port). These appear on the PO PDF.</p>
+            <div className="form-row">
+              <div className="form-group">
+                <label>Service vendor (e.g. customs broker)</label>
+                <select
+                  value={notifyPartyServiceVendorId}
+                  onChange={(e) => setNotifyPartyServiceVendorId(e.target.value)}
+                  style={{ width: '100%' }}
+                >
+                  <option value="">— None —</option>
+                  {vendors.filter(v => v.is_service_vendor).map(v => (
+                    <option key={v.id} value={v.id}>{v.name}{v.service_vendor_type ? ` (${getServiceVendorTypeLabel(v.service_vendor_type)})` : ''}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="form-group notify-party-contacts-multi">
+                <label>Contact(s) (notify party)</label>
+                {!notifyPartyServiceVendorId ? (
+                  <p className="form-hint">Select a service vendor first.</p>
+                ) : notifyPartyContacts.length === 0 ? (
+                  <p className="form-hint">No contacts for this vendor. Add contacts in Quality → Vendors → vendor → Contacts.</p>
+                ) : (
+                  <div className="notify-party-checkboxes">
+                    {notifyPartyContacts.map(c => (
+                      <label key={c.id} className="notify-party-checkbox">
+                        <input
+                          type="checkbox"
+                          checked={notifyPartyContactIds.includes(c.id)}
+                          onChange={() => toggleNotifyPartyContact(c.id)}
+                        />
+                        <span>
+                          {c.name}
+                          {c.location_label ? ` — ${c.location_label}` : ''}
+                          {(c.emails || []).length > 0 && (
+                            <div className="notify-party-emails">{c.emails!.join(', ')}</div>
+                          )}
+                          {c.notes && <div className="notify-party-notes">Notes: {c.notes}</div>}
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -834,8 +1189,9 @@ function CreatePurchaseOrder({ onClose, onSuccess }: CreatePurchaseOrderProps) {
                   <th>Vendor</th>
                   <th>Description</th>
                   <th>Unit of Measure</th>
-                  <th>Unit Cost</th>
+                  <th>Unit cost</th>
                   <th>Qty</th>
+                  <th>Line notes</th>
                   <th>Amount</th>
                 </tr>
               </thead>
@@ -843,7 +1199,9 @@ function CreatePurchaseOrder({ onClose, onSuccess }: CreatePurchaseOrderProps) {
                 {poItems.map((item, index) => {
                   const uniqueSkus = getUniqueSkus()
                   const vendorsForSku = item.sku ? getVendorsForSku(item.sku) : []
-                  
+                  const catalogItem = item.item_id ? items.find((i) => i.id === item.item_id) : undefined
+                  const packSizeHint = formatPackSizeHint(catalogItem)
+
                   return (
                   <tr key={index}>
                     <td>
@@ -949,8 +1307,20 @@ function CreatePurchaseOrder({ onClose, onSuccess }: CreatePurchaseOrderProps) {
                         step="0.01"
                         min="0"
                         value={item.unit_cost === '' ? '' : item.unit_cost}
-                        readOnly
-                        className="number-input read-only-input"
+                        onChange={(e) => {
+                          const v = e.target.value
+                          handleItemChange(index, 'unit_cost', v === '' ? '' : parseFloat(v))
+                        }}
+                        onBlur={(e) => {
+                          const v = e.target.value
+                          if (v === '') return
+                          const n = parseFloat(v)
+                          if (!Number.isFinite(n)) return
+                          const r = roundMoney2(n)
+                          if (r !== n) handleItemChange(index, 'unit_cost', r)
+                        }}
+                        className="number-input"
+                        title="Override if the price differs from item / cost master"
                       />
                     </td>
                     <td>
@@ -968,7 +1338,21 @@ function CreatePurchaseOrder({ onClose, onSuccess }: CreatePurchaseOrderProps) {
                           required
                           style={{ width: '100%' }}
                         />
+                        {packSizeHint ? (
+                          <small className="po-qty-pack-hint" title="From item master (pack sizes)">
+                            {packSizeHint}
+                          </small>
+                        ) : null}
                       </div>
+                    </td>
+                    <td>
+                      <input
+                        type="text"
+                        value={item.notes}
+                        onChange={(e) => handleItemChange(index, 'notes', e.target.value)}
+                        placeholder="Optional"
+                        className="po-line-notes-input"
+                      />
                     </td>
                     <td>{formatCurrency((typeof item.unit_cost === 'string' ? parseFloat(item.unit_cost) || 0 : item.unit_cost) * (typeof item.quantity === 'string' ? parseFloat(item.quantity) || 0 : item.quantity))}</td>
                   </tr>
@@ -977,12 +1361,11 @@ function CreatePurchaseOrder({ onClose, onSuccess }: CreatePurchaseOrderProps) {
               </tbody>
               <tfoot>
                 <tr>
-                  <td colSpan={5} className="text-right"><strong>SUBTOTAL</strong></td>
+                  <td colSpan={7} className="text-right"><strong>SUBTOTAL</strong></td>
                   <td><strong>{formatCurrency(calculateSubtotal())}</strong></td>
-                  <td></td>
                 </tr>
                 <tr>
-                  <td colSpan={5} className="text-right"><strong>DISCOUNT</strong></td>
+                  <td colSpan={7} className="text-right"><strong>DISCOUNT</strong></td>
                   <td>
                     <input
                       type="number"
@@ -994,10 +1377,9 @@ function CreatePurchaseOrder({ onClose, onSuccess }: CreatePurchaseOrderProps) {
                       style={{ width: '100%', textAlign: 'right' }}
                     />
                   </td>
-                  <td></td>
                 </tr>
                 <tr>
-                  <td colSpan={5} className="text-right"><strong>SHIPPING</strong></td>
+                  <td colSpan={7} className="text-right"><strong>SHIPPING</strong></td>
                   <td>
                     <input
                       type="number"
@@ -1009,12 +1391,10 @@ function CreatePurchaseOrder({ onClose, onSuccess }: CreatePurchaseOrderProps) {
                       style={{ width: '100%', textAlign: 'right' }}
                     />
                   </td>
-                  <td></td>
                 </tr>
                 <tr>
-                  <td colSpan={5} className="text-right"><strong>TOTAL</strong></td>
+                  <td colSpan={7} className="text-right"><strong>TOTAL</strong></td>
                   <td><strong>{formatCurrency(calculateTotal())}</strong></td>
-                  <td></td>
                 </tr>
               </tfoot>
             </table>
@@ -1031,11 +1411,12 @@ function CreatePurchaseOrder({ onClose, onSuccess }: CreatePurchaseOrderProps) {
               />
             </div>
             <div className="form-group">
-              <label>Notes</label>
+              <label>PO comments / notes</label>
               <textarea
                 value={formData.notes}
                 onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
-                rows={3}
+                rows={4}
+                placeholder="Internal comments, special terms, or instructions for this PO"
               />
             </div>
           </div>

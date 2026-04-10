@@ -2,17 +2,27 @@ import { useState } from 'react'
 import VendorApproval from '../components/quality/VendorApproval'
 import LotTracking from '../components/quality/LotTracking'
 import FinishedGoodsList from '../components/quality/FinishedGoodsList'
+import RDFormulasList from '../components/quality/RDFormulasList'
 import CriticalControlPoints from '../components/quality/CriticalControlPoints'
+import CoaLibrary from '../components/quality/CoaLibrary'
 import './Quality.css'
 
 const NAV_SECTIONS = [
   { label: 'Vendors', items: [{ id: 'vendors' as const, label: 'Vendor Approval' }] },
-  { label: 'Tracking', items: [{ id: 'lot-tracking' as const, label: 'Lot Tracking' }] },
-  { label: 'Products', items: [{ id: 'finished-goods' as const, label: 'Finished Goods' }, { id: 'ccps' as const, label: 'Critical Control Points' }] },
+  {
+    label: 'Tracking',
+    items: [
+      { id: 'lot-tracking' as const, label: 'Lot Tracking' },
+      { id: 'coa-library' as const, label: 'COA library' },
+    ],
+  },
+  { label: 'Products', items: [{ id: 'finished-goods' as const, label: 'Finished Goods' }, { id: 'rd-formulas' as const, label: 'R&D Formulas' }, { id: 'ccps' as const, label: 'Critical Control Points' }] },
 ]
 
 function Quality() {
-  const [activeTab, setActiveTab] = useState<'vendors' | 'lot-tracking' | 'finished-goods' | 'ccps'>('vendors')
+  const [activeTab, setActiveTab] = useState<
+    'vendors' | 'lot-tracking' | 'coa-library' | 'finished-goods' | 'rd-formulas' | 'ccps'
+  >('vendors')
 
   return (
     <div className="quality-page">
@@ -43,7 +53,9 @@ function Quality() {
         <main className="quality-main">
           {activeTab === 'vendors' && <VendorApproval />}
           {activeTab === 'lot-tracking' && <LotTracking />}
+          {activeTab === 'coa-library' && <CoaLibrary />}
           {activeTab === 'finished-goods' && <FinishedGoodsList />}
+          {activeTab === 'rd-formulas' && <RDFormulasList />}
           {activeTab === 'ccps' && <CriticalControlPoints />}
         </main>
       </div>

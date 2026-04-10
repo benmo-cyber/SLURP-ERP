@@ -1,10 +1,25 @@
 import { api } from './client'
 
-// Vendors API
+// Vendors API — return every vendor (handles paginated API if pagination is re-enabled later)
 export const getVendors = async () => {
-  const response = await api.get('/vendors/')
-  // Handle paginated response
-  return response.data.results || response.data
+  const out: any[] = []
+  let nextPath: string | null = '/vendors/'
+  while (nextPath) {
+    const { data } = await api.get(nextPath)
+    if (Array.isArray(data)) {
+      return data
+    }
+    out.push(...(data.results ?? []))
+    const next = data.next as string | null | undefined
+    if (!next) break
+    try {
+      const u = new URL(next)
+      nextPath = u.pathname.replace(/^\/api\//, '') + u.search
+    } catch {
+      break
+    }
+  }
+  return out
 }
 
 export const getVendor = async (id: number) => {
@@ -22,6 +37,12 @@ export const updateVendor = async (id: number, data: any) => {
   return response.data
 }
 
+/** Partial update (preferred for vendor profile saves — avoids overwriting fields). */
+export const patchVendor = async (id: number, data: Record<string, unknown>) => {
+  const response = await api.patch(`/vendors/${id}/`, data)
+  return response.data
+}
+
 export const deleteVendor = async (id: number) => {
   const response = await api.delete(`/vendors/${id}/`)
   return response.data
@@ -34,6 +55,39 @@ export const approveVendor = async (id: number, approvedBy: string = 'DOOF') => 
 
 export const getVendorItems = async (vendorId: number) => {
   const response = await api.get(`/vendors/${vendorId}/items/`)
+  return response.data
+}
+
+// Vendor contacts (all vendors; service vendors also use these for PO notify party)
+export const getVendorContacts = async (vendorId?: number) => {
+  const params = vendorId != null ? { vendor_id: vendorId } : undefined
+  const response = await api.get('/vendor-contacts/', { params })
+  return response.data.results ?? response.data
+}
+
+export const createVendorContact = async (data: {
+  vendor: number
+  name: string
+  title?: string
+  emails?: string[]
+  phone?: string
+  location_label?: string
+  notes?: string
+}) => {
+  const response = await api.post('/vendor-contacts/', data)
+  return response.data
+}
+
+export const updateVendorContact = async (
+  id: number,
+  data: Partial<{ name: string; title: string; emails: string[]; phone: string; location_label: string; notes: string }>
+) => {
+  const response = await api.patch(`/vendor-contacts/${id}/`, data)
+  return response.data
+}
+
+export const deleteVendorContact = async (id: number) => {
+  const response = await api.delete(`/vendor-contacts/${id}/`)
   return response.data
 }
 

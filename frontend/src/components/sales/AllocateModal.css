@@ -105,23 +105,34 @@
   color: #92400e;
 }
 
+.lots-table tr.lot-prerepack {
+  background: #eff6ff;
+}
+
+.lots-table tr.lot-prerepack td:first-child {
+  color: #1e40af;
+}
+
 .unit-toggle label {
   font-weight: 500;
+  color: #111827;
 }
 
 .unit-toggle button {
   padding: 6px 12px;
-  border: 1px solid #ddd;
+  border: 1px solid #cbd5e1;
   background: white;
+  color: #111827;
   cursor: pointer;
   border-radius: 4px;
   transition: all 0.2s;
 }
 
 .unit-toggle button.active {
-  background: #007bff;
-  color: white;
-  border-color: #007bff;
+  background: #dbeafe;
+  color: #111827;
+  border-color: #2563eb;
+  font-weight: 600;
 }
 
 .unit-toggle button:hover:not(.active) {
@@ -211,14 +222,16 @@
 }
 
 .lots-table thead {
-  background: #f8f9fa;
+  background: var(--app-header-bg);
 }
 
 .lots-table th {
   padding: 10px;
   text-align: left;
   font-weight: 600;
-  border-bottom: 2px solid #ddd;
+  color: var(--app-header-text);
+  background: var(--app-header-bg);
+  border-bottom: 2px solid var(--table-header-border);
 }
 
 .lots-table td {
@@ -321,4 +334,27 @@
   text-align: center;
   padding: 40px;
   color: #666;
+}
+
+.drop-ship-explain {
+  margin: 0 0 0.75rem;
+  line-height: 1.45;
+  color: #374151;
+  font-size: 0.9375rem;
+}
+
+.allocate-coa-link {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #2563eb;
+  text-decoration: none;
+}
+
+.allocate-coa-link:hover {
+  text-decoration: underline;
+}
+
+.allocate-coa-dash {
+  color: #9ca3af;
+  font-size: 0.85rem;
 }

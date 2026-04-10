@@ -2,6 +2,17 @@ import { useState } from 'react'
 import { createCustomerContact, updateCustomerContact } from '../../api/customers'
 import './CreateContact.css'
 
+function parseEmailsInput(text: string): string[] {
+  return text
+    .split(/[\n,;]+/)
+    .map((e) => e.trim())
+    .filter(Boolean)
+}
+
+function formatEmailsForInput(emails?: string[]): string {
+  return (emails || []).join('\n')
+}
+
 interface CreateContactProps {
   customerId: number
   contact?: any
@@ -10,14 +21,25 @@ interface CreateContactProps {
 }
 
 function CreateContact({ customerId, contact, onClose, onSuccess }: CreateContactProps) {
+  const CONTACT_TYPES = [
+    { value: 'general', label: 'General' },
+    { value: 'billing', label: 'Billing' },
+    { value: 'sales', label: 'Sales' },
+    { value: 'shipping', label: 'Shipping' },
+    { value: 'other', label: 'Other' },
+  ]
+
   const [formData, setFormData] = useState({
     first_name: contact?.first_name || '',
     last_name: contact?.last_name || '',
     title: contact?.title || '',
-    email: contact?.email || '',
+    contact_type: contact?.contact_type || 'general',
+    emailsText: formatEmailsForInput(contact?.emails),
     phone: contact?.phone || '',
     mobile: contact?.mobile || '',
     is_primary: contact?.is_primary || false,
+    is_ap_contact: contact?.is_ap_contact || false,
+    is_purchasing_contact: contact?.is_purchasing_contact || false,
     is_active: contact?.is_active !== undefined ? contact.is_active : true,
     notes: contact?.notes || '',
   })
@@ -31,11 +53,27 @@ function CreateContact({ customerId, contact, onClose, onSuccess }: CreateContac
     }
 
     try {
+      const emails = parseEmailsInput(formData.emailsText)
+      const payload = {
+        customer: customerId,
+        first_name: formData.first_name,
+        last_name: formData.last_name,
+        title: formData.title,
+        contact_type: formData.contact_type,
+        emails,
+        phone: formData.phone,
+        mobile: formData.mobile,
+        is_primary: formData.is_primary,
+        is_ap_contact: formData.is_ap_contact,
+        is_purchasing_contact: formData.is_purchasing_contact,
+        is_active: formData.is_active,
+        notes: formData.notes,
+      }
       if (contact) {
-        await updateCustomerContact(contact.id, { ...formData, customer: customerId })
+        await updateCustomerContact(contact.id, payload)
         alert('Contact updated successfully!')
       } else {
-        await createCustomerContact({ ...formData, customer: customerId })
+        await createCustomerContact(payload)
         alert('Contact created successfully!')
       }
       onSuccess()
@@ -77,26 +115,43 @@ function CreateContact({ customerId, contact, onClose, onSuccess }: CreateContac
             </div>
           </div>
 
-          <div className="form-group">
-            <label>Title/Position</label>
-            <input
-              type="text"
-              value={formData.title}
-              onChange={(e) => setFormData({ ...formData, title: e.target.value })}
-              placeholder="e.g., Purchasing Manager"
-            />
+          <div className="form-row">
+            <div className="form-group">
+              <label>Title/Position</label>
+              <input
+                type="text"
+                value={formData.title}
+                onChange={(e) => setFormData({ ...formData, title: e.target.value })}
+                placeholder="e.g., Purchasing Manager"
+              />
+            </div>
+            <div className="form-group">
+              <label>Contact type</label>
+              <select
+                value={formData.contact_type}
+                onChange={(e) => setFormData({ ...formData, contact_type: e.target.value })}
+              >
+                {CONTACT_TYPES.map((t) => (
+                  <option key={t.value} value={t.value}>{t.label}</option>
+                ))}
+              </select>
+            </div>
           </div>
 
           <div className="form-row">
-            <div className="form-group">
-              <label>Email</label>
-              <input
-                type="email"
-                value={formData.email}
-                onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+            <div className="form-group" style={{ flex: '1 1 100%', minWidth: '200px' }}>
+              <label>Email addresses</label>
+              <textarea
+                rows={4}
+                placeholder="One per line, or separate with commas"
+                value={formData.emailsText}
+                onChange={(e) => setFormData({ ...formData, emailsText: e.target.value })}
               />
+              <small style={{ color: '#666' }}>Multiple addresses allowed (invoices / SO confirmations go to all A/P or purchasing emails).</small>
             </div>
+          </div>
 
+          <div className="form-row">
             <div className="form-group">
               <label>Phone</label>
               <input
@@ -124,6 +179,28 @@ function CreateContact({ customerId, contact, onClose, onSuccess }: CreateContac
                 onChange={(e) => setFormData({ ...formData, is_primary: e.target.checked })}
               />
               Primary Contact
+            </label>
+          </div>
+
+          <div className="form-group">
+            <label>
+              <input
+                type="checkbox"
+                checked={formData.is_ap_contact}
+                onChange={(e) => setFormData({ ...formData, is_ap_contact: e.target.checked })}
+              />
+              A/P contact (receives invoices when issued)
+            </label>
+          </div>
+
+          <div className="form-group">
+            <label>
+              <input
+                type="checkbox"
+                checked={formData.is_purchasing_contact}
+                onChange={(e) => setFormData({ ...formData, is_purchasing_contact: e.target.checked })}
+              />
+              Purchasing contact (receives sales order confirmations when issued)
             </label>
           </div>
 

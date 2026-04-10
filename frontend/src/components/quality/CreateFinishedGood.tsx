@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { getItems, createItem, createFormula, getCriticalControlPoints } from '../../api/inventory'
+import { getRDFormulas, getRDFormula } from '../../api/rdFormulas'
 import { getVendors } from '../../api/quality'
 import './CreateFinishedGood.css'
 
@@ -18,6 +19,8 @@ function CreateFinishedGood({ onClose = () => {}, onSuccess = () => {} }: Create
   const [items, setItems] = useState<any[]>([])
   const [ccps, setCcps] = useState<{ id: number; name: string }[]>([])
   const [approvedVendors, setApprovedVendors] = useState<any[]>([])
+  const [rdFormulas, setRdFormulas] = useState<{ id: number; name: string; status: string }[]>([])
+  const [selectedRdFormulaId, setSelectedRdFormulaId] = useState<number | ''>('')
   const [formData, setFormData] = useState({
     sku: '',
     name: '',
@@ -25,7 +28,11 @@ function CreateFinishedGood({ onClose = () => {}, onSuccess = () => {} }: Create
     pack_size: '',
     pack_size_unit: 'lbs' as 'lbs' | 'kg' | 'ea',
     formula_version: '1.0',
+    shelf_life_months: '',
     critical_control_point_id: '' as string | number,
+    qc_parameter_name: '',
+    qc_spec_min: '',
+    qc_spec_max: '',
     mixing_instructions: '',
     order_of_addition: '',
     equipment: '',
@@ -42,8 +49,15 @@ function CreateFinishedGood({ onClose = () => {}, onSuccess = () => {} }: Create
 
   const loadData = async () => {
     try {
+      const [ccpsData, vendorsData, rdList] = await Promise.all([
+        getCriticalControlPoints(),
+        getVendors(),
+        getRDFormulas().catch(() => []),
+      ])
+      setCcps(Array.isArray(ccpsData) ? ccpsData : [])
+      setRdFormulas(Array.isArray(rdList) ? rdList.map((r: any) => ({ id: r.id, name: r.name, status: r.status || 'draft' })) : [])
+
       // Load vendors first to get approved vendor names
-      const vendorsData = await getVendors()
       console.log('All vendors:', vendorsData)
       const approved = vendorsData.filter((v: any) => v.approval_status === 'approved')
       console.log('Approved vendors:', approved)
@@ -100,6 +114,31 @@ function CreateFinishedGood({ onClose = () => {}, onSuccess = () => {} }: Create
     }
   }
 
+  const loadRDFormulaForPreFill = async (id: number) => {
+    try {
+      const rd = await getRDFormula(id) as { name: string; lines?: { line_type: string; item_id?: number; item?: { id: number }; composition_pct?: number; notes?: string }[] }
+      setFormData((prev) => ({ ...prev, name: rd.name || prev.name }))
+      const ingredientLines = (rd.lines || []).filter((l: any) => l.line_type === 'ingredient' && (l.item_id ?? l.item?.id))
+      const preFillIngredients: FormulaIngredient[] = ingredientLines.length > 0
+        ? ingredientLines.map((l: any) => ({
+            item_id: String(l.item_id ?? l.item?.id ?? ''),
+            percentage: l.composition_pct != null ? String(l.composition_pct) : '',
+            notes: l.notes || '',
+          }))
+        : [{ item_id: '', percentage: '', notes: '' }]
+      setIngredients(preFillIngredients)
+    } catch (e) {
+      console.error(e)
+      alert('Could not load R&D formula')
+    }
+  }
+
+  useEffect(() => {
+    if (selectedRdFormulaId !== '' && typeof selectedRdFormulaId === 'number') {
+      loadRDFormulaForPreFill(selectedRdFormulaId)
+    }
+  }, [selectedRdFormulaId])
+
   const updateIngredient = (index: number, field: keyof FormulaIngredient, value: string) => {
     const newIngredients = [...ingredients]
     newIngredients[index] = { ...newIngredients[index], [field]: value }
@@ -127,6 +166,16 @@ function CreateFinishedGood({ onClose = () => {}, onSuccess = () => {} }: Create
       return
     }
 
+    let shelfLifeMonths: number | null = null
+    if (formData.shelf_life_months.trim()) {
+      const n = parseInt(formData.shelf_life_months, 10)
+      if (Number.isNaN(n) || n < 1) {
+        alert('Shelf life (months) must be a positive whole number, or leave blank.')
+        return
+      }
+      shelfLifeMonths = n
+    }
+
     try {
       setSubmitting(true)
       
@@ -144,7 +193,11 @@ function CreateFinishedGood({ onClose = () => {}, onSuccess = () => {} }: Create
       await createFormula({
         finished_good_id: itemResponse.id,
         version: formData.formula_version,
+        shelf_life_months: shelfLifeMonths,
         critical_control_point_id: formData.critical_control_point_id ? Number(formData.critical_control_point_id) : null,
+        qc_parameter_name: formData.qc_parameter_name?.trim() || null,
+        qc_spec_min: formData.qc_spec_min?.trim() ? parseFloat(formData.qc_spec_min) : null,
+        qc_spec_max: formData.qc_spec_max?.trim() ? parseFloat(formData.qc_spec_max) : null,
         mixing_instructions: formData.mixing_instructions || null,
         order_of_addition: formData.order_of_addition || null,
         equipment: formData.equipment || null,
@@ -182,6 +235,24 @@ function CreateFinishedGood({ onClose = () => {}, onSuccess = () => {} }: Create
       </div>
 
       <form onSubmit={handleSubmit} className="finished-good-form">
+        <div className="form-section rd-formula-prefill-section">
+          <h3>Start from R&D formula (optional)</h3>
+          <p className="form-hint">Select an approved R&D formula to pre-fill product name and ingredient list.</p>
+          <div className="form-group">
+            <label>R&D Formula</label>
+            <select
+              value={selectedRdFormulaId === '' ? '' : String(selectedRdFormulaId)}
+              onChange={(e) => setSelectedRdFormulaId(e.target.value === '' ? '' : parseInt(e.target.value, 10))}
+              className="rd-formula-select"
+            >
+              <option value="">— None —</option>
+              {rdFormulas.map((r) => (
+                <option key={r.id} value={r.id}>{r.name} ({r.status})</option>
+              ))}
+            </select>
+          </div>
+        </div>
+
         <div className="form-section">
           <h3>Item Information</h3>
           <div className="form-grid">
@@ -253,6 +324,19 @@ function CreateFinishedGood({ onClose = () => {}, onSuccess = () => {} }: Create
               />
             </div>
             <div className="form-group">
+              <label>Shelf life (months)</label>
+              <input
+                type="number"
+                min={1}
+                max={120}
+                step={1}
+                value={formData.shelf_life_months}
+                onChange={(e) => setFormData({ ...formData, shelf_life_months: e.target.value })}
+                placeholder="e.g. 24"
+              />
+              <small className="form-hint">Default expiration for new FG lots = batch close date + this many months. Optional.</small>
+            </div>
+            <div className="form-group">
               <label>Critical Control Point (CCP)</label>
               <select
                 value={formData.critical_control_point_id === '' ? '' : String(formData.critical_control_point_id)}
@@ -263,7 +347,45 @@ function CreateFinishedGood({ onClose = () => {}, onSuccess = () => {} }: Create
                   <option key={ccp.id} value={ccp.id}>{ccp.name}</option>
                 ))}
               </select>
+              <small className="form-hint">Shown on batch ticket: &quot;Has [CCP] been inspected and installed properly?&quot;</small>
             </div>
+          </div>
+
+          <div className="form-section qc-section">
+            <h3>Quality Control Parameters</h3>
+            <div className="form-grid">
+              <div className="form-group full-width">
+                <label>QC Parameter Name</label>
+                <input
+                  type="text"
+                  value={formData.qc_parameter_name}
+                  onChange={(e) => setFormData({ ...formData, qc_parameter_name: e.target.value })}
+                  placeholder="e.g., norbixin, betanin, absorbance"
+                />
+                <small className="form-hint">This parameter will be required when closing batches for this finished good.</small>
+              </div>
+              <div className="form-group">
+                <label>Spec Minimum</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={formData.qc_spec_min}
+                  onChange={(e) => setFormData({ ...formData, qc_spec_min: e.target.value })}
+                  placeholder="Min value"
+                />
+              </div>
+              <div className="form-group">
+                <label>Spec Maximum</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={formData.qc_spec_max}
+                  onChange={(e) => setFormData({ ...formData, qc_spec_max: e.target.value })}
+                  placeholder="Max value"
+                />
+              </div>
+            </div>
+            <p className="qc-note">If both min and max are set, batch closure will validate that QC results fall within this range. Leave blank if no QC validation is required.</p>
           </div>
 
           <div className="ingredients-section">

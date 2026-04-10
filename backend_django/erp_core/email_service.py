@@ -43,26 +43,46 @@ def get_recipient_email(obj, email_field='email'):
     return None
 
 
+def _emails_from_customer_contact(contact):
+    """Flatten emails JSON list from CustomerContact."""
+    out = []
+    for e in getattr(contact, 'emails', None) or []:
+        s = str(e).strip()
+        if s:
+            out.append(s)
+    return out
+
+
 def send_invoice_email(invoice, pdf_content=None):
-    """Send invoice email with PDF attachment"""
+    """Send invoice email with PDF attachment. Recipients: A/P contacts (is_ap_contact=True) for the customer, or fallback to customer/ship-to email."""
     try:
-        # Get recipient email
-        recipient_email = None
+        from .models import CustomerContact
+
+        recipient_emails = []
         if invoice.sales_order and invoice.sales_order.customer:
-            recipient_email = invoice.sales_order.customer.email
-        elif invoice.sales_order and invoice.sales_order.ship_to_location:
-            recipient_email = invoice.sales_order.ship_to_location.email
-        
-        if not recipient_email:
+            # Prefer contacts marked as A/P contact
+            ap_contacts = CustomerContact.objects.filter(
+                customer_id=invoice.sales_order.customer_id,
+                is_ap_contact=True,
+                is_active=True
+            ).exclude(email__isnull=True).exclude(email='')
+            recipient_emails = [c.email for c in ap_contacts]
+        if not recipient_emails and invoice.sales_order and invoice.sales_order.customer:
+            if invoice.sales_order.customer.email:
+                recipient_emails = [invoice.sales_order.customer.email]
+        if not recipient_emails and invoice.sales_order and invoice.sales_order.ship_to_location:
+            if invoice.sales_order.ship_to_location.email:
+                recipient_emails = [invoice.sales_order.ship_to_location.email]
+
+        if not recipient_emails:
             logger.warning(f"No email address found for invoice {invoice.invoice_number}")
             return False
-        
+
         # Create email
         subject = f"Invoice {invoice.invoice_number}"
         from_email = settings.DEFAULT_FROM_EMAIL
         reply_to = [settings.EMAIL_REPLY_TO]
-        
-        # Email body
+
         body = f"""
 Dear Customer,
 
@@ -77,27 +97,26 @@ If you have any questions, please reply to this email.
 Thank you,
 Wildwood Ingredients
 """
-        
+
         email = EmailMessage(
             subject=subject,
             body=body,
             from_email=from_email,
-            to=[recipient_email],
+            to=recipient_emails,
             reply_to=reply_to
         )
-        
-        # Attach PDF if provided
+
         if pdf_content:
             email.attach(
                 f"Invoice_{invoice.invoice_number}.pdf",
                 pdf_content,
                 'application/pdf'
             )
-        
+
         email.send()
-        logger.info(f"Invoice email sent successfully to {recipient_email} for invoice {invoice.invoice_number}")
+        logger.info(f"Invoice email sent successfully to {recipient_emails} for invoice {invoice.invoice_number}")
         return True
-        
+
     except Exception as e:
         logger.error(f"Failed to send invoice email: {str(e)}")
         return False
@@ -171,25 +190,34 @@ Wildwood Ingredients
 
 
 def send_sales_order_confirmation_email(sales_order, pdf_content=None):
-    """Send sales order confirmation email with PDF attachment"""
+    """Send sales order confirmation email with PDF attachment. Recipients: Purchasing contacts (is_purchasing_contact=True) for the customer, or fallback to customer/ship-to email."""
     try:
-        # Get recipient email
-        recipient_email = None
-        if sales_order.customer:
-            recipient_email = sales_order.customer.email
-        elif sales_order.ship_to_location:
-            recipient_email = sales_order.ship_to_location.email
-        
-        if not recipient_email:
+        from .models import CustomerContact
+
+        recipient_emails = []
+        if sales_order.customer_id:
+            purchasing_contacts = CustomerContact.objects.filter(
+                customer_id=sales_order.customer_id,
+                is_purchasing_contact=True,
+                is_active=True,
+            )
+            recipient_emails = []
+            for c in purchasing_contacts:
+                recipient_emails.extend(_emails_from_customer_contact(c))
+            recipient_emails = list(dict.fromkeys(recipient_emails))
+        if not recipient_emails and sales_order.customer and sales_order.customer.email:
+            recipient_emails = [sales_order.customer.email]
+        if not recipient_emails and sales_order.ship_to_location and sales_order.ship_to_location.email:
+            recipient_emails = [sales_order.ship_to_location.email]
+
+        if not recipient_emails:
             logger.warning(f"No email address found for sales order {sales_order.so_number}")
             return False
-        
-        # Create email
+
         subject = f"Sales Order Confirmation {sales_order.so_number}"
         from_email = settings.DEFAULT_FROM_EMAIL
         reply_to = [settings.EMAIL_REPLY_TO]
-        
-        # Email body
+
         body = f"""
 Dear Customer,
 
@@ -203,27 +231,26 @@ If you have any questions, please reply to this email.
 Thank you,
 Wildwood Ingredients
 """
-        
+
         email = EmailMessage(
             subject=subject,
             body=body,
             from_email=from_email,
-            to=[recipient_email],
+            to=recipient_emails,
             reply_to=reply_to
         )
-        
-        # Attach PDF if provided
+
         if pdf_content:
             email.attach(
                 f"Sales_Order_{sales_order.so_number}.pdf",
                 pdf_content,
                 'application/pdf'
             )
-        
+
         email.send()
-        logger.info(f"Sales order confirmation email sent successfully to {recipient_email} for SO {sales_order.so_number}")
+        logger.info(f"Sales order confirmation email sent successfully to {recipient_emails} for SO {sales_order.so_number}")
         return True
-        
+
     except Exception as e:
         logger.error(f"Failed to send sales order confirmation email: {str(e)}")
         return False

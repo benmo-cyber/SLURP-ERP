@@ -43,8 +43,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       } else {
         setState({ user: null, loading: false, error: null })
       }
-    } catch {
-      setState({ user: null, loading: false, error: null })
+    } catch (err: any) {
+      const isNetworkError = err?.code === 'ERR_NETWORK' || !err?.response
+      if (isNetworkError) {
+        // Backend unreachable: don't clear user so we don't "log them out"
+        setState((prev) => ({
+          user: prev.user,
+          loading: false,
+          error: 'Cannot reach server. Start the backend (e.g. python manage.py runserver on port 8000) and refresh.',
+        }))
+      } else {
+        setState({ user: null, loading: false, error: null })
+      }
     }
   }, [])
 
@@ -65,7 +75,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const user = await authApi.login(username, password)
       setState({ user, loading: false, error: null })
     } catch (err: any) {
-      const message = err.response?.data?.error || 'Login failed'
+      const data = err.response?.data
+      let message = (typeof data?.error === 'string' && data.error) ||
+        (typeof data?.detail === 'string' && data.detail) ||
+        (Array.isArray(data?.detail) && data.detail[0]) ||
+        null
+      if (!message) {
+        if (err.code === 'ERR_NETWORK' || !err.response) {
+          message = 'Cannot reach server. Check that the backend is running (e.g. port 8000) and try again.'
+        } else {
+          message = `Login failed${err.response?.status ? ` (${err.response.status})` : ''}. Try again or check your credentials.`
+        }
+      }
       setState((s) => ({ ...s, loading: false, error: message }))
       throw new Error(message)
     }

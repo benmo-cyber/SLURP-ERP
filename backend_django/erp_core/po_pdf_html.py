@@ -3,9 +3,10 @@ Purchase Order PDF via Jinja2 HTML template → xhtml2pdf (pure Python, no syste
 Build context from PurchaseOrder, render HTML, convert to PDF. No placeholder redaction.
 """
 from pathlib import Path
-import base64
 import logging
-from io import BytesIO
+
+from .html_pdf_common import html_string_to_pdf_bytes
+from .pdf_generator import get_batch_ticket_logo_base64_cached
 
 logger = logging.getLogger(__name__)
 
@@ -14,6 +15,21 @@ PO_HEADING_BLUE = "#1e3a5f"
 PO_HEADER_BG = "#c5d4e8"
 PO_STATUS_BG = "#d4e0ed"
 PO_TOTAL_BG = "#1e3a5f"
+
+# Keep PDF HTML small — huge notes + xhtml2pdf table layout can hang or run for minutes.
+_MAX_PO_NOTES_CHARS = 12000
+_MAX_NOTIFY_NOTES_CHARS = 4000
+
+
+def _po_line_description(item, po_item):
+    """Vendor item name + optional vendor catalog number."""
+    if not item:
+        return ((po_item.notes or "") if po_item else "") or ""
+    base = (item.vendor_item_name or item.name or "").strip()
+    num = (getattr(item, "vendor_item_number", None) or "").strip()
+    if num and base:
+        return f"{base} ({num})"
+    return base
 
 
 def _build_po_context(purchase_order):
@@ -46,21 +62,27 @@ def _build_po_context(purchase_order):
     bill_to_addr2 = "Washington, MO 63090"
 
     ship_to_name = (purchase_order.ship_to_name or "").strip()
-    ship_to_addr1 = (purchase_order.ship_to_address or "").strip()
+    raw_ship_addr1 = (purchase_order.ship_to_address or "").strip()
+    # Normalize "Michels Dr." to "Michels Drive" for consistency with Bill To
+    ship_to_addr1 = "6431 Michels Drive" if raw_ship_addr1 in ("6431 Michels Dr.", "6431 Michels Drive") else raw_ship_addr1
     ship_to_addr2 = ", ".join(filter(None, [purchase_order.ship_to_city, purchase_order.ship_to_state, purchase_order.ship_to_zip]))
 
     notes = (getattr(purchase_order, "notes", None) or "").strip()
+    if len(notes) > _MAX_PO_NOTES_CHARS:
+        notes = notes[:_MAX_PO_NOTES_CHARS].rstrip() + "\n… (truncated for PDF)"
 
     line_items = []
     for idx, po_item in enumerate(purchase_order.items.select_related("item").all(), 1):
         item = po_item.item
-        desc = (item.name if item else (po_item.notes or "")) or ""
-        uom = (getattr(item, "unit_of_measure", None) if item else None) or "lbs"
+        desc = _po_line_description(item, po_item)
+        uom = (getattr(po_item, "order_uom", None) or "").strip() or (
+            (getattr(item, "unit_of_measure", None) if item else None) or "lbs"
+        )
         qty = po_item.quantity_ordered
         up = po_item.unit_price or 0
         line_total = qty * up
-        # PO line items don't have tax % in model; show — unless we add the field later
-        tax_pct_str = "—"
+        tax_pct = getattr(po_item, "tax", None)
+        tax_pct_str = f"{tax_pct:.1f}%" if tax_pct is not None and tax_pct != 0 else "0%"
         line_items.append({
             "num": idx,
             "description": desc[:60],
@@ -77,15 +99,23 @@ def _build_po_context(purchase_order):
     shipping_cost = float(getattr(purchase_order, "shipping_cost", 0) or 0)
     total = round(subtotal - discount + shipping_cost, 2)
 
-    logo_base64 = ""
-    try:
-        from .pdf_generator import get_batch_ticket_logo_path
-        logo_path = get_batch_ticket_logo_path()
-        if logo_path and Path(logo_path).exists():
-            with open(logo_path, "rb") as f:
-                logo_base64 = base64.b64encode(f.read()).decode("ascii")
-    except Exception:
-        pass
+    logo_base64 = get_batch_ticket_logo_base64_cached()
+
+    notify_parties = []
+    np_contacts = getattr(purchase_order, "notify_party_contacts", None)
+    if np_contacts:
+        for c in np_contacts.all():
+            np_notes = (c.notes or "").strip() or None
+            if np_notes and len(np_notes) > _MAX_NOTIFY_NOTES_CHARS:
+                np_notes = np_notes[:_MAX_NOTIFY_NOTES_CHARS].rstrip() + "…"
+            notify_parties.append({
+                "name": (c.name or "").strip(),
+                "emails": [str(e).strip() for e in (c.emails or []) if str(e).strip()],
+                "phone": (c.phone or "").strip() or None,
+                "location_label": (c.location_label or "").strip() or None,
+                "vendor_name": (c.vendor.name if c.vendor else "").strip(),
+                "notes": np_notes,
+            })
 
     return {
         "po_number": purchase_order.po_number or "",
@@ -111,6 +141,7 @@ def _build_po_context(purchase_order):
         "discount": f"-${discount:,.2f}",
         "total": f"${total:,.2f}",
         "logo_base64": logo_base64,
+        "notify_parties": notify_parties,
     }
 
 
@@ -121,7 +152,6 @@ def generate_po_pdf_from_html(purchase_order):
     """
     try:
         from jinja2 import Environment, FileSystemLoader
-        from xhtml2pdf import pisa
     except ImportError as e:
         logger.warning("PO HTML→PDF requires jinja2 and xhtml2pdf: %s", e)
         return None
@@ -137,20 +167,10 @@ def generate_po_pdf_from_html(purchase_order):
         context = _build_po_context(purchase_order)
         html_string = template.render(**context)
 
-        pdf_buffer = BytesIO()
-        result = pisa.CreatePDF(html_string, dest=pdf_buffer, encoding="utf-8")
-        # pisa returns a context object; .err is the error count (0 = success)
-        err = getattr(result, "err", 1)
-        if err != 0:
-            logger.warning(
-                "PO xhtml2pdf reported errors: err=%s, log=%s",
-                err,
-                getattr(result, "log", None),
-            )
-            return None
-        pdf_buffer.seek(0)
-        out = pdf_buffer.getvalue()
-        logger.info("PO PDF: HTML path succeeded, size=%s", len(out))
+        po_label = f"PO {getattr(purchase_order, 'po_number', '') or ''}".strip()
+        out = html_string_to_pdf_bytes(html_string, log_label=po_label or "PO PDF")
+        if out:
+            logger.info("PO PDF: HTML path succeeded, size=%s", len(out))
         return out
     except Exception as e:
         logger.warning("PO HTML→PDF failed: %s", e, exc_info=True)

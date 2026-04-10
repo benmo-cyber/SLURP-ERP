@@ -11,7 +11,11 @@ interface FiscalPeriod {
   is_closed: boolean
 }
 
-function FinancialReports() {
+interface FinancialReportsProps {
+  onNavigateToTab?: (tab: string) => void
+}
+
+function FinancialReports({ onNavigateToTab }: FinancialReportsProps) {
   const [trialBalance, setTrialBalance] = useState<any>(null)
   const [balanceSheet, setBalanceSheet] = useState<any>(null)
   const [incomeStatement, setIncomeStatement] = useState<any>(null)
@@ -147,6 +151,14 @@ function FinancialReports() {
     <div className="financial-reports">
       <div className="reports-header">
         <h2>Financial Reports</h2>
+        {onNavigateToTab && (
+          <div className="reports-related-links">
+            <span className="related-label">Related:</span>
+            <button type="button" className="link-btn" onClick={() => onNavigateToTab('ar')}>Accounts Receivable</button>
+            <span className="related-sep">|</span>
+            <button type="button" className="link-btn" onClick={() => onNavigateToTab('invoices')}>Invoices</button>
+          </div>
+        )}
         <div className="report-filters">
           <div className="filter-group">
             <label>Report Type:</label>

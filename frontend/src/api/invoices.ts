@@ -20,6 +20,11 @@ export const updateInvoice = async (id: number, data: any) => {
   return response.data
 }
 
+export const patchInvoice = async (id: number, data: Record<string, unknown>) => {
+  const response = await api.patch(`/invoices/${id}/`, data)
+  return response.data
+}
+
 export const getAgingReport = async () => {
   const response = await api.get('/invoices/aging-report/')
   return response.data

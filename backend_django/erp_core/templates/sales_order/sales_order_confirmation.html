@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Sales Order {{ so_number }}</title>
+  <style>
+    @page { size: letter; margin: 0.4in; }
+    body { font-family: Helvetica, Arial, sans-serif; font-size: 9pt; color: #000; margin: 0; line-height: 1.25; }
+    .header-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+    .header-table td { vertical-align: top; }
+    .header-logo-cell { width: 252px; padding-right: 16px; }
+    .company-addr { font-size: 8pt; color: #333; line-height: 1.3; }
+    .header-right-cell { text-align: right; padding-left: 16px; }
+    .title-box { background: #e8eef4; padding: 8px 14px 10px 14px; text-align: right; }
+    .doc-title { font-size: 18pt; font-weight: bold; color: #1e3a5f; letter-spacing: 0.5px; margin: 0; }
+    .doc-sub { font-size: 8pt; color: #555; margin: 4px 0 0 0; }
+    .meta-table { width: 400px; border-collapse: collapse; font-size: 8pt; margin: 10px 0 6px 0; table-layout: fixed; }
+    .meta-table th { text-align: left; padding: 4px 6px; border: 1px solid #bbb; background: #e8eef4; font-weight: bold; color: #333; width: 140px; vertical-align: middle; font-size: 8pt; }
+    .meta-table td { padding: 4px 6px; border: 1px solid #bbb; background: #fff; vertical-align: middle; font-size: 8pt; }
+    .section-title { font-size: 10pt; font-weight: bold; color: #1e3a5f; margin: 10px 0 4px 0; text-transform: uppercase; border-bottom: 2px solid #1e3a5f; padding-bottom: 2px; }
+    .items-table { width: 100%; border-collapse: collapse; margin-bottom: 6px; font-size: 8pt; table-layout: fixed; }
+    .items-table th { background: #c5d4e8; color: #333; padding: 4px 6px; border: 1px solid #bbb; font-weight: bold; }
+    .items-table td { padding: 4px 6px; border: 1px solid #bbb; }
+    .items-table .row-alt { background: #eef2f7; }
+    .items-table .num, .items-table .money { text-align: right; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <table class="header-table">
+      <tr>
+        <td class="header-logo-cell">
+          {% if logo_base64 %}
+          <img src="data:image/png;base64,{{ logo_base64 }}" alt="" style="width: 150px; height: 150px; margin-bottom: 4px;" />
+          {% endif %}
+          <div class="company-addr">6431 Michels Drive<br />Washington, MO 63090</div>
+        </td>
+        <td class="header-right-cell">
+          <div class="title-box">
+            <div class="doc-title">SALES ORDER CONFIRMATION</div>
+            <p class="doc-sub">Status: {{ status }}</p>
+          </div>
+        </td>
+      </tr>
+    </table>
+  </div>
+
+  <table class="meta-table">
+    <tr><th>SO Number</th><td>{{ so_number }}</td></tr>
+    <tr><th>Order Date</th><td>{{ order_date }}</td></tr>
+    <tr><th>Expected Ship Date</th><td>{{ expected_ship_date }}</td></tr>
+    <tr><th>Customer</th><td>{{ customer_name }}</td></tr>
+    {% if customer_po %}
+    <tr><th>Customer PO</th><td>{{ customer_po }}</td></tr>
+    {% endif %}
+  </table>
+
+  <div class="section-title">Line Items</div>
+  <table class="items-table">
+    <thead>
+      <tr>
+        <th style="width:12%;">Item</th>
+        <th style="width:38%;">Description</th>
+        <th style="width:18%;">Qty</th>
+        <th style="width:14%;">Unit Price</th>
+        <th style="width:18%;">Total</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in line_items %}
+      <tr class="{% if loop.index0 % 2 == 1 %}row-alt{% endif %}">
+        <td>{{ row.sku }}</td>
+        <td>{{ row.description }}</td>
+        <td class="num">{{ row.qty }}</td>
+        <td class="money">{{ row.unit_price }}</td>
+        <td class="money">{{ row.line_total }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</body>
+</html>

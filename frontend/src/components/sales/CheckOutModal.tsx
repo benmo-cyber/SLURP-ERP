@@ -1,8 +1,8 @@
-import { useState, useEffect } from 'react'
-import { getAvailableSalesOrders, getSalesOrder, allocateSalesOrder, shipSalesOrder, cancelSalesOrder, openPackingList } from '../../api/salesOrders'
-import { getLotsBySkuVendor, getItems } from '../../api/inventory'
+import { useState, useEffect, useRef } from 'react'
+import { getAvailableSalesOrders, getSalesOrder, allocateSalesOrder, shipSalesOrder, cancelSalesOrder } from '../../api/salesOrders'
 import { formatNumber } from '../../utils/formatNumber'
-import { useBackdatedEntry } from '../../context/BackdatedEntryContext'
+import { formatAppDate } from '../../utils/appDateFormat'
+import { useGodMode } from '../../context/GodModeContext'
 import './CheckOutModal.css'
 
 interface Lot {
@@ -70,8 +70,26 @@ interface CheckOutModalProps {
   onSuccess: () => void
 }
 
+/** Mass qty in native UoM (lbs/kg): 2 decimals to avoid float junk like 499.99899752 in inputs. */
+function roundMassInNativeUnit(qty: number, unitOfMeasure: string): number {
+  const u = (unitOfMeasure || '').toLowerCase()
+  if (u === 'ea') return Math.round(qty)
+  if (u !== 'lbs' && u !== 'kg') return qty
+  return Math.round(qty * 100) / 100
+}
+
+/** If qty is within tolerance of max (allocation drift), snap to max so "ship all" shows 500 not 499.998… */
+function snapShipQtyToMax(qty: number, maxQty: number, unitOfMeasure: string): number {
+  const q = roundMassInNativeUnit(qty, unitOfMeasure)
+  const m = roundMassInNativeUnit(maxQty, unitOfMeasure)
+  const u = (unitOfMeasure || '').toLowerCase()
+  const tol = u === 'ea' ? 0.51 : 0.015
+  if (Math.abs(q - m) <= tol) return m
+  return q
+}
+
 function CheckOutModal({ onClose, onSuccess }: CheckOutModalProps) {
-  const { maxDateForEntry } = useBackdatedEntry()
+  const { maxDateForEntry } = useGodMode()
   const [salesOrders, setSalesOrders] = useState<SalesOrder[]>([])
   const [selectedSOId, setSelectedSOId] = useState<number | null>(null)
   const [salesOrder, setSalesOrder] = useState<SalesOrder | null>(null)
@@ -82,13 +100,14 @@ function CheckOutModal({ onClose, onSuccess }: CheckOutModalProps) {
   const [shipDate, setShipDate] = useState<string>('')
   const [carrier, setCarrier] = useState<string>('')
   const [trackingNumber, setTrackingNumber] = useState<string>('')
-  const [dimensions, setDimensions] = useState<string>('')
   const [pieces, setPieces] = useState<number | ''>('')
+  const [pieceDimensions, setPieceDimensions] = useState<string[]>([])
+  const [pieceWeights, setPieceWeights] = useState<string[]>([])
   const [unitDisplay, setUnitDisplay] = useState<'lbs' | 'kg'>('lbs')
   const [saving, setSaving] = useState(false)
   const [shipping, setShipping] = useState(false)
   const [cancelling, setCancelling] = useState(false)
-  const [showBOL, setShowBOL] = useState(false)
+  const shipSubmitLock = useRef(false)
 
   useEffect(() => {
     loadSalesOrders()
@@ -112,6 +131,25 @@ function CheckOutModal({ onClose, onSuccess }: CheckOutModalProps) {
       }
     }
   }, [salesOrder])
+
+  useEffect(() => {
+    if (pieces === '' || typeof pieces !== 'number' || pieces < 1) {
+      setPieceDimensions([])
+      setPieceWeights([])
+      return
+    }
+    const n = pieces
+    setPieceDimensions((prev) => {
+      const next = prev.slice(0, n)
+      while (next.length < n) next.push('')
+      return next
+    })
+    setPieceWeights((prev) => {
+      const next = prev.slice(0, n)
+      while (next.length < n) next.push('')
+      return next
+    })
+  }, [pieces])
 
   const loadSalesOrders = async () => {
     try {
@@ -288,6 +326,7 @@ function CheckOutModal({ onClose, onSuccess }: CheckOutModalProps) {
   }
 
   const handleShipOrder = async () => {
+    if (shipSubmitLock.current) return
     if (!salesOrder || !shipDate) {
       alert('Please select a ship date')
       return
@@ -299,16 +338,17 @@ function CheckOutModal({ onClose, onSuccess }: CheckOutModalProps) {
     for (const item of salesOrder.items) {
       const alloc = allocations.get(item.id)
       if (alloc) {
-        const totalToShip = alloc.allocations.reduce((sum, a) => sum + a.quantity, 0)
+        const rawSum = alloc.allocations.reduce((sum, a) => sum + a.quantity, 0)
+        const totalToShip = roundMassInNativeUnit(rawSum, item.item.unit_of_measure)
         if (totalToShip > 0) {
-          // Validate we're not shipping more than allocated
-          if (totalToShip > item.quantity_allocated) {
+          const allocCap = roundMassInNativeUnit(item.quantity_allocated, item.item.unit_of_measure)
+          if (totalToShip > allocCap + 0.02) {
             alert(`Cannot ship ${totalToShip} of ${item.item.name}. Only ${item.quantity_allocated} is allocated.`)
             return
           }
           itemsToShip.push({
             item_id: item.id,
-            quantity: totalToShip
+            quantity: snapShipQtyToMax(totalToShip, allocCap, item.item.unit_of_measure),
           })
         }
       }
@@ -329,20 +369,54 @@ function CheckOutModal({ onClose, onSuccess }: CheckOutModalProps) {
       return
     }
 
-    if (!confirm('Are you sure you want to checkout this order? This will create a DRAFT invoice and packing list.')) {
+    if (!carrier.trim()) {
+      alert('Carrier is required (printed on the packing list and invoice).')
+      return
+    }
+    if (pieces === '' || typeof pieces !== 'number' || pieces < 1) {
+      alert('Enter the number of pieces (boxes, pallets, etc.) for this shipment.')
+      return
+    }
+    const pieceCount = pieces
+    if (pieceDimensions.length !== pieceCount || pieceWeights.length !== pieceCount) {
+      alert('Dimension and weight fields must match the number of pieces.')
+      return
+    }
+    for (let i = 0; i < pieceCount; i++) {
+      if (!pieceDimensions[i]?.trim()) {
+        alert(`Enter dimensions for piece ${i + 1} (e.g. L×W×H).`)
+        return
+      }
+      if (!pieceWeights[i]?.trim()) {
+        alert(`Enter weight for piece ${i + 1} (include unit, e.g. 45 lbs).`)
+        return
+      }
+    }
+
+    if (!confirm('Are you sure you want to checkout this order? This will create a DRAFT invoice and save packing list details.')) {
       return
     }
 
+    shipSubmitLock.current = true
+    const idempotencyKey =
+      typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(36).slice(2)}`
     try {
       setShipping(true)
-      const result = await shipSalesOrder(salesOrder.id, {
-        ship_date: shipDate,
-        items: itemsToShip,
-        carrier: carrier.trim() || undefined,
-        tracking_number: trackingNumber.trim() || undefined,
-        dimensions: dimensions.trim() || undefined,
-        pieces: pieces !== '' ? Number(pieces) : undefined,
-      })
+      await shipSalesOrder(
+        salesOrder.id,
+        {
+          ship_date: shipDate,
+          items: itemsToShip,
+          carrier: carrier.trim(),
+          tracking_number: trackingNumber.trim() || undefined,
+          pieces: pieceCount,
+          piece_dimensions: pieceDimensions.map((d) => d.trim()),
+          piece_weights: pieceWeights.map((w) => w.trim()),
+        },
+        { idempotencyKey }
+      )
       alert('Order checked out successfully! DRAFT invoice created. You can now go to Finance > Invoices to review and issue it.')
       onSuccess()
       onClose()
@@ -351,16 +425,7 @@ function CheckOutModal({ onClose, onSuccess }: CheckOutModalProps) {
       alert(`Failed to checkout order: ${error.response?.data?.error || error.message}`)
     } finally {
       setShipping(false)
-    }
-  }
-
-  const handlePrintBOL = async () => {
-    if (!salesOrder) return
-    try {
-      await openPackingList(salesOrder.id)
-    } catch (error: any) {
-      console.error('Failed to generate packing list:', error)
-      alert(error?.message || 'Failed to generate packing list')
+      shipSubmitLock.current = false
     }
   }
 
@@ -495,7 +560,10 @@ function CheckOutModal({ onClose, onSuccess }: CheckOutModalProps) {
                           <div className="lots-list">
                             {availableLotsForItem.map(lot => {
                               const lotAlloc = alloc?.allocations.find(a => a.lot_id === lot.id)
-                              const quantityToShip = lotAlloc?.quantity ?? 0
+                              const quantityToShip = roundMassInNativeUnit(
+                                lotAlloc?.quantity ?? 0,
+                                lot.item.unit_of_measure
+                              )
                               const allocatedToThisSO = item.allocated_lots?.find((a: any) => a.lot.id === lot.id)?.quantity_allocated ?? 0
                               const maxQty = allocatedToThisSO
 
@@ -504,9 +572,9 @@ function CheckOutModal({ onClose, onSuccess }: CheckOutModalProps) {
                                   <div className="lot-info">
                                     <span><strong>Lot:</strong> {lot.lot_number}</span>
                                     <span>Allocated to this order: {formatNumber(convertQuantity(allocatedToThisSO, lot.item.unit_of_measure))} {unitDisplay}</span>
-                                    <span>Received: {new Date(lot.received_date).toLocaleDateString()}</span>
+                                    <span>Received: {formatAppDate(lot.received_date)}</span>
                                     {lot.expiration_date && (
-                                      <span>Expires: {new Date(lot.expiration_date).toLocaleDateString()}</span>
+                                      <span>Expires: {formatAppDate(lot.expiration_date)}</span>
                                     )}
                                   </div>
                                   <div className="quantity-input-group">
@@ -520,7 +588,11 @@ function CheckOutModal({ onClose, onSuccess }: CheckOutModalProps) {
                                       onChange={(e) => {
                                         const val = parseFloat(e.target.value) || 0
                                         const clamped = Math.min(Math.max(0, val), maxQty)
-                                        updateAllocation(item.id, lot.id, clamped)
+                                        updateAllocation(
+                                          item.id,
+                                          lot.id,
+                                          snapShipQtyToMax(clamped, maxQty, lot.item.unit_of_measure)
+                                        )
                                       }}
                                       className="quantity-input"
                                     />
@@ -548,6 +620,9 @@ function CheckOutModal({ onClose, onSuccess }: CheckOutModalProps) {
               {/* Step 3: Ship Date & shipping details (for packing list) */}
               <div className="checkout-step">
                 <h3>Step 3: Ship Date & shipping details</h3>
+                <p className="info-text" style={{ marginBottom: '12px' }}>
+                  Carrier, piece count, and dimensions plus weight for each piece are required and are printed on the packing list after checkout. Tracking is optional and can be added later.
+                </p>
                 <div className="form-group">
                   <label>Ship Date *</label>
                   <input
@@ -561,7 +636,7 @@ function CheckOutModal({ onClose, onSuccess }: CheckOutModalProps) {
                   <p className="info-text">You can set the ship date earlier than the requested date if needed.</p>
                 </div>
                 <div className="form-group">
-                  <label>Carrier</label>
+                  <label>Carrier *</label>
                   <input
                     type="text"
                     value={carrier}
@@ -569,7 +644,7 @@ function CheckOutModal({ onClose, onSuccess }: CheckOutModalProps) {
                     placeholder="e.g. FedEx, UPS"
                     className="form-input"
                   />
-                  <p className="info-text">Shipping carrier; shown on the invoice under SHIPPED VIA.</p>
+                  <p className="info-text">Shown on the packing list and invoice (SHIPPED VIA).</p>
                 </div>
                 <div className="form-group">
                   <label>Tracking number</label>
@@ -577,33 +652,86 @@ function CheckOutModal({ onClose, onSuccess }: CheckOutModalProps) {
                     type="text"
                     value={trackingNumber}
                     onChange={(e) => setTrackingNumber(e.target.value)}
-                    placeholder="Optional"
+                    placeholder="Optional — add when available"
                     className="form-input"
                   />
+                  <p className="info-text">If blank, you can add tracking on the sales order or before issuing the invoice.</p>
                 </div>
                 <div className="form-group">
-                  <label>Dimensions</label>
-                  <input
-                    type="text"
-                    value={dimensions}
-                    onChange={(e) => setDimensions(e.target.value)}
-                    placeholder="e.g. 48x40x60 (LxWxH)"
-                    className="form-input"
-                  />
-                  <p className="info-text">Pallet or box dimensions for the packing list.</p>
-                </div>
-                <div className="form-group">
-                  <label>Pieces</label>
+                  <label>Pieces *</label>
                   <input
                     type="number"
-                    min={0}
+                    min={1}
                     value={pieces === '' ? '' : pieces}
-                    onChange={(e) => setPieces(e.target.value === '' ? '' : parseInt(e.target.value, 10) || 0)}
-                    placeholder="Boxes (ground) or pallets (FTL/LTL)"
+                    onChange={(e) => {
+                      const v = e.target.value
+                      if (v === '') {
+                        setPieces('')
+                        return
+                      }
+                      const n = parseInt(v, 10)
+                      setPieces(Number.isNaN(n) ? '' : Math.max(1, n))
+                    }}
+                    placeholder="Number of handling units (boxes, pallets, etc.)"
                     className="form-input"
                   />
-                  <p className="info-text">Number of boxes if shipping ground, or number of pallets if FTL/LTL.</p>
+                  <p className="info-text">
+                    How many separate cartons or pallets for <strong>this checkout</strong>. Partial shipments use a separate checkout with their own pieces and dimensions. After checkout, open the packing list from Sales Orders (Pack list or Release).
+                  </p>
                 </div>
+                {typeof pieces === 'number' && pieces >= 1 && (
+                  <div className="form-group piece-dimensions-block">
+                    <label className="piece-dimensions-heading">Dimensions &amp; weight * (one row per piece)</label>
+                    <p className="info-text">Enter size and weight for each handling unit.</p>
+                    {Array.from({ length: pieces }, (_, idx) => (
+                      <div key={idx} className="piece-handling-unit">
+                        <div className="piece-handling-unit-title">Piece {idx + 1}</div>
+                        <div className="piece-handling-unit-fields">
+                          <div className="piece-field">
+                            <label htmlFor={`piece-dim-${idx}`}>Dimensions</label>
+                            <input
+                              id={`piece-dim-${idx}`}
+                              type="text"
+                              value={pieceDimensions[idx] ?? ''}
+                              onChange={(e) => {
+                                const val = e.target.value
+                                setPieceDimensions((prev) => {
+                                  const copy = [...prev]
+                                  while (copy.length < pieces) copy.push('')
+                                  copy[idx] = val
+                                  return copy
+                                })
+                              }}
+                              placeholder="e.g. 48×40×60 in"
+                              className="form-input"
+                              autoComplete="off"
+                            />
+                          </div>
+                          <div className="piece-field">
+                            <label htmlFor={`piece-wt-${idx}`}>Weight</label>
+                            <input
+                              id={`piece-wt-${idx}`}
+                              type="text"
+                              value={pieceWeights[idx] ?? ''}
+                              onChange={(e) => {
+                                const val = e.target.value
+                                setPieceWeights((prev) => {
+                                  const copy = [...prev]
+                                  while (copy.length < pieces) copy.push('')
+                                  copy[idx] = val
+                                  return copy
+                                })
+                              }}
+                              placeholder="e.g. 45 lbs"
+                              className="form-input"
+                              autoComplete="off"
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
 
               {/* Actions */}

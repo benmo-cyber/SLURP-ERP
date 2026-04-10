@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import { createPayment, getAccountsPayable, getAccountsReceivable, getAccounts } from '../../api/finance'
-import { useBackdatedEntry } from '../../context/BackdatedEntryContext'
+import { useGodMode } from '../../context/GodModeContext'
 import './PaymentEntry.css'
 
 interface PaymentEntryProps {
@@ -33,6 +33,7 @@ interface Account {
 }
 
 const PaymentEntry: React.FC<PaymentEntryProps> = ({ onClose, onSuccess, paymentType, apEntryId, arEntryId }) => {
+  const { maxDateForEntry } = useGodMode()
   const [formData, setFormData] = useState({
     payment_type: paymentType || 'ap_payment',
     payment_date: new Date().toISOString().split('T')[0],

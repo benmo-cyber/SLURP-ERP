@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { getCalendarEvents } from '../../api/calendar'
+import { APP_TIME_ZONE, formatAppDate } from '../../utils/appDateFormat'
 import { updateProductionBatch } from '../../api/inventory'
 import './Calendar.css'
 
@@ -304,7 +305,7 @@ function Calendar() {
               >
                 <div className="week-day-header">
                   <div className="week-day-name">
-                    {day.toLocaleDateString('en-US', { weekday: 'short' })}
+                    {day.toLocaleDateString('en-US', { timeZone: APP_TIME_ZONE, weekday: 'short' })}
                   </div>
                   <div className="week-day-number">{day.getDate()}</div>
                 </div>
@@ -339,7 +340,7 @@ function Calendar() {
     return (
       <div className="calendar-day-view">
         <div className={`day-header ${isToday ? 'today' : ''}`}>
-          <h3>{currentDate.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</h3>
+          <h3>{currentDate.toLocaleDateString('en-US', { timeZone: APP_TIME_ZONE, weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</h3>
         </div>
         <div
           className="day-events-list"
@@ -420,9 +421,9 @@ function Calendar() {
             <button onClick={() => navigateDate('prev')}>‹</button>
             <button onClick={goToToday}>Today</button>
             <span className="current-date">
-              {viewMode === 'month' && currentDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
-              {viewMode === 'week' && `${getStartDate().toLocaleDateString()} - ${getEndDate().toLocaleDateString()}`}
-              {viewMode === 'day' && currentDate.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
+              {viewMode === 'month' && currentDate.toLocaleDateString('en-US', { timeZone: APP_TIME_ZONE, month: 'long', year: 'numeric' })}
+              {viewMode === 'week' && `${formatAppDate(getStartDate())} - ${formatAppDate(getEndDate())}`}
+              {viewMode === 'day' && currentDate.toLocaleDateString('en-US', { timeZone: APP_TIME_ZONE, weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
             </span>
             <button onClick={() => navigateDate('next')}>›</button>
           </div>
@@ -477,7 +478,7 @@ function Calendar() {
         <div className="modal-overlay" onClick={() => setSelectedDate(null)}>
           <div className="date-events-modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
-              <h3>Events for {selectedDate.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</h3>
+              <h3>Events for {selectedDate.toLocaleDateString('en-US', { timeZone: APP_TIME_ZONE, weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</h3>
               <button className="close-button" onClick={() => setSelectedDate(null)}>×</button>
             </div>
             <div className="date-events-content">
@@ -576,7 +577,7 @@ function Calendar() {
               </div>
               <div className="detail-row">
                 <strong>Date</strong>
-                <span>{new Date(selectedEvent.date).toLocaleDateString()}</span>
+                <span>{formatAppDate(selectedEvent.date)}</span>
               </div>
               {selectedEvent.type === 'production' && (
                 <>

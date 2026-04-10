@@ -165,7 +165,8 @@
 }
 
 .so-items-table th {
-  background-color: #f5f5f5;
+  background-color: var(--app-header-bg);
+  color: var(--app-header-text);
   font-weight: 600;
 }
 

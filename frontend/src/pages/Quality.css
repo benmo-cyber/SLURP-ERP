@@ -94,8 +94,13 @@
 .quality-main {
   flex: 1;
   min-width: 0;
-  padding: 1.5rem 2rem;
+  padding: 0;
   overflow-y: auto;
+}
+
+.quality-main > * {
+  margin: 1.5rem 2rem;
+  box-sizing: border-box;
 }
 
 @media (max-width: 768px) {
@@ -143,8 +148,8 @@
     border-left: none;
     border-radius: 6px;
   }
-  .quality-main {
-    padding: 1rem;
+  .quality-main > * {
+    margin: 1rem;
   }
 }
 

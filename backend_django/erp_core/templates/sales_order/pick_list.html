@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Pick List {{ so_number }}</title>
+  <style>
+    @page { size: letter; margin: 0.5in; }
+    body { font-family: Arial, Helvetica, sans-serif; font-size: 9pt; color: #000; margin: 0; line-height: 1.25; }
+    .header-table { width: 100%; border-collapse: collapse; margin-bottom: 12px; }
+    .header-table td { vertical-align: top; padding: 0; }
+    .logo-cell { width: 2in; }
+    .logo-cell img { width: 120px; height: 120px; display: block; }
+    .title-right { text-align: right; }
+    .title-right h1 { margin: 0 0 4px 0; font-size: 18pt; }
+    .title-right .sub { font-size: 9pt; color: #333; max-width: 3.2in; margin-left: auto; }
+    .bill-ship-table { width: 100%; border-collapse: collapse; margin-bottom: 12px; }
+    .bill-ship-table td { vertical-align: top; width: 50%; padding: 0 8px 0 0; font-size: 9pt; }
+    .addr-block { margin-top: 4px; }
+    .addr-line { margin: 0 0 3px 0; line-height: 1.35; }
+    .meta-table { width: 100%; border-collapse: collapse; margin-bottom: 12px; font-size: 9pt; }
+    .meta-table td { padding: 2px 8px 2px 0; }
+    .items-table { width: 100%; border-collapse: collapse; font-size: 9pt; }
+    .items-table th, .items-table td { border: 0.5px solid #333; padding: 5px 6px; text-align: left; }
+    .items-table th { background: #e8e8e8; font-weight: bold; }
+    .items-table .col-qty { text-align: right; width: 14%; }
+    .items-table .col-sku { width: 16%; }
+    .items-table .col-lot { width: 18%; font-size: 8.5pt; }
+    .sign-off-section { margin-top: 18pt; padding-top: 10pt; border-top: 1px solid #333; }
+    .sign-off-table { width: 100%; border-collapse: collapse; font-size: 9pt; }
+    .sign-off-table td { width: 50%; vertical-align: bottom; padding: 8pt 12pt 0 0; }
+    .sign-off-table td:last-child { padding-right: 0; padding-left: 12pt; }
+    .sign-off-label { font-weight: bold; margin-bottom: 4pt; display: block; color: #111; }
+    .sign-off-hint { font-size: 7.5pt; color: #555; font-weight: normal; margin-top: 2pt; }
+    .sign-off-line { border-bottom: 1px solid #000; height: 24pt; margin-top: 2pt; font-size: 1pt; line-height: 24pt; }
+  </style>
+</head>
+<body>
+  <table class="header-table">
+    <tr>
+      <td class="logo-cell">
+        {% if logo_base64 %}
+        <img src="data:image/png;base64,{{ logo_base64 }}" alt="" />
+        {% else %}
+        <span style="font-weight: bold;">Wildwood Ingredients, LLC</span>
+        {% endif %}
+      </td>
+      <td class="title-right">
+        <h1>Pick List</h1>
+        <div>SO # {{ so_number }}</div>
+        <div class="sub">Pull the quantities below from inventory by Wildwood lot number before packing / checkout.</div>
+      </td>
+    </tr>
+  </table>
+
+  <table class="bill-ship-table">
+    <tr>
+      <td>
+        <strong>Ship To:</strong>
+        <div class="addr-block">
+          {% for line in ship_to_lines %}
+          <div class="addr-line">{{ line }}</div>
+          {% endfor %}
+        </div>
+      </td>
+      <td>
+        <strong>Bill To:</strong>
+        <div class="addr-block">
+          {% for line in bill_to_lines %}
+          <div class="addr-line">{{ line }}</div>
+          {% endfor %}
+        </div>
+      </td>
+    </tr>
+  </table>
+
+  <table class="meta-table">
+    <tr><td><strong>Printed:</strong></td><td>{{ date_str }}</td><td><strong>Order Date:</strong></td><td>{{ order_date_str }}</td></tr>
+    <tr><td><strong>Expected Ship:</strong></td><td>{{ ship_date_str }}</td><td><strong>PO / SO #:</strong></td><td>{{ po_so_str }}</td></tr>
+  </table>
+
+  <table class="items-table">
+    <thead>
+      <tr>
+        <th class="col-sku">SKU</th>
+        <th>Description</th>
+        <th class="col-lot">Wildwood Lot #</th>
+        <th class="col-qty">Qty to pick</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in line_items %}
+      <tr>
+        <td class="col-sku">{{ row.sku }}</td>
+        <td>{{ row.description }}</td>
+        <td class="col-lot">{{ row.lot_number }}</td>
+        <td class="col-qty">{{ row.quantity }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <div class="sign-off-section">
+    <table class="sign-off-table">
+      <tr>
+        <td>
+          <span class="sign-off-label">Picked by (operator)</span>
+          <div class="sign-off-line">&nbsp;</div>
+          <span class="sign-off-hint">Operator initials (pick completed per this list).</span>
+        </td>
+        <td>
+          <span class="sign-off-label">Verified by (supervisor)</span>
+          <div class="sign-off-line">&nbsp;</div>
+          <span class="sign-off-hint">Supervisor initials (pick verified).</span>
+        </td>
+      </tr>
+    </table>
+  </div>
+</body>
+</html>

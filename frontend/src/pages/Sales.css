@@ -30,8 +30,13 @@
 .sales-header-actions {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
+  gap: 0.625rem;
   flex-wrap: wrap;
+}
+
+.sales-header-actions .btn {
+  border-radius: 8px;
+  font-weight: 500;
 }
 
 .sales-layout {
@@ -104,12 +109,18 @@
   font-weight: 600;
 }
 
-/* Main content */
+/* Margin on child so sticky table headers align with scrollport */
 .sales-main {
   flex: 1;
   min-width: 0;
-  padding: 1.5rem 2rem;
+  padding: 0;
   overflow-y: auto;
+  background: var(--sales-bg, #f0f2f5);
+}
+
+.sales-main > * {
+  margin: 1.5rem 2rem;
+  box-sizing: border-box;
 }
 
 /* Responsive: collapse sidebar on narrow screens */
@@ -166,7 +177,7 @@
     border-radius: 6px;
   }
 
-  .sales-main {
-    padding: 1rem;
+  .sales-main > * {
+    margin: 1rem;
   }
 }

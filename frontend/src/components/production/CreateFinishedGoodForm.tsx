@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { getItems, createItem } from '../../api/inventory'
 import { createFinishedProductSpecification } from '../../api/production'
-import { useBackdatedEntry } from '../../context/BackdatedEntryContext'
+import { useGodMode } from '../../context/GodModeContext'
 import './CreateFinishedGoodForm.css'
 
 interface CreateFinishedGoodFormProps {
@@ -10,6 +10,7 @@ interface CreateFinishedGoodFormProps {
 }
 
 function CreateFinishedGoodForm({ onClose, onSuccess }: CreateFinishedGoodFormProps) {
+  const { maxDateForEntry } = useGodMode()
   const [submitting, setSubmitting] = useState(false)
   const [step, setStep] = useState<'item' | 'fps'>('item')
   

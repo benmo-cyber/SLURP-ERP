@@ -1,8 +1,8 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { getItems, createLot } from '../../api/inventory'
 import { getPurchaseOrders } from '../../api/purchaseOrders'
 import { getVendors } from '../../api/quality'
-import { useBackdatedEntry } from '../../context/BackdatedEntryContext'
+import { useGodMode } from '../../context/GodModeContext'
 import './CheckInForm.css'
 
 interface Item {
@@ -25,11 +25,7 @@ interface PurchaseOrder {
 
 interface PurchaseOrderItem {
   id: number
-  item: {
-    id: number
-    name: string
-    sku: string
-  }
+  item: Item
   quantity_ordered: number
   quantity_received: number
 }
@@ -41,6 +37,8 @@ interface Vendor {
 
 interface CheckInRow {
   date: string
+  expiration_date: string
+  manufacture_date: string
   po_number: string
   vendor: string
   carrier: string
@@ -68,7 +66,7 @@ interface CheckInFormProps {
 }
 
 function CheckInForm({ onClose, onSuccess }: CheckInFormProps) {
-  const { maxDateForEntry } = useBackdatedEntry()
+  const { maxDateForEntry, godModeOn, canUseGodMode } = useGodMode()
   const [items, setItems] = useState<Item[]>([])
   const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>([])
   const [vendors, setVendors] = useState<Vendor[]>([])
@@ -79,6 +77,8 @@ function CheckInForm({ onClose, onSuccess }: CheckInFormProps) {
   const [rows, setRows] = useState<CheckInRow[]>([
     {
       date: new Date().toISOString().split('T')[0],
+      expiration_date: '',
+      manufacture_date: '',
       po_number: '',
       vendor: '',
       carrier: '',
@@ -104,6 +104,21 @@ function CheckInForm({ onClose, onSuccess }: CheckInFormProps) {
   useEffect(() => {
     loadData()
   }, [])
+
+  /** Resolve item from the filtered inventory list or from loaded PO lines (PO lines must work even when item.on_order is 0). */
+  const getItemById = useCallback(
+    (id: number | null | undefined): Item | undefined => {
+      if (id == null) return undefined
+      const fromList = items.find((i) => i.id === id)
+      if (fromList) return fromList
+      for (const poLines of poItemsByRow.values()) {
+        const line = poLines?.find((pi) => pi.item?.id === id)
+        if (line?.item) return line.item
+      }
+      return undefined
+    },
+    [items, poItemsByRow]
+  )
 
   const loadData = async () => {
     try {
@@ -229,7 +244,8 @@ function CheckInForm({ onClose, onSuccess }: CheckInFormProps) {
   }
 
   const handleProductChange = async (index: number, productId: string) => {
-    const item = items.find(i => i.id === parseInt(productId))
+    const pid = parseInt(productId, 10)
+    const item = Number.isNaN(pid) ? undefined : getItemById(pid)
     const updatedRows = [...rows]
     updatedRows[index] = {
       ...updatedRows[index],
@@ -471,6 +487,8 @@ function CheckInForm({ onClose, onSuccess }: CheckInFormProps) {
     setPoItemsByRow(updatedPoItems)
     setRows([...rows, {
       date: new Date().toISOString().split('T')[0],
+      expiration_date: '',
+      manufacture_date: '',
       po_number: '',
       vendor: '',
       carrier: '',
@@ -526,7 +544,7 @@ function CheckInForm({ onClose, onSuccess }: CheckInFormProps) {
       }
       
       // Check if item is a raw material - vendor lot number is required
-      const item = items.find(i => i.id === row.product_id)
+      const item = getItemById(row.product_id)
       if (item && item.item_type === 'raw_material') {
         if (!row.vendor_lot_number || !row.vendor_lot_number.trim()) {
           alert(`Row ${i + 1}: Vendor lot number is required for raw materials`)
@@ -548,7 +566,7 @@ function CheckInForm({ onClose, onSuccess }: CheckInFormProps) {
           return
         }
         
-        const item = items.find(i => i.id === row.product_id)
+        const item = getItemById(row.product_id)
         
         if (!item) {
           alert(`Row ${rows.indexOf(row) + 1}: Item not found`)
@@ -572,11 +590,28 @@ function CheckInForm({ onClose, onSuccess }: CheckInFormProps) {
         // Convert date to ISO string with time
         const receivedDate = row.date ? new Date(row.date + 'T00:00:00').toISOString() : new Date().toISOString()
         
+        const expirationIso =
+          row.expiration_date && row.expiration_date.trim()
+            ? new Date(row.expiration_date + 'T00:00:00').toISOString()
+            : null
+
+        const manufactureIso =
+          row.manufacture_date && row.manufacture_date.trim()
+            ? new Date(row.manufacture_date + 'T00:00:00').toISOString()
+            : null
+
         const checkInData = {
           item_id: row.product_id,
           quantity: quantity,
           received_date: receivedDate,
+          expiration_date: expirationIso,
+          manufacture_date: manufactureIso,
           po_number: row.po_number || null,
+          // Internal WWI lot # is always auto-generated unless staff + God mode supplies an override
+          lot_number:
+            godModeOn && canUseGodMode && row.lot_number && row.lot_number.trim()
+              ? row.lot_number.trim()
+              : null,
           vendor_lot_number: row.vendor_lot_number && row.vendor_lot_number.trim() ? row.vendor_lot_number.trim() : null,
           status: row.status,
           short_reason: row.short_reason && row.short_reason.trim() ? row.short_reason.trim() : null,
@@ -633,6 +668,10 @@ function CheckInForm({ onClose, onSuccess }: CheckInFormProps) {
           <h2>Check In Materials</h2>
           <button onClick={onClose} className="close-btn">×</button>
         </div>
+        <p className="checkin-modal-hint" style={{ margin: '0 1rem 0.75rem', color: '#444', fontSize: '0.9rem' }}>
+          For <strong>raw materials</strong> and <strong>distributed items</strong>, use <strong>Expiration</strong> (best-by) and{' '}
+          <strong>Mfg</strong> (manufacturer production or pack date) when shown on the certificate or label. Both are saved on the lot.
+        </p>
 
         <form onSubmit={handleSubmit} className="checkin-form">
           <div className="checkin-table-wrapper">
@@ -640,20 +679,23 @@ function CheckInForm({ onClose, onSuccess }: CheckInFormProps) {
               <thead>
                 <tr>
                   <th>Date</th>
+                  <th title="Lot expiration / best-by (stored on the lot)">Expiration</th>
+                  <th title="Manufacturer production or pack date">Mfg</th>
                   <th>PO Number</th>
                   <th>Vendor</th>
                   <th>Carrier</th>
                   <th>Product</th>
-                  <th>Vendor Lot #</th>
-                  <th>Quantity</th>
+                  <th>Vendor lot</th>
+                  <th title="Internal WWI lot number">Int. lot</th>
+                  <th>Qty</th>
                   <th>Status</th>
-                  <th>Short Reason</th>
-                  <th>CoA (*)</th>
-                  <th>Prod. Free Pests, Odors and Clean (*)</th>
-                  <th>Carrier Free of Pests, Odors, Clean, Secured Load (*)</th>
-                  <th>Shipment accepted and stored as required (*)</th>
-                  <th>Initials</th>
-                  <th>Actions</th>
+                  <th>Short</th>
+                  <th title="Certificate of Analysis received">CoA*</th>
+                  <th title="Product free of pests, odors, clean">Prod OK*</th>
+                  <th title="Carrier free of pests, odors, clean, secured load">Carr OK*</th>
+                  <th title="Shipment accepted and stored as required">Stored*</th>
+                  <th>Inits</th>
+                  <th scope="col" className="checkin-th-actions" title="Remove row"> </th>
                 </tr>
               </thead>
               <tbody>
@@ -667,6 +709,24 @@ function CheckInForm({ onClose, onSuccess }: CheckInFormProps) {
                         max={maxDateForEntry}
                         required
                         className="table-input"
+                      />
+                    </td>
+                    <td>
+                      <input
+                        type="date"
+                        value={row.expiration_date}
+                        onChange={(e) => handleRowChange(index, 'expiration_date', e.target.value)}
+                        className="table-input"
+                        title="Optional. Saved on the lot and shown across inventory, sales, and production."
+                      />
+                    </td>
+                    <td>
+                      <input
+                        type="date"
+                        value={row.manufacture_date}
+                        onChange={(e) => handleRowChange(index, 'manufacture_date', e.target.value)}
+                        className="table-input"
+                        title="Optional. Manufacturer production or pack date (especially for distributed / resale goods)."
                       />
                     </td>
                     <td>
@@ -712,19 +772,25 @@ function CheckInForm({ onClose, onSuccess }: CheckInFormProps) {
                       >
                         <option value="">Select Product...</option>
                         {(() => {
-                          // Filter items based on selected PO
                           const poItems = poItemsByRow.get(index)
-                          let availableItems = items
-                          
+                          let availableItems: Item[] = items
+
                           if (row.po_number && poItems && poItems.length > 0) {
-                            // Only show items that are on the selected PO
-                            const poItemIds = poItems.map(poItem => poItem.item.id)
-                            availableItems = items.filter(item => poItemIds.includes(item.id))
+                            // Use PO line items directly — the global `items` list only includes rows with on_order > 0,
+                            // so intersecting with it hid every line on many POs (e.g. remaining receipt when on_order is 0).
+                            const seen = new Set<number>()
+                            availableItems = []
+                            for (const poItem of poItems) {
+                              const it = poItem.item
+                              if (it?.id != null && !seen.has(it.id)) {
+                                seen.add(it.id)
+                                availableItems.push(it)
+                              }
+                            }
                           } else if (row.po_number) {
-                            // PO is selected but items haven't loaded yet, show empty
                             availableItems = []
                           }
-                          
+
                           return availableItems.map((item) => (
                             <option key={item.id} value={item.id}>
                               {item.sku} - {item.name}{item.vendor ? ` (${item.vendor})` : ''}
@@ -735,7 +801,7 @@ function CheckInForm({ onClose, onSuccess }: CheckInFormProps) {
                     </td>
                     <td>
                       {(() => {
-                        const item = items.find(i => i.id === row.product_id)
+                        const item = getItemById(row.product_id)
                         const isRawMaterial = item && item.item_type === 'raw_material'
                         return (
                           <input
@@ -750,6 +816,28 @@ function CheckInForm({ onClose, onSuccess }: CheckInFormProps) {
                           />
                         )
                       })()}
+                    </td>
+                    <td>
+                      {godModeOn && canUseGodMode ? (
+                        <input
+                          type="text"
+                          value={row.lot_number}
+                          onChange={(e) => handleRowChange(index, 'lot_number', e.target.value)}
+                          placeholder="Blank = auto (1yy…)"
+                          className="table-input"
+                          title="Staff God mode: override internal WWI lot number. Leave blank for the next auto number."
+                        />
+                      ) : (
+                        <input
+                          type="text"
+                          value=""
+                          readOnly
+                          disabled
+                          placeholder="Auto-assigned"
+                          className="table-input"
+                          title="Each check-in gets an internal WWI lot number (1yy00000). Staff can override with God mode on."
+                        />
+                      )}
                     </td>
                     <td>
                       <div className="quantity-input-group">

@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>FPS {{ item_sku }}</title>
+  <style>
+    @page { size: letter; margin: 0.45in; }
+    body { font-family: Helvetica, Arial, sans-serif; font-size: 9pt; color: #000; margin: 0; line-height: 1.35; }
+    .header-row { width: 100%; margin-bottom: 8px; }
+    .header-row td { vertical-align: top; font-size: 10pt; }
+    .logo-cell { width: 200px; padding-right: 12px; }
+    .addr { font-size: 9pt; color: #333; line-height: 1.3; }
+    .title { text-align: center; font-size: 14pt; font-weight: bold; margin: 14px 0 10px 0; }
+    .test-freq { margin-bottom: 10px; font-size: 9pt; }
+    .field-label { font-weight: bold; font-size: 9pt; margin-top: 8px; color: #000; }
+    .field-value { font-size: 9pt; margin-bottom: 10px; white-space: pre-wrap; word-wrap: break-word; }
+    .footer { font-size: 7pt; color: #666; margin-top: 12px; line-height: 1.3; }
+    .page-break { page-break-before: always; }
+    .checklist-title { text-align: center; font-size: 14pt; font-weight: bold; margin: 14px 0 12px 0; }
+    .check-row { font-size: 9pt; margin: 4px 0; }
+    .formula-table { width: 100%; border-collapse: collapse; font-size: 9pt; margin-top: 6px; }
+    .formula-table th, .formula-table td { border: 1px solid #bbb; padding: 4px 6px; text-align: left; }
+    .formula-table th { background: #e8eef4; }
+  </style>
+</head>
+<body>
+
+  <table class="header-row">
+    <tr>
+      <td class="logo-cell">
+        {% if logo_base64 %}
+        <img src="data:image/png;base64,{{ logo_base64 }}" alt="" style="width: 120px; height: 120px; margin-bottom: 6px;" />
+        {% endif %}
+        <div class="addr">6431 Michels Drive<br/>Washington, MO 63090<br/>314-835-8207</div>
+      </td>
+      <td></td>
+    </tr>
+  </table>
+
+  <div class="title">Finished Product Specification</div>
+
+  {% if show_test_frequency %}
+  <div class="test-freq"><strong>Test frequency:</strong> {{ test_frequency }}</div>
+  {% endif %}
+
+  {% for sec in spec_sections %}
+  <div class="field-label">{{ sec.label }}</div>
+  <div class="field-value">{{ sec.value }}</div>
+  {% endfor %}
+
+  <div class="footer">{{ footer_note }}</div>
+
+  <div class="page-break"></div>
+
+  <table class="header-row">
+    <tr>
+      <td class="logo-cell">
+        {% if logo_base64 %}
+        <img src="data:image/png;base64,{{ logo_base64 }}" alt="" style="width: 120px; height: 120px; margin-bottom: 6px;" />
+        {% endif %}
+        <div class="addr">6431 Michels Drive<br/>Washington, MO 63090<br/>314-835-8207</div>
+      </td>
+      <td></td>
+    </tr>
+  </table>
+
+  <div class="checklist-title">{{ checklist_title }}</div>
+
+  <div class="field-value"><strong>Product Name:</strong> {{ product_name }}</div>
+
+  {% for row in checklist %}
+  <div class="check-row">{% if row.checked %}✓{% else %}☐{% endif %} {{ row.label }}</div>
+  {% endfor %}
+
+  <div class="field-label">Processing Requirements (i.e. specific tank or mixer, how long should product be mixed, allergen considerations, temperature requirements)</div>
+  <div class="field-value">{{ processing_requirements }}</div>
+
+  <div class="field-label">Product Formula</div>
+  {% if has_formula %}
+  <div class="field-value">Version: {{ formula_version }}</div>
+  <table class="formula-table">
+    <tr><th>Ingredient</th><th>%</th></tr>
+    {% for fr in formula_rows %}
+    <tr><td>{{ fr.name }}</td><td>{{ fr.percent }}</td></tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <div class="field-value">No formula assigned</div>
+  {% endif %}
+
+  <div class="field-label">Name and Title of Person Completing Form</div>
+  <div class="field-value">{{ completed_by_name }}</div>
+
+  <div class="field-label">Signature and Date</div>
+  <div class="field-value">{{ completed_signature }} {% if completed_date %} {{ completed_date }}{% endif %}</div>
+
+  <div class="footer">{{ footer_note }}</div>
+
+</body>
+</html>

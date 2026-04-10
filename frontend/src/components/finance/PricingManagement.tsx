@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { getVendorPricing, getCustomerPricing, getItems } from '../../api/finance'
 import { formatCurrency } from '../../utils/formatNumber'
+import { formatAppDate } from '../../utils/appDateFormat'
 import CreateVendorPricing from './CreateVendorPricing'
 import PricingHistory from './PricingHistory'
 import './PricingManagement.css'
@@ -106,8 +107,8 @@ function PricingManagement() {
                       <td>{pricing.vendor_name}</td>
                       <td className="amount">{formatCurrency(pricing.unit_price)}</td>
                       <td>{pricing.unit_of_measure}</td>
-                      <td>{new Date(pricing.effective_date).toLocaleDateString()}</td>
-                      <td>{pricing.expiry_date ? new Date(pricing.expiry_date).toLocaleDateString() : '-'}</td>
+                      <td>{formatAppDate(pricing.effective_date)}</td>
+                      <td>{pricing.expiry_date ? formatAppDate(pricing.expiry_date) : '-'}</td>
                       <td>
                         <span className={`status-badge ${pricing.is_active ? 'active' : 'inactive'}`}>
                           {pricing.is_active ? 'Active' : 'Inactive'}
@@ -156,8 +157,8 @@ function PricingManagement() {
                       <td>{pricing.customer_name}</td>
                       <td className="amount">{formatCurrency(pricing.unit_price)}</td>
                       <td>{pricing.unit_of_measure}</td>
-                      <td>{new Date(pricing.effective_date).toLocaleDateString()}</td>
-                      <td>{pricing.expiry_date ? new Date(pricing.expiry_date).toLocaleDateString() : '-'}</td>
+                      <td>{formatAppDate(pricing.effective_date)}</td>
+                      <td>{pricing.expiry_date ? formatAppDate(pricing.expiry_date) : '-'}</td>
                       <td>
                         <span className={`status-badge ${pricing.is_active ? 'active' : 'inactive'}`}>
                           {pricing.is_active ? 'Active' : 'Inactive'}

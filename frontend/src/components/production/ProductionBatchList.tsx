@@ -1,7 +1,10 @@
 import { useState, useEffect } from 'react'
-import { getProductionBatches } from '../../api/inventory'
+import { getProductionBatches, updateProductionBatch } from '../../api/inventory'
+import { useGodMode } from '../../context/GodModeContext'
 import BatchDetailView from './BatchDetailView'
 import { formatNumber } from '../../utils/formatNumber'
+import { formatQuantityForDisplay, normalizeEaQuantity } from '../../utils/massQuantity'
+import { formatAppDate } from '../../utils/appDateFormat'
 import './ProductionBatchList.css'
 
 const API_BASE_URL = 'http://localhost:8000/api'
@@ -9,10 +12,13 @@ const API_BASE_URL = 'http://localhost:8000/api'
 interface ProductionBatch {
   id: number
   batch_number: string
+  /** Production batches store mass in lbs; repack stores mass in the finished item native UoM (e.g. kg). */
+  batch_type?: 'production' | 'repack'
   finished_good_item: {
     id: number
     name: string
     sku: string
+    unit_of_measure?: string
   }
   quantity_produced: number
   quantity_actual: number
@@ -26,14 +32,16 @@ interface ProductionBatch {
 
 interface ProductionBatchListProps {
   onCloseBatch: (batch: ProductionBatch) => void
-  onUnfkBatch?: (batch: ProductionBatch) => void
+  onReverseBatch?: (batch: ProductionBatch) => void
   onAdjustBatch?: (batch: ProductionBatch) => void
 }
 
 type InProgressSortKey = 'batch_number' | 'finished_good' | 'quantity_produced' | 'production_date' | 'status' | null
 type ClosedSortKey = 'batch_number' | 'finished_good' | 'quantity_produced' | 'quantity_actual' | 'production_date' | 'closed_date' | 'status' | null
 
-function ProductionBatchList({ onCloseBatch, onUnfkBatch, onAdjustBatch }: ProductionBatchListProps) {
+function ProductionBatchList({ onCloseBatch, onReverseBatch, onAdjustBatch }: ProductionBatchListProps) {
+  const { godModeOn, canUseGodMode } = useGodMode()
+  const allowBtEdit = Boolean(godModeOn && canUseGodMode)
   const [batches, setBatches] = useState<ProductionBatch[]>([])
   const [loading, setLoading] = useState(true)
   const [selectedBatchId, setSelectedBatchId] = useState<number | null>(null)
@@ -110,27 +118,98 @@ function ProductionBatchList({ onCloseBatch, onUnfkBatch, onAdjustBatch }: Produ
   const inProgressBatches = batches.filter(b => b.status !== 'closed')
   const closedBatches = batches.filter(b => b.status === 'closed')
 
-  // Convert quantity based on unit display preference
-  const convertQuantity = (quantity: number, unit: string = 'lbs') => {
-    if (unit === 'ea') return formatNumber(quantity, 0)
-    if (unitDisplay === 'kg' && unit === 'lbs') {
-      return formatNumber(quantity * 0.453592)
-    } else if (unitDisplay === 'lbs' && unit === 'kg') {
-      return formatNumber(quantity * 2.20462)
+  /** DB storage unit for batch-level mass fields: lbs for production, native UoM for repack. */
+  const massStorageUnit = (batch: ProductionBatch): string => {
+    if (batch.batch_type === 'repack') {
+      const u = (batch.finished_good_item?.unit_of_measure || 'lbs').toLowerCase()
+      if (u === 'ea') return 'ea'
+      return u === 'kg' ? 'kg' : 'lbs'
     }
-    return formatNumber(quantity)
+    return 'lbs'
   }
 
-  const getDisplayUnit = (unit: string = 'lbs') => {
-    if (unit === 'ea') return 'ea'
+  // Convert quantity based on unit display preference (storage unit = API storage; normalize float drift)
+  const convertQuantity = (quantity: number, storageUnit: string = 'lbs') => {
+    if (storageUnit === 'ea') return formatNumber(normalizeEaQuantity(quantity), 0)
+    return formatQuantityForDisplay(quantity, storageUnit, unitDisplay)
+  }
+
+  const getDisplayUnit = (storageUnit: string = 'lbs') => {
+    if (storageUnit === 'ea') return 'ea'
     return unitDisplay
   }
 
-  // Format quantity to produce so whole numbers (e.g. 700.01) display as 700, not 700.01
-  const formatQuantityToProduce = (quantity: number): string => {
-    const rounded = Math.round(quantity)
-    if (Math.abs(quantity - rounded) <= 0.02) return formatNumber(rounded, 0)
-    return formatNumber(quantity)
+  const formatQuantityToProduceColumn = (batch: ProductionBatch): string => {
+    const su = massStorageUnit(batch)
+    if (su === 'ea') return formatNumber(normalizeEaQuantity(batch.quantity_produced), 0)
+    return formatQuantityForDisplay(batch.quantity_produced, su, unitDisplay)
+  }
+
+  const batchTicketPdfUrl = (batchId: number) =>
+    `${API_BASE_URL}/production-batches/${batchId}/pdf/?mass_unit=${encodeURIComponent(unitDisplay)}`
+
+  const saveBtNumber = async (batch: ProductionBatch, raw: string) => {
+    const value = raw.trim()
+    if (!value || value === batch.batch_number) return
+    try {
+      await updateProductionBatch(batch.id, { batch_number: value })
+      await loadBatches()
+    } catch (err: unknown) {
+      const e = err as { response?: { data?: { error?: string } } }
+      alert(e.response?.data?.error || (err instanceof Error ? err.message : 'Failed to update BT number'))
+    }
+  }
+
+  const renderBtCell = (batch: ProductionBatch) => {
+    const pdfUrl = batchTicketPdfUrl(batch.id)
+    if (allowBtEdit) {
+      return (
+        <div className="batch-number-cell-god">
+          <input
+            type="text"
+            className="batch-number-input"
+            defaultValue={batch.batch_number}
+            key={`${batch.id}-${batch.batch_number}`}
+            title="God mode: edit BT number (staff). Blur or Enter to save."
+            onBlur={(e) => saveBtNumber(batch, e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+            }}
+            aria-label="Batch ticket number"
+          />
+          <a
+            href={pdfUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="batch-number-pdf-link"
+            onClick={(e) => {
+              e.preventDefault()
+              window.open(pdfUrl, '_blank')
+            }}
+          >
+            PDF
+          </a>
+        </div>
+      )
+    }
+    if (batch.status === 'in_progress') {
+      return (
+        <a
+          href={pdfUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{ color: '#0066cc', textDecoration: 'underline', cursor: 'pointer' }}
+          onClick={(e) => {
+            e.preventDefault()
+            window.open(pdfUrl, '_blank')
+          }}
+          title="Click to view/print batch ticket PDF (uses Display Units: lbs / kg)"
+        >
+          {batch.batch_number}
+        </a>
+      )
+    }
+    return <span>{batch.batch_number}</span>
   }
 
   if (loading) {
@@ -182,27 +261,9 @@ function ProductionBatchList({ onCloseBatch, onUnfkBatch, onAdjustBatch }: Produ
             <tbody>
               {sortInProgress(inProgressBatches).map((batch) => (
                 <tr key={batch.id}>
-                  <td className="batch-number">
-                    {batch.status === 'in_progress' ? (
-                      <a
-                        href={`${API_BASE_URL}/production-batches/${batch.id}/pdf/`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        style={{ color: '#0066cc', textDecoration: 'underline', cursor: 'pointer' }}
-                        onClick={(e) => {
-                          e.preventDefault()
-                          window.open(`${API_BASE_URL}/production-batches/${batch.id}/pdf/`, '_blank')
-                        }}
-                        title="Click to view/print batch ticket PDF"
-                      >
-                        {batch.batch_number}
-                      </a>
-                    ) : (
-                      batch.batch_number
-                    )}
-                  </td>
+                  <td className="batch-number">{renderBtCell(batch)}</td>
                   <td>{batch.finished_good_item.name}</td>
-                  <td>{unitDisplay === 'kg' ? formatNumber(batch.quantity_produced * 0.453592) : formatQuantityToProduce(batch.quantity_produced)} {getDisplayUnit()}</td>
+                  <td>{formatQuantityToProduceColumn(batch)} {getDisplayUnit(massStorageUnit(batch))}</td>
                   <td>{formatProductionDate(batch.production_date)}</td>
                   <td>
                     <span className={`status-badge status-${batch.status}`}>
@@ -230,10 +291,11 @@ function ProductionBatchList({ onCloseBatch, onUnfkBatch, onAdjustBatch }: Produ
                         Close Batch
                       </button>
                       <button
-                        onClick={() => onUnfkBatch?.(batch)}
+                        onClick={() => onReverseBatch?.(batch)}
+                        title="Reverse this batch ticket: rolls back inventory effects and removes the batch (cannot be undone)"
                         className="btn btn-danger btn-sm"
                       >
-                        UNFK
+                        Reverse batch
                       </button>
                     </div>
                   </td>
@@ -269,38 +331,25 @@ function ProductionBatchList({ onCloseBatch, onUnfkBatch, onAdjustBatch }: Produ
             <tbody>
               {sortClosed(closedBatches).map((batch) => (
                 <tr key={batch.id}>
-                  <td className="batch-number">
-                    <a
-                      href={`${API_BASE_URL}/production-batches/${batch.id}/pdf/`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      style={{ color: '#0066cc', textDecoration: 'underline', cursor: 'pointer' }}
-                      onClick={(e) => {
-                        e.preventDefault()
-                        window.open(`${API_BASE_URL}/production-batches/${batch.id}/pdf/`, '_blank')
-                      }}
-                      title="Click to view/print batch ticket PDF"
-                    >
-                      {batch.batch_number}
-                    </a>
-                  </td>
+                  <td className="batch-number">{renderBtCell(batch)}</td>
                   <td>{batch.finished_good_item.name}</td>
-                  <td>{convertQuantity(batch.quantity_produced)} {getDisplayUnit()}</td>
-                  <td>{convertQuantity(batch.quantity_actual)} {getDisplayUnit()}</td>
+                  <td>{convertQuantity(batch.quantity_produced, massStorageUnit(batch))} {getDisplayUnit(massStorageUnit(batch))}</td>
+                  <td>{convertQuantity(batch.quantity_actual, massStorageUnit(batch))} {getDisplayUnit(massStorageUnit(batch))}</td>
                   <td className={batch.variance >= 0 ? 'positive' : 'negative'}>
-                    {batch.variance >= 0 ? '+' : ''}{convertQuantity(Math.abs(batch.variance))} {getDisplayUnit()}
+                    {batch.variance >= 0 ? '+' : ''}{convertQuantity(Math.abs(batch.variance), massStorageUnit(batch))} {getDisplayUnit(massStorageUnit(batch))}
                   </td>
-                  <td>{convertQuantity(batch.wastes)} {getDisplayUnit()}</td>
-                  <td>{convertQuantity(batch.spills)} {getDisplayUnit()}</td>
+                  <td>{convertQuantity(batch.wastes, massStorageUnit(batch))} {getDisplayUnit(massStorageUnit(batch))}</td>
+                  <td>{convertQuantity(batch.spills, massStorageUnit(batch))} {getDisplayUnit(massStorageUnit(batch))}</td>
                   <td>{formatProductionDate(batch.production_date)}</td>
-                  <td>{batch.closed_date ? new Date(batch.closed_date).toLocaleDateString() : '-'}</td>
+                  <td>{batch.closed_date ? formatAppDate(batch.closed_date) : '-'}</td>
                   <td>
-                    {onUnfkBatch && (
+                    {onReverseBatch && (
                       <button
-                        onClick={() => onUnfkBatch(batch)}
+                        onClick={() => onReverseBatch(batch)}
+                        title="Reverse this batch ticket: rolls back inventory effects and removes the batch (cannot be undone)"
                         className="btn btn-danger btn-sm"
                       >
-                        UNFK
+                        Reverse batch
                       </button>
                     )}
                   </td>

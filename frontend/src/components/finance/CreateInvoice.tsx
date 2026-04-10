@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react'
 import { getItems, createInvoice } from '../../api/finance'
 import { getSalesOrder } from '../../api/salesOrders'
-import { useBackdatedEntry } from '../../context/BackdatedEntryContext'
+import { getCustomerContacts } from '../../api/customers'
+import { useGodMode } from '../../context/GodModeContext'
 import './CreateInvoice.css'
 
 interface Item {
@@ -29,6 +30,7 @@ interface CreateInvoiceProps {
 function CreateInvoice({ onClose, onSuccess, salesOrderId }: CreateInvoiceProps) {
   const [items, setItems] = useState<Item[]>([])
   const [formData, setFormData] = useState({
+    invoice_number: '', // Leave blank for auto-generation; set for legacy / God mode
     invoice_type: 'customer',
     customer_vendor_name: '',
     customer_vendor_id: '',
@@ -43,6 +45,9 @@ function CreateInvoice({ onClose, onSuccess, salesOrderId }: CreateInvoiceProps)
   ])
   const [submitting, setSubmitting] = useState(false)
   const [loading, setLoading] = useState(false)
+  const [contacts, setContacts] = useState<{ id: number; first_name: string; last_name: string; contact_type?: string }[]>([])
+  const [selectedContactId, setSelectedContactId] = useState<number | null>(null)
+  const { maxDateForEntry } = useGodMode()
 
   useEffect(() => {
     loadItems()
@@ -73,6 +78,22 @@ function CreateInvoice({ onClose, onSuccess, salesOrderId }: CreateInvoiceProps)
     try {
       setLoading(true)
       const salesOrder = await getSalesOrder(salesOrderId)
+      
+      // Load contacts when customer invoice and we have a customer
+      if (salesOrder.customer?.id) {
+        try {
+          const list = await getCustomerContacts(salesOrder.customer.id)
+          const arr = Array.isArray(list) ? list : (list?.results ?? [])
+          setContacts(arr)
+          setSelectedContactId(salesOrder.contact?.id ?? null)
+        } catch {
+          setContacts([])
+          setSelectedContactId(null)
+        }
+      } else {
+        setContacts([])
+        setSelectedContactId(null)
+      }
       
       // Auto-populate form data from sales order
       setFormData(prev => ({
@@ -163,6 +184,7 @@ function CreateInvoice({ onClose, onSuccess, salesOrderId }: CreateInvoiceProps)
         invoice_type: formData.invoice_type,
         customer_vendor_name: formData.customer_vendor_name,
         customer_vendor_id: formData.customer_vendor_id || null,
+        ...(formData.invoice_number?.trim() && { invoice_number: formData.invoice_number.trim() }),
         invoice_date: formData.invoice_date,
         due_date: formData.due_date || null,
         tax_amount: tax,
@@ -180,6 +202,9 @@ function CreateInvoice({ onClose, onSuccess, salesOrderId }: CreateInvoiceProps)
       // If salesOrderId is provided, link the invoice to the sales order
       if (salesOrderId) {
         invoiceData.sales_order_id = salesOrderId
+      }
+      if (formData.invoice_type === 'customer' && selectedContactId) {
+        invoiceData.contact = selectedContactId
       }
       
       await createInvoice(invoiceData)
@@ -211,6 +236,18 @@ function CreateInvoice({ onClose, onSuccess, salesOrderId }: CreateInvoiceProps)
         <form onSubmit={handleSubmit} className="invoice-form">
           <div className="form-row">
             <div className="form-group">
+              <label>Invoice Number (leave blank for auto-generation)</label>
+              <input
+                type="text"
+                value={formData.invoice_number}
+                onChange={(e) => setFormData({ ...formData, invoice_number: e.target.value })}
+                placeholder="e.g. legacy INV-2023-001"
+              />
+              <small style={{ color: '#666', fontSize: '0.85rem' }}>For legacy or historical data (God mode), enter the number to use.</small>
+            </div>
+          </div>
+          <div className="form-row">
+            <div className="form-group">
               <label>Invoice Type *</label>
               <select
                 value={formData.invoice_type}
@@ -230,6 +267,22 @@ function CreateInvoice({ onClose, onSuccess, salesOrderId }: CreateInvoiceProps)
                 required
               />
             </div>
+            {formData.invoice_type === 'customer' && salesOrderId && contacts.length > 0 && (
+              <div className="form-group">
+                <label>Contact</label>
+                <select
+                  value={selectedContactId ?? ''}
+                  onChange={(e) => setSelectedContactId(e.target.value ? parseInt(e.target.value) : null)}
+                >
+                  <option value="">Select Contact (optional)</option>
+                  {contacts.map(c => (
+                    <option key={c.id} value={c.id}>
+                      {c.first_name} {c.last_name}{c.contact_type ? ` (${String(c.contact_type).charAt(0).toUpperCase() + String(c.contact_type).slice(1)})` : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
           </div>
 
           <div className="form-row">

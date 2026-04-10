@@ -66,7 +66,7 @@ function UnlinkItem({ onClose, onSuccess }: UnlinkItemProps) {
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal-content unlink-item-modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
-          <h2>UNFK - Unlink Item</h2>
+          <h2>Unlink item</h2>
           <button onClick={onClose} className="close-btn">×</button>
         </div>
 

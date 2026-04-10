@@ -61,6 +61,13 @@
   padding: 1.5rem;
 }
 
+.close-batch-section-hint {
+  margin: 0 0 1rem 0;
+  font-size: 0.9rem;
+  color: #555;
+  line-height: 1.45;
+}
+
 .batch-info {
   background: #f8f9fa;
   border-radius: 8px;

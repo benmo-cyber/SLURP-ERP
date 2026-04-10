@@ -1,8 +1,36 @@
 import { useState, useEffect } from 'react'
 import { getItems, getFormulas, getLots, createProductionBatch, getItemPackSizes, getPartialLots } from '../../api/inventory'
 import { formatNumber } from '../../utils/formatNumber'
-import { useBackdatedEntry } from '../../context/BackdatedEntryContext'
+import { normalizeMassQuantity } from '../../utils/massQuantity'
+import { formatAppDate } from '../../utils/appDateFormat'
+import { useGodMode } from '../../context/GodModeContext'
+import {
+  getBagsPerInventoryEa,
+  bagsToRolls,
+  rollsToBags,
+} from '../../utils/rollBagUnits'
 import './CreateBatchTicket.css'
+
+function formatApiError(err: unknown): string {
+  if (err && typeof err === 'object' && 'response' in err) {
+    const r = err as { response?: { status?: number; data?: unknown }; config?: { url?: string }; message?: string }
+    const status = r.response?.status
+    const url = r.config?.url ?? ''
+    const data = r.response?.data
+    let snippet = ''
+    if (typeof data === 'string') snippet = data.slice(0, 400)
+    else if (data && typeof data === 'object') {
+      try {
+        snippet = JSON.stringify(data).slice(0, 400)
+      } catch {
+        snippet = r.message ?? ''
+      }
+    }
+    return `HTTP ${status ?? '?'} ${url} ${snippet}`.trim()
+  }
+  if (err instanceof Error) return err.message
+  return String(err)
+}
 
 interface Item {
   id: number
@@ -31,7 +59,19 @@ interface Lot {
   vendor_lot_number?: string | null
   item: Item
   quantity_remaining: number
+  /** Net usable for production (API): after sales, on-hold, in-progress batch reservations — aligns with inventory *available*. */
+  quantity_available_for_use?: number
   status: string
+  received_date?: string
+  pack_size_obj?: { pack_size: number; pack_size_unit: string; description?: string | null } | null
+}
+
+/** Net qty available to allocate on batch tickets (matches API quantity_available_for_use; not received qty). */
+function lotNetAvailable(lot: Lot): number {
+  const qAvail = lot.quantity_available_for_use
+  if (qAvail != null && Number.isFinite(qAvail)) return Math.max(0, qAvail)
+  const qRem = lot['quantity_remaining']
+  return Math.max(0, qRem ?? 0)
 }
 
 interface CreateBatchTicketProps {
@@ -39,8 +79,86 @@ interface CreateBatchTicketProps {
   onSuccess: () => void
 }
 
+function normalizeSku(sku: string): string {
+  return sku.trim().toUpperCase()
+}
+
+/** Production batches need a formula; list one finished-good per SKU from formula definitions (avoids duplicate SKUs from other pathways). */
+function buildProductionFinishedGoodsFromFormulas(itemsData: Item[], formulasData: Formula[]): Item[] {
+  const seen = new Set<string>()
+  const out: Item[] = []
+  for (const f of formulasData) {
+    const fg = f.finished_good
+    if (!fg?.id || !fg.sku) continue
+    const key = normalizeSku(fg.sku)
+    if (seen.has(key)) continue
+    seen.add(key)
+    const full = itemsData.find((i) => i.id === fg.id)
+    if (full && full.item_type === 'finished_good') {
+      out.push(full)
+    } else if (full) {
+      out.push(full)
+    } else {
+      out.push(fg)
+    }
+  }
+  out.sort((a, b) => a.sku.localeCompare(b.sku))
+  return out
+}
+
+function lotUsableForRepack(l: Lot): boolean {
+  return !!(lotNetAvailable(l) > 0 && (!l.status || l.status === 'accepted'))
+}
+
+/**
+ * Repack: one dropdown row per SKU. Include distributed + raw masters, and finished goods that have on-hand lots.
+ * If multiple Item rows share a SKU, pick one: prefer an item that has stock; if several, distributed > finished_good > raw.
+ */
+function buildRepackItemsDeduped(itemsData: Item[], lotsData: Lot[]): Item[] {
+  const eligible = itemsData.filter((i) => {
+    if (i.item_type === 'distributed_item' || i.item_type === 'raw_material') return true
+    if (i.item_type === 'finished_good') {
+      return lotsData.some((l) => l.item.id === i.id && lotUsableForRepack(l))
+    }
+    return false
+  })
+  const bySku = new Map<string, Item[]>()
+  for (const it of eligible) {
+    const k = normalizeSku(it.sku)
+    if (!bySku.has(k)) bySku.set(k, [])
+    bySku.get(k)!.push(it)
+  }
+  const rankType = (it: Item) =>
+    it.item_type === 'distributed_item' ? 0 : it.item_type === 'finished_good' ? 1 : 2
+  const out: Item[] = []
+  for (const group of bySku.values()) {
+    const withStock = group.filter((it) => lotsData.some((l) => l.item.id === it.id && lotUsableForRepack(l)))
+    let pick: Item
+    if (withStock.length === 1) {
+      pick = withStock[0]
+    } else if (withStock.length > 1) {
+      pick =
+        withStock.find((i) => i.item_type === 'distributed_item') ||
+        withStock.find((i) => i.item_type === 'finished_good') ||
+        withStock.sort((a, b) => rankType(a) - rankType(b) || a.id - b.id)[0]
+    } else {
+      const sorted = [...group].sort((a, b) => rankType(a) - rankType(b) || a.id - b.id)
+      pick = sorted[0]
+    }
+    out.push(pick)
+  }
+  out.sort((a, b) => a.sku.localeCompare(b.sku))
+  return out
+}
+
+function repackOptionLabel(item: Item): string {
+  if (item.item_type === 'distributed_item') return 'Distribution'
+  if (item.item_type === 'finished_good') return 'Manufactured stock'
+  return 'Raw material'
+}
+
 function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
-  const { minDateForEntry } = useBackdatedEntry()
+  const { minDateForEntry } = useGodMode()
   const [batchType, setBatchType] = useState<'production' | 'repack'>('production')
   const [finishedGoods, setFinishedGoods] = useState<Item[]>([])
   const [repackItems, setRepackItems] = useState<Item[]>([])
@@ -159,26 +277,37 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
   const loadData = async () => {
     try {
       setLoading(true)
-      const [itemsData, formulasData, lotsData] = await Promise.all([
-        getItems(),
-        getFormulas(),
-        getLots()
-      ])
-      
+      const endpoints = ['GET /items/', 'GET /formulas/', 'GET /lots/'] as const
+      const settled = await Promise.allSettled([getItems(), getFormulas(), getLots()])
+      const failures: string[] = []
+      settled.forEach((result, i) => {
+        if (result.status === 'rejected') {
+          failures.push(`${endpoints[i]} ${formatApiError(result.reason)}`)
+        }
+      })
+      if (failures.length > 0) {
+        console.error('CreateBatchTicket loadData failed:', failures)
+        alert(
+          `Failed to load data (server error). Check the Network tab and Django console.\n\n${failures.join('\n')}`
+        )
+        return
+      }
+      const itemsData = (settled[0] as PromiseFulfilledResult<Awaited<ReturnType<typeof getItems>>>).value
+      const formulasData = (settled[1] as PromiseFulfilledResult<Awaited<ReturnType<typeof getFormulas>>>).value
+      const lotsData = (settled[2] as PromiseFulfilledResult<Awaited<ReturnType<typeof getLots>>>).value
+
       console.log('Loaded lots data:', lotsData)
       console.log('Total lots received:', lotsData.length)
       
-      const finishedGoods = itemsData.filter((item: Item) => item.item_type === 'finished_good')
-      const repackItems = itemsData.filter((item: Item) => 
-        item.item_type === 'distributed_item' || item.item_type === 'raw_material'
-      )
+      const finishedGoods = buildProductionFinishedGoodsFromFormulas(itemsData, formulasData)
+      const repackItems = buildRepackItemsDeduped(itemsData, lotsData)
       setFinishedGoods(finishedGoods)
       setRepackItems(repackItems)
       
       // Load indirect material lots
       const indirectMaterialLots = lotsData.filter((lot: Lot) => 
         lot.item.item_type === 'indirect_material' && 
-        lot.quantity_remaining > 0 &&
+        lotNetAvailable(lot) > 0 &&
         (!lot.status || lot.status === 'accepted')
       )
       setIndirectMaterialLots(indirectMaterialLots)
@@ -201,7 +330,7 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
         const hasItem = lot.item && lot.item.sku
         // Status might be undefined/null for older lots, so treat as accepted if not set
         const isAccepted = !lot.status || lot.status === 'accepted'
-        const hasQuantity = lot.quantity_remaining && lot.quantity_remaining > 0
+        const hasQuantity = lotNetAvailable(lot) > 0
         
         if (!hasItem) {
           console.warn('Lot missing item:', lot)
@@ -210,7 +339,7 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
           console.log('Lot not accepted:', lot.lot_number, 'status:', lot.status)
         }
         if (!hasQuantity) {
-          console.log('Lot has no remaining quantity:', lot.lot_number, 'remaining:', lot.quantity_remaining)
+          console.log('Lot has no remaining quantity:', lot.lot_number, 'net available:', lotNetAvailable(lot))
         }
         
         return hasItem && isAccepted && hasQuantity
@@ -242,7 +371,7 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
       console.log('No ingredients found - showing all available lots as fallback')
       const fallbackLots = allLots.filter((lot: Lot) => {
         const isAccepted = !lot.status || lot.status === 'accepted'
-        const hasQuantity = lot.quantity_remaining && lot.quantity_remaining > 0
+        const hasQuantity = lotNetAvailable(lot) > 0
         return isAccepted && hasQuantity
       })
       console.log('Fallback lots:', fallbackLots.length)
@@ -284,7 +413,7 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
         itemSku: l.item?.sku,
         itemName: l.item?.name,
         status: l.status,
-        quantityRemaining: l.quantity_remaining
+        quantityRemaining: lotNetAvailable(l)
       }))
     })
     
@@ -293,13 +422,13 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
       const matchesSku = lotSku && ingredientSkus.includes(lotSku)
       // Status might be undefined/null for older lots, so treat as accepted if not set
       const isAccepted = !lot.status || lot.status === 'accepted'
-      const hasQuantity = lot.quantity_remaining && lot.quantity_remaining > 0
+      const hasQuantity = lotNetAvailable(lot) > 0
       
       if (matchesSku && !isAccepted) {
         console.log('Lot matches SKU but not accepted:', lot.lot_number, lot.item.sku, 'status:', lot.status)
       }
       if (matchesSku && !hasQuantity) {
-        console.log('Lot matches SKU but no quantity:', lot.lot_number, lot.item.sku, 'remaining:', lot.quantity_remaining)
+        console.log('Lot matches SKU but no quantity:', lot.lot_number, lot.item.sku, 'remaining:', lotNetAvailable(lot))
       }
       if (!matchesSku && lot.item?.sku) {
         console.log('Lot SKU does not match ingredients:', lot.lot_number, 'lot SKU:', lot.item.sku, 'ingredient SKUs:', ingredientSkus)
@@ -312,71 +441,84 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
       ingredientSkus,
       totalLots: allLots.length,
       filteredLots: filteredLots.length,
-      lots: filteredLots.map(l => ({ id: l.id, lot_number: l.lot_number, sku: l.item?.sku, qty: l.quantity_remaining }))
+      lots: filteredLots.map(l => ({ id: l.id, lot_number: l.lot_number, sku: l.item?.sku, qty: lotNetAvailable(l) }))
     })
     
     setAvailableLots(filteredLots)
   }
 
   const convertWeight = (value: number, from: 'lbs' | 'kg', to: 'lbs' | 'kg'): number => {
-    if (from === to) return value
+    if (from === to) return normalizeMassQuantity(value)
     if (from === 'lbs' && to === 'kg') {
       const converted = value / 2.20462
-      // Round to 2 decimal places to avoid floating point precision issues
-      return Math.round(converted * 100) / 100
+      return normalizeMassQuantity(Math.round(converted * 100) / 100)
     }
     if (from === 'kg' && to === 'lbs') {
       const converted = value * 2.20462
-      // Round to 2 decimal places to avoid floating point precision issues
-      return Math.round(converted * 100) / 100
+      return normalizeMassQuantity(Math.round(converted * 100) / 100)
     }
     return value
   }
 
+  const resolveLot = (lotId: number): Lot | undefined =>
+    [...availableLots, ...allLots, ...indirectMaterialLots].find((l) => l.id === lotId)
+
+  /** Formula / repack lot inputs: quantity stored as rolls in inventory; user may enter bags when pack size defines bags/roll. */
   const handleLotQuantityChange = (lotId: number, quantity: string, lotUnitOfMeasure: string) => {
-    // Update the input value state - preserve as string to avoid any parsing issues
+    const lot = resolveLot(lotId)
+    const bagsPerRoll = lot ? getBagsPerInventoryEa(lot) : null
+
     const newInputValues = { ...lotInputValues }
     if (quantity === '') {
       delete newInputValues[lotId]
     } else {
       newInputValues[lotId] = quantity
     }
-    setLotInputValues(newInputValues)
-    
-    // Convert and store in lot's native unit
+
     const newSelectedLots = { ...selectedLots }
     if (quantity === '' || parseFloat(quantity) <= 0 || isNaN(parseFloat(quantity))) {
       delete newSelectedLots[lotId]
-    } else {
-      // User enters quantity in quantityUnit (display unit)
-      // Convert to lot's native unit for storage
-      // Parse carefully to preserve exact integers
-      const parsedQuantity = parseFloat(quantity)
-      
-      // If units match, preserve exact value (no conversion needed)
-      if (quantityUnit === lotUnitOfMeasure) {
-        // Check if the string represents a whole number (no decimal point)
-        const isIntegerString = !quantity.includes('.')
-        if (isIntegerString) {
-          // Store as exact integer - parse as integer to avoid any floating point issues
-          newSelectedLots[lotId] = parseInt(quantity, 10)
-        } else {
-          // Has decimal - check if it's effectively a whole number (within floating point tolerance)
-          const rounded = Math.round(parsedQuantity)
-          const isWholeNumber = Math.abs(parsedQuantity - rounded) < 0.0000001
-          if (isWholeNumber) {
-            // Store as exact integer
-            newSelectedLots[lotId] = rounded
-          } else {
-            // Round to 2 decimal places for decimals
-            newSelectedLots[lotId] = Math.round(parsedQuantity * 100) / 100
-          }
-        }
-      } else {
-        // Need to convert from display unit (quantityUnit) to lot's native unit
-        const quantityInLotUnit = convertWeight(parsedQuantity, quantityUnit, lotUnitOfMeasure as 'lbs' | 'kg')
-        newSelectedLots[lotId] = quantityInLotUnit
+      setLotInputValues(newInputValues)
+      setSelectedLots(newSelectedLots)
+      return
+    }
+
+    if (bagsPerRoll != null && lot) {
+      const bags = parseFloat(quantity)
+      const maxBags = rollsToBags(lotNetAvailable(lot), bagsPerRoll)
+      if (bags > maxBags + 1e-6) {
+        alert(
+          `Cannot exceed available bags (~${formatNumber(maxBags)} bags / ${formatNumber(lotNetAvailable(lot))} rolls). Ordering stays in rolls; enter bags used for production.`
+        )
+        return
       }
+      newSelectedLots[lotId] = bagsToRolls(bags, bagsPerRoll)
+      setLotInputValues(newInputValues)
+      setSelectedLots(newSelectedLots)
+      return
+    }
+
+    setLotInputValues(newInputValues)
+
+    const parsedQuantity = parseFloat(quantity)
+    if (quantityUnit === lotUnitOfMeasure) {
+      const isIntegerString = !quantity.includes('.')
+      if (isIntegerString) {
+        newSelectedLots[lotId] = parseInt(quantity, 10)
+      } else {
+        const rounded = Math.round(parsedQuantity)
+        const isWholeNumber = Math.abs(parsedQuantity - rounded) < 0.0000001
+        if (isWholeNumber) {
+          newSelectedLots[lotId] = rounded
+        } else {
+          newSelectedLots[lotId] = Math.round(parsedQuantity * 100) / 100
+        }
+      }
+    } else if (lotUnitOfMeasure === 'lbs' || lotUnitOfMeasure === 'kg') {
+      const quantityInLotUnit = convertWeight(parsedQuantity, quantityUnit, lotUnitOfMeasure as 'lbs' | 'kg')
+      newSelectedLots[lotId] = quantityInLotUnit
+    } else {
+      newSelectedLots[lotId] = Math.round(parsedQuantity * 100) / 100
     }
     setSelectedLots(newSelectedLots)
   }
@@ -389,6 +531,11 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
     Object.keys(lotInputValues).forEach(lotIdStr => {
       const lotId = parseInt(lotIdStr)
       const lot = [...availableLots, ...allLots].find(l => l.id === lotId)
+      if (lot && getBagsPerInventoryEa(lot) != null && lotInputValues[lotId] !== undefined) {
+        convertedInputValues[lotId] = lotInputValues[lotId]
+        if (selectedLots[lotId] != null) convertedStoredValues[lotId] = selectedLots[lotId]
+        return
+      }
       if (lot && lotInputValues[lotId]) {
         const currentValue = parseFloat(lotInputValues[lotId])
         if (!isNaN(currentValue)) {
@@ -411,6 +558,47 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
     setLotInputValues(convertedInputValues)
     setSelectedLots(convertedStoredValues)
     setQuantityUnit(newUnit)
+  }
+
+  const handleIndirectQuantityChange = (lot: Lot, value: string) => {
+    const lotId = lot.id
+    const bpr = getBagsPerInventoryEa(lot)
+    const newInputValues = { ...indirectMaterialInputValues }
+    const newSelected = { ...selectedIndirectMaterials }
+
+    if (value === '' || parseFloat(value) <= 0 || isNaN(parseFloat(value))) {
+      delete newInputValues[lotId]
+      delete newSelected[lotId]
+      setIndirectMaterialInputValues(newInputValues)
+      setSelectedIndirectMaterials(newSelected)
+      return
+    }
+
+    if (bpr != null) {
+      const bags = parseFloat(value)
+      const maxBags = rollsToBags(lotNetAvailable(lot), bpr)
+      if (bags > maxBags + 1e-6) {
+        alert(
+          `Cannot exceed available bags (~${formatNumber(maxBags)} bags / ${formatNumber(lotNetAvailable(lot))} rolls).`
+        )
+        return
+      }
+      newInputValues[lotId] = value
+      newSelected[lotId] = bagsToRolls(bags, bpr)
+      setIndirectMaterialInputValues(newInputValues)
+      setSelectedIndirectMaterials(newSelected)
+      return
+    }
+
+    const qty = parseFloat(value)
+    if (qty <= lotNetAvailable(lot)) {
+      newInputValues[lotId] = value
+      newSelected[lotId] = qty
+      setIndirectMaterialInputValues(newInputValues)
+      setSelectedIndirectMaterials(newSelected)
+    } else {
+      alert(`Cannot exceed available quantity: ${lotNetAvailable(lot)}`)
+    }
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -463,14 +651,14 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
           quantityUnit === selectedRepackItem.unit_of_measure
             ? parsedQty
             : convertWeight(parsedQty, quantityUnit, selectedRepackItem.unit_of_measure as 'lbs' | 'kg')
-        quantityProducedForApi = Math.round(quantityInNative * 100) / 100
+        quantityProducedForApi = normalizeMassQuantity(Math.round(quantityInNative * 100) / 100)
 
         // Total quantity used is already in native unit (all repack lots are same item)
         let totalQuantityUsedNative = 0
         Object.keys(selectedLots).forEach(lotId => {
           totalQuantityUsedNative += selectedLots[parseInt(lotId)]
         })
-        totalQuantityUsedNative = Math.round(totalQuantityUsedNative * 100) / 100
+        totalQuantityUsedNative = normalizeMassQuantity(Math.round(totalQuantityUsedNative * 100) / 100)
 
         if (Math.abs(totalQuantityUsedNative - quantityProducedForApi) > tolerance) {
           const uom = selectedRepackItem.unit_of_measure
@@ -482,7 +670,7 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
         const quantityInLbs = quantityUnit === 'kg'
           ? convertWeight(parseFloat(quantity), 'kg', 'lbs')
           : parseFloat(quantity)
-        const roundedQuantityInLbs = Math.round(quantityInLbs * 100) / 100
+        const roundedQuantityInLbs = normalizeMassQuantity(Math.round(quantityInLbs * 100) / 100)
 
         let totalQuantityUsedInLbs = 0
         Object.keys(selectedLots).forEach(lotId => {
@@ -493,10 +681,13 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
               totalQuantityUsedInLbs += quantityUsed
             } else if (lot.item.unit_of_measure === 'kg') {
               totalQuantityUsedInLbs += convertWeight(quantityUsed, 'kg', 'lbs')
+            } else if (lot.item.unit_of_measure === 'ea') {
+              // Matches backend: ea counts 1:1 toward batch lbs balance for production validation
+              totalQuantityUsedInLbs += quantityUsed
             }
           }
         })
-        totalQuantityUsedInLbs = Math.round(totalQuantityUsedInLbs * 100) / 100
+        totalQuantityUsedInLbs = normalizeMassQuantity(Math.round(totalQuantityUsedInLbs * 100) / 100)
 
         if (Math.abs(totalQuantityUsedInLbs - roundedQuantityInLbs) > tolerance) {
           alert(`Quantity mismatch: Total quantity used (${formatNumber(totalQuantityUsedInLbs)} lbs) must equal quantity to produce (${formatNumber(roundedQuantityInLbs)} lbs)`)
@@ -516,13 +707,19 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
       // Batch number will be auto-generated by the backend
       const batchData: any = {
         batch_type: batchType,
+        batch_ticket_mass_unit: quantityUnit,
         quantity_produced: quantityProducedForApi,
         production_date: productionDate,
         status: isFuture ? 'scheduled' : 'in_progress',
         inputs: Object.keys(selectedLots).map(lotId => {
           const qty = selectedLots[parseInt(lotId)]
-          // Preserve exact integers, round decimals to 2 places
-          // Use tolerance of 0.01 to catch floating point errors (e.g., 615.99 -> 616)
+          const lot = availableLots.find(l => l.id === parseInt(lotId)) || allLots.find(l => l.id === parseInt(lotId))
+          if (lot?.item.unit_of_measure === 'ea') {
+            return {
+              lot_id: parseInt(lotId),
+              quantity_used: Math.round(qty * 1e5) / 1e5,
+            }
+          }
           const roundedToInteger = Math.round(qty)
           const isInteger = Math.abs(qty - roundedToInteger) <= 0.01
           return {
@@ -530,10 +727,14 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
             quantity_used: isInteger ? roundedToInteger : Math.round(qty * 100) / 100
           }
         }),
-        indirect_materials: Object.keys(selectedIndirectMaterials).map(lotId => ({
-          lot_id: parseInt(lotId),
-          quantity_used: selectedIndirectMaterials[parseInt(lotId)]
-        }))
+        indirect_materials: Object.keys(selectedIndirectMaterials).map(lotId => {
+          const id = parseInt(lotId)
+          const q = selectedIndirectMaterials[id]
+          const lot = indirectMaterialLots.find(l => l.id === id)
+          const qtyOut =
+            lot?.item.unit_of_measure === 'ea' ? Math.round(q * 1e5) / 1e5 : Math.round(q * 100) / 100
+          return { lot_id: id, quantity_used: qtyOut }
+        })
       }
 
       if (batchType === 'production') {
@@ -721,7 +922,7 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
                 <option value="">Select Item</option>
                 {repackItems.map((item) => (
                   <option key={item.id} value={item.id}>
-                    {item.sku} - {item.name} ({item.item_type === 'distributed_item' ? 'Distribution' : 'Raw Material'})
+                    {item.sku} - {item.name} ({repackOptionLabel(item)})
                   </option>
                 ))}
               </select>
@@ -756,35 +957,41 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
                 Select partial lots (quantities less than pack size) to work into this batch. 
                 These will be combined with the new production when the batch is closed.
               </p>
-              <div className="lots-grid" style={{ marginTop: '10px' }}>
-                {partialLots.map((lot) => (
+              <div className="lots-list" style={{ marginTop: '10px' }}>
+                {partialLots.map((lot) => {
+                  const partialBpr = getBagsPerInventoryEa(lot)
+                  return (
                   <div 
                     key={lot.id} 
-                    className={`lot-card ${selectedPartials.has(lot.id) ? 'selected' : ''}`}
+                    className={`lot-row lot-row--partial ${selectedPartials.has(lot.id) ? 'selected' : ''}`}
                     style={{ cursor: 'pointer' }}
                     onClick={() => handlePartialToggle(lot.id)}
                   >
-                    <div className="lot-card-header">
+                    <div className="lot-row-partial-main">
                       <input
                         type="checkbox"
                         checked={selectedPartials.has(lot.id)}
                         onChange={() => handlePartialToggle(lot.id)}
                         onClick={(e) => e.stopPropagation()}
-                        style={{ marginRight: '8px' }}
+                        style={{ marginRight: '4px', flexShrink: 0 }}
                       />
                       <span className="lot-number-badge">{lot.lot_number}</span>
                       <span className="lot-available-badge" style={{ background: '#ffc107', color: '#000' }}>
-                        Partial: {formatNumber(lot.quantity_remaining)} {lot.item.unit_of_measure}
+                        Partial:{' '}
+                        {partialBpr != null
+                          ? `${formatNumber(lotNetAvailable(lot))} rolls (~${formatNumber(rollsToBags(lotNetAvailable(lot), partialBpr))} bags)`
+                          : `${formatNumber(lotNetAvailable(lot))} ${lot.item.unit_of_measure}`}
                       </span>
                     </div>
-                    <div className="lot-info">
-                      <span>Received: {new Date(lot.received_date).toLocaleDateString()}</span>
+                    <div className="lot-row-partial-meta">
+                      <span>Received: {formatAppDate(lot.received_date)}</span>
                       {lot.pack_size_obj && (
                         <span>Pack Size: {formatNumber(lot.pack_size_obj.pack_size)} {lot.pack_size_obj.pack_size_unit}</span>
                       )}
                     </div>
                   </div>
-                ))}
+                  )
+                })}
               </div>
             </div>
           )}
@@ -835,7 +1042,7 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
             <small className="form-hint">
               {new Date(productionDate) > new Date() 
                 ? 'Future date selected - batch will be created as "Scheduled"'
-                : minDateForEntry ? 'Select today or a future date' : 'Any date allowed (backdated entry on)'}
+                : minDateForEntry ? 'Select today or a future date' : 'Any date allowed (God mode on)'}
             </small>
           </div>
 
@@ -873,9 +1080,15 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
                   const substituteItems = repackItems.filter(i => i.id !== ingredient.item.id)
                   // Total selected for this row only (from lots in ingredientLots)
                   let totalSelected = 0
+                  let selectedBagsTotal = 0
                   ingredientLots.forEach(lot => {
                     const lotIdNum = lot.id
                     if (!selectedLots[lotIdNum]) return
+                    const bpr = getBagsPerInventoryEa(lot)
+                    if (bpr != null) {
+                      selectedBagsTotal += rollsToBags(selectedLots[lotIdNum], bpr)
+                      return
+                    }
                     const inputValue = lotInputValues[lotIdNum]
                     if (inputValue && quantityUnit === lot.item.unit_of_measure) {
                       if (!inputValue.includes('.')) {
@@ -885,7 +1098,9 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
                       }
                     } else {
                       const storedQty = selectedLots[lotIdNum] || 0
-                      if (quantityUnit !== lot.item.unit_of_measure) {
+                      if (lot.item.unit_of_measure !== 'lbs' && lot.item.unit_of_measure !== 'kg') {
+                        totalSelected += storedQty
+                      } else if (quantityUnit !== lot.item.unit_of_measure) {
                         totalSelected += convertWeight(storedQty, lot.item.unit_of_measure as 'lbs' | 'kg', quantityUnit)
                       } else {
                         totalSelected += storedQty
@@ -965,8 +1180,17 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
                             Required: {requiredQtyDisplay} {quantityUnit === 'kg' ? 'kg' : 'lbs'}
                             {hasPctOverride && ' (from batch %)'}
                           </span>
-                          <span className={`selected-qty ${finalTotalSelected > 0 ? 'has-selection' : ''}`}>
-                            Selected: {formatNumber(finalTotalSelected)} {quantityUnit}
+                          <span className={`selected-qty ${finalTotalSelected > 0 || selectedBagsTotal > 0 ? 'has-selection' : ''}`}>
+                            {selectedBagsTotal > 0 && (
+                              <span className="selected-bags">Bags (from rolls): {formatNumber(selectedBagsTotal)}</span>
+                            )}
+                            {selectedBagsTotal > 0 && finalTotalSelected > 0 && ' · '}
+                            {finalTotalSelected > 0 && (
+                              <span>Selected (weight): {formatNumber(finalTotalSelected)} {quantityUnit}</span>
+                            )}
+                            {selectedBagsTotal > 0 && finalTotalSelected === 0 && (
+                              <span> (inventory deducted in rolls)</span>
+                            )}
                           </span>
                         </div>
                       </div>
@@ -1043,43 +1267,61 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
                           )}
                         </div>
                       ) : (
-                        <div className="lots-grid">
-                          {ingredientLots.map((lot) => (
-                            <div key={lot.id} className={`lot-card ${selectedLots[lot.id] ? 'selected' : ''}`}>
-                              <div className="lot-card-header">
+                        <div className="lots-list">
+                          {ingredientLots.map((lot) => {
+                            const bpr = getBagsPerInventoryEa(lot)
+                            const maxBagsAvail = bpr != null ? rollsToBags(lotNetAvailable(lot), bpr) : null
+                            const displayAvail =
+                              bpr != null
+                                ? `${formatNumber(lotNetAvailable(lot))} rolls (~${formatNumber(maxBagsAvail ?? 0)} bags)`
+                                : `${formatNumber(
+                                    quantityUnit === lot.item.unit_of_measure
+                                      ? lotNetAvailable(lot)
+                                      : lot.item.unit_of_measure === 'lbs'
+                                        ? convertWeight(lotNetAvailable(lot), 'lbs', 'kg')
+                                        : lot.item.unit_of_measure === 'kg'
+                                          ? convertWeight(lotNetAvailable(lot), 'kg', 'lbs')
+                                          : lotNetAvailable(lot)
+                                  )} ${quantityUnit} available`
+                            const maxInput =
+                              bpr != null
+                                ? maxBagsAvail ?? 0
+                                : quantityUnit === lot.item.unit_of_measure
+                                  ? lotNetAvailable(lot)
+                                  : lot.item.unit_of_measure === 'lbs'
+                                    ? convertWeight(lotNetAvailable(lot), 'lbs', 'kg')
+                                    : lot.item.unit_of_measure === 'kg'
+                                      ? convertWeight(lotNetAvailable(lot), 'kg', 'lbs')
+                                      : lotNetAvailable(lot)
+                            return (
+                            <div key={lot.id} className={`lot-row ${selectedLots[lot.id] ? 'selected' : ''}`}>
+                              <div className="lot-row-ident">
                                 <span className="lot-number-badge">
                                   {lot.item.item_type === 'raw_material' && lot.vendor_lot_number 
                                     ? `Vendor Lot: ${lot.vendor_lot_number}` 
                                     : lot.lot_number}
                                 </span>
-                                <span className="lot-available-badge">
-                                  {formatNumber(
-                                    quantityUnit === lot.item.unit_of_measure
-                                      ? lot.quantity_remaining
-                                      : (lot.item.unit_of_measure === 'lbs'
-                                          ? convertWeight(lot.quantity_remaining, 'lbs', 'kg')
-                                          : convertWeight(lot.quantity_remaining, 'kg', 'lbs'))
-                                  )} {quantityUnit} available
-                                </span>
+                                <span className="lot-available-inline">{displayAvail}</span>
                               </div>
-                              <div className="lot-quantity-section">
-                                <label>Quantity to Use</label>
+                              <div className="lot-row-qty">
+                                <label>{bpr != null ? 'Bags to use' : 'Quantity to use'}</label>
+                                {bpr != null && (
+                                  <p className="ea-bag-hint">
+                                    Stock &amp; POs are in rolls ({formatNumber(bpr)} bags/roll). Enter bags consumed; the system converts to rolls.
+                                  </p>
+                                )}
                                 <div className="quantity-input-group">
                                   <input
                                     type="number"
-                                    step="0.01"
+                                    step={bpr != null ? '1' : '0.01'}
                                     min="0"
-                                    max={quantityUnit === lot.item.unit_of_measure 
-                                      ? lot.quantity_remaining 
-                                      : (lot.item.unit_of_measure === 'lbs' 
-                                          ? convertWeight(lot.quantity_remaining, 'lbs', 'kg')
-                                          : convertWeight(lot.quantity_remaining, 'kg', 'lbs'))}
+                                    max={maxInput}
                                     value={lotInputValues[lot.id] || ''}
                                     onChange={(e) => handleLotQuantityChange(lot.id, e.target.value, lot.item.unit_of_measure)}
-                                    placeholder="0.00"
+                                    placeholder={bpr != null ? '0' : '0.00'}
                                     className="quantity-input"
                                   />
-                                  <span className="unit-label">{quantityUnit}</span>
+                                  <span className="unit-label">{bpr != null ? 'bags' : quantityUnit}</span>
                                 </div>
                                 {selectedLots[lot.id] && (
                                   <button
@@ -1092,7 +1334,8 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
                                 )}
                               </div>
                             </div>
-                          ))}
+                            )
+                          })}
                         </div>
                       )}
                     </div>
@@ -1153,37 +1396,61 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
               )}
               
               {availableLots.length > 0 && (
-                <div className="lots-grid">
-                  {availableLots.map((lot) => (
-                    <div key={lot.id} className={`lot-card ${selectedLots[lot.id] ? 'selected' : ''}`}>
-                      <div className="lot-card-header">
+                <div className="lots-list">
+                  {availableLots.map((lot) => {
+                    const bpr = getBagsPerInventoryEa(lot)
+                    const maxBagsAvail = bpr != null ? rollsToBags(lotNetAvailable(lot), bpr) : null
+                    const displayAvail =
+                      bpr != null
+                        ? `${formatNumber(lotNetAvailable(lot))} rolls (~${formatNumber(maxBagsAvail ?? 0)} bags)`
+                        : `${formatNumber(
+                            quantityUnit === lot.item.unit_of_measure
+                              ? lotNetAvailable(lot)
+                              : lot.item.unit_of_measure === 'lbs'
+                                ? convertWeight(lotNetAvailable(lot), 'lbs', 'kg')
+                                : lot.item.unit_of_measure === 'kg'
+                                  ? convertWeight(lotNetAvailable(lot), 'kg', 'lbs')
+                                  : lotNetAvailable(lot)
+                          )} ${quantityUnit} available`
+                    const maxInput =
+                      bpr != null
+                        ? maxBagsAvail ?? 0
+                        : quantityUnit === lot.item.unit_of_measure
+                          ? lotNetAvailable(lot)
+                          : lot.item.unit_of_measure === 'lbs'
+                            ? convertWeight(lotNetAvailable(lot), 'lbs', 'kg')
+                            : lot.item.unit_of_measure === 'kg'
+                              ? convertWeight(lotNetAvailable(lot), 'kg', 'lbs')
+                              : lotNetAvailable(lot)
+                    return (
+                    <div key={lot.id} className={`lot-row ${selectedLots[lot.id] ? 'selected' : ''}`}>
+                      <div className="lot-row-ident">
                         <span className="lot-number-badge">
                           {lot.item.item_type === 'raw_material' && lot.vendor_lot_number 
                             ? `Vendor Lot: ${lot.vendor_lot_number}` 
                             : lot.lot_number}
                         </span>
-                        <span className="lot-available-badge">
-                          {formatNumber(lot.quantity_remaining)} {lot.item.unit_of_measure} available
-                        </span>
+                        <span className="lot-available-inline">{displayAvail}</span>
                       </div>
-                      <div className="lot-quantity-section">
-                        <label>Quantity to Use</label>
+                      <div className="lot-row-qty">
+                        <label>{bpr != null ? 'Bags to use' : 'Quantity to use'}</label>
+                        {bpr != null && (
+                          <p className="ea-bag-hint">
+                            Stock &amp; POs are in rolls ({formatNumber(bpr)} bags/roll). Enter bags to repack.
+                          </p>
+                        )}
                         <div className="quantity-input-group">
                           <input
                             type="number"
-                            step="0.01"
+                            step={bpr != null ? '1' : '0.01'}
                             min="0"
-                            max={quantityUnit === lot.item.unit_of_measure 
-                              ? lot.quantity_remaining 
-                              : (lot.item.unit_of_measure === 'lbs' 
-                                  ? convertWeight(lot.quantity_remaining, 'lbs', 'kg')
-                                  : convertWeight(lot.quantity_remaining, 'kg', 'lbs'))}
+                            max={maxInput}
                             value={lotInputValues[lot.id] || ''}
                             onChange={(e) => handleLotQuantityChange(lot.id, e.target.value, lot.item.unit_of_measure)}
-                            placeholder="0.00"
+                            placeholder={bpr != null ? '0' : '0.00'}
                             className="quantity-input"
                           />
-                          <span className="unit-label">{quantityUnit}</span>
+                          <span className="unit-label">{bpr != null ? 'bags' : quantityUnit}</span>
                         </div>
                         {selectedLots[lot.id] && (
                           <button
@@ -1196,7 +1463,8 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
                         )}
                       </div>
                     </div>
-                  ))}
+                    )
+                  })}
                 </div>
               )}
               </div>
@@ -1213,67 +1481,47 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
                 ℹ️ No indirect materials available in inventory.
               </div>
             ) : (
-              <div className="lots-grid">
-                {indirectMaterialLots.map((lot) => (
-                  <div key={lot.id} className={`lot-card ${selectedIndirectMaterials[lot.id] ? 'selected' : ''}`}>
-                    <div className="lot-card-header">
-                      <span className="lot-number-badge">
-                        {lot.lot_number}
-                      </span>
-                      <span className="lot-available-badge">
-                        {formatNumber(lot.quantity_remaining)} {lot.item.unit_of_measure} available
-                      </span>
+              <div className="lots-list">
+                {indirectMaterialLots.map((lot) => {
+                  const bpr = getBagsPerInventoryEa(lot)
+                  const maxBags = bpr != null ? rollsToBags(lotNetAvailable(lot), bpr) : null
+                  const availLabel =
+                    bpr != null
+                      ? `${formatNumber(lotNetAvailable(lot))} rolls (~${formatNumber(maxBags ?? 0)} bags)`
+                      : `${formatNumber(lotNetAvailable(lot))} ${lot.item.unit_of_measure} available`
+                  return (
+                  <div key={lot.id} className={`lot-row ${selectedIndirectMaterials[lot.id] ? 'selected' : ''}`}>
+                    <div className="lot-row-ident lot-row-ident-indirect">
+                      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '0.5rem 0.75rem' }}>
+                        <span className="lot-number-badge">{lot.lot_number}</span>
+                        <span className="lot-available-inline">{availLabel}</span>
+                      </div>
+                      <span className="lot-row-indirect-sku">{lot.item.name} ({lot.item.sku})</span>
                     </div>
-                    <div style={{ padding: '10px', fontSize: '14px', color: '#666' }}>
-                      <strong>{lot.item.name}</strong> ({lot.item.sku})
-                    </div>
-                    <div className="lot-quantity-section">
-                      <label>Quantity to Use</label>
+                    <div className="lot-row-qty">
+                      <label>{bpr != null ? 'Bags to use' : 'Quantity to use'}</label>
+                      {bpr != null && (
+                        <p className="ea-bag-hint">
+                          Order &amp; receive in rolls ({formatNumber(bpr)} bags/roll). Enter bags used here.
+                        </p>
+                      )}
                       <div className="quantity-input-group">
                         <input
                           type="number"
-                          step="0.01"
+                          step={bpr != null ? '1' : '0.01'}
                           min="0"
-                          max={lot.quantity_remaining}
+                          max={bpr != null ? maxBags ?? undefined : lotNetAvailable(lot)}
                           value={indirectMaterialInputValues[lot.id] || ''}
-                          onChange={(e) => {
-                            const value = e.target.value
-                            const newInputValues = { ...indirectMaterialInputValues }
-                            const newSelected = { ...selectedIndirectMaterials }
-                            
-                            if (value === '' || parseFloat(value) <= 0 || isNaN(parseFloat(value))) {
-                              delete newInputValues[lot.id]
-                              delete newSelected[lot.id]
-                            } else {
-                              const qty = parseFloat(value)
-                              if (qty <= lot.quantity_remaining) {
-                                newInputValues[lot.id] = value
-                                newSelected[lot.id] = qty
-                              } else {
-                                alert(`Cannot exceed available quantity: ${lot.quantity_remaining}`)
-                                return
-                              }
-                            }
-                            
-                            setIndirectMaterialInputValues(newInputValues)
-                            setSelectedIndirectMaterials(newSelected)
-                          }}
-                          placeholder="0.00"
+                          onChange={(e) => handleIndirectQuantityChange(lot, e.target.value)}
+                          placeholder={bpr != null ? '0' : '0.00'}
                           className="quantity-input"
                         />
-                        <span className="unit-label">{lot.item.unit_of_measure}</span>
+                        <span className="unit-label">{bpr != null ? 'bags' : lot.item.unit_of_measure}</span>
                       </div>
                       {selectedIndirectMaterials[lot.id] && (
                         <button
                           type="button"
-                          onClick={() => {
-                            const newInputValues = { ...indirectMaterialInputValues }
-                            const newSelected = { ...selectedIndirectMaterials }
-                            delete newInputValues[lot.id]
-                            delete newSelected[lot.id]
-                            setIndirectMaterialInputValues(newInputValues)
-                            setSelectedIndirectMaterials(newSelected)
-                          }}
+                          onClick={() => handleIndirectQuantityChange(lot, '')}
                           className="btn-clear-lot"
                         >
                           Clear
@@ -1281,7 +1529,8 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
                       )}
                     </div>
                   </div>
-                ))}
+                  )
+                })}
               </div>
             )}
           </div>

@@ -57,7 +57,11 @@ function UnlinkFinishedGood({ onClose, onSuccess }: UnlinkFinishedGoodProps) {
     const hasFormula = formulas.some(f => f.finished_good?.id === selectedItemId)
     const formulaWarning = hasFormula ? ' This will also delete the associated formula and FPS.' : ''
 
-    if (!confirm(`Are you sure you want to UNFK this finished good? This action cannot be undone.${formulaWarning}`)) {
+    if (
+      !confirm(
+        `Permanently remove this finished good from the catalog? This does not reverse batches or receipts.${formulaWarning}\n\nThis cannot be undone.`,
+      )
+    ) {
       return
     }
 
@@ -80,7 +84,7 @@ function UnlinkFinishedGood({ onClose, onSuccess }: UnlinkFinishedGoodProps) {
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal-content unlink-finished-good-modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
-          <h2>UNFK - Unlink Finished Good</h2>
+          <h2>Unlink finished good</h2>
           <button onClick={onClose} className="close-btn">×</button>
         </div>
 

@@ -173,7 +173,8 @@
 }
 
 .customer-table th {
-  background-color: #f5f5f5;
+  background-color: var(--app-header-bg);
+  color: var(--app-header-text);
   font-weight: 600;
 }
 
@@ -182,7 +183,7 @@
   user-select: none;
 }
 .customer-table th.sortable:hover {
-  background-color: #e8e8e8;
+  background-color: var(--table-header-hover-bg);
 }
 
 .customer-table tr:hover {

@@ -13,6 +13,8 @@ import PLProForma from '../components/finance/PLProForma'
 import BankReconciliation from '../components/finance/BankReconciliation'
 import FiscalPeriods from '../components/finance/FiscalPeriods'
 import KPIs from '../components/finance/KPIs'
+import MarginTrends from '../components/finance/MarginTrends'
+import RawMaterialLotCosts from '../components/finance/RawMaterialLotCosts'
 import './Finance.css'
 
 export type FinanceTabId =
@@ -27,6 +29,7 @@ export type FinanceTabId =
   | 'periods'
   | 'pricing'
   | 'cost-master'
+  | 'margin-trends'
   | 'reports'
   | 'pl-actual'
   | 'pl-proforma'
@@ -58,6 +61,8 @@ const NAV_SECTIONS: { label: string; items: { id: FinanceTabId; label: string }[
     items: [
       { id: 'pricing', label: 'Pricing Management' },
       { id: 'cost-master', label: 'Cost Master List' },
+      { id: 'margin-trends', label: 'Price & margin trends' },
+      { id: 'rm-lot-costs', label: 'RM lot cost vs estimate' },
     ],
   },
   {
@@ -105,13 +110,15 @@ function Finance() {
           {activeTab === 'dashboard' && <FinancialDashboard />}
           {activeTab === 'kpis' && <KPIs />}
           {activeTab === 'ledger' && <GeneralLedger />}
-          {activeTab === 'invoices' && <Invoices />}
+          {activeTab === 'invoices' && <Invoices onNavigateToTab={setActiveTab} />}
           {activeTab === 'journal' && <JournalEntries />}
           {activeTab === 'pricing' && <PricingManagement />}
-          {activeTab === 'reports' && <FinancialReports />}
+          {activeTab === 'reports' && <FinancialReports onNavigateToTab={setActiveTab} />}
           {activeTab === 'cost-master' && <CostMasterList />}
+          {activeTab === 'margin-trends' && <MarginTrends />}
+          {activeTab === 'rm-lot-costs' && <RawMaterialLotCosts />}
           {activeTab === 'ap' && <AccountsPayable />}
-          {activeTab === 'ar' && <AccountsReceivable />}
+          {activeTab === 'ar' && <AccountsReceivable onNavigateToTab={setActiveTab} />}
           {activeTab === 'bank-recon' && <BankReconciliation />}
           {activeTab === 'periods' && <FiscalPeriods />}
           {activeTab === 'pl-actual' && <PLActual />}
