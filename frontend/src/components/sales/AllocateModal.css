@@ -358,3 +358,58 @@
   color: #9ca3af;
   font-size: 0.85rem;
 }
+
+/* Lots shown only from current SO allocation (no free stock in pool) */
+.lot-from-existing-allocation {
+  background: #fffbeb;
+}
+
+.lot-merge-hint {
+  font-size: 0.75rem;
+  color: #92400e;
+  font-weight: 500;
+}
+
+.allocate-section {
+  margin-bottom: 1.5rem;
+}
+
+.allocate-section h4 {
+  margin: 0 0 0.35rem;
+  font-size: 1.05rem;
+}
+
+.allocate-section-blurb {
+  margin: 0 0 0.75rem;
+  font-size: 0.875rem;
+  color: #4b5563;
+  line-height: 1.45;
+}
+
+.allocate-section-blurb em {
+  font-style: italic;
+}
+
+.no-lots.muted {
+  color: #6b7280;
+  font-size: 0.9rem;
+}
+
+tr.lot-on-order-line td {
+  vertical-align: middle;
+}
+
+.allocate-data-warning {
+  color: #b45309;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  margin: 0 0 0.75rem;
+}
+
+.allocate-orphan-line {
+  padding: 0.75rem 0;
+}
+
+.btn-clear-orphan {
+  margin-top: 0.25rem;
+}

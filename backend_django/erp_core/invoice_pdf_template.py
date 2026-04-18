@@ -251,17 +251,12 @@ def _build_ship_to_from_sales_order(so):
 
 
 def _build_bill_to_from_customer(customer):
-    """Bill-to: from customer profile (customer selected in customer name dropdown on the sales order)."""
+    """Bill-to: strict bill_to_* or else HQ (matches pdf_generator.bill_to_dict_for_invoice_template)."""
     if not customer:
         return {}
-    return {
-        "company_name": (getattr(customer, "name", None) or "").strip(),
-        "street_address": (getattr(customer, "address", None) or "").strip(),
-        "city": (getattr(customer, "city", None) or "").strip(),
-        "state": (getattr(customer, "state", None) or "").strip(),
-        "zipcode": (getattr(customer, "zip_code", None) or "").strip(),
-        "phone": (getattr(customer, "phone", None) or "").strip(),
-    }
+    from .pdf_generator import bill_to_dict_for_invoice_template
+
+    return bill_to_dict_for_invoice_template(customer)
 
 
 def _normalize_field_name(name):
@@ -387,7 +382,9 @@ def fill_invoice_template_pdf(template_path, invoice):
         carrier = (getattr(so, "carrier", None) or "").strip()
         tracking = (getattr(so, "tracking_number", None) or "").strip()
         shipped_via = " ".join(filter(None, [carrier, tracking])).strip()
-    payment_terms = (getattr(customer, "payment_terms", None) or "").strip() if customer else ""
+    from .invoice_helpers import resolve_payment_terms_for_invoice
+
+    payment_terms = resolve_payment_terms_for_invoice(invoice)
     so_notes = (getattr(so, "notes", None) or "").strip() if so else ""
 
     # Combined City, State zipcode (one field in template)
@@ -509,7 +506,6 @@ def fill_invoice_template_pdf(template_path, invoice):
             desc = (getattr(it, "description", None) or "").strip()
             if not desc and getattr(it, "item", None):
                 desc = (getattr(it.item, "name", None) or getattr(it.item, "sku", None) or "").strip()
-            lot = (getattr(it, "lot_number", None) or "").strip()
             up = getattr(it, "unit_price", None)
             up_str = fmt_dollar(up) if up is not None else ""
             line_total = getattr(it, "total", None)
@@ -521,8 +517,6 @@ def fill_invoice_template_pdf(template_path, invoice):
                 ("**Quantity**", qty_str),
                 ("Item 1 description", desc),
                 ("**Item 1 description**", desc),
-                ("Item 1 lot number", lot),
-                ("**Item 1 lot number**", lot),
                 ("Unit price", up_str),
                 ("**Unit price**", up_str),
                 ("Total", total_str),

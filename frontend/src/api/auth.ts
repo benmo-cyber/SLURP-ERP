@@ -1,4 +1,4 @@
-import { api, setCsrfToken } from './client'
+import { api, fetchAndStoreCsrf } from './client'
 
 export type Role = 'viewer' | 'operator' | 'manager' | 'admin'
 
@@ -23,20 +23,19 @@ export interface MeResponse {
 
 /** Ensure we have a CSRF token (call once before login or on app init). */
 export async function getCsrf(): Promise<string> {
-  const r = await api.get<{ csrfToken: string }>('/auth/csrf/')
-  const token = r.data.csrfToken
-  setCsrfToken(token)
-  return token
+  return fetchAndStoreCsrf()
 }
 
 export async function login(username: string, password: string): Promise<AuthUser> {
   await getCsrf()
   const r = await api.post<AuthUser>('/auth/login/', { username, password })
+  await getCsrf()
   return r.data
 }
 
 export async function logout(): Promise<void> {
   await api.post('/auth/logout/')
+  await getCsrf()
 }
 
 export async function me(): Promise<MeResponse> {

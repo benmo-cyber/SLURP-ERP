@@ -63,6 +63,43 @@ interface CreateSalesOrderProps {
   salesOrder?: any // Optional: if provided, component works in edit mode
 }
 
+/** DRF often returns FK fields as a bare id on retrieve; code assumed nested { id }. */
+function normalizeFkId(raw: unknown): number | null {
+  if (raw == null || raw === '') return null
+  if (typeof raw === 'object' && raw !== null && 'id' in (raw as object)) {
+    const id = (raw as { id: unknown }).id
+    if (typeof id === 'number' && !Number.isNaN(id)) return id
+    if (typeof id === 'string' && id.trim() !== '') {
+      const n = parseInt(id, 10)
+      return Number.isNaN(n) ? null : n
+    }
+    return null
+  }
+  if (typeof raw === 'number' && !Number.isNaN(raw)) return raw
+  if (typeof raw === 'string' && raw.trim() !== '') {
+    const n = parseInt(raw, 10)
+    return Number.isNaN(n) ? null : n
+  }
+  return null
+}
+
+function resolveCustomerIdFromOrder(
+  orderData: { customer?: { id?: number } | null; customer_name?: string | null },
+  customers: Customer[]
+): number | null {
+  const cid = orderData.customer?.id
+  if (cid != null && typeof cid === 'number') return cid
+  const name = (orderData.customer_name || '').trim().toLowerCase()
+  if (!name || customers.length === 0) return null
+  const exact = customers.find((c) => c.name.trim().toLowerCase() === name)
+  if (exact) return exact.id
+  const partial = customers.find((c) => {
+    const cn = c.name.trim().toLowerCase()
+    return cn.includes(name) || name.includes(cn)
+  })
+  return partial?.id ?? null
+}
+
 function CreateSalesOrder({ onClose, onSuccess, salesOrder }: CreateSalesOrderProps) {
   const { godModeOn, canUseGodMode, maxDateForEntry, minDateForEntry } = useGodMode()
   const todayYmd = useMemo(() => {
@@ -122,6 +159,43 @@ function CreateSalesOrder({ onClose, onSuccess, salesOrder }: CreateSalesOrderPr
   const [unitDisplay, setUnitDisplay] = useState<'lbs' | 'kg'>('lbs')
   /** While typing "12." on mass UoM price (display unit), hold raw string so toggle math + manual edit both work */
   const [unitPriceDrafts, setUnitPriceDrafts] = useState<Record<number, string>>({})
+  /** When loading an existing SO, we fetch ship-to/pricing/contacts in loadSalesOrderData; skip one selectedCustomerId effect so we don't overwrite ship-to with default or clear contact. */
+  const skipCustomerLoadEffectRef = useRef(false)
+  const loadSalesOrderGenerationRef = useRef(0)
+
+  /** Item dropdown lists customer pricing; existing SO lines may reference items not in that list — merge those from the item catalog so the select value stays valid. */
+  const itemSelectOptions = useMemo((): CustomerPricing[] => {
+    const pricedIds = new Set(customerPricing.map((p) => p.item_id))
+    const extras: CustomerPricing[] = []
+    for (const row of soItems) {
+      if (row.item_id == null || pricedIds.has(row.item_id)) continue
+      const it = items.find((i) => i.id === row.item_id)
+      if (!it) continue
+      const up =
+        row.unit_price === '' || row.unit_price === null || row.unit_price === undefined
+          ? 0
+          : typeof row.unit_price === 'number'
+            ? row.unit_price
+            : parseFloat(String(row.unit_price)) || 0
+      extras.push({
+        id: -row.item_id,
+        item: {
+          id: it.id,
+          name: it.name,
+          sku: (it as { sku?: string }).sku,
+          unit_of_measure: it.unit_of_measure,
+        },
+        item_id: row.item_id,
+        unit_price: up,
+        unit_of_measure: row.unit || it.unit_of_measure,
+        effective_date: '',
+        expiry_date: null,
+        is_active: true,
+      })
+      pricedIds.add(row.item_id)
+    }
+    return [...customerPricing, ...extras]
+  }, [customerPricing, soItems, items])
 
   useEffect(() => {
     loadItems()
@@ -133,6 +207,10 @@ function CreateSalesOrder({ onClose, onSuccess, salesOrder }: CreateSalesOrderPr
 
   useEffect(() => {
     if (selectedCustomerId) {
+      if (skipCustomerLoadEffectRef.current) {
+        skipCustomerLoadEffectRef.current = false
+        return
+      }
       loadShipToLocations(selectedCustomerId)
       loadCustomerPricing(selectedCustomerId)
       loadCustomerContacts(selectedCustomerId)
@@ -287,34 +365,48 @@ function CreateSalesOrder({ onClose, onSuccess, salesOrder }: CreateSalesOrderPr
 
   const loadSalesOrderData = async () => {
     if (!salesOrder) return
-    
+
+    const generation = ++loadSalesOrderGenerationRef.current
+
     try {
       setLoading(true)
-      const orderData = await getSalesOrder(salesOrder.id)
-      
-      // Set customer
-      if (orderData.customer) {
-        setSelectedCustomerId(orderData.customer.id)
-        try {
-          const contactList = await getCustomerContacts(orderData.customer.id)
-          const list = Array.isArray(contactList) ? contactList : (contactList?.results ?? [])
-          setContacts(list)
-        } catch {
-          setContacts([])
+      const [orderData, customerList, itemsData] = await Promise.all([
+        getSalesOrder(salesOrder.id),
+        getCustomers(true),
+        getItems(),
+      ])
+      if (generation !== loadSalesOrderGenerationRef.current) return
+
+      setCustomers(customerList)
+      setItems(Array.isArray(itemsData) ? itemsData : itemsData?.results ?? [])
+
+      const preferredShipToId = normalizeFkId(orderData.ship_to_location)
+      const contactId = normalizeFkId(orderData.contact)
+      const resolvedCustomerId = resolveCustomerIdFromOrder(orderData, customerList)
+
+      if (resolvedCustomerId != null) {
+        await loadShipToLocations(resolvedCustomerId, preferredShipToId)
+        if (generation !== loadSalesOrderGenerationRef.current) return
+        await loadCustomerPricing(resolvedCustomerId)
+        if (generation !== loadSalesOrderGenerationRef.current) return
+        await loadCustomerContacts(resolvedCustomerId)
+        if (generation !== loadSalesOrderGenerationRef.current) return
+        setSelectedContactId(contactId)
+        skipCustomerLoadEffectRef.current = true
+        setSelectedCustomerId(resolvedCustomerId)
+      } else {
+        setSelectedCustomerId(null)
+        setShipToLocations([])
+        setCustomerPricing([])
+        setContacts([])
+        setSelectedContactId(null)
+        if (preferredShipToId != null) {
+          setSelectedShipToId(preferredShipToId)
+        } else {
+          setSelectedShipToId(null)
         }
       }
-      
-      // Set ship-to location
-      if (orderData.ship_to_location) {
-        setSelectedShipToId(orderData.ship_to_location.id)
-      }
-      // Set contact
-      if (orderData.contact) {
-        setSelectedContactId(orderData.contact.id)
-      } else {
-        setSelectedContactId(null)
-      }
-      
+
       // Set form data
       setFormData({
         so_number: orderData.so_number || '',
@@ -333,31 +425,34 @@ function CreateSalesOrder({ onClose, onSuccess, salesOrder }: CreateSalesOrderPr
         customer_country: orderData.customer_country || '',
         customer_phone: orderData.customer_phone || '',
         requested_ship_date: orderData.expected_ship_date ? orderData.expected_ship_date.split('T')[0] : '',
-        subtotal: orderData.subtotal || 0,
-        freight: orderData.freight || 0,
-        misc: orderData.misc || 0,
-        prepaid: orderData.prepaid || 0,
-        discount: orderData.discount || 0,
-        grand_total: orderData.grand_total || 0,
+        subtotal: orderData.subtotal ?? 0,
+        freight: orderData.freight ?? 0,
+        misc: orderData.misc ?? 0,
+        prepaid: orderData.prepaid ?? 0,
+        discount: orderData.discount ?? 0,
+        grand_total: orderData.grand_total ?? 0,
         notes: orderData.notes || '',
         drop_ship: !!(orderData as { drop_ship?: boolean }).drop_ship,
       })
-      
+
       // Set items
       if (orderData.items && orderData.items.length > 0) {
         const formattedItems = orderData.items.map((item: any) => ({
-          item_id: item.item?.id || null,
-          vendor_part_number: item.item?.sku || '',
-          description: item.item?.name || '',
-          quantity_ordered: item.quantity_ordered || '',
-          unit: item.item?.unit_of_measure || '',
-          unit_price: item.unit_price || '',
-          notes: item.notes || '',
+          item_id: item.item?.id ?? null,
+          vendor_part_number: (item.vendor_part_number != null && item.vendor_part_number !== ''
+            ? String(item.vendor_part_number)
+            : item.item?.sku) ?? '',
+          description: item.item?.name ?? '',
+          quantity_ordered: item.quantity_ordered ?? '',
+          unit: item.item?.unit_of_measure ?? '',
+          unit_price: item.unit_price ?? '',
+          notes: item.notes ?? '',
         }))
         setSoItems(formattedItems)
       }
       setCustomerPoPdfUrl(orderData.customer_po_pdf_url || null)
     } catch (error) {
+      skipCustomerLoadEffectRef.current = false
       console.error('Failed to load sales order data:', error)
       alert('Failed to load sales order data')
     } finally {
@@ -370,18 +465,21 @@ function CreateSalesOrder({ onClose, onSuccess, salesOrder }: CreateSalesOrderPr
       const data = await getCustomerContacts(customerId)
       const list = Array.isArray(data) ? data : (data?.results ?? [])
       setContacts(list)
-      setSelectedContactId(null)
     } catch (error) {
       console.error('Failed to load contacts:', error)
       setContacts([])
     }
   }
 
-  const loadShipToLocations = async (customerId: number) => {
+  /** Prefer the sales order's ship-to when hydrating edit mode; otherwise pick default / first. */
+  const loadShipToLocations = async (customerId: number, preferredShipToId?: number | null) => {
     try {
       const data = await getShipToLocations(customerId)
       setShipToLocations(data)
-      // Auto-select default location if available
+      if (preferredShipToId != null && data.some((loc: ShipToLocation) => loc.id === preferredShipToId)) {
+        setSelectedShipToId(preferredShipToId)
+        return
+      }
       const defaultLocation = data.find((loc: ShipToLocation) => loc.is_default)
       if (defaultLocation) {
         setSelectedShipToId(defaultLocation.id)
@@ -1120,16 +1218,21 @@ function CreateSalesOrder({ onClose, onSuccess, salesOrder }: CreateSalesOrderPr
                         value={item.item_id ? String(item.item_id) : ''}
                         onChange={(e) => handleItemChange(index, 'item_id', e.target.value ? parseInt(e.target.value) : null)}
                         required
-                        disabled={!selectedCustomerId}
+                        disabled={!selectedCustomerId && itemSelectOptions.length === 0}
                       >
                         <option value="">
-                          {selectedCustomerId ? (customerPricing.length === 0 ? 'No items with pricing' : 'Select Item') : 'Select Customer First'}
+                          {!selectedCustomerId && itemSelectOptions.length === 0
+                            ? 'Select Customer First'
+                            : itemSelectOptions.length === 0
+                              ? 'No items with pricing'
+                              : 'Select Item'}
                         </option>
-                        {selectedCustomerId && customerPricing.length > 0 && customerPricing.map(pricing => (
-                          <option key={pricing.item_id} value={String(pricing.item_id)}>
-                            {pricing.item.name} {pricing.item.sku ? `(${pricing.item.sku})` : ''}
-                          </option>
-                        ))}
+                        {itemSelectOptions.length > 0 &&
+                          itemSelectOptions.map((pricing) => (
+                            <option key={pricing.item_id} value={String(pricing.item_id)}>
+                              {pricing.item.name} {pricing.item.sku ? `(${pricing.item.sku})` : ''}
+                            </option>
+                          ))}
                       </select>
                     </td>
                     <td>

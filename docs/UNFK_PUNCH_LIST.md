@@ -14,9 +14,13 @@ Older builds used the slang label **UNFK** in several places; the UI now prefers
 | **Inventory → Items list → “Delete item”** (per row) | Same: **delete Item** via `deleteItem`. | **No.** | **No.** |
 | **Purchasing → PO list / PO detail → “Reverse check-in”** | **Reverse check-in** for a **Lot** (`reverseCheckIn` / `bulkReverseCheckIn`): removes the receipt lot and rolls back PO received qty when possible. | **No.** | **Yes** (for that receipt lot). |
 | **Inventory → “Reverse check-in”** (header admin modal) | Same backend on a selected lot. | **No.** | **Yes** (that lot). |
-| **Production → “Reverse batch”** | `POST /api/production-batches/{id}/reverse/` — reverses that batch (restore inputs if closed, delete output lots, delete batch). Ledger notes may still say UNFK internally. | **Yes** (that batch only). | **No.** |
+| **Production → “Reverse batch”** | `POST /api/production-batches/{id}/reverse/` — reverses that batch (restore inputs if closed, delete output lots, delete batch). **Blocked (400)** if lots still have active allocations or unfixed shipment ledger lines. Ledger notes may still say UNFK internally. | **Yes** (that batch only). | **No.** |
+| **Sales → reverse shipment** | `POST /api/shipments/{id}/reverse/` — undoes one checkout (inventory, restores allocations, removes draft invoice chain). Use **before** reversing a batch whose output lot shipped. | **No.** | **No.** |
+| **GET batch reversal plan** | `GET /api/production-batches/{id}/reversal-plan/` — JSON: `blockers`, `suggested_steps`, `can_reverse_now`. | **—** | **—** |
 
 **Inventory lot grid (SKU × vendor table):** There is no receipt-reversal button on the main lot rows; use **PO → Reverse check-in** or **Inventory → Reverse check-in**.
+
+**Unwind order:** reverse shipment(s) → clear any remaining sales allocations if still blocked → reverse batch. Preconditions live in `erp_core/reversal_guard.py`.
 
 ---
 
@@ -89,8 +93,8 @@ So: **you cannot** reverse a raw material check-in that was already consumed in 
 |-------|----------|
 | Reverse check-in rules & errors | `erp_core/views.py` — `reverse_check_in_single_lot`, `LotViewSet.reverse_check_in`, `bulk_reverse_check_in` |
 | Item delete (FG / Items UNFK) | `ItemViewSet.destroy` in `erp_core/views.py` |
-| Batch reverse | `ProductionBatchViewSet.reverse` in `erp_core/views.py` |
-| Shipment reverse | `erp_core/shipment_reversal.py` — `reverse_shipment` |
+| Batch reverse + guard + `reversal-plan` | `ProductionBatchViewSet` in `erp_core/views.py`; logic in `erp_core/reversal_guard.py` |
+| Shipment reverse (API) | `ShipmentViewSet.reverse` in `erp_core/views.py`; core in `erp_core/shipment_reversal.py` — `reverse_shipment` |
 | PO status after receipt rollback | `reconcile_purchase_order_status_from_lines` in `erp_core/views.py` |
 
 ---

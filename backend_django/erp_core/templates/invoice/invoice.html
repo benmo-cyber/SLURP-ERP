@@ -21,6 +21,8 @@
     .comments-body { font-size: 9pt; }
     .ref-table, .items-table, .totals-table { width: 100%; border-collapse: collapse; font-size: 9pt; }
     .ref-table th, .ref-table td, .items-table th, .items-table td { border: 0.5px solid #d0d0d0; padding: 5px; text-align: left; }
+    .items-table th:nth-child(3), .items-table th:nth-child(4),
+    .items-table td:nth-child(3), .items-table td:nth-child(4) { text-align: right; }
     .ref-table th, .items-table th { background: #e8e8e8; font-weight: bold; }
     .items-table .num { text-align: right; }
     .items-table .align-right { text-align: right; }
@@ -87,7 +89,6 @@
       <tr>
         <th>QUANTITY</th>
         <th>DESCRIPTION</th>
-        <th>LOT #</th>
         <th>UNIT PRICE</th>
         <th>TOTAL</th>
       </tr>
@@ -97,7 +98,6 @@
       <tr{% if loop.index0 % 2 %} class="row-alt"{% endif %}>
         <td>{{ row.qty }}</td>
         <td>{{ row.description }}</td>
-        <td>{{ row.lot }}</td>
         <td class="align-right">{{ row.unit_price }}</td>
         <td class="align-right">{{ row.total }}</td>
       </tr>

@@ -77,6 +77,61 @@ function normalizeSku(s: string): string {
   return (s || '').trim().toUpperCase()
 }
 
+/**
+ * Inventory API often returns no "available" lots when stock is depleted, on hold (without toggle),
+ * or filtered — but this SO may still have allocations. Merge those lots in so quantities can be
+ * cleared (re-allocate / unallocate).
+ */
+function placeholderLot(item: SalesOrderItem, lotId: number): Lot {
+  return {
+    id: lotId,
+    lot_number: `Lot #${lotId}`,
+    quantity_remaining: 0,
+    received_date: '',
+    item: {
+      id: item.item.id,
+      sku: item.item.sku,
+      name: item.item.name,
+      unit_of_measure: item.item.unit_of_measure,
+    },
+  }
+}
+
+/**
+ * All lot rows we need to render: warehouse pool + anything saved on the SO line + placeholders for
+ * orphan lot_ids. Never drop allocations just because inventory API did not return the lot.
+ */
+function mergeLotsForLineDisplay(
+  item: SalesOrderItem,
+  available: Lot[],
+  alloc: ItemAllocation | undefined,
+): Lot[] {
+  const byId = new Map<number, Lot>()
+  for (const l of available) {
+    byId.set(l.id, l)
+  }
+  if (item.allocated_lots?.length) {
+    for (const al of item.allocated_lots) {
+      if (!al.lot?.id) continue
+      if (!byId.has(al.lot.id)) {
+        byId.set(al.lot.id, al.lot)
+      }
+    }
+  }
+  if (alloc?.allocations?.length) {
+    for (const a of alloc.allocations) {
+      if (a.quantity <= 0 || byId.has(a.lot_id)) continue
+      const fromSaved = item.allocated_lots?.find((x) => x.lot?.id === a.lot_id)
+      if (fromSaved?.lot) {
+        byId.set(a.lot_id, fromSaved.lot)
+      } else {
+        byId.set(a.lot_id, placeholderLot(item, a.lot_id))
+      }
+    }
+  }
+  return Array.from(byId.values())
+}
+
 function AllocateModal({ salesOrderId, onClose, onSuccess }: AllocateModalProps) {
   const [salesOrder, setSalesOrder] = useState<SalesOrder | null>(null)
   const [loading, setLoading] = useState(false)
@@ -133,7 +188,6 @@ function AllocateModal({ salesOrderId, onClose, onSuccess }: AllocateModalProps)
         let combined: Lot[] = fgLots
         if (includePreRepackLots) {
           const rmLots = await getLotsBySkuVendor(item.item.sku, undefined, 'raw_material')
-          const fgIds = new Set(fgLots.map((l) => l.id))
           const byId = new Map<number, Lot>()
           for (const l of fgLots) byId.set(l.id, l)
           for (const l of rmLots) {
@@ -162,19 +216,9 @@ function AllocateModal({ salesOrderId, onClose, onSuccess }: AllocateModalProps)
 
     setPrerepackLotKeys(prerepackKeys)
     setAvailableLots(lotsMap)
-
-    // Drop allocations pointing at lots no longer listed (e.g. turning off pre-repack).
-    setAllocations((prev) => {
-      const next = new Map(prev)
-      for (const [soLineId, alloc] of next) {
-        const allowed = new Set((lotsMap.get(alloc.item_id) || []).map((l) => l.id))
-        const filtered = alloc.allocations.filter((a) => allowed.has(a.lot_id))
-        if (filtered.length !== alloc.allocations.length) {
-          next.set(soLineId, { ...alloc, allocations: filtered })
-        }
-      }
-      return next
-    })
+    // Do not strip allocations when lots are missing from the "available" pool — that pool is for
+    // picking *additional* stock. Lines already allocated must stay in state so users can return
+    // material to the warehouse slot even when inventory API returns no eligible rows.
   }
 
   const initializeAllocations = () => {
@@ -187,6 +231,7 @@ function AllocateModal({ salesOrderId, onClose, onSuccess }: AllocateModalProps)
       
       if (item.allocated_lots) {
         for (const alloc of item.allocated_lots) {
+          if (!alloc.lot?.id) continue
           existingAllocations.push({
             lot_id: alloc.lot.id,
             quantity: alloc.quantity_allocated
@@ -257,9 +302,45 @@ function AllocateModal({ salesOrderId, onClose, onSuccess }: AllocateModalProps)
     return value
   }
 
-  const isFullyAllocated = (item: SalesOrderItem): boolean => {
-    const totalAllocated = getTotalAllocated(item.id)
-    return totalAllocated >= item.quantity_ordered
+  /**
+   * Clears one order line when the server has quantity_allocated but no SalesOrderLot rows (e.g. after
+   * drop-ship-style allocate deleted lots, or inconsistent data). POST with empty allocations zeros the line.
+   */
+  const handleClearOrphanLineAllocation = async (item: SalesOrderItem) => {
+    if (!salesOrder) return
+    const qty = item.quantity_allocated ?? 0
+    const displayUnit =
+      unitDisplay === 'kg' && item.item.unit_of_measure === 'lbs'
+        ? 'kg'
+        : unitDisplay === 'lbs' && item.item.unit_of_measure === 'kg'
+          ? 'lbs'
+          : item.item.unit_of_measure
+    const msg = [
+      `Reset this line (${formatNumber(convertQuantity(qty, item.item.unit_of_measure))} ${displayUnit})?`,
+      'It has no warehouse lots linked—only a line total. This sets the line to zero so you can allocate real lots.',
+    ].join(' ')
+    if (!window.confirm(msg)) return
+    try {
+      setSaving(true)
+      await allocateSalesOrder(salesOrder.id, {
+        items: [
+          {
+            item_id: item.item.id,
+            is_distributed: item.item.item_type === 'distributed_item',
+            allocations: [],
+            raw_materials: [],
+          },
+        ],
+        allow_prerepack_allocation: includePreRepackLots,
+      })
+      await loadSalesOrder(salesOrder.id)
+      onSuccess()
+    } catch (error: any) {
+      console.error('Failed to clear line allocation:', error)
+      alert(error.response?.data?.error || error.message || 'Request failed')
+    } finally {
+      setSaving(false)
+    }
   }
 
   const handleDropShipConfirm = async () => {
@@ -284,13 +365,15 @@ function AllocateModal({ salesOrderId, onClose, onSuccess }: AllocateModalProps)
     let hasOnHoldAllocation = false
     for (const item of salesOrder.items) {
       const alloc = allocations.get(item.id)
-      if (alloc?.allocations?.length) {
-        const lots = availableLots.get(item.item.id) || []
-        for (const a of alloc.allocations) {
-          if (a.quantity > 0 && lots.find((l: Lot) => l.id === a.lot_id)?.status === 'on_hold') {
-            hasOnHoldAllocation = true
-            break
-          }
+      if (!alloc?.allocations?.length) continue
+      const pool = availableLots.get(item.item.id) || []
+      for (const a of alloc.allocations) {
+        if (a.quantity <= 0) continue
+        let lot = pool.find((l: Lot) => l.id === a.lot_id)
+        if (!lot) lot = item.allocated_lots?.find((al) => al.lot?.id === a.lot_id)?.lot
+        if (lot?.status === 'on_hold') {
+          hasOnHoldAllocation = true
+          break
         }
       }
       if (hasOnHoldAllocation) break
@@ -450,14 +533,142 @@ function AllocateModal({ salesOrderId, onClose, onSuccess }: AllocateModalProps)
 
           <div className="allocation-items">
             {salesOrder.items.map(item => {
-              const lots = availableLots.get(item.item.id) || []
+              const availableOnly = availableLots.get(item.item.id) || []
               const alloc = allocations.get(item.id)
-              const totalAllocated = getTotalAllocated(item.id)
+              const merged = mergeLotsForLineDisplay(item, availableOnly, alloc)
+              const allocatedOnLot = (lotId: number) =>
+                alloc?.allocations.find((a) => a.lot_id === lotId)?.quantity ?? 0
+              const onOrderLots = merged.filter((lot) => {
+                const q = allocatedOnLot(lot.id)
+                const saved =
+                  item.allocated_lots?.find((al) => al.lot?.id === lot.id)?.quantity_allocated ?? 0
+                return q > 0 || saved > 0
+              })
+              const orphanLineAllocation =
+                onOrderLots.length === 0 && (item.quantity_allocated ?? 0) > 1e-6
+              const onOrderIds = new Set(onOrderLots.map((l) => l.id))
+              const warehouseLots = availableOnly.filter(
+                (lot) =>
+                  !onOrderIds.has(lot.id) &&
+                  allocatedOnLot(lot.id) <= 0 &&
+                  lotAvailableForUse(lot) > 0,
+              )
+              const totalAllocated = orphanLineAllocation
+                ? (item.quantity_allocated ?? 0)
+                : getTotalAllocated(item.id)
               const remaining = item.quantity_ordered - totalAllocated
               const unitDisplayText = unitDisplay === 'kg' && item.item.unit_of_measure === 'lbs' ? 'kg' : 
                                      unitDisplay === 'lbs' && item.item.unit_of_measure === 'kg' ? 'lbs' : 
                                      item.item.unit_of_measure
-              const isFullyAlloc = isFullyAllocated(item)
+              const isFullyAlloc = totalAllocated + 1e-6 >= (item.quantity_ordered ?? 0)
+
+              const renderLotRow = (lot: Lot, mode: 'onOrder' | 'warehouse') => {
+                const lotAlloc = alloc?.allocations.find((a) => a.lot_id === lot.id)
+                const allocatedQty = lotAlloc?.quantity || 0
+                const availableQty = lotAvailableForUse(lot)
+                const inAvailablePool = availableOnly.some((l) => l.id === lot.id)
+                const maxAllocatable = Math.min(
+                  allocatedQty + availableQty,
+                  remaining + allocatedQty,
+                )
+                const savedAlloc = item.allocated_lots?.find((a) => a.lot?.id === lot.id)
+                const coaUrl = savedAlloc?.coa_customer_pdf_url
+
+                const isPrerepack =
+                  includePreRepackLots && prerepackLotKeys.has(`${item.item.id}:${lot.id}`)
+                return (
+                  <tr
+                    key={`${mode}-${lot.id}`}
+                    className={[
+                      lot.status === 'on_hold' ? 'lot-on-hold' : '',
+                      isPrerepack ? 'lot-prerepack' : '',
+                      mode === 'onOrder' ? 'lot-on-order-line' : '',
+                      !inAvailablePool && allocatedQty > 0 ? 'lot-from-existing-allocation' : '',
+                    ]
+                      .filter(Boolean)
+                      .join(' ')}
+                  >
+                    <td>
+                      {lot.lot_number}
+                      {lot.status === 'on_hold' ? ' (on hold)' : ''}
+                      {isPrerepack ? ' — pre-repack / vendor stock' : ''}
+                      {mode === 'onOrder' && !inAvailablePool && allocatedQty > 0 ? (
+                        <span
+                          className="lot-merge-hint"
+                          title="Not in the current warehouse pick list — clearing still returns this quantity to the lot / slot."
+                        >
+                          {' '}
+                          (return to slot)
+                        </span>
+                      ) : null}
+                    </td>
+                    <td>
+                      {mode === 'onOrder' ? (
+                        <span title="Free stock in the warehouse for this lot; may be 0 while this order still holds an allocation.">
+                          {formatNumber(convertQuantity(availableQty, lot.item.unit_of_measure))}{' '}
+                          {unitDisplayText}
+                        </span>
+                      ) : (
+                        <>
+                          {formatNumber(convertQuantity(availableQty, lot.item.unit_of_measure))}{' '}
+                          {unitDisplayText}
+                        </>
+                      )}
+                    </td>
+                    <td>
+                      <input
+                        type="number"
+                        min="0"
+                        max={convertQuantity(maxAllocatable, lot.item.unit_of_measure)}
+                        step="0.01"
+                        value={(() => {
+                          const v = convertQuantity(allocatedQty, lot.item.unit_of_measure)
+                          return v === 0 ? 0 : Math.round(v * 100) / 100
+                        })()}
+                        onChange={(e) => {
+                          const val = parseFloat(e.target.value) || 0
+                          const unitQty = convertDisplayToUnit(val, lot.item.unit_of_measure)
+                          updateAllocation(item.id, lot.id, unitQty)
+                        }}
+                        className="allocation-input"
+                      />
+                      <span className="unit-label">{unitDisplayText}</span>
+                    </td>
+                    <td>
+                      {coaUrl ? (
+                        <a
+                          href={coaUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="allocate-coa-link"
+                          title="Customer COA for this allocation"
+                        >
+                          PDF
+                        </a>
+                      ) : (
+                        <span className="allocate-coa-dash">—</span>
+                      )}
+                    </td>
+                    <td>
+                      <button
+                        className="btn-allocate-full"
+                        onClick={() => updateAllocation(item.id, lot.id, maxAllocatable)}
+                        disabled={maxAllocatable <= 0}
+                      >
+                        {mode === 'onOrder' ? 'Use max' : 'Allocate all'}
+                      </button>
+                      {allocatedQty > 0 && (
+                        <button
+                          className="btn-clear"
+                          onClick={() => updateAllocation(item.id, lot.id, 0)}
+                        >
+                          Clear (return to slot)
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                )
+              }
 
               return (
                 <div key={item.id} className="allocation-item">
@@ -478,104 +689,74 @@ function AllocateModal({ salesOrderId, onClose, onSuccess }: AllocateModalProps)
                   </div>
 
                   <div className="lots-list">
-                    <h4>Available Lots:</h4>
-                    {lots.length === 0 ? (
-                      <p className="no-lots">No available lots for this item</p>
-                    ) : (
-                      <table className="lots-table">
-                        <thead>
-                          <tr>
-                            <th>Lot Number</th>
-                            <th>Available</th>
-                            <th>Allocated</th>
-                            <th>COA</th>
-                            <th>Actions</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {lots.map(lot => {
-                            const lotAlloc = alloc?.allocations.find(a => a.lot_id === lot.id)
-                            const allocatedQty = lotAlloc?.quantity || 0
-                            const availableQty = lotAvailableForUse(lot)
-                            const maxAllocatable = Math.min(availableQty, remaining + allocatedQty)
-                            const savedAlloc = item.allocated_lots?.find((a) => a.lot.id === lot.id)
-                            const coaUrl = savedAlloc?.coa_customer_pdf_url
+                    <div className="allocate-section allocate-section-on-order">
+                      <h4>On this order</h4>
+                      <p className="allocate-section-blurb">
+                        Lower or clear a lot to put that quantity back on the lot in inventory.
+                      </p>
+                      {onOrderLots.length === 0 ? (
+                        orphanLineAllocation ? (
+                          <div className="allocate-orphan-line">
+                            <p className="allocate-data-warning">
+                              This line shows{' '}
+                              {formatNumber(convertQuantity(item.quantity_allocated, item.item.unit_of_measure))}{' '}
+                              {unitDisplayText} allocated, but <strong>no lots are linked</strong> (often after
+                              drop-ship confirm or bad data). Reset the line, then pick lots in the next section.
+                            </p>
+                            <button
+                              type="button"
+                              className="btn-clear btn-clear-orphan"
+                              disabled={saving}
+                              onClick={() => void handleClearOrphanLineAllocation(item)}
+                            >
+                              {saving ? 'Saving…' : 'Reset line to zero'}
+                            </button>
+                          </div>
+                        ) : (
+                          <p className="no-lots">Nothing allocated on this line yet.</p>
+                        )
+                      ) : (
+                        <table className="lots-table">
+                          <thead>
+                            <tr>
+                              <th>Lot</th>
+                              <th>Free in warehouse</th>
+                              <th>On this order</th>
+                              <th>COA</th>
+                              <th>Actions</th>
+                            </tr>
+                          </thead>
+                          <tbody>{onOrderLots.map((lot) => renderLotRow(lot, 'onOrder'))}</tbody>
+                        </table>
+                      )}
+                    </div>
 
-                            const isPrerepack =
-                              includePreRepackLots && prerepackLotKeys.has(`${item.item.id}:${lot.id}`)
-                            return (
-                              <tr
-                                key={lot.id}
-                                className={[
-                                  lot.status === 'on_hold' ? 'lot-on-hold' : '',
-                                  isPrerepack ? 'lot-prerepack' : '',
-                                ]
-                                  .filter(Boolean)
-                                  .join(' ')}
-                              >
-                                <td>
-                                  {lot.lot_number}
-                                  {lot.status === 'on_hold' ? ' (on hold)' : ''}
-                                  {isPrerepack ? ' — pre-repack / vendor stock' : ''}
-                                </td>
-                                <td>{formatNumber(convertQuantity(availableQty, lot.item.unit_of_measure))} {unitDisplayText}</td>
-                                <td>
-                                  <input
-                                    type="number"
-                                    min="0"
-                                    max={convertQuantity(maxAllocatable, lot.item.unit_of_measure)}
-                                    step="0.01"
-                                    value={(() => {
-                                      const v = convertQuantity(allocatedQty, lot.item.unit_of_measure)
-                                      return v === 0 ? 0 : Math.round(v * 100) / 100
-                                    })()}
-                                    onChange={(e) => {
-                                      const val = parseFloat(e.target.value) || 0
-                                      const unitQty = convertDisplayToUnit(val, lot.item.unit_of_measure)
-                                      updateAllocation(item.id, lot.id, unitQty)
-                                    }}
-                                    className="allocation-input"
-                                  />
-                                  <span className="unit-label">{unitDisplayText}</span>
-                                </td>
-                                <td>
-                                  {coaUrl ? (
-                                    <a
-                                      href={coaUrl}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                      className="allocate-coa-link"
-                                      title="Customer COA for this allocation"
-                                    >
-                                      PDF
-                                    </a>
-                                  ) : (
-                                    <span className="allocate-coa-dash">—</span>
-                                  )}
-                                </td>
-                                <td>
-                                  <button
-                                    className="btn-allocate-full"
-                                    onClick={() => updateAllocation(item.id, lot.id, maxAllocatable)}
-                                    disabled={maxAllocatable <= 0}
-                                  >
-                                    Allocate All
-                                  </button>
-                                  {allocatedQty > 0 && (
-                                    <button
-                                      className="btn-clear"
-                                      onClick={() => updateAllocation(item.id, lot.id, 0)}
-                                    >
-                                      Clear
-                                    </button>
-                                  )}
-                                </td>
-                              </tr>
-                            )
-                          })}
-                        </tbody>
-                      </table>
-                    )}
+                    <div className="allocate-section allocate-section-warehouse">
+                      <h4>From warehouse</h4>
+                      <p className="allocate-section-blurb">
+                        Add stock from inventory to cover what is still open on the order. To swap lots, clear the line
+                        above first.
+                      </p>
+                      {warehouseLots.length === 0 ? (
+                        <p className="no-lots muted">
+                          No lots match this list for the SKU (or every matching lot is already on this line). Try
+                          on-hold or pre-repack above.
+                        </p>
+                      ) : (
+                        <table className="lots-table">
+                          <thead>
+                            <tr>
+                              <th>Lot</th>
+                              <th>Available</th>
+                              <th>Allocate</th>
+                              <th>COA</th>
+                              <th>Actions</th>
+                            </tr>
+                          </thead>
+                          <tbody>{warehouseLots.map((lot) => renderLotRow(lot, 'warehouse'))}</tbody>
+                        </table>
+                      )}
+                    </div>
                   </div>
                 </div>
               )

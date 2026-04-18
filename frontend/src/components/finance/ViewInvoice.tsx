@@ -9,6 +9,8 @@ import './ViewInvoice.css'
 interface Invoice {
   id: number
   invoice_number: string
+  /** Resolved server-side (same logic as invoice PDF) — prefer over sales_order.customer.payment_terms */
+  payment_terms?: string | null
   sales_order?: {
     id: number
     so_number: string
@@ -49,10 +51,12 @@ interface ViewInvoiceProps {
 }
 
 function ViewInvoice({ invoiceId, onClose, onSuccess }: ViewInvoiceProps) {
+  const { godModeOn, canUseGodMode } = useGodMode()
   const [invoice, setInvoice] = useState<Invoice | null>(null)
   const [loading, setLoading] = useState(true)
   const [editing, setEditing] = useState(false)
   const [formData, setFormData] = useState({
+    invoice_number: '',
     status: '',
     tracking_number: '',
     notes: '',
@@ -213,6 +217,14 @@ function ViewInvoice({ invoiceId, onClose, onSuccess }: ViewInvoiceProps) {
                   <label>Due Date:</label>
                   <span>{formatAppDate(invoice.due_date)}</span>
                 </div>
+                <div className="detail-item">
+                  <label>Payment Terms:</label>
+                  <span>
+                    {(invoice.payment_terms && invoice.payment_terms.trim()) ||
+                      invoice.sales_order?.customer?.payment_terms?.trim() ||
+                      '—'}
+                  </span>
+                </div>
               </div>
             </div>
 
@@ -227,10 +239,6 @@ function ViewInvoice({ invoiceId, onClose, onSuccess }: ViewInvoiceProps) {
                   <div className="detail-item">
                     <label>Customer:</label>
                     <span>{invoice.sales_order.customer_name}</span>
-                  </div>
-                  <div className="detail-item">
-                    <label>Payment Terms:</label>
-                    <span>{invoice.sales_order.customer?.payment_terms || '-'}</span>
                   </div>
                   <div className="detail-item">
                     <label>Tracking Number:</label>

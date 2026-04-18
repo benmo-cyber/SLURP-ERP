@@ -1,5 +1,13 @@
-import { useState, useEffect, useRef } from 'react'
-import { getAvailableSalesOrders, getSalesOrder, allocateSalesOrder, shipSalesOrder, cancelSalesOrder } from '../../api/salesOrders'
+import { useState, useEffect, useRef, useMemo } from 'react'
+import {
+  getAvailableSalesOrders,
+  getSalesOrder,
+  allocateSalesOrder,
+  shipSalesOrder,
+  combinedShipSalesOrders,
+  cancelSalesOrder,
+  openCombinedPackingList,
+} from '../../api/salesOrders'
 import { formatNumber } from '../../utils/formatNumber'
 import { formatAppDate } from '../../utils/appDateFormat'
 import { useGodMode } from '../../context/GodModeContext'
@@ -46,6 +54,8 @@ interface SalesOrder {
   expected_ship_date: string
   status: string
   items: SalesOrderItem[]
+  customer?: { id: number } | null
+  ship_to_location?: number | null
 }
 
 interface Allocation {
@@ -108,6 +118,10 @@ function CheckOutModal({ onClose, onSuccess }: CheckOutModalProps) {
   const [shipping, setShipping] = useState(false)
   const [cancelling, setCancelling] = useState(false)
   const shipSubmitLock = useRef(false)
+  const [combinedMode, setCombinedMode] = useState(false)
+  const [combinedExtraIds, setCombinedExtraIds] = useState<number[]>([])
+  const [combinedStack, setCombinedStack] = useState<SalesOrder[] | null>(null)
+  const [combinedLoading, setCombinedLoading] = useState(false)
 
   useEffect(() => {
     loadSalesOrders()
@@ -116,21 +130,56 @@ function CheckOutModal({ onClose, onSuccess }: CheckOutModalProps) {
   useEffect(() => {
     if (selectedSOId) {
       loadSalesOrder(selectedSOId)
+      setCombinedExtraIds([])
     }
   }, [selectedSOId])
 
   useEffect(() => {
-    if (salesOrder) {
-      loadAvailableLots()
-      initializeAllocations()
-      if (salesOrder.expected_ship_date) {
-        const date = new Date(salesOrder.expected_ship_date)
-        setShipDate(date.toISOString().split('T')[0])
-      } else {
-        setShipDate(new Date().toISOString().split('T')[0])
-      }
+    if (!combinedMode || !selectedSOId) {
+      setCombinedStack(null)
+      return
     }
-  }, [salesOrder])
+    let cancelled = false
+    setCombinedLoading(true)
+    ;(async () => {
+      try {
+        const primary = await getSalesOrder(selectedSOId)
+        if (cancelled) return
+        const extras = await Promise.all(combinedExtraIds.map((id) => getSalesOrder(id)))
+        if (cancelled) return
+        setCombinedStack([primary, ...extras])
+      } finally {
+        if (!cancelled) setCombinedLoading(false)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [combinedMode, selectedSOId, combinedExtraIds])
+
+  useEffect(() => {
+    const orders = combinedMode ? combinedStack : salesOrder ? [salesOrder] : null
+    if (!orders?.length) return
+    loadAvailableLotsForOrders(orders)
+    initializeAllocationsForOrders(orders)
+    const first = orders[0]
+    if (first.expected_ship_date) {
+      const date = new Date(first.expected_ship_date)
+      setShipDate(date.toISOString().split('T')[0])
+    } else {
+      setShipDate(new Date().toISOString().split('T')[0])
+    }
+  }, [combinedMode, combinedStack, salesOrder])
+
+  const compatibleExtras = useMemo(() => {
+    if (!salesOrder || !combinedMode) return []
+    const cid = salesOrder.customer?.id
+    const st = salesOrder.ship_to_location
+    return salesOrders.filter((so) => {
+      if (so.id === salesOrder.id) return false
+      return so.customer?.id === cid && so.ship_to_location === st
+    })
+  }, [salesOrders, salesOrder, combinedMode])
 
   useEffect(() => {
     if (pieces === '' || typeof pieces !== 'number' || pieces < 1) {
@@ -180,58 +229,48 @@ function CheckOutModal({ onClose, onSuccess }: CheckOutModalProps) {
     }
   }
 
-  const loadAvailableLots = async () => {
-    if (!salesOrder) return
-
-    // For checkout, we only show lots that are already allocated to this sales order
+  const loadAvailableLotsForOrders = (orders: SalesOrder[]) => {
     const lotsMap = new Map<number, Lot[]>()
-    
-    for (const soItem of salesOrder.items) {
-      // Only show allocated lots for this item
-      const allocatedLots: Lot[] = []
-      if (soItem.allocated_lots) {
-        for (const alloc of soItem.allocated_lots) {
-          if (alloc.quantity_allocated > 0 && alloc.lot) {
-            allocatedLots.push(alloc.lot)
+    for (const so of orders) {
+      for (const soItem of so.items) {
+        const allocatedLots: Lot[] = []
+        if (soItem.allocated_lots) {
+          for (const alloc of soItem.allocated_lots) {
+            if (alloc.quantity_allocated > 0 && alloc.lot) {
+              allocatedLots.push(alloc.lot)
+            }
           }
         }
+        lotsMap.set(soItem.id, allocatedLots)
       }
-      lotsMap.set(soItem.id, allocatedLots)
     }
-
     setAvailableLots(lotsMap)
-    setRawMaterialLots(new Map()) // Not used in checkout
+    setRawMaterialLots(new Map())
   }
 
-  const initializeAllocations = () => {
-    if (!salesOrder) return
-
-    // Initialize with quantities to ship (default to all allocated)
+  const initializeAllocationsForOrders = (orders: SalesOrder[]) => {
     const allocMap = new Map<number, ItemAllocation>()
-
-    for (const item of salesOrder.items) {
-      const existingAllocations: Allocation[] = []
-
-      // Start with all allocated quantities as default quantities to ship
-      if (item.allocated_lots) {
-        for (const alloc of item.allocated_lots) {
-          if (alloc.quantity_allocated > 0) {
-            existingAllocations.push({
-              lot_id: alloc.lot.id,
-              quantity: alloc.quantity_allocated // Default to ship all allocated
-            })
+    for (const so of orders) {
+      for (const item of so.items) {
+        const existingAllocations: Allocation[] = []
+        if (item.allocated_lots) {
+          for (const alloc of item.allocated_lots) {
+            if (alloc.quantity_allocated > 0) {
+              existingAllocations.push({
+                lot_id: alloc.lot.id,
+                quantity: alloc.quantity_allocated,
+              })
+            }
           }
         }
+        allocMap.set(item.id, {
+          item_id: item.item.id,
+          is_distributed: false,
+          allocations: existingAllocations,
+          raw_materials: [],
+        })
       }
-
-      allocMap.set(item.id, {
-        item_id: item.item.id,
-        is_distributed: false, // Not used in checkout
-        allocations: existingAllocations,
-        raw_materials: []
-      })
     }
-
     setAllocations(allocMap)
   }
 
@@ -300,22 +339,29 @@ function CheckOutModal({ onClose, onSuccess }: CheckOutModalProps) {
   }
 
   const handleSaveAllocations = async () => {
-    if (!salesOrder) return
+    const orders =
+      combinedMode && combinedStack && combinedStack.length
+        ? combinedStack
+        : salesOrder
+          ? [salesOrder]
+          : []
+    if (!orders.length) return
 
     try {
       setSaving(true)
-      const itemsData: ItemAllocation[] = []
-
-      for (const item of salesOrder.items) {
-        const alloc = allocations.get(item.id)
-        if (alloc) {
-          itemsData.push(alloc)
+      for (const so of orders) {
+        const itemsData: ItemAllocation[] = []
+        for (const item of so.items) {
+          const alloc = allocations.get(item.id)
+          if (alloc) itemsData.push(alloc)
         }
+        await allocateSalesOrder(so.id, { items: itemsData })
       }
-
-      await allocateSalesOrder(salesOrder.id, { items: itemsData })
       alert('Allocations saved successfully!')
-      await loadSalesOrder(salesOrder.id) // Reload to get updated data
+      await loadSalesOrder(orders[0].id)
+      if (combinedMode) {
+        setCombinedExtraIds((ids) => [...ids])
+      }
       onSuccess()
     } catch (error: any) {
       console.error('Failed to save allocations:', error)
@@ -327,42 +373,70 @@ function CheckOutModal({ onClose, onSuccess }: CheckOutModalProps) {
 
   const handleShipOrder = async () => {
     if (shipSubmitLock.current) return
-    if (!salesOrder || !shipDate) {
+    if (!shipDate) {
       alert('Please select a ship date')
       return
     }
 
-    // Build items array with quantities to ship
-    const itemsToShip: Array<{ item_id: number; quantity: number }> = []
-    
-    for (const item of salesOrder.items) {
-      const alloc = allocations.get(item.id)
-      if (alloc) {
-        const rawSum = alloc.allocations.reduce((sum, a) => sum + a.quantity, 0)
-        const totalToShip = roundMassInNativeUnit(rawSum, item.item.unit_of_measure)
-        if (totalToShip > 0) {
-          const allocCap = roundMassInNativeUnit(item.quantity_allocated, item.item.unit_of_measure)
-          if (totalToShip > allocCap + 0.02) {
-            alert(`Cannot ship ${totalToShip} of ${item.item.name}. Only ${item.quantity_allocated} is allocated.`)
-            return
-          }
-          itemsToShip.push({
-            item_id: item.id,
-            quantity: snapShipQtyToMax(totalToShip, allocCap, item.item.unit_of_measure),
-          })
-        }
+    if (combinedMode) {
+      if (!combinedStack || combinedStack.length < 2) {
+        alert('Combined checkout needs at least two orders (same customer and ship-to). Use the checkboxes below.')
+        return
       }
-    }
-    
-    if (itemsToShip.length === 0) {
-      alert('Please select quantities to ship')
+    } else if (!salesOrder) {
+      alert('Select a sales order')
       return
     }
 
-    const itemIdsToShip = new Set(itemsToShip.map((i: { item_id: number }) => i.item_id))
-    const hasOnHoldAllocated = salesOrder?.items?.some(
-      (item) => itemIdsToShip.has(item.item.id) && item.allocated_lots?.some(
-        (al: { lot: Lot }) => al.lot?.status === 'on_hold'
+    const ordersToCheckout =
+      combinedMode && combinedStack && combinedStack.length >= 2
+        ? combinedStack
+        : salesOrder
+          ? [salesOrder]
+          : []
+
+    const buildItemsToShipForOrderOrAbort = (so: SalesOrder): Array<{ item_id: number; quantity: number }> | null => {
+      const itemsToShip: Array<{ item_id: number; quantity: number }> = []
+      for (const item of so.items) {
+        const alloc = allocations.get(item.id)
+        if (alloc) {
+          const rawSum = alloc.allocations.reduce((sum, a) => sum + a.quantity, 0)
+          const totalToShip = roundMassInNativeUnit(rawSum, item.item.unit_of_measure)
+          if (totalToShip > 0) {
+            const allocCap = roundMassInNativeUnit(item.quantity_allocated, item.item.unit_of_measure)
+            if (totalToShip > allocCap + 0.02) {
+              alert(`Cannot ship ${totalToShip} of ${item.item.name}. Only ${item.quantity_allocated} is allocated.`)
+              return null
+            }
+            itemsToShip.push({
+              item_id: item.id,
+              quantity: snapShipQtyToMax(totalToShip, allocCap, item.item.unit_of_measure),
+            })
+          }
+        }
+      }
+      return itemsToShip
+    }
+
+    const orderPayloads: Array<{ sales_order_id: number; items: Array<{ item_id: number; quantity: number }> }> = []
+    for (const so of ordersToCheckout) {
+      const itemsToShip = buildItemsToShipForOrderOrAbort(so)
+      if (itemsToShip === null) return
+      if (itemsToShip.length === 0) {
+        alert(`Select quantities to ship for ${so.so_number}.`)
+        return
+      }
+      orderPayloads.push({ sales_order_id: so.id, items: itemsToShip })
+    }
+
+    const itemIdsToShip = new Set(
+      orderPayloads.flatMap((o) => o.items.map((i) => i.item_id))
+    )
+    const hasOnHoldAllocated = ordersToCheckout.some((so) =>
+      so.items.some(
+        (item) =>
+          itemIdsToShip.has(item.id) &&
+          item.allocated_lots?.some((al: { lot: Lot }) => al.lot?.status === 'on_hold')
       )
     )
     if (hasOnHoldAllocated && !confirm('One or more allocated lots are on hold (ship under quarantine). Proceed with checkout?')) {
@@ -393,7 +467,10 @@ function CheckOutModal({ onClose, onSuccess }: CheckOutModalProps) {
       }
     }
 
-    if (!confirm('Are you sure you want to checkout this order? This will create a DRAFT invoice and save packing list details.')) {
+    const confirmMsg = combinedMode
+      ? 'Check out these orders on one shipment? One draft invoice per order; freight applies to the first order only. A combined packing list will open.'
+      : 'Are you sure you want to checkout this order? This will create a DRAFT invoice and save packing list details.'
+    if (!confirm(confirmMsg)) {
       return
     }
 
@@ -404,20 +481,41 @@ function CheckOutModal({ onClose, onSuccess }: CheckOutModalProps) {
         : `${Date.now()}-${Math.random().toString(36).slice(2)}`
     try {
       setShipping(true)
-      await shipSalesOrder(
-        salesOrder.id,
-        {
-          ship_date: shipDate,
-          items: itemsToShip,
-          carrier: carrier.trim(),
-          tracking_number: trackingNumber.trim() || undefined,
-          pieces: pieceCount,
-          piece_dimensions: pieceDimensions.map((d) => d.trim()),
-          piece_weights: pieceWeights.map((w) => w.trim()),
-        },
-        { idempotencyKey }
-      )
-      alert('Order checked out successfully! DRAFT invoice created. You can now go to Finance > Invoices to review and issue it.')
+      if (combinedMode) {
+        const res = await combinedShipSalesOrders(
+          {
+            orders: orderPayloads,
+            ship_date: shipDate,
+            carrier: carrier.trim(),
+            tracking_number: trackingNumber.trim() || undefined,
+            pieces: pieceCount,
+            piece_dimensions: pieceDimensions.map((d) => d.trim()),
+            piece_weights: pieceWeights.map((w) => w.trim()),
+          },
+          { idempotencyKey }
+        )
+        alert(
+          'Orders checked out on one shipment. Draft invoices were created. Review the combined packing list in the new tab.'
+        )
+        if (res.combined_shipment_key) {
+          openCombinedPackingList(res.combined_shipment_key)
+        }
+      } else {
+        await shipSalesOrder(
+          ordersToCheckout[0].id,
+          {
+            ship_date: shipDate,
+            items: orderPayloads[0].items,
+            carrier: carrier.trim(),
+            tracking_number: trackingNumber.trim() || undefined,
+            pieces: pieceCount,
+            piece_dimensions: pieceDimensions.map((d) => d.trim()),
+            piece_weights: pieceWeights.map((w) => w.trim()),
+          },
+          { idempotencyKey }
+        )
+        alert('Order checked out successfully! DRAFT invoice created. You can now go to Finance > Invoices to review and issue it.')
+      }
       onSuccess()
       onClose()
     } catch (error: any) {
@@ -450,7 +548,16 @@ function CheckOutModal({ onClose, onSuccess }: CheckOutModalProps) {
     }
   }
 
-  if (loading && !salesOrder) {
+  const ordersForCheckout =
+    combinedMode && combinedStack && combinedStack.length >= 2
+      ? combinedStack
+      : !combinedMode && salesOrder
+        ? [salesOrder]
+        : null
+
+  const showCheckoutSteps = Boolean(ordersForCheckout?.length)
+
+  if ((loading && !salesOrder) || (combinedMode && Boolean(selectedSOId) && combinedLoading)) {
     return (
       <div className="modal-overlay">
         <div className="modal-content">
@@ -508,17 +615,57 @@ function CheckOutModal({ onClose, onSuccess }: CheckOutModalProps) {
                     </option>
                   ))}
                 </select>
+                <label style={{ display: 'block', marginTop: 12 }}>
+                  <input
+                    type="checkbox"
+                    checked={combinedMode}
+                    onChange={(e) => {
+                      setCombinedMode(e.target.checked)
+                      if (!e.target.checked) setCombinedExtraIds([])
+                    }}
+                  />{' '}
+                  Ship multiple orders on one truck (same customer and ship-to). Freight on the first order only; one combined packing list opens after checkout.
+                </label>
+                {combinedMode && salesOrder && (
+                  <div style={{ marginTop: 10 }} className="info-text">
+                    <div><strong>Also include (checked orders ship with the one above):</strong></div>
+                    {compatibleExtras.length === 0 ? (
+                      <span>No other eligible orders in this list.</span>
+                    ) : (
+                      compatibleExtras.map((so) => (
+                        <label key={so.id} style={{ display: 'block', marginTop: 6 }}>
+                          <input
+                            type="checkbox"
+                            checked={combinedExtraIds.includes(so.id)}
+                            onChange={(e) => {
+                              if (e.target.checked) setCombinedExtraIds((ids) => [...ids, so.id])
+                              else setCombinedExtraIds((ids) => ids.filter((x) => x !== so.id))
+                            }}
+                          />{' '}
+                          {so.so_number} — {so.customer_name}
+                        </label>
+                      ))
+                    )}
+                    {combinedStack && combinedStack.length < 2 && (
+                      <p className="warning-text" style={{ marginTop: 8 }}>
+                        Select at least one additional order, or turn off combined shipment.
+                      </p>
+                    )}
+                  </div>
+                )}
               </>
             )}
           </div>
 
-          {salesOrder && (
+          {showCheckoutSteps && ordersForCheckout && (
             <>
               {/* Step 2: Show allocated lots and enter quantity to ship today (supports partial shipments) */}
               <div className="checkout-step">
                 <h3>Step 2: Allocated lots & quantity to ship today</h3>
                 <p className="info-text" style={{ marginBottom: '12px' }}>
-                  Below are the lots allocated to this sales order. Enter the amount you are shipping today from each lot (e.g. ship the rest on another date).
+                  {combinedMode
+                    ? 'For each sales order below, enter the amount you are shipping today from each lot.'
+                    : 'Below are the lots allocated to this sales order. Enter the amount you are shipping today from each lot (e.g. ship the rest on another date).'}
                 </p>
                 <div className="unit-toggle">
                   <label>Display Units:</label>
@@ -536,7 +683,12 @@ function CheckOutModal({ onClose, onSuccess }: CheckOutModalProps) {
                   </button>
                 </div>
 
-                {salesOrder.items.map(item => {
+                {ordersForCheckout.map((so) => (
+                  <div key={so.id} className="checkout-so-block" style={{ marginBottom: 20 }}>
+                    {combinedMode && (
+                      <h4 style={{ marginBottom: 10 }}>Sales order {so.so_number}</h4>
+                    )}
+                    {so.items.map(item => {
                   const alloc = allocations.get(item.id)
                   const totalAllocated = getTotalAllocated(item.id)
                   const remaining = item.quantity_ordered - totalAllocated
@@ -615,6 +767,8 @@ function CheckOutModal({ onClose, onSuccess }: CheckOutModalProps) {
                     </div>
                   )
                 })}
+                  </div>
+                ))}
               </div>
 
               {/* Step 3: Ship Date & shipping details (for packing list) */}
@@ -738,10 +892,18 @@ function CheckOutModal({ onClose, onSuccess }: CheckOutModalProps) {
               <div className="checkout-actions">
                 <button
                   onClick={handleShipOrder}
-                  disabled={shipping || !shipDate}
+                  disabled={
+                    shipping ||
+                    !shipDate ||
+                    (combinedMode && (!combinedStack || combinedStack.length < 2))
+                  }
                   className="btn btn-primary"
                 >
-                  {shipping ? 'Processing...' : 'Checkout Order & Create Invoice'}
+                  {shipping
+                    ? 'Processing...'
+                    : combinedMode
+                      ? 'Checkout combined shipment & create invoices'
+                      : 'Checkout Order & Create Invoice'}
                 </button>
                 <button
                   onClick={onClose}

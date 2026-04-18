@@ -1275,11 +1275,14 @@ class InvoiceSerializer(serializers.ModelSerializer):
         return None
     
     def get_payment_terms(self, obj):
-        """Get payment terms from sales order customer"""
-        if hasattr(obj, 'sales_order') and obj.sales_order:
-            if hasattr(obj.sales_order, 'customer') and obj.sales_order.customer:
-                return getattr(obj.sales_order.customer, 'payment_terms', None)
-        return None
+        """Same customer resolution as invoice PDFs (SO contact, legacy id, invoice contact)."""
+        try:
+            from .invoice_helpers import resolve_payment_terms_for_invoice
+
+            t = resolve_payment_terms_for_invoice(obj)
+            return t or None
+        except Exception:
+            return None
     
     def get_tax(self, obj):
         """Map tax_amount to tax for frontend compatibility"""

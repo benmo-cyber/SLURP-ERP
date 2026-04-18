@@ -6,8 +6,7 @@ Used by management command remove_duplicate_shipment when a duplicate /ship/ cre
 from __future__ import annotations
 
 import logging
-from collections import deque
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Set
 
 from django.db import transaction
 
@@ -64,7 +63,9 @@ def reverse_shipment(
     """
     Fully reverse one shipment. Raises ValueError if invariants fail.
 
-    If allow_non_draft_invoice is False, refuses when linked invoice status != draft.
+    If allow_non_draft_invoice is False, refuses when a linked invoice is still active
+    (e.g. sent/paid/overdue). Draft and cancelled invoices are always allowed: cancelled
+    means voided in Finance and the row can be removed with the shipment.
     """
     from .models import (
         InventoryTransaction,
@@ -90,10 +91,12 @@ def reverse_shipment(
             .filter(notes__icontains=needle)
         )
         for inv in invoices:
-            if inv.status != 'draft' and not allow_non_draft_invoice:
+            if inv.status in ('draft', 'cancelled'):
+                continue
+            if not allow_non_draft_invoice:
                 raise ValueError(
                     f'Invoice {inv.invoice_number} is status={inv.status}; '
-                    'pass allow_non_draft_invoice=True only after manual review.'
+                    'void it in Finance (cancelled) or pass allow_non_draft_invoice=True only after manual review.'
                 )
 
         if dry_run:
@@ -107,10 +110,11 @@ def reverse_shipment(
         for inv in invoices:
             _delete_invoice_finance_chain(inv)
 
-        txns: List = list(
-            InventoryTransaction.objects.filter(notes__icontains=needle).order_by('id')
+        # Match txns to shipment lines by lot ↔ SalesOrderLot for that line (checkout order ≠ ShipmentItem id order).
+        all_txns: List = list(
+            InventoryTransaction.objects.filter(notes__icontains=needle).select_related('lot').order_by('id')
         )
-        txns_q: deque = deque(txns)
+        used_ids: Set[int] = set()
 
         ship_items = list(
             shipment.items.select_related('sales_order_item', 'sales_order_item__item').order_by('id')
@@ -119,9 +123,16 @@ def reverse_shipment(
         for si in ship_items:
             so_item = si.sales_order_item
             target = float(si.quantity_shipped)
+            lot_ids = set(
+                SalesOrderLot.objects.filter(sales_order_item=so_item).values_list('lot_id', flat=True)
+            )
+            line_txns = [t for t in all_txns if t.id not in used_ids and t.lot_id in lot_ids]
+            line_txns.sort(key=lambda x: x.id)
+
             acc = 0.0
-            while acc < target - 0.02 and txns_q:
-                t = txns_q.popleft()
+            for t in line_txns:
+                if acc >= target - 0.02:
+                    break
                 amt = abs(float(t.quantity))
                 lot = t.lot
                 lot.quantity_remaining += amt
@@ -135,11 +146,14 @@ def reverse_shipment(
                     sol.quantity_allocated += amt
                     sol.save(update_fields=['quantity_allocated'])
                 t.delete()
+                used_ids.add(t.id)
                 acc += amt
 
             if abs(acc - target) > 0.05:
-                if acc < 0.02 and target > 0.02 and getattr(so, 'drop_ship', False):
-                    # Virtual shipment line (no inventory transactions)
+                if acc < 0.02 and target > 0.02 and (
+                    getattr(so, 'drop_ship', False) or not lot_ids
+                ):
+                    # Drop-ship / virtual line: no inventory movements for this ShipmentItem
                     pass
                 else:
                     raise ValueError(
@@ -151,8 +165,12 @@ def reverse_shipment(
             so_item.quantity_allocated += target
             so_item.save(update_fields=['quantity_shipped', 'quantity_allocated'])
 
-        if txns_q:
-            raise ValueError(f'Leftover inventory transactions for shipment {shipment_id}: {len(txns_q)}')
+        leftover = [t for t in all_txns if t.id not in used_ids]
+        if leftover:
+            raise ValueError(
+                f'Leftover inventory transactions for shipment {shipment_id}: {len(leftover)} '
+                f'(could not match to shipment lines by lot)'
+            )
 
         ShipmentItem.objects.filter(shipment=shipment).delete()
         shipment.delete()

@@ -238,6 +238,18 @@ export const reverseBatchTicket = async (batchId: number) => {
   return response.data
 }
 
+/** Blockers + suggested_steps before reversing a batch (GET). */
+export const getProductionBatchReversalPlan = async (batchId: number) => {
+  const response = await api.get(`/production-batches/${batchId}/reversal-plan/`)
+  return response.data
+}
+
+/** Undo one SO shipment (inventory, draft invoice, allocations); use before reversing a batch whose lot shipped. */
+export const reverseShipment = async (shipmentId: number) => {
+  const response = await api.post(`/shipments/${shipmentId}/reverse/`)
+  return response.data
+}
+
 export const getPartialLots = async (finishedGoodItemId: number) => {
   const response = await api.get(`/production-batches/partials/?finished_good_item_id=${finishedGoodItemId}`)
   return response.data

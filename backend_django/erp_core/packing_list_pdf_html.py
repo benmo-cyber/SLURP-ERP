@@ -395,3 +395,82 @@ def generate_packing_list_pdf_from_shipment(shipment):
     except Exception as e:
         logger.warning("Packing list from shipment failed: %s", e, exc_info=True)
         return None
+
+
+def _build_combined_packing_list_context(shipments):
+    """
+    One packing list covering multiple sales orders released on the same truck (shared carrier/tracking/pieces).
+    """
+    if not shipments:
+        return None
+    shipments = sorted(shipments, key=lambda s: s.id)
+    primary = shipments[0]
+    sales_order = primary.sales_order
+    base = _build_packing_list_context_from_shipment(primary)
+
+    so_nums = []
+    po_parts = []
+    for sh in shipments:
+        so = sh.sales_order
+        sn = (getattr(so, "so_number", None) or "").strip()
+        if sn:
+            so_nums.append(sn)
+        po = (getattr(so, "customer_reference_number", None) or "").strip()
+        if po:
+            po_parts.append(po)
+    so_joined = ", ".join(so_nums) if so_nums else (base.get("so_number") or "—")
+    base["so_number"] = so_joined
+    uniq_po = sorted(set(po_parts))
+    if uniq_po:
+        po_so = " / ".join(uniq_po) + " / " + so_joined if so_joined != "—" else " / ".join(uniq_po)
+    else:
+        po_so = so_joined
+    base["po_so_str"] = po_so
+    base["po_ref"] = uniq_po[0] if len(uniq_po) == 1 else ("; ".join(uniq_po) if uniq_po else "—")
+
+    line_items = []
+    for sh in shipments:
+        so = sh.sales_order
+        title = f"Sales order {(getattr(so, 'so_number', None) or so.pk)}"
+        line_items.append(
+            {
+                "is_section": True,
+                "section_title": title,
+                "sku": "",
+                "description": "",
+                "quantity": "",
+                "lots": "",
+            }
+        )
+        line_items.extend(_build_shipment_line_items(sh))
+
+    base["line_items"] = line_items
+    base["combined_note"] = "Combined shipment — multiple sales orders on one release."
+    return base
+
+
+def generate_combined_packing_list_pdf(shipments):
+    """PDF for several shipments sharing combined_shipment_key (one truck, one set of handling units)."""
+    try:
+        from jinja2 import Environment, FileSystemLoader
+    except ImportError as e:
+        logger.warning("Packing list HTML→PDF requires jinja2 and xhtml2pdf: %s", e)
+        return None
+    context = _build_combined_packing_list_context(shipments)
+    if not context:
+        return None
+    try:
+        template_dir = Path(__file__).resolve().parent / "templates" / "packing_list"
+        if not template_dir.is_dir():
+            return None
+        env = Environment(loader=FileSystemLoader(str(template_dir)))
+        template = env.get_template("packing_list.html")
+        html_string = template.render(**context)
+        label = "combined-" + "-".join(str(s.id) for s in shipments[:5])
+        out = html_string_to_pdf_bytes(html_string, log_label=f"Packing list combined {label}")
+        if out:
+            logger.info("Combined packing list PDF: shipments=%s size=%s", [s.id for s in shipments], len(out))
+        return out
+    except Exception as e:
+        logger.warning("Combined packing list PDF failed: %s", e, exc_info=True)
+        return None

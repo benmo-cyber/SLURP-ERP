@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from 'react'
+import { useAuth } from '../../context/AuthContext'
 import { useGodMode } from '../../context/GodModeContext'
 import {
   getSalesOrders,
@@ -6,12 +7,14 @@ import {
   updateSalesOrder,
   patchSalesOrder,
   issueSalesOrder,
+  revertSalesOrderToDraft,
   openPackingList,
   openPackingListForShipment,
   openPickList,
 } from '../../api/salesOrders'
 import { formatNumber } from '../../utils/formatNumber'
 import { formatAppDate } from '../../utils/appDateFormat'
+import { reverseShipment } from '../../api/inventory'
 import AllocateModal from './AllocateModal'
 import './SalesOrdersList.css'
 
@@ -39,6 +42,8 @@ interface SalesOrder {
     }
     quantity_ordered: number
     quantity_allocated: number
+    /** Cumulative shipped on this line — used so packing list stays available after ship when allocation hits zero */
+    quantity_shipped?: number
     unit_price: number
     allocated_lots?: Array<{
       id: number
@@ -102,14 +107,17 @@ function customerCoaPendingTitle(sku: string, lotLabel: string) {
 }
 
 function SalesOrdersList({ refreshKey = 0, onSelectOrder, onEditOrder }: SalesOrdersListProps) {
+  const { user } = useAuth()
   const [orders, setOrders] = useState<SalesOrder[]>([])
   const [completedOrders, setCompletedOrders] = useState<SalesOrder[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [deletingId, setDeletingId] = useState<number | null>(null)
+  const [reversingShipmentId, setReversingShipmentId] = useState<number | null>(null)
   const [editingShipDateId, setEditingShipDateId] = useState<number | null>(null)
   const [editingShipDate, setEditingShipDate] = useState<string>('')
   const [issuingId, setIssuingId] = useState<number | null>(null)
+  const [revertingToDraftId, setRevertingToDraftId] = useState<number | null>(null)
   const [allocatingSOId, setAllocatingSOId] = useState<number | null>(null)
   const [issueModalOrder, setIssueModalOrder] = useState<SalesOrder | null>(null)
   const [issueDateValue, setIssueDateValue] = useState('')
@@ -281,17 +289,95 @@ function SalesOrdersList({ refreshKey = 0, onSelectOrder, onEditOrder }: SalesOr
     loadOrders()
   }
 
+  const canReverseShipments = Boolean(user?.is_staff || user?.is_superuser)
+
+  const canRevertSalesOrderToDraft = (order: SalesOrder): boolean => {
+    if (!user?.is_staff && !user?.is_superuser) return false
+    if (!['issued', 'allocated', 'ready_for_shipment'].includes(order.status)) return false
+    if (order.shipments && order.shipments.length > 0) return false
+    if (
+      order.items?.some((li) => (li.quantity_shipped ?? 0) > 1e-6)
+    ) {
+      return false
+    }
+    return true
+  }
+
+  const handleRevertToDraft = async (e: React.MouseEvent, order: SalesOrder) => {
+    e.stopPropagation()
+    if (!canRevertSalesOrderToDraft(order)) return
+    if (
+      !window.confirm(
+        `Revert ${order.so_number} to Draft? This clears all allocations (lots released back to inventory). ` +
+          `You can edit lines and Issue again. Requires no shipments and no sent invoices.`,
+      )
+    ) {
+      return
+    }
+    try {
+      setRevertingToDraftId(order.id)
+      await revertSalesOrderToDraft(order.id)
+      await loadOrders()
+    } catch (err: any) {
+      console.error('Revert to draft failed:', err)
+      const msg =
+        err.response?.data?.error || err.response?.data?.detail || err.message || 'Revert to draft failed'
+      alert(typeof msg === 'string' ? msg : JSON.stringify(msg))
+    } finally {
+      setRevertingToDraftId(null)
+    }
+  }
+
+  const handleReverseShipment = async (
+    e: React.MouseEvent,
+    order: SalesOrder,
+    shipmentId: number,
+    releaseIndex1: number,
+  ) => {
+    e.stopPropagation()
+    if (
+      !window.confirm(
+        `Reverse release ${releaseIndex1} on ${order.so_number}? This undoes that checkout: restores inventory and allocations, deletes this shipment row, and removes draft invoices tied to this release. It will fail if the invoice is already issued (not draft). This cannot be undone from the UI.`,
+      )
+    ) {
+      return
+    }
+    try {
+      setReversingShipmentId(shipmentId)
+      await reverseShipment(shipmentId)
+      await loadOrders()
+    } catch (err: any) {
+      console.error('Reverse shipment failed:', err)
+      const msg = err.response?.data?.error || err.response?.data?.detail || err.message || 'Reverse shipment failed'
+      alert(typeof msg === 'string' ? msg : JSON.stringify(msg))
+    } finally {
+      setReversingShipmentId(null)
+    }
+  }
+
   const isFullyAllocated = (order: SalesOrder): boolean => {
     if (!order.items || order.items.length === 0) return false
     return order.items.every(item => item.quantity_allocated >= item.quantity_ordered)
   }
 
-  /** Packing list PDF uses carrier, tracking, pieces, dimensions & weights from checkout — enable only after at least one shipment. */
-  const canOpenOrderPackingList = (order: SalesOrder): boolean =>
-    Boolean(order.shipments && order.shipments.length > 0)
+  /** Order-level packing list: needs checkout data (shipment) and something to document — allocated qty, drop ship, or already shipped. */
+  const canOpenOrderPackingList = (order: SalesOrder): boolean => {
+    if (!order.shipments?.length) return false
+    if (order.drop_ship) return true
+    return Boolean(
+      order.items?.some(
+        (it) =>
+          (it.quantity_allocated ?? 0) > 0 || (it.quantity_shipped ?? 0) > 0,
+      ),
+    )
+  }
 
-  const packingListDisabledTitle =
-    'Complete checkout first. Carrier, tracking, pieces, per-piece dimensions and weights are saved to the packing list. Then open Pack list or a Release link.'
+  const orderPackingListDisabledTitle = (order: SalesOrder): string => {
+    if (!order.shipments?.length) {
+      return 'Complete checkout first. Carrier, tracking, pieces, per-piece dimensions and weights are saved to the packing list. Then open Pack list or a Release link.'
+    }
+    return 'Nothing is allocated and nothing has shipped on this order yet, so the order packing list is not available. Allocate inventory first, or open Packing list on a Release below after checkout.'
+  }
 
   const canOpenPickList = (order: SalesOrder): boolean =>
     Boolean(order.items?.some((it) => (it.quantity_allocated ?? 0) > 0))
@@ -331,6 +417,41 @@ function SalesOrdersList({ refreshKey = 0, onSelectOrder, onEditOrder }: SalesOr
     } finally {
       setDeletingId(null)
     }
+  }
+
+  /** Per-release packing list + staff-only reverse checkout (same row as open orders + completed). */
+  const shipmentReleasesBlock = (order: SalesOrder) => {
+    if (!order.shipments?.length) return null
+    // Checkout releases apply to issued/shipped work; draft rows should not offer "Reverse" (confusing if
+    // stale shipment rows remain after a status change). Revert-to-draft already requires zero shipments.
+    if (order.status === 'draft' || order.status === 'cancelled') return null
+    return (
+      <div className="so-pl-releases">
+        {order.shipments.map((s, idx) => (
+          <div key={s.id} className="so-pl-release-row">
+            <button
+              type="button"
+              className="so-pl-release-link"
+              onClick={() => openPackingListForShipment(s.id)}
+              title={`Packing list for shipment ${idx + 1}${s.ship_date ? ` (${String(s.ship_date).slice(0, 10)})` : ''}`}
+            >
+              Release {idx + 1}
+            </button>
+            {canReverseShipments && (
+              <button
+                type="button"
+                className="so-pl-reverse-btn"
+                disabled={reversingShipmentId === s.id}
+                onClick={(e) => handleReverseShipment(e, order, s.id, idx + 1)}
+                title="Staff: undo this checkout (restores inventory and allocations, removes draft invoice for this release). Fails if invoice is already issued."
+              >
+                {reversingShipmentId === s.id ? '…' : 'Reverse'}
+              </button>
+            )}
+          </div>
+        ))}
+      </div>
+    )
   }
 
   const issueModal = issueModalOrder ? (
@@ -605,27 +726,13 @@ function SalesOrdersList({ refreshKey = 0, onSelectOrder, onEditOrder }: SalesOr
                           title={
                             canOpenOrderPackingList(order)
                               ? 'Packing list (full order summary)'
-                              : packingListDisabledTitle
+                              : orderPackingListDisabledTitle(order)
                           }
                         >
                           Pack list
                         </button>
                       </div>
-                      {order.shipments && order.shipments.length > 0 && (
-                        <div className="so-pl-releases">
-                          {order.shipments.map((s, idx) => (
-                            <button
-                              key={s.id}
-                              type="button"
-                              className="so-pl-release-link"
-                              onClick={() => openPackingListForShipment(s.id)}
-                              title={`Packing list for shipment ${idx + 1}${s.ship_date ? ` (${String(s.ship_date).slice(0, 10)})` : ''}`}
-                            >
-                              Release {idx + 1}
-                            </button>
-                          ))}
-                        </div>
-                      )}
+                      {shipmentReleasesBlock(order)}
                       {(() => {
                         const coaRows = customerCoaRowsForOrder(order)
                         if (coaRows.length === 0) return null
@@ -690,6 +797,17 @@ function SalesOrdersList({ refreshKey = 0, onSelectOrder, onEditOrder }: SalesOr
                           title={isFullyAllocated(order) ? 'Re-allocate inventory' : 'Allocate inventory'}
                         >
                           {isFullyAllocated(order) ? 'Re-alloc' : 'Allocate'}
+                        </button>
+                      )}
+                      {canRevertSalesOrderToDraft(order) && (
+                        <button
+                          type="button"
+                          className="so-act-btn so-act-btn--muted"
+                          onClick={(e) => handleRevertToDraft(e, order)}
+                          disabled={revertingToDraftId === order.id}
+                          title="Staff: clear allocations and set status to Draft so you can edit lines and re-issue"
+                        >
+                          {revertingToDraftId === order.id ? '…' : 'Revert to draft'}
                         </button>
                       )}
                       {onEditOrder && (order.status === 'draft' || order.status === 'allocated' || order.status === 'issued') && (
@@ -879,27 +997,13 @@ function SalesOrdersList({ refreshKey = 0, onSelectOrder, onEditOrder }: SalesOr
                             title={
                               canOpenOrderPackingList(order)
                                 ? 'Packing list (full order summary)'
-                                : packingListDisabledTitle
+                                : orderPackingListDisabledTitle(order)
                             }
                           >
                             Pack list
                           </button>
                         </div>
-                        {order.shipments && order.shipments.length > 0 && (
-                          <div className="so-pl-releases">
-                            {order.shipments.map((s, idx) => (
-                              <button
-                                key={s.id}
-                                type="button"
-                                className="so-pl-release-link"
-                                onClick={() => openPackingListForShipment(s.id)}
-                                title={`Packing list for shipment ${idx + 1}`}
-                              >
-                                Release {idx + 1}
-                              </button>
-                            ))}
-                          </div>
-                        )}
+                        {shipmentReleasesBlock(order)}
                         {(() => {
                           const coaRows = customerCoaRowsForOrder(order)
                           if (coaRows.length === 0) return null

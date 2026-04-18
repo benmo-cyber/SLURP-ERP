@@ -6,7 +6,11 @@ from pathlib import Path
 import logging
 
 from .html_pdf_common import html_string_to_pdf_bytes
-from .invoice_helpers import format_invoice_quantity_display, unit_of_measure_for_invoice_line
+from .invoice_helpers import (
+    format_invoice_quantity_display,
+    resolve_payment_terms_for_invoice,
+    unit_of_measure_for_invoice_line,
+)
 from .pdf_generator import get_batch_ticket_logo_base64_cached
 
 logger = logging.getLogger(__name__)
@@ -14,12 +18,21 @@ logger = logging.getLogger(__name__)
 
 def _build_invoice_context(invoice):
     """Build template context from Invoice. Matches data used by generate_invoice_pdf in pdf_generator."""
+    bill_lines: list = []
+    ship_lines: list = []
     try:
         from .pdf_generator import _invoice_bill_to, _invoice_ship_to
-        bill_lines, payment_terms = _invoice_bill_to(invoice)
+
+        bill_lines, _ = _invoice_bill_to(invoice)
+    except Exception as e:
+        logger.warning('Invoice PDF: bill-to block failed: %s', e, exc_info=True)
+    payment_terms = resolve_payment_terms_for_invoice(invoice)
+    try:
+        from .pdf_generator import _invoice_ship_to
+
         ship_lines = _invoice_ship_to(invoice)
-    except Exception:
-        bill_lines, ship_lines, payment_terms = [], [], ''
+    except Exception as e:
+        logger.warning('Invoice PDF: ship-to block failed: %s', e, exc_info=True)
     bill_text = '<br/>'.join(bill_lines) if bill_lines else '—'
     ship_text = '<br/>'.join(ship_lines) if ship_lines else '—'
 
@@ -43,7 +56,6 @@ def _build_invoice_context(invoice):
             desc = (getattr(it, 'description', None) or '').strip()
             if not desc and getattr(it, 'item', None):
                 desc = (getattr(it.item, 'name', None) or getattr(it.item, 'sku', None) or '').strip()
-            lot = (getattr(it, 'lot_number', None) or '').strip()
             qty = getattr(it, 'quantity', None)
             uom = unit_of_measure_for_invoice_line(it)
             up = getattr(it, 'unit_price', None)
@@ -53,14 +65,13 @@ def _build_invoice_context(invoice):
             items.append({
                 'qty': format_invoice_quantity_display(qty, uom),
                 'description': desc or '—',
-                'lot': lot or '—',
                 'unit_price': f"${up:,.2f}" if up is not None else '—',
                 'total': f"${total:,.2f}" if total is not None else '—',
             })
     except Exception:
         pass
     if not items:
-        items = [{'qty': '—', 'description': '—', 'lot': '—', 'unit_price': '—', 'total': '—'}]
+        items = [{'qty': '—', 'description': '—', 'unit_price': '—', 'total': '—'}]
 
     subtotal = getattr(invoice, 'subtotal', None)
     if subtotal is None and items:

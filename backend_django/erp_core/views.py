@@ -40,6 +40,7 @@ from .serializers import (
     ItemCoaTestLineSerializer, LotCoaCertificateSerializer, LotCoaCustomerCopySerializer,
 )
 from .email_service import send_invoice_email, send_purchase_order_email, send_sales_order_confirmation_email
+from .sales_order_allocation_release import release_sales_order_allocations
 from .mass_quantity import (
     normalize_mass_quantity,
     normalize_quantity_by_uom,
@@ -4752,10 +4753,30 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
         response['X-Content-Type-Options'] = 'nosniff'
         return response
     
+    @action(detail=True, methods=['get'], url_path='reversal-plan')
+    def reversal_plan(self, request, pk=None):
+        """Return blockers and suggested unwind order before calling POST .../reverse/."""
+        batch = self.get_object()
+        from .reversal_guard import build_batch_reversal_plan
+
+        return Response(build_batch_reversal_plan(batch))
+
     @action(detail=True, methods=['post'])
     def reverse(self, request, pk=None):
         batch = self.get_object()
-        
+        from .reversal_guard import build_batch_reversal_plan, get_production_batch_reversal_blockers
+
+        blockers = get_production_batch_reversal_blockers(batch)
+        if blockers:
+            return Response(
+                {
+                    'error': 'Cannot reverse this batch until dependencies are cleared.',
+                    'blockers': blockers,
+                    'reversal_plan': build_batch_reversal_plan(batch),
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         try:
             # Store batch number for error messages
             batch_number = batch.batch_number
@@ -6309,6 +6330,16 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
         tracking_number = request.data.get('tracking_number', '').strip()
         carrier = (request.data.get('carrier') or '').strip()
         items_to_ship = request.data.get('items', [])  # List of {item_id, quantity} for partial shipments
+        combined_shipment_key = None
+        raw_ck = request.data.get('combined_shipment_key')
+        if raw_ck:
+            import uuid as _uuid
+
+            try:
+                combined_shipment_key = _uuid.UUID(str(raw_ck))
+            except (ValueError, TypeError, AttributeError):
+                combined_shipment_key = None
+        combined_freight_skip = bool(request.data.get('combined_freight_skip'))
         
         # Validate order is issued or ready_for_shipment and has allocations
         if sales_order.status not in ('issued', 'ready_for_shipment'):
@@ -6475,6 +6506,7 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
                     pieces=pieces_int,
                     piece_dimensions=piece_dims_clean,
                     piece_weights=piece_weights_clean,
+                    combined_shipment_key=combined_shipment_key,
                 )
                 
                 # Process items to ship - normalize item_id to int for dict lookup (JSON may send string)
@@ -6648,6 +6680,8 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
                 )
                 # Get freight, discount, tax from sales order if available, otherwise 0
                 freight = getattr(sales_order, 'freight', 0.0) or 0.0
+                if combined_freight_skip:
+                    freight = 0.0
                 discount = getattr(sales_order, 'discount', 0.0) or 0.0
                 tax = 0.0  # Calculate tax if needed
                 grand_total = subtotal + freight + tax - discount
@@ -6920,7 +6954,10 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
                 'shipment': {
                     'id': shipment.id,
                     'ship_date': shipment.ship_date.isoformat(),
-                    'tracking_number': shipment.tracking_number
+                    'tracking_number': shipment.tracking_number,
+                    'combined_shipment_key': (
+                        str(combined_shipment_key) if combined_shipment_key else None
+                    ),
                 }
             }
             if idem_key:
@@ -6943,6 +6980,154 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
                 'error': str(e),
                 'detail': traceback.format_exc()
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @action(detail=False, methods=['post'], url_path='combined-ship')
+    def combined_ship(self, request):
+        """
+        Check out multiple sales orders in one atomic operation: same carrier / tracking / pieces /
+        dimensions, one combined packing list key. Freight is applied on the first order only.
+        Requires the same customer and ship-to location on every order.
+        """
+        import copy
+        import uuid as uuid_mod
+
+        from django.db import transaction
+        from rest_framework.test import APIRequestFactory, force_authenticate
+
+        from .models import SalesOrder
+
+        if not request.user or not request.user.is_authenticated:
+            return Response({'error': 'Authentication required.'}, status=status.HTTP_401_UNAUTHORIZED)
+
+        orders_spec = request.data.get('orders')
+        if not isinstance(orders_spec, list) or len(orders_spec) < 2:
+            return Response(
+                {
+                    'error': (
+                        'Provide "orders": a list of at least 2 objects, each with "sales_order_id" '
+                        '(or "id") and optional "items" for partial ship.'
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        parsed = []
+        for spec in orders_spec:
+            if not isinstance(spec, dict):
+                return Response({'error': 'Each order entry must be an object.'}, status=status.HTTP_400_BAD_REQUEST)
+            raw_id = spec.get('sales_order_id') or spec.get('id')
+            if raw_id is None:
+                return Response({'error': 'Each order needs sales_order_id or id.'}, status=status.HTTP_400_BAD_REQUEST)
+            try:
+                oid = int(raw_id)
+            except (TypeError, ValueError):
+                return Response({'error': f'Invalid sales order id: {raw_id!r}'}, status=status.HTTP_400_BAD_REQUEST)
+            parsed.append((oid, spec))
+
+        ids = [p[0] for p in parsed]
+        if len(set(ids)) != len(ids):
+            return Response({'error': 'Duplicate sales order in orders list.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if isinstance(request.data, dict):
+            base = {k: copy.deepcopy(v) for k, v in request.data.items() if k != 'orders'}
+        else:
+            base = request.data.copy()
+            base.pop('orders', None)
+            if hasattr(base, 'dict'):
+                base = base.dict()
+
+        key = uuid_mod.uuid4()
+        results = []
+        factory = APIRequestFactory()
+
+        try:
+            with transaction.atomic():
+                sos = list(
+                    SalesOrder.objects.select_for_update()
+                    .filter(pk__in=ids)
+                    .order_by('id')
+                )
+                if len(sos) != len(ids):
+                    return Response(
+                        {'error': 'One or more sales orders were not found.'},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                by_id = {so.id: so for so in sos}
+
+                first = by_id[ids[0]]
+                cust_id = first.customer_id
+                st_id = first.ship_to_location_id
+                for oid in ids:
+                    so = by_id[oid]
+                    if so.customer_id != cust_id or so.ship_to_location_id != st_id:
+                        return Response(
+                            {
+                                'error': (
+                                    'Combined checkout requires the same customer and ship-to location '
+                                    'on every order.'
+                                )
+                            },
+                            status=status.HTTP_400_BAD_REQUEST,
+                        )
+                    if so.status not in ('issued', 'ready_for_shipment'):
+                        return Response(
+                            {
+                                'error': (
+                                    f'Order {so.so_number} must be issued or ready for shipment '
+                                    f'(status is {so.status}).'
+                                )
+                            },
+                            status=status.HTTP_400_BAD_REQUEST,
+                        )
+                    total_alloc = sum(float(getattr(i, 'quantity_allocated', 0) or 0) for i in so.items.all())
+                    if total_alloc <= 0 and not getattr(so, 'drop_ship', False):
+                        return Response(
+                            {'error': f'Order {so.so_number} has no allocated quantity to ship.'},
+                            status=status.HTTP_400_BAD_REQUEST,
+                        )
+
+                view = SalesOrderViewSet.as_view({'post': 'ship'})
+                for idx, (oid, spec) in enumerate(parsed):
+                    payload = dict(base)
+                    if spec.get('items') is not None:
+                        payload['items'] = spec['items']
+                    payload['combined_shipment_key'] = str(key)
+                    payload['combined_freight_skip'] = idx > 0
+
+                    req = factory.post(f'/api/sales-orders/{oid}/ship/', payload, format='json')
+                    force_authenticate(req, user=request.user)
+                    for meta_key in (
+                        'HTTP_X_CSRFTOKEN',
+                        'HTTP_COOKIE',
+                        'HTTP_AUTHORIZATION',
+                    ):
+                        if meta_key in getattr(request, 'META', {}):
+                            req.META[meta_key] = request.META[meta_key]
+                    if getattr(request, 'COOKIES', None):
+                        req.COOKIES = request.COOKIES
+
+                    resp = view(req, pk=oid)
+                    status_code = getattr(resp, 'status_code', 500)
+                    if status_code >= 400:
+                        err = getattr(resp, 'data', None)
+                        if err is None:
+                            err = {'error': 'Ship failed'}
+                        return Response(err, status=status_code)
+                    results.append(resp.data)
+
+            return Response(
+                {'combined_shipment_key': str(key), 'shipments': results},
+                status=status.HTTP_200_OK,
+            )
+        except Exception as e:
+            import logging
+            import traceback
+
+            logging.getLogger(__name__).exception('combined_ship failed')
+            return Response(
+                {'error': str(e), 'detail': traceback.format_exc()},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
     
     @action(detail=True, methods=['post'])
     def issue(self, request, pk=None):
@@ -6988,6 +7173,81 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
         # Return updated sales order
         serializer = self.get_serializer(sales_order)
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['post'], url_path='revert-to-draft')
+    def revert_to_draft(self, request, pk=None):
+        """
+        Staff: move issued / allocated / ready-for-shipment back to draft so lines can be edited,
+        then POST /issue/ again. Clears allocations (same inventory rules as cancel).
+        Blocked if any shipment exists, any shipped quantity on lines, or non-draft invoices.
+        """
+        from django.db import transaction
+
+        if not request.user.is_staff:
+            return Response(
+                {'error': 'Only staff can revert a sales order to draft.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        sales_order = self.get_object()
+
+        if sales_order.status not in ('issued', 'allocated', 'ready_for_shipment'):
+            return Response(
+                {
+                    'error': (
+                        f'Only issued, allocated, or ready-for-shipment orders can be reverted. '
+                        f'Current status: {sales_order.status}'
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if sales_order.shipments.exists():
+            return Response(
+                {
+                    'error': (
+                        'This order has checkout shipments. Reverse each shipment first '
+                        '(warehouse: Reverse on the release row), then revert to draft.'
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        for item in sales_order.items.all():
+            if float(item.quantity_shipped or 0) > 1e-6:
+                return Response(
+                    {
+                        'error': (
+                            'This order has shipped quantities on file. Reverse shipments first, '
+                            'then revert to draft.'
+                        )
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        blocking_invoices = Invoice.objects.filter(sales_order=sales_order).exclude(
+            status__in=('draft', 'cancelled')
+        )
+        if blocking_invoices.exists():
+            nums = ', '.join(blocking_invoices.values_list('invoice_number', flat=True)[:5])
+            return Response(
+                {
+                    'error': (
+                        f'Void non-draft invoices in Finance first (or cancel them). '
+                        f'Blocking invoice(s): {nums}'
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        with transaction.atomic():
+            release_sales_order_allocations(sales_order)
+            Invoice.objects.filter(sales_order=sales_order, status='draft').update(status='cancelled')
+            sales_order.status = 'draft'
+            sales_order.save(update_fields=['status'])
+
+        sales_order.refresh_from_db()
+        return Response(self.get_serializer(sales_order).data, status=status.HTTP_200_OK)
     
     @action(detail=True, methods=['post'])
     def cancel(self, request, pk=None):
@@ -6997,54 +7257,8 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
         sales_order = self.get_object()
         
         with transaction.atomic():
-            # Find all allocations
-            for so_item in sales_order.items.all():
-                allocations = SalesOrderLot.objects.filter(sales_order_item=so_item)
-                
-                for allocation in allocations:
-                    lot = allocation.lot
-                    
-                    # Check if this is a distributed item lot (created for this sales order)
-                    # We can identify this by checking if the lot was created recently and
-                    # has a transaction referencing this sales order
-                    is_distributed_lot = InventoryTransaction.objects.filter(
-                        lot=lot,
-                        reference_number=sales_order.so_number,
-                        notes__icontains='distributed'
-                    ).exists()
-                    
-                    if is_distributed_lot:
-                        # This is a distributed item lot - delete it and reverse raw materials
-                        # Find the raw material transactions
-                        raw_material_transactions = InventoryTransaction.objects.filter(
-                            reference_number=sales_order.so_number,
-                            quantity__lt=0,  # Negative quantities are raw materials
-                            notes__icontains=lot.lot_number
-                        )
-                        
-                        # Reverse raw material quantities
-                        for trans in raw_material_transactions:
-                            raw_lot = trans.lot
-                            raw_lot.quantity_remaining += abs(trans.quantity)
-                            raw_lot.save()
-                            
-                            # Create reverse transaction
-                            InventoryTransaction.objects.create(
-                                transaction_type='adjustment',
-                                lot=raw_lot,
-                                quantity=abs(trans.quantity),
-                                reference_number=sales_order.so_number,
-                                notes=f'Reversed allocation from cancelled order {sales_order.so_number}'
-                            )
-                        
-                        # Delete the distributed lot
-                        lot.delete()
-                
-                # Delete all allocations
-                allocations.delete()
-                so_item.quantity_allocated = 0.0
-                so_item.save()
-            
+            release_sales_order_allocations(sales_order)
+
             # Cancel any invoices
             Invoice.objects.filter(sales_order=sales_order).update(status='cancelled')
             
@@ -7213,6 +7427,23 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        # Warehouse orders with no allocation and no shipped qty have nothing to document at order level
+        # (e.g. after clearing allocations while a checkout shipment row still exists).
+        if not getattr(sales_order, 'drop_ship', False):
+            items = list(sales_order.items.all())
+            total_alloc = sum(float(getattr(i, 'quantity_allocated', 0) or 0) for i in items)
+            total_shipped = sum(float(getattr(i, 'quantity_shipped', 0) or 0) for i in items)
+            if total_alloc <= 0 and total_shipped <= 0:
+                return Response(
+                    {
+                        'error': (
+                            'Nothing is allocated and nothing has shipped on this order. Allocate inventory '
+                            'before opening the order packing list, or use Packing list on a shipment Release.'
+                        )
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
         try:
             from .packing_list_pdf_html import generate_packing_list_pdf_from_html
             pdf_content = generate_packing_list_pdf_from_html(sales_order)
@@ -7289,6 +7520,70 @@ class ShipmentViewSet(viewsets.ReadOnlyModelViewSet):
             qs = qs.filter(sales_order_id=so_id)
         return qs
 
+    @action(detail=False, methods=['get'], url_path='combined-packing-list', url_name='combined-packing-list')
+    def combined_packing_list(self, request):
+        """PDF packing list for all shipments sharing combined_shipment_key (same truck / handling units)."""
+        import uuid as uuid_mod
+
+        from django.http import HttpResponse
+
+        raw_key = request.query_params.get('combined_shipment_key') or request.query_params.get('key')
+        if not raw_key:
+            return Response(
+                {'error': 'Query parameter combined_shipment_key (or key) is required.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            ck = uuid_mod.UUID(str(raw_key))
+        except ValueError:
+            return Response({'error': 'Invalid combined_shipment_key UUID.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        shipments = list(
+            Shipment.objects.filter(combined_shipment_key=ck)
+            .select_related('sales_order', 'sales_order__customer', 'sales_order__ship_to_location')
+            .prefetch_related('items__sales_order_item__item')
+            .order_by('id')
+        )
+        if len(shipments) < 2:
+            return Response(
+                {'error': 'No combined shipment found for this key (need at least two shipment rows).'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        c0 = shipments[0].sales_order.customer_id
+        s0 = shipments[0].sales_order.ship_to_location_id
+        for sh in shipments:
+            so = sh.sales_order
+            if so.customer_id != c0 or so.ship_to_location_id != s0:
+                return Response(
+                    {'error': 'Combined shipments must share the same customer and ship-to location.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        try:
+            from .packing_list_pdf_html import generate_combined_packing_list_pdf
+
+            pdf_content = generate_combined_packing_list_pdf(shipments)
+            if pdf_content:
+                safe_nums = '_'.join(
+                    (getattr(sh.sales_order, 'so_number', None) or str(sh.sales_order_id)) for sh in shipments[:6]
+                )
+                response = HttpResponse(pdf_content, content_type='application/pdf')
+                response['Content-Disposition'] = f'inline; filename="Packing_List_combined_{safe_nums}.pdf"'
+                response['X-Content-Type-Options'] = 'nosniff'
+                return response
+        except Exception as e:
+            import logging
+            import traceback
+
+            logging.getLogger(__name__).exception('combined packing list PDF failed: %s', e)
+            logging.getLogger(__name__).error(traceback.format_exc())
+
+        return Response(
+            {'error': 'Failed to generate combined packing list PDF.'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
     @action(detail=True, methods=['get'], url_path='packing-list', url_name='packing-list')
     def packing_list(self, request, pk=None):
         """Generate packing list PDF for this shipment (one PDF per release)."""
@@ -7312,6 +7607,28 @@ class ShipmentViewSet(viewsets.ReadOnlyModelViewSet):
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
+    @action(detail=True, methods=['post'], url_path='reverse')
+    def reverse(self, request, pk=None):
+        """
+        Undo one checkout shipment: inventory, allocations, draft invoice/AR, then delete Shipment.
+        Call this before reversing a production batch whose output lot was shipped.
+        """
+        from rest_framework.exceptions import PermissionDenied
+
+        if not request.user or not request.user.is_authenticated:
+            raise PermissionDenied('Authentication required.')
+        if not (getattr(request.user, 'is_staff', False) or getattr(request.user, 'is_superuser', False)):
+            raise PermissionDenied('Only staff can reverse a shipment.')
+
+        from .shipment_reversal import reverse_shipment
+
+        shipment = self.get_object()
+        try:
+            result = reverse_shipment(shipment.pk)
+            return Response(result, status=status.HTTP_200_OK)
+        except ValueError as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
 
 class InvoiceViewSet(viewsets.ModelViewSet):
     serializer_class = InvoiceSerializer
@@ -7333,7 +7650,11 @@ class InvoiceViewSet(viewsets.ModelViewSet):
         # Build queryset - use raw SQL if column doesn't exist to avoid ORM errors
         if has_sales_order_column:
             queryset = Invoice.objects.select_related(
-                'sales_order', 'sales_order__customer', 'sales_order__ship_to_location'
+                'sales_order',
+                'sales_order__customer',
+                'sales_order__ship_to_location',
+                'contact',
+                'contact__customer',
             ).prefetch_related('items', 'sales_order__shipments').all()
         else:
             # No sales_order_id column - use raw SQL to avoid ORM trying to access it
@@ -7530,6 +7851,8 @@ class InvoiceViewSet(viewsets.ModelViewSet):
                         else:
                             invoice.sales_order_id = None
                             invoice._sales_order_id = None
+                        if 'contact_id' in data and data.get('contact_id'):
+                            invoice.contact_id = data['contact_id']
                         
                         invoice._state.adding = False
                         invoice._state.db = connection
@@ -7770,6 +8093,8 @@ class InvoiceViewSet(viewsets.ModelViewSet):
                     if 'sales_order_id' in mapped_dict and mapped_dict['sales_order_id']:
                         invoice.sales_order_id = mapped_dict['sales_order_id']
                         invoice._sales_order_id = mapped_dict['sales_order_id']
+                    if 'contact_id' in mapped_dict and mapped_dict.get('contact_id'):
+                        invoice.contact_id = mapped_dict['contact_id']
                     
                     invoice._state.adding = False
                     invoice._state.db = connection
@@ -8238,6 +8563,8 @@ class InvoiceViewSet(viewsets.ModelViewSet):
                     if 'sales_order_id' in mapped_dict and mapped_dict['sales_order_id']:
                         invoice.sales_order_id = mapped_dict['sales_order_id']
                         invoice._sales_order_id = mapped_dict['sales_order_id']
+                    if 'contact_id' in mapped_dict and mapped_dict.get('contact_id'):
+                        invoice.contact_id = mapped_dict['contact_id']
                     
                     invoice._state.adding = False
                     invoice._state.db = connection
@@ -8496,6 +8823,8 @@ class InvoiceViewSet(viewsets.ModelViewSet):
                     
                     if 'sales_order_id' in mapped_dict and mapped_dict['sales_order_id']:
                         invoice.sales_order_id = mapped_dict['sales_order_id']
+                    if 'contact_id' in mapped_dict and mapped_dict.get('contact_id'):
+                        invoice.contact_id = mapped_dict['contact_id']
                     
                     invoice._state.adding = False
                     invoice._state.db = connection

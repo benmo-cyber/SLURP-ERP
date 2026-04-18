@@ -64,6 +64,39 @@ export const shipSalesOrder = async (
   return response.data
 }
 
+export type CombinedShipOrderSpec = {
+  sales_order_id: number
+  items?: Array<{ item_id: number; quantity: number }>
+}
+
+/** Check out 2+ orders on one truck: shared carrier/tracking/pieces/dimensions; freight on first order only. */
+export const combinedShipSalesOrders = async (
+  payload: {
+    orders: CombinedShipOrderSpec[]
+    ship_date: string
+    piece_dimensions: string[]
+    piece_weights: string[]
+    pieces: number
+    tracking_number?: string
+    carrier: string
+    invoice_date?: string
+  },
+  options?: { idempotencyKey?: string }
+) => {
+  const idempotencyKey =
+    options?.idempotencyKey ??
+    (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(36).slice(2)}`)
+  const response = await api.post('/sales-orders/combined-ship/', payload, {
+    headers: { 'X-Idempotency-Key': idempotencyKey },
+  })
+  return response.data as {
+    combined_shipment_key: string
+    shipments: Array<Record<string, unknown>>
+  }
+}
+
 export const cancelSalesOrder = async (id: number) => {
   const response = await api.post(`/sales-orders/${id}/cancel/`)
   return response.data
@@ -77,6 +110,12 @@ export type IssueSalesOrderPayload = {
 
 export const issueSalesOrder = async (id: number, payload?: IssueSalesOrderPayload) => {
   const response = await api.post(`/sales-orders/${id}/issue/`, payload ?? {})
+  return response.data
+}
+
+/** Staff: issued/allocated/ready → draft, clears allocations; requires no shipments / shipped qty / non-draft invoices. */
+export const revertSalesOrderToDraft = async (id: number) => {
+  const response = await api.post(`/sales-orders/${id}/revert-to-draft/`)
   return response.data
 }
 
@@ -104,6 +143,14 @@ export const getPackingListUrlForShipment = (shipmentId: number) =>
 /** Open packing list for a shipment in a new tab. */
 export const openPackingListForShipment = (shipmentId: number): void => {
   window.open(getPackingListUrlForShipment(shipmentId), '_blank', 'noopener,noreferrer')
+}
+
+/** One PDF for multiple shipments checked out together (same combined_shipment_key). */
+export const getCombinedPackingListUrl = (combinedShipmentKey: string) =>
+  `${API_BASE_URL.replace(/\/$/, '')}/shipments/combined-packing-list/?combined_shipment_key=${encodeURIComponent(combinedShipmentKey)}`
+
+export const openCombinedPackingList = (combinedShipmentKey: string): void => {
+  window.open(getCombinedPackingListUrl(combinedShipmentKey), '_blank', 'noopener,noreferrer')
 }
 
 /** Fetch shipments for a sales order (optional; invoice may already include sales_order.shipments). */
@@ -148,14 +195,24 @@ export interface ParsedCustomerPO {
   extracted_preview?: string
 }
 
+const formDataUploadConfig = {
+  headers: { Accept: 'application/json' as const },
+  maxBodyLength: 50 * 1024 * 1024,
+  maxContentLength: 50 * 1024 * 1024,
+  transformRequest: [
+    (data: unknown, headers: Record<string, string>) => {
+      if (data instanceof FormData) {
+        delete headers['Content-Type']
+      }
+      return data
+    },
+  ],
+}
+
 export const parseCustomerPo = async (file: File): Promise<ParsedCustomerPO> => {
   const formData = new FormData()
   formData.append('file', file)
-  const response = await axios.post(`${API_BASE_URL}/sales-orders/parse-customer-po/`, formData, {
-    headers: { Accept: 'application/json' },
-    maxBodyLength: 50 * 1024 * 1024,
-    maxContentLength: 50 * 1024 * 1024,
-  })
+  const response = await api.post<ParsedCustomerPO>('/sales-orders/parse-customer-po/', formData, formDataUploadConfig)
   return response.data
 }
 
@@ -163,10 +220,6 @@ export const parseCustomerPo = async (file: File): Promise<ParsedCustomerPO> => 
 export const uploadCustomerPo = async (salesOrderId: number, file: File): Promise<void> => {
   const formData = new FormData()
   formData.append('file', file)
-  await axios.post(`${API_BASE_URL}/sales-orders/${salesOrderId}/customer-po/`, formData, {
-    headers: { Accept: 'application/json' },
-    maxBodyLength: 50 * 1024 * 1024,
-    maxContentLength: 50 * 1024 * 1024,
-  })
+  await api.post(`/sales-orders/${salesOrderId}/customer-po/`, formData, formDataUploadConfig)
 }
 

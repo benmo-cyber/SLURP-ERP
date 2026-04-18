@@ -81,6 +81,9 @@
     {% if pieces and pieces != '—' %}
     <tr><td><strong>Pieces:</strong></td><td colspan="3">{{ pieces }}</td></tr>
     {% endif %}
+    {% if combined_note %}
+    <tr><td colspan="4" style="font-style: italic;">{{ combined_note }}</td></tr>
+    {% endif %}
   </table>
 
   {% if piece_dimension_rows and piece_dimension_rows|length > 0 %}
@@ -119,12 +122,18 @@
     </thead>
     <tbody>
       {% for row in line_items %}
+      {% if row.is_section %}
+      <tr>
+        <td colspan="4" style="font-weight: bold; background: #f0f0f0; padding: 6px;">{{ row.section_title }}</td>
+      </tr>
+      {% else %}
       <tr>
         <td class="col-sku">{{ row.sku }}</td>
         <td>{{ row.description }}</td>
         <td class="col-lots">{{ row.lots|default('—') }}</td>
         <td class="col-qty">{{ row.quantity }}</td>
       </tr>
+      {% endif %}
       {% endfor %}
     </tbody>
   </table>

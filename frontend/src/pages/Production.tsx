@@ -61,8 +61,16 @@ function Production() {
       console.error('Failed to reverse batch:', error)
       console.error('Error response:', error.response)
       console.error('Error data:', error.response?.data)
-      const errorMsg = error.response?.data?.error || error.response?.data?.detail || error.message || 'Failed to reverse batch ticket'
-      alert(errorMsg)
+      const data = error.response?.data
+      const blockers = data?.blockers
+      if (Array.isArray(blockers) && blockers.length > 0) {
+        const lines = blockers.map((b: { message?: string }) => b.message || JSON.stringify(b)).join('\n\n')
+        alert(`${data?.error || 'Cannot reverse this batch.'}\n\n${lines}`)
+      } else {
+        const errorMsg =
+          data?.error || data?.detail || error.message || 'Failed to reverse batch ticket'
+        alert(errorMsg)
+      }
     } finally {
       setBatchToUnfk(null)
     }

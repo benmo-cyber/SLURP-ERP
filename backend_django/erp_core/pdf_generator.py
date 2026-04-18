@@ -226,23 +226,116 @@ def add_logo_header(story, logo_path=None):
             logger.warning(f"Could not load logo: {e}")
 
 
+def _customer_has_any_bill_to_field(c) -> bool:
+    bt_a = (getattr(c, 'bill_to_address', None) or '').strip()
+    bt_ci = (getattr(c, 'bill_to_city', None) or '').strip()
+    bt_st = (getattr(c, 'bill_to_state', None) or '').strip()
+    bt_z = (getattr(c, 'bill_to_zip_code', None) or '').strip()
+    bt_co = (getattr(c, 'bill_to_country', None) or '').strip()
+    return bool(bt_a or bt_ci or bt_st or bt_z or bt_co)
+
+
+def _strict_bill_to_lines_from_customer(c):
+    """
+    BILL TO on invoices: if any bill_to_* is populated, use ONLY those fields (no HQ fill-in for blanks).
+    Per-field HQ fallback was pulling headquarters street onto invoices where bill-to city/state differed
+    from ship-to, making the bill block look like the ship-to address.
+    If all bill_to_* are empty, use headquarters (address / city / state / zip).
+    """
+    name = (getattr(c, 'name', None) or '').strip()
+    lines = []
+    if name:
+        lines.append(name)
+
+    if _customer_has_any_bill_to_field(c):
+        bt_a = (getattr(c, 'bill_to_address', None) or '').strip()
+        bt_ci = (getattr(c, 'bill_to_city', None) or '').strip()
+        bt_st = (getattr(c, 'bill_to_state', None) or '').strip()
+        bt_z = (getattr(c, 'bill_to_zip_code', None) or '').strip()
+        bt_co = (getattr(c, 'bill_to_country', None) or '').strip()
+        if bt_a:
+            lines.append(bt_a)
+        csz = ', '.join(filter(None, [bt_ci, bt_st, bt_z])).strip()
+        if csz:
+            lines.append(csz)
+        if bt_co:
+            lines.append(bt_co)
+    else:
+        hq_a = (getattr(c, 'address', None) or '').strip()
+        hq_ci = (getattr(c, 'city', None) or '').strip()
+        hq_st = (getattr(c, 'state', None) or '').strip()
+        hq_z = (getattr(c, 'zip_code', None) or '').strip()
+        if hq_a:
+            lines.append(hq_a)
+        csz = ', '.join(filter(None, [hq_ci, hq_st, hq_z])).strip()
+        if csz:
+            lines.append(csz)
+
+    phone = (getattr(c, 'phone', None) or '').strip()
+    if phone:
+        lines.append('Phone: ' + phone)
+    return [l for l in lines if l]
+
+
+def bill_to_dict_for_invoice_template(customer):
+    """Structured bill-to for AcroForm fills; same strict vs HQ rules as _strict_bill_to_lines_from_customer."""
+    if not customer:
+        return {}
+    name = (getattr(customer, 'name', None) or '').strip()
+    if _customer_has_any_bill_to_field(customer):
+        return {
+            'company_name': name,
+            'street_address': (getattr(customer, 'bill_to_address', None) or '').strip(),
+            'city': (getattr(customer, 'bill_to_city', None) or '').strip(),
+            'state': (getattr(customer, 'bill_to_state', None) or '').strip(),
+            'zipcode': (getattr(customer, 'bill_to_zip_code', None) or '').strip(),
+            'phone': (getattr(customer, 'phone', None) or '').strip(),
+        }
+    return {
+        'company_name': name,
+        'street_address': (getattr(customer, 'address', None) or '').strip(),
+        'city': (getattr(customer, 'city', None) or '').strip(),
+        'state': (getattr(customer, 'state', None) or '').strip(),
+        'zipcode': (getattr(customer, 'zip_code', None) or '').strip(),
+        'phone': (getattr(customer, 'phone', None) or '').strip(),
+    }
+
+
+def _invoice_bill_to_from_sales_order_legacy(so):
+    """When SalesOrder has no Customer FK, use denormalized name/address on the order."""
+    lines = []
+    n = (getattr(so, 'customer_name', None) or '').strip()
+    if n:
+        lines.append(n)
+    addr = (getattr(so, 'customer_address', None) or '').strip()
+    if addr:
+        lines.append(addr)
+    csz = ', '.join(filter(None, [
+        (getattr(so, 'customer_city', None) or '').strip(),
+        (getattr(so, 'customer_state', None) or '').strip(),
+        (getattr(so, 'customer_zip', None) or '').strip(),
+    ])).strip()
+    if csz:
+        lines.append(csz)
+    ph = (getattr(so, 'customer_phone', None) or '').strip()
+    if ph:
+        lines.append('Phone: ' + ph)
+    return [l for l in lines if l]
+
+
 def _invoice_bill_to(invoice):
-    """Bill-to from customer profile (customer on the sales order)."""
+    """Bill-to lines + payment terms (terms from invoice_helpers, same as due-date logic)."""
+    from .invoice_helpers import resolve_customer_for_invoice, resolve_payment_terms_for_invoice
+
+    terms = resolve_payment_terms_for_invoice(invoice)
+    c = resolve_customer_for_invoice(invoice)
+    if c:
+        return _strict_bill_to_lines_from_customer(c), terms
+
     so = getattr(invoice, 'sales_order', None)
-    c = getattr(so, 'customer', None) if so else None
-    if not c:
-        return [], ''
-    lines = [
-        (getattr(c, 'name', None) or '').strip(),
-        (getattr(c, 'address', None) or '').strip(),
-        ', '.join(filter(None, [
-            (getattr(c, 'city', None) or '').strip(),
-            (getattr(c, 'state', None) or '').strip(),
-            (getattr(c, 'zip_code', None) or '').strip(),
-        ])).strip(),
-        ('Phone: ' + (getattr(c, 'phone', None) or '').strip()) if getattr(c, 'phone', None) else '',
-    ]
-    return [l for l in lines if l], (getattr(c, 'payment_terms', None) or '').strip()
+    if so:
+        return _invoice_bill_to_from_sales_order_legacy(so), terms
+    return [], terms
 
 
 def _invoice_ship_to(invoice):
@@ -403,13 +496,12 @@ def generate_invoice_pdf(invoice):
         items = list(invoice.items.select_related('item', 'sales_order_item__item').all())
     except Exception:
         items = []
-    row_headers = ['QUANTITY', 'DESCRIPTION', 'LOT #', 'UNIT PRICE', 'TOTAL']
+    row_headers = ['QUANTITY', 'DESCRIPTION', 'UNIT PRICE', 'TOTAL']
     rows = [row_headers]
     for it in items:
         desc = (getattr(it, 'description', None) or '').strip()
         if not desc and getattr(it, 'item', None):
             desc = (getattr(it.item, 'name', None) or getattr(it.item, 'sku', None) or '').strip()
-        lot = (getattr(it, 'lot_number', None) or '').strip()
         qty = getattr(it, 'quantity', None)
         uom = unit_of_measure_for_invoice_line(it)
         up = getattr(it, 'unit_price', None)
@@ -419,13 +511,12 @@ def generate_invoice_pdf(invoice):
         rows.append([
             format_invoice_quantity_display(qty, uom),
             desc or '—',
-            lot or '—',
             f"${up:,.2f}" if up is not None else '—',
             f"${total:,.2f}" if total is not None else '—',
         ])
     if len(rows) == 1:
-        rows.append(['—', '—', '—', '—', '—'])
-    items_tbl = Table(rows, colWidths=[0.95*inch, 2.35*inch, 1.0*inch, 0.9*inch, 0.9*inch])
+        rows.append(['—', '—', '—', '—'])
+    items_tbl = Table(rows, colWidths=[1.0*inch, 3.35*inch, 0.9*inch, 0.85*inch])
     items_tbl.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, 0), header_bg),
         ('TEXTCOLOR', (0, 0), (-1, -1), black),
@@ -433,7 +524,7 @@ def generate_invoice_pdf(invoice):
         ('FONTNAME', (0, 1), (-1, -1), body_font),
         ('FONTSIZE', (0, 0), (-1, -1), font_9),
         ('ALIGN', (0, 0), (0, -1), 'LEFT'),
-        ('ALIGN', (3, 0), (-1, -1), 'RIGHT'),
+        ('ALIGN', (2, 0), (-1, -1), 'RIGHT'),
         ('GRID', (0, 0), (-1, -1), 0.5, border_color),
         ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#fafafa')]),
         ('TOPPADDING', (0, 0), (-1, -1), 5),

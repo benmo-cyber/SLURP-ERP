@@ -1772,6 +1772,12 @@ class Shipment(models.Model):
         null=True,
         help_text='List of weight strings per handling unit (same length as pieces), e.g. "45 lbs"',
     )
+    combined_shipment_key = models.UUIDField(
+        blank=True,
+        null=True,
+        db_index=True,
+        help_text='When set, links multiple shipments checked out together (one truck, shared packing list).',
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     
     class Meta:
@@ -1837,26 +1843,13 @@ class Invoice(models.Model):
         return f"{self.invoice_number}"
 
     def _payment_terms_string_for_due_date(self):
-        """Customer payment terms from linked sales order or bill-to contact."""
-        if self.sales_order_id:
-            try:
-                so = self.sales_order
-                if so is None:
-                    so = SalesOrder.objects.filter(pk=self.sales_order_id).select_related('customer').first()
-                if so and getattr(so, 'customer', None):
-                    return (so.customer.payment_terms or '').strip()
-            except Exception:
-                pass
-        if self.contact_id:
-            try:
-                cc = self.contact
-                if cc is None:
-                    cc = CustomerContact.objects.filter(pk=self.contact_id).select_related('customer').first()
-                if cc and getattr(cc, 'customer', None):
-                    return (cc.customer.payment_terms or '').strip()
-            except Exception:
-                pass
-        return ''
+        """Customer payment terms — same resolution as invoice PDFs (see invoice_helpers)."""
+        try:
+            from .invoice_helpers import resolve_payment_terms_for_invoice
+
+            return resolve_payment_terms_for_invoice(self)
+        except Exception:
+            return ''
 
     def save(self, *args, **kwargs):
         from .invoice_helpers import due_date_from_issue_and_payment_terms

@@ -59,8 +59,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [])
 
   useEffect(() => {
-    authApi.getCsrf().catch(() => {})
-    refreshUser()
+    let cancelled = false
+    ;(async () => {
+      await authApi.getCsrf().catch(() => {})
+      if (!cancelled) await refreshUser()
+    })()
+    return () => {
+      cancelled = true
+    }
   }, [refreshUser])
 
   useEffect(() => {
