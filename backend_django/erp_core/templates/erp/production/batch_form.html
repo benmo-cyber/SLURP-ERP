@@ -1,0 +1,15 @@
+{% extends "erp/base.html" %}
+{% block title %}New Batch — SLURP ERP{% endblock %}
+{% block content %}
+<div class="page-header"><h1>Create Batch Ticket</h1><a href="{% url 'production_dashboard' %}" class="btn btn-secondary">Back</a></div>
+<div class="card">
+  <form method="post">
+    {% csrf_token %}
+    {% for field in form %}<div class="form-row"><label>{{ field.label }}</label>{{ field }}</div>{% endfor %}
+    <h3 style="margin-top:1rem;">Input Lots</h3>
+    {{ formset.management_form }}
+    {% for f in formset %}<div class="formset-row form-grid">{% for field in f %}<div class="form-row"><label>{{ field.label }}</label>{{ field }}</div>{% endfor %}</div>{% endfor %}
+    <button type="submit" class="btn btn-primary">Create Batch</button>
+  </form>
+</div>
+{% endblock %}

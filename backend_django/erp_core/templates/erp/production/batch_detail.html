@@ -1,0 +1,33 @@
+{% extends "erp/base.html" %}
+{% block title %}Batch {{ batch.batch_number }} — SLURP ERP{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>{{ batch.batch_number }} <span class="badge badge-{{ batch.status }}">{{ batch.get_status_display }}</span></h1>
+  <a href="{% url 'production_dashboard' %}" class="btn btn-secondary">Back</a>
+</div>
+<div class="card detail-grid">
+  <div><strong>Type:</strong> {{ batch.get_batch_type_display }}</div>
+  <div><strong>Item:</strong> {{ batch.finished_good_item.name }}</div>
+  <div><strong>Qty Produced:</strong> {{ batch.quantity_produced|floatformat:2 }}</div>
+  <div><strong>Qty Actual:</strong> {{ batch.quantity_actual|floatformat:2 }}</div>
+</div>
+<div class="card">
+  <h3>Inputs</h3>
+  <table class="data"><thead><tr><th>Lot</th><th>Item</th><th>Qty Used</th></tr></thead>
+  <tbody>{% for inp in batch.inputs.all %}<tr><td>{{ inp.lot.lot_number }}</td><td>{{ inp.lot.item.sku }}</td><td>{{ inp.quantity_used|floatformat:2 }}</td></tr>{% empty %}<tr><td colspan="3">None</td></tr>{% endfor %}</tbody></table>
+  <h3 style="margin-top:1rem;">Outputs</h3>
+  <table class="data"><thead><tr><th>Lot</th><th>Qty</th></tr></thead>
+  <tbody>{% for out in batch.outputs.all %}<tr><td>{{ out.lot.lot_number }}</td><td>{{ out.quantity_produced|floatformat:2 }}</td></tr>{% empty %}<tr><td colspan="2">None</td></tr>{% endfor %}</tbody></table>
+</div>
+{% if batch.status != 'closed' %}
+<div class="card">
+  <h3>Close Batch</h3>
+  <form method="post" action="{% url 'production_batch_close' batch.pk %}">
+    {% csrf_token %}
+    {% for field in close_form %}<div class="form-row"><label>{{ field.label }}</label>{{ field }}</div>{% endfor %}
+    <button type="submit" class="btn btn-primary">Close Batch</button>
+  </form>
+</div>
+<form method="post" action="{% url 'production_batch_reverse' batch.pk %}">{% csrf_token %}<button class="btn btn-danger">UNFK Batch</button></form>
+{% endif %}
+{% endblock %}

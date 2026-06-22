@@ -1,0 +1,41 @@
+{% extends "erp/base.html" %}
+{% block title %}{{ customer.name }} — SLURP ERP{% endblock %}
+{% block content %}
+<div class="page-header"><h1>{{ customer.name }}</h1><a href="{% url 'sales_dashboard' %}" class="btn btn-secondary">Back</a></div>
+<div class="tabs">
+  <a href="?tab=overview" {% if tab == 'overview' %}class="active"{% endif %}>Overview</a>
+  <a href="?tab=ship-to" {% if tab == 'ship-to' %}class="active"{% endif %}>Ship-To</a>
+  <a href="?tab=contacts" {% if tab == 'contacts' %}class="active"{% endif %}>Contacts</a>
+  <a href="?tab=calls" {% if tab == 'calls' %}class="active"{% endif %}>Sales Calls</a>
+  <a href="?tab=forecasts" {% if tab == 'forecasts' %}class="active"{% endif %}>Forecasts</a>
+  <a href="?tab=pricing" {% if tab == 'pricing' %}class="active"{% endif %}>Pricing</a>
+</div>
+{% if tab == 'overview' %}
+<div class="card detail-grid">
+  <div><strong>ID:</strong> {{ customer.customer_id }}</div>
+  <div><strong>Email:</strong> {{ customer.email|default:"—" }}</div>
+  <div><strong>Phone:</strong> {{ customer.phone|default:"—" }}</div>
+  <div><strong>Payment Terms:</strong> {{ customer.payment_terms|default:"—" }}</div>
+</div>
+{% elif tab == 'ship-to' %}
+<div class="card"><table class="data"><thead><tr><th>Location</th><th>City</th><th>Default</th></tr></thead>
+<tbody>{% for loc in customer.ship_to_locations.all %}<tr><td>{{ loc.location_name }}</td><td>{{ loc.city }}</td><td>{% if loc.is_default %}Yes{% endif %}</td></tr>{% endfor %}</tbody></table>
+<form method="post" action="{% url 'customer_sub_create' customer.pk 'ship-to' %}">{% csrf_token %}{% for field in ship_to_form %}<div class="form-row"><label>{{ field.label }}</label>{{ field }}</div>{% endfor %}<button class="btn btn-primary">Add Location</button></form></div>
+{% elif tab == 'contacts' %}
+<div class="card"><table class="data"><thead><tr><th>Name</th><th>Title</th><th>Email</th></tr></thead>
+<tbody>{% for c in customer.contacts.all %}<tr><td>{{ c.full_name }}</td><td>{{ c.title|default:"—" }}</td><td>{{ c.email|default:"—" }}</td></tr>{% endfor %}</tbody></table>
+<form method="post" action="{% url 'customer_sub_create' customer.pk 'contact' %}">{% csrf_token %}{% for field in contact_form %}<div class="form-row"><label>{{ field.label }}</label>{{ field }}</div>{% endfor %}<button class="btn btn-primary">Add Contact</button></form></div>
+{% elif tab == 'calls' %}
+<div class="card"><table class="data"><thead><tr><th>Date</th><th>Type</th><th>Subject</th></tr></thead>
+<tbody>{% for call in customer.sales_calls.all %}<tr><td>{{ call.call_date|date:"Y-m-d H:i" }}</td><td>{{ call.get_call_type_display }}</td><td>{{ call.subject|default:"—" }}</td></tr>{% endfor %}</tbody></table>
+<form method="post" action="{% url 'customer_sub_create' customer.pk 'sales-call' %}">{% csrf_token %}{% for field in sales_call_form %}<div class="form-row"><label>{{ field.label }}</label>{{ field }}</div>{% endfor %}<button class="btn btn-primary">Log Call</button></form></div>
+{% elif tab == 'forecasts' %}
+<div class="card"><table class="data"><thead><tr><th>Period</th><th>Item</th><th>Qty</th></tr></thead>
+<tbody>{% for f in customer.forecasts.all %}<tr><td>{{ f.forecast_period }}</td><td>{{ f.item.sku }}</td><td>{{ f.forecast_quantity|floatformat:2 }}</td></tr>{% endfor %}</tbody></table>
+<form method="post" action="{% url 'customer_sub_create' customer.pk 'forecast' %}">{% csrf_token %}{% for field in forecast_form %}<div class="form-row"><label>{{ field.label }}</label>{{ field }}</div>{% endfor %}<button class="btn btn-primary">Add Forecast</button></form></div>
+{% else %}
+<div class="card"><table class="data"><thead><tr><th>Item</th><th>Price</th><th>Effective</th></tr></thead>
+<tbody>{% for p in customer.pricing.all %}<tr><td>{{ p.item.sku }}</td><td>${{ p.unit_price|floatformat:2 }}/{{ p.unit_of_measure }}</td><td>{{ p.effective_date }}</td></tr>{% endfor %}</tbody></table>
+<form method="post" action="{% url 'customer_sub_create' customer.pk 'pricing' %}">{% csrf_token %}{% for field in pricing_form %}<div class="form-row"><label>{{ field.label }}</label>{{ field }}</div>{% endfor %}<button class="btn btn-primary">Add Pricing</button></form></div>
+{% endif %}
+{% endblock %}

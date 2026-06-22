@@ -1,0 +1,20 @@
+{% extends "erp/base.html" %}
+{% block title %}New Purchase Order — SLURP ERP{% endblock %}
+{% block content %}
+<div class="page-header"><h1>New Purchase Order</h1><a href="{% url 'inventory_dashboard' %}?tab=pos" class="btn btn-secondary">Back</a></div>
+<div class="card">
+  <form method="post">
+    {% csrf_token %}
+    <h3>Header</h3>
+    {% for field in po_form %}<div class="form-row"><label>{{ field.label }}</label>{{ field }}</div>{% endfor %}
+    <h3 style="margin-top:1.5rem;">Line Items</h3>
+    {{ formset.management_form }}
+    {% for form in formset %}
+    <div class="formset-row form-grid">
+      {% for field in form %}<div class="form-row"><label>{{ field.label }}</label>{{ field }}</div>{% endfor %}
+    </div>
+    {% endfor %}
+    <button type="submit" class="btn btn-primary">Create PO</button>
+  </form>
+</div>
+{% endblock %}

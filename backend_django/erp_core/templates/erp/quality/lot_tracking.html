@@ -1,0 +1,9 @@
+{% extends "erp/base.html" %}
+{% block title %}Lot Tracking — SLURP ERP{% endblock %}
+{% block content %}
+<div class="page-header"><h1>Lot Tracking</h1><a href="{% url 'quality_dashboard' %}" class="btn btn-secondary">Back</a></div>
+<div class="card"><h3>Lots</h3><table class="data"><thead><tr><th>Lot</th><th>SKU</th><th>Status</th><th>Qty Remaining</th><th>Received</th></tr></thead>
+<tbody>{% for lot in lots %}<tr><td>{{ lot.lot_number }}</td><td>{{ lot.item.sku }}</td><td>{{ lot.get_status_display }}</td><td>{{ lot.quantity_remaining|floatformat:2 }}</td><td>{{ lot.received_date|date:"Y-m-d" }}</td></tr>{% endfor %}</tbody></table></div>
+<div class="card"><h3>Recent Batches</h3><table class="data"><thead><tr><th>Batch</th><th>Item</th><th>Status</th></tr></thead>
+<tbody>{% for b in batches %}<tr><td>{{ b.batch_number }}</td><td>{{ b.finished_good_item.sku }}</td><td>{{ b.get_status_display }}</td></tr>{% endfor %}</tbody></table></div>
+{% endblock %}

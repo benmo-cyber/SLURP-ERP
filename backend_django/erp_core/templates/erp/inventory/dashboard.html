@@ -1,0 +1,101 @@
+{% extends "erp/base.html" %}
+{% block title %}Inventory — SLURP ERP{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>Inventory</h1>
+  <div class="actions">
+    <a href="{% url 'check_in' %}" class="btn btn-primary">Check In</a>
+    <a href="{% url 'reverse_check_in' %}" class="btn btn-secondary">Reverse Check-In</a>
+    <a href="{% url 'item_create' %}" class="btn btn-primary">New Item</a>
+    <a href="{% url 'po_create' %}" class="btn btn-primary">New PO</a>
+  </div>
+</div>
+
+<div class="tabs">
+  <a href="?tab=inventory" {% if tab == 'inventory' %}class="active"{% endif %}>Inventory Table</a>
+  <a href="?tab=items" {% if tab == 'items' %}class="active"{% endif %}>Items</a>
+  <a href="?tab=pos" {% if tab == 'pos' %}class="active"{% endif %}>Purchase Orders</a>
+</div>
+
+{% if tab == 'inventory' %}
+<div class="card">
+  <table class="data">
+    <thead>
+      <tr>
+        <th>SKU</th><th>Description</th><th>Type</th>
+        <th>Total Qty</th><th>On Hand</th><th>On Order</th><th>Available</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in inventory %}
+      <tr>
+        <td><strong>{{ row.sku }}</strong></td>
+        <td>{{ row.description }}</td>
+        <td>{{ row.item_type }}</td>
+        <td>{{ row.totals.total_quantity|floatformat:2 }}</td>
+        <td>{{ row.totals.quantity_remaining|floatformat:2 }}</td>
+        <td>{{ row.totals.on_order|floatformat:2 }}</td>
+        <td>{{ row.totals.available|floatformat:2 }}</td>
+      </tr>
+      {% for vendor in row.vendors %}
+      <tr>
+        <td colspan="2" style="padding-left:1.5rem;">↳ {{ vendor.vendor }}</td>
+        <td></td>
+        <td>{{ vendor.total_quantity|floatformat:2 }}</td>
+        <td>{{ vendor.quantity_remaining|floatformat:2 }}</td>
+        <td>{{ vendor.on_order|floatformat:2 }}</td>
+        <td>{{ vendor.available|floatformat:2 }}</td>
+      </tr>
+      {% for lot in vendor.lots %}
+      <tr>
+        <td colspan="2" style="padding-left:2.5rem;">Lot {{ lot.lot_number }}</td>
+        <td><span class="badge badge-{{ lot.status }}">{{ lot.get_status_display }}</span></td>
+        <td>{{ lot.quantity|floatformat:2 }}</td>
+        <td>{{ lot.quantity_remaining|floatformat:2 }}</td>
+        <td></td>
+        <td><a href="{% url 'lot_edit' lot.pk %}" class="btn btn-sm btn-secondary">Edit</a></td>
+      </tr>
+      {% endfor %}
+      {% endfor %}
+      {% empty %}
+      <tr><td colspan="7">No inventory data.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% elif tab == 'items' %}
+<div class="card">
+  <table class="data">
+    <thead><tr><th>SKU</th><th>Name</th><th>Type</th><th>Vendor</th><th>UOM</th><th>On Order</th><th></th></tr></thead>
+    <tbody>
+      {% for item in items %}
+      <tr>
+        <td>{{ item.sku }}</td><td>{{ item.name }}</td><td>{{ item.get_item_type_display }}</td>
+        <td>{{ item.vendor|default:"—" }}</td><td>{{ item.unit_of_measure }}</td>
+        <td>{{ item.on_order|floatformat:2 }}</td>
+        <td><a href="{% url 'item_edit' item.pk %}" class="btn btn-sm btn-secondary">Edit</a></td>
+      </tr>
+      {% empty %}<tr><td colspan="7">No items.</td></tr>{% endfor %}
+    </tbody>
+  </table>
+</div>
+{% elif tab == 'pos' %}
+<div class="card">
+  <table class="data">
+    <thead><tr><th>PO #</th><th>Vendor</th><th>Status</th><th>Expected</th><th>Total</th><th></th></tr></thead>
+    <tbody>
+      {% for po in purchase_orders %}
+      <tr>
+        <td><a href="{% url 'po_detail' po.pk %}">{{ po.po_number }}</a></td>
+        <td>{{ po.vendor_customer_name }}</td>
+        <td><span class="badge badge-{{ po.status }}">{{ po.get_status_display }}</span></td>
+        <td>{{ po.expected_delivery_date|default:"—" }}</td>
+        <td>${{ po.total|floatformat:2 }}</td>
+        <td><a href="{% url 'po_detail' po.pk %}" class="btn btn-sm btn-secondary">View</a></td>
+      </tr>
+      {% empty %}<tr><td colspan="6">No purchase orders.</td></tr>{% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+{% endblock %}

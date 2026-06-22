@@ -1,0 +1,32 @@
+{% extends "erp/base.html" %}
+{% block title %}Checkout {{ sales_order.so_number }} — SLURP ERP{% endblock %}
+{% block content %}
+<div class="page-header"><h1>Checkout — {{ sales_order.so_number }}</h1><a href="{% url 'sales_dashboard' %}?tab=orders" class="btn btn-secondary">Back</a></div>
+<div class="card">
+  <table class="data"><thead><tr><th>Item</th><th>Ordered</th><th>Allocated</th><th>Shipped</th></tr></thead>
+  <tbody>{% for item in sales_order.items.all %}<tr><td>{{ item.item.sku }} — {{ item.item.name }}</td>
+  <td>{{ item.quantity_ordered|floatformat:2 }}</td><td>{{ item.quantity_allocated|floatformat:2 }}</td><td>{{ item.quantity_shipped|floatformat:2 }}</td></tr>{% endfor %}</tbody></table>
+</div>
+{% if sales_order.status != 'shipped' %}
+<div class="card">
+  <h3>Allocate Lots</h3>
+  <form method="post" action="{% url 'sales_order_allocate' sales_order.pk %}">{% csrf_token %}
+  {% for row in allocation_forms %}
+  <div class="formset-row">
+    <strong>{{ row.so_item.item.sku }}</strong> — need {{ row.so_item.quantity_ordered|floatformat:2 }}
+    <div class="form-grid">
+      <div class="form-row"><label>Lot</label><select name="lot_{{ row.so_item.id }}"><option value="">—</option>{% for lot in row.lots %}<option value="{{ lot.pk }}">{{ lot.lot_number }} ({{ lot.quantity_remaining|floatformat:2 }} avail)</option>{% endfor %}</select></div>
+      <div class="form-row"><label>Quantity</label><input type="number" step="0.01" name="qty_{{ row.so_item.id }}" min="0"></div>
+    </div>
+  </div>
+  {% endfor %}
+  <button type="submit" class="btn btn-primary">Allocate</button></form>
+</div>
+<div class="card">
+  <h3>Ship Order</h3>
+  <form method="post" action="{% url 'sales_order_ship' sales_order.pk %}">{% csrf_token %}
+  {% for field in ship_form %}<div class="form-row"><label>{{ field.label }}</label>{{ field }}</div>{% endfor %}
+  <button type="submit" class="btn btn-primary">Ship &amp; Create Invoice</button></form>
+</div>
+{% endif %}
+{% endblock %}

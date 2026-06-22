@@ -1,0 +1,39 @@
+{% extends "erp/base.html" %}
+{% block title %}{{ vendor.name }} — SLURP ERP{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>{{ vendor.name }} <span class="badge badge-{{ vendor.approval_status }}">{{ vendor.get_approval_status_display }}</span></h1>
+  <a href="{% url 'quality_dashboard' %}" class="btn btn-secondary">Back</a>
+</div>
+<div class="tabs">
+  <a href="?tab=overview" {% if tab == 'overview' %}class="active"{% endif %}>Overview</a>
+  <a href="?tab=documents" {% if tab == 'documents' %}class="active"{% endif %}>Documents</a>
+  <a href="?tab=exceptions" {% if tab == 'exceptions' %}class="active"{% endif %}>Exceptions</a>
+  <a href="?tab=history" {% if tab == 'history' %}class="active"{% endif %}>History</a>
+</div>
+{% if tab == 'overview' %}
+<div class="card detail-grid">
+  <div><strong>Contact:</strong> {{ vendor.contact_name|default:"—" }}</div>
+  <div><strong>Email:</strong> {{ vendor.email|default:"—" }}</div>
+  <div><strong>Phone:</strong> {{ vendor.phone|default:"—" }}</div>
+  <div><strong>Risk:</strong> {{ vendor.get_risk_profile_display }}</div>
+</div>
+{% if vendor.approval_status != 'approved' %}
+<form method="post" action="{% url 'vendor_approve' vendor.pk %}">{% csrf_token %}<button class="btn btn-primary">Approve Vendor</button></form>
+{% endif %}
+{% elif tab == 'documents' %}
+<div class="card"><table class="data"><thead><tr><th>Name</th><th>Type</th><th>Uploaded</th></tr></thead>
+<tbody>{% for doc in vendor.documents.all %}<tr><td>{{ doc.document_name }}</td><td>{{ doc.get_document_type_display }}</td><td>{{ doc.uploaded_at|date:"Y-m-d" }}</td></tr>{% empty %}<tr><td colspan="3">No documents.</td></tr>{% endfor %}</tbody></table>
+<form method="post" enctype="multipart/form-data" action="{% url 'document_upload' vendor.pk %}">{% csrf_token %}
+{% for field in document_form %}<div class="form-row"><label>{{ field.label }}</label>{{ field }}</div>{% endfor %}
+<button type="submit" class="btn btn-primary">Upload</button></form></div>
+{% elif tab == 'exceptions' %}
+<div class="card"><table class="data"><thead><tr><th>Material</th><th>Status</th><th>Requested</th><th></th></tr></thead>
+<tbody>{% for exc in vendor.exceptions.all %}<tr><td>{{ exc.material_commodity }}</td><td>{{ exc.get_status_display }}</td><td>{{ exc.requested_date|date:"Y-m-d" }}</td>
+<td>{% if exc.status == 'pending' %}<form method="post" action="{% url 'exception_approve' exc.pk %}">{% csrf_token %}<button class="btn btn-sm btn-primary">Approve</button></form>{% endif %}</td></tr>{% empty %}<tr><td colspan="4">No exceptions.</td></tr>{% endfor %}</tbody></table>
+<form method="post" action="{% url 'exception_create' vendor.pk %}">{% csrf_token %}{% for field in exception_form %}<div class="form-row"><label>{{ field.label }}</label>{{ field }}</div>{% endfor %}<button type="submit" class="btn btn-primary">Submit Exception</button></form></div>
+{% else %}
+<div class="card"><table class="data"><thead><tr><th>Type</th><th>Description</th><th>Date</th></tr></thead>
+<tbody>{% for h in vendor.history.all %}<tr><td>{{ h.get_history_type_display }}</td><td>{{ h.description }}</td><td>{{ h.date|date:"Y-m-d" }}</td></tr>{% empty %}<tr><td colspan="3">No history.</td></tr>{% endfor %}</tbody></table></div>
+{% endif %}
+{% endblock %}

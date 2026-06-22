@@ -1,0 +1,41 @@
+{% extends "erp/base.html" %}
+{% block title %}Finance — SLURP ERP{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>Finance</h1>
+  <div class="actions">
+    <a href="{% url 'account_create' %}" class="btn btn-primary">New Account</a>
+    <a href="{% url 'cost_master_create' %}" class="btn btn-primary">New Cost Master</a>
+    <a href="{% url 'aging_report' %}" class="btn btn-secondary">Aging Report</a>
+  </div>
+</div>
+<div class="tabs">
+  <a href="?tab=gl" {% if tab == 'gl' %}class="active"{% endif %}>General Ledger</a>
+  <a href="?tab=invoices" {% if tab == 'invoices' %}class="active"{% endif %}>Invoices</a>
+  <a href="?tab=pricing" {% if tab == 'pricing' %}class="active"{% endif %}>Pricing</a>
+  <a href="?tab=cost" {% if tab == 'cost' %}class="active"{% endif %}>Cost Master</a>
+</div>
+{% if tab == 'gl' %}
+{% for type_name, accts in accounts.items %}
+<div class="card"><h3>{{ type_name }}</h3><table class="data"><thead><tr><th>#</th><th>Name</th><th>Active</th></tr></thead>
+<tbody>{% for a in accts %}<tr><td>{{ a.account_number }}</td><td>{{ a.name }}</td><td>{% if a.is_active %}Yes{% else %}No{% endif %}</td></tr>{% endfor %}</tbody></table></div>
+{% empty %}<div class="card">No accounts. <a href="{% url 'account_create' %}">Create one</a>.</div>{% endfor %}
+{% elif tab == 'invoices' %}
+<div class="card"><table class="data"><thead><tr><th>Invoice</th><th>SO</th><th>Customer</th><th>Status</th><th>Total</th><th>Due</th></tr></thead>
+<tbody>{% for inv in invoices %}<tr><td><a href="{% url 'invoice_detail' inv.pk %}">{{ inv.invoice_number }}</a></td>
+<td>{{ inv.sales_order.so_number }}</td><td>{{ inv.sales_order.customer_name }}</td>
+<td><span class="badge badge-{{ inv.status }}">{{ inv.get_status_display }}</span></td>
+<td>${{ inv.grand_total|floatformat:2 }}</td><td>{{ inv.due_date }}</td></tr>{% empty %}<tr><td colspan="6">No invoices.</td></tr>{% endfor %}</tbody></table></div>
+{% elif tab == 'pricing' %}
+<div class="card"><h3>Vendor Pricing</h3><a href="{% url 'vendor_pricing_create' %}" class="btn btn-sm btn-primary">Add</a>
+<table class="data"><thead><tr><th>Vendor</th><th>Item</th><th>Price</th></tr></thead>
+<tbody>{% for p in vendor_pricing %}<tr><td>{{ p.vendor_name }}</td><td>{{ p.item.sku }}</td><td>${{ p.unit_price|floatformat:2 }}</td></tr>{% endfor %}</tbody></table></div>
+<div class="card"><h3>Customer Pricing</h3><a href="{% url 'customer_pricing_create' %}" class="btn btn-sm btn-primary">Add</a>
+<table class="data"><thead><tr><th>Customer</th><th>Item</th><th>Price</th></tr></thead>
+<tbody>{% for p in customer_pricing %}<tr><td>{{ p.customer.name }}</td><td>{{ p.item.sku }}</td><td>${{ p.unit_price|floatformat:2 }}</td></tr>{% endfor %}</tbody></table></div>
+{% else %}
+<div class="card"><table class="data"><thead><tr><th>Vendor Material</th><th>SKU</th><th>Vendor</th><th>$/kg</th><th>$/lb</th></tr></thead>
+<tbody>{% for cm in cost_master %}<tr><td>{{ cm.vendor_material }}</td><td>{{ cm.wwi_product_code|default:"—" }}</td><td>{{ cm.vendor|default:"—" }}</td>
+<td>{{ cm.price_per_kg|floatformat:2|default:"—" }}</td><td>{{ cm.price_per_lb|floatformat:2|default:"—" }}</td></tr>{% empty %}<tr><td colspan="5">No cost master entries.</td></tr>{% endfor %}</tbody></table></div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,9 @@
+{% extends "erp/base.html" %}
+{% block title %}New Sales Order — SLURP ERP{% endblock %}
+{% block content %}
+<div class="page-header"><h1>New Sales Order</h1><a href="{% url 'sales_dashboard' %}" class="btn btn-secondary">Back</a></div>
+<div class="card"><form method="post">{% csrf_token %}
+{% for field in so_form %}<div class="form-row"><label>{{ field.label }}</label>{{ field }}</div>{% endfor %}
+<h3>Line Items</h3>{{ formset.management_form }}{% for f in formset %}<div class="formset-row form-grid">{% for field in f %}<div class="form-row"><label>{{ field.label }}</label>{{ field }}</div>{% endfor %}</div>{% endfor %}
+<button type="submit" class="btn btn-primary">Create Order</button></form></div>
+{% endblock %}

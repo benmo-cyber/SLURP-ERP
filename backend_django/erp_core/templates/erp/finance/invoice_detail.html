@@ -1,0 +1,16 @@
+{% extends "erp/base.html" %}
+{% block title %}Invoice {{ invoice.invoice_number }} — SLURP ERP{% endblock %}
+{% block content %}
+<div class="page-header"><h1>Invoice {{ invoice.invoice_number }}</h1><a href="{% url 'finance_dashboard' %}?tab=invoices" class="btn btn-secondary">Back</a></div>
+<div class="card detail-grid">
+  <div><strong>SO:</strong> {{ invoice.sales_order.so_number }}</div>
+  <div><strong>Customer:</strong> {{ invoice.sales_order.customer_name }}</div>
+  <div><strong>Date:</strong> {{ invoice.invoice_date }}</div>
+  <div><strong>Due:</strong> {{ invoice.due_date }}</div>
+  <div><strong>Status:</strong> <span class="badge badge-{{ invoice.status }}">{{ invoice.get_status_display }}</span></div>
+  <div><strong>Total:</strong> ${{ invoice.grand_total|floatformat:2 }}</div>
+</div>
+<div class="card"><table class="data"><thead><tr><th>Description</th><th>Qty</th><th>Price</th><th>Total</th></tr></thead>
+<tbody>{% for line in invoice.items.all %}<tr><td>{{ line.description }}</td><td>{{ line.quantity|floatformat:2 }}</td><td>${{ line.unit_price|floatformat:2 }}</td><td>${{ line.total|floatformat:2 }}</td></tr>{% endfor %}</tbody></table></div>
+<form method="post" action="{% url 'invoice_status' invoice.pk %}">{% csrf_token %}{% for field in status_form %}<div class="form-row"><label>{{ field.label }}</label>{{ field }}</div>{% endfor %}<button class="btn btn-primary">Update Status</button></form>
+{% endblock %}

@@ -1,0 +1,10 @@
+{% extends "erp/base.html" %}
+{% block title %}New Finished Good — SLURP ERP{% endblock %}
+{% block content %}
+<div class="page-header"><h1>Create Finished Good</h1><a href="{% url 'quality_dashboard' %}?tab=finished" class="btn btn-secondary">Back</a></div>
+<div class="card"><form method="post">{% csrf_token %}
+<h3>Item</h3>{% for field in item_form %}<div class="form-row"><label>{{ field.label }}</label>{{ field }}</div>{% endfor %}
+<h3>Formula (BOM %)</h3>{{ formula_formset.management_form }}{% for f in formula_formset %}<div class="formset-row form-grid">{% for field in f %}<div class="form-row"><label>{{ field.label }}</label>{{ field }}</div>{% endfor %}</div>{% endfor %}
+<h3>FPS Checklist</h3>{% for field in fps_form %}<div class="form-row"><label>{{ field.label }}</label>{{ field }}</div>{% endfor %}
+<button type="submit" class="btn btn-primary">Create</button></form></div>
+{% endblock %}

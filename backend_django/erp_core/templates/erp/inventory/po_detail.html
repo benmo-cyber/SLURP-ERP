@@ -1,0 +1,41 @@
+{% extends "erp/base.html" %}
+{% block title %}PO {{ po.po_number }} — SLURP ERP{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>PO {{ po.po_number }} <span class="badge badge-{{ po.status }}">{{ po.get_status_display }}</span></h1>
+  <a href="{% url 'inventory_dashboard' %}?tab=pos" class="btn btn-secondary">Back</a>
+</div>
+<div class="card detail-grid">
+  <div><strong>Vendor:</strong> {{ po.vendor_customer_name }}</div>
+  <div><strong>Expected:</strong> {{ po.expected_delivery_date|default:"—" }}</div>
+  <div><strong>Tracking:</strong> {{ po.tracking_number|default:"—" }}</div>
+  <div><strong>Total:</strong> ${{ po.total|floatformat:2 }}</div>
+</div>
+<div class="card">
+  <table class="data">
+    <thead><tr><th>Item</th><th>Ordered</th><th>Received</th><th>Unit Price</th></tr></thead>
+    <tbody>
+      {% for line in po.items.all %}
+      <tr>
+        <td>{{ line.item.sku }} — {{ line.item.name }}</td>
+        <td>{{ line.quantity_ordered|floatformat:2 }}</td>
+        <td>{{ line.quantity_received|floatformat:2 }}</td>
+        <td>${{ line.unit_price|floatformat:2 }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+<div class="actions">
+  {% if po.status == 'draft' %}
+  <form method="post" action="{% url 'po_action' po.pk 'issue' %}">{% csrf_token %}<button class="btn btn-primary">Issue</button></form>
+  {% endif %}
+  {% if po.status == 'issued' %}
+  <form method="post" action="{% url 'po_action' po.pk 'receive' %}">{% csrf_token %}<button class="btn btn-primary">Mark Received</button></form>
+  <form method="post" action="{% url 'po_action' po.pk 'revise' %}">{% csrf_token %}<button class="btn btn-secondary">Revise</button></form>
+  {% endif %}
+  {% if po.status != 'cancelled' and po.status != 'completed' %}
+  <form method="post" action="{% url 'po_action' po.pk 'cancel' %}">{% csrf_token %}<button class="btn btn-danger">Cancel</button></form>
+  {% endif %}
+</div>
+{% endblock %}

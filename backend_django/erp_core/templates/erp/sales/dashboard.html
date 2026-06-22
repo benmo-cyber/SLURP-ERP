@@ -1,0 +1,31 @@
+{% extends "erp/base.html" %}
+{% block title %}Sales — SLURP ERP{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>Sales</h1>
+  <div class="actions">
+    <a href="{% url 'customer_create' %}" class="btn btn-primary">New Customer</a>
+    <a href="{% url 'sales_order_create' %}" class="btn btn-primary">New Sales Order</a>
+    <a href="{% url 'calendar' %}" class="btn btn-secondary">Calendar</a>
+  </div>
+</div>
+<div class="tabs">
+  <a href="?tab=crm" {% if tab == 'crm' %}class="active"{% endif %}>CRM</a>
+  <a href="?tab=orders" {% if tab == 'orders' %}class="active"{% endif %}>Sales Orders</a>
+  <a href="?tab=calendar" {% if tab == 'calendar' %}class="active"{% endif %}>Calendar</a>
+</div>
+{% if tab == 'crm' %}
+<div class="card"><table class="data"><thead><tr><th>ID</th><th>Customer</th><th>Contact</th><th>Terms</th><th></th></tr></thead>
+<tbody>{% for c in customers %}<tr><td>{{ c.customer_id }}</td><td><a href="{% url 'customer_detail' c.pk %}">{{ c.name }}</a></td>
+<td>{{ c.contact_name|default:"—" }}</td><td>{{ c.payment_terms|default:"—" }}</td>
+<td><a href="{% url 'customer_detail' c.pk %}" class="btn btn-sm btn-secondary">Profile</a></td></tr>{% empty %}<tr><td colspan="5">No customers.</td></tr>{% endfor %}</tbody></table></div>
+{% elif tab == 'orders' %}
+<div class="card"><table class="data"><thead><tr><th>SO #</th><th>Customer</th><th>Status</th><th>Ref</th><th></th></tr></thead>
+<tbody>{% for so in sales_orders %}<tr><td>{{ so.so_number }}</td><td>{{ so.customer_name }}</td>
+<td><span class="badge badge-{{ so.status }}">{{ so.get_status_display }}</span></td><td>{{ so.customer_reference_number|default:"—" }}</td>
+<td><a href="{% url 'sales_order_checkout' so.pk %}" class="btn btn-sm btn-secondary">Checkout</a></td></tr>{% empty %}<tr><td colspan="5">No sales orders.</td></tr>{% endfor %}</tbody></table></div>
+{% else %}
+<div class="card"><table class="data"><thead><tr><th>Date</th><th>Event</th><th>Type</th></tr></thead>
+<tbody>{% for e in calendar_events %}<tr><td>{{ e.date }}</td><td>{{ e.title }}</td><td>{{ e.type }}</td></tr>{% empty %}<tr><td colspan="3">No events this month.</td></tr>{% endfor %}</tbody></table></div>
+{% endif %}
+{% endblock %}

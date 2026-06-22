@@ -1,0 +1,11 @@
+{% extends "erp/base.html" %}
+{% block title %}AR Aging — SLURP ERP{% endblock %}
+{% block content %}
+<div class="page-header"><h1>AR Aging Report</h1><a href="{% url 'finance_dashboard' %}?tab=invoices" class="btn btn-secondary">Back</a></div>
+{% for bucket, invs in aging.items %}
+<div class="card"><h3>{{ bucket }} ({{ invs|length }})</h3>
+{% if invs %}<table class="data"><thead><tr><th>Invoice</th><th>Customer</th><th>Due</th><th>Total</th></tr></thead>
+<tbody>{% for inv in invs %}<tr><td><a href="{% url 'invoice_detail' inv.pk %}">{{ inv.invoice_number }}</a></td><td>{{ inv.sales_order.customer_name }}</td><td>{{ inv.due_date }}</td><td>${{ inv.grand_total|floatformat:2 }}</td></tr>{% endfor %}</tbody></table>
+{% else %}<p>None</p>{% endif %}</div>
+{% endfor %}
+{% endblock %}

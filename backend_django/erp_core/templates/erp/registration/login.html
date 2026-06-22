@@ -1,0 +1,25 @@
+{% extends "erp/base.html" %}
+{% block title %}Login — SLURP ERP{% endblock %}
+{% block content %}
+<div class="login-page">
+  <div class="login-card">
+    <h1>SLURP ERP</h1>
+    <p style="text-align:center;color:#64748b;margin-bottom:1.5rem;">Sign in to continue</p>
+    <form method="post">
+      {% csrf_token %}
+      {% if form.errors %}
+      <p style="color:#991b1b;margin-bottom:1rem;">Invalid username or password.</p>
+      {% endif %}
+      <div class="form-row">
+        <label for="id_username">Username</label>
+        <input type="text" name="username" id="id_username" autofocus required>
+      </div>
+      <div class="form-row">
+        <label for="id_password">Password</label>
+        <input type="password" name="password" id="id_password" required>
+      </div>
+      <button type="submit" class="btn btn-primary" style="width:100%;margin-top:0.5rem;">Sign in</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

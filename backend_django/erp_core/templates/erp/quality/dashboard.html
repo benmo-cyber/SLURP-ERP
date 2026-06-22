@@ -1,0 +1,32 @@
+{% extends "erp/base.html" %}
+{% block title %}Quality — SLURP ERP{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>Quality</h1>
+  <div class="actions">
+    <a href="{% url 'vendor_create' %}" class="btn btn-primary">New Vendor</a>
+    <a href="{% url 'finished_good_create' %}" class="btn btn-primary">New Finished Good</a>
+    <a href="{% url 'lot_tracking' %}" class="btn btn-secondary">Lot Tracking</a>
+  </div>
+</div>
+<div class="tabs">
+  <a href="?tab=vendors" {% if tab == 'vendors' %}class="active"{% endif %}>Vendors</a>
+  <a href="?tab=finished" {% if tab == 'finished' %}class="active"{% endif %}>Finished Goods</a>
+  <a href="?tab=lots" {% if tab == 'lots' %}class="active"{% endif %}>Recent Lots</a>
+</div>
+{% if tab == 'vendors' %}
+<div class="card"><table class="data"><thead><tr><th>Vendor</th><th>Status</th><th>Risk</th><th></th></tr></thead>
+<tbody>{% for v in vendors %}<tr><td><a href="{% url 'vendor_detail' v.pk %}">{{ v.name }}</a></td>
+<td><span class="badge badge-{{ v.approval_status }}">{{ v.get_approval_status_display }}</span></td>
+<td>{{ v.get_risk_profile_display }}</td><td><a href="{% url 'vendor_detail' v.pk %}" class="btn btn-sm btn-secondary">View</a></td></tr>{% empty %}<tr><td colspan="4">No vendors.</td></tr>{% endfor %}</tbody></table></div>
+{% elif tab == 'finished' %}
+<div class="card"><table class="data"><thead><tr><th>SKU</th><th>Name</th><th>Formula</th><th>FPS</th></tr></thead>
+<tbody>{% for fg in finished_goods %}<tr><td>{{ fg.sku }}</td><td>{{ fg.name }}</td>
+<td>{% if fg.formula %}v{{ fg.formula.version }}{% else %}—{% endif %}</td>
+<td>{% if fg.fps %}Yes{% else %}—{% endif %}</td></tr>{% empty %}<tr><td colspan="4">No finished goods.</td></tr>{% endfor %}</tbody></table></div>
+{% else %}
+<div class="card"><table class="data"><thead><tr><th>Lot</th><th>Item</th><th>Status</th><th>Remaining</th></tr></thead>
+<tbody>{% for lot in lots %}<tr><td>{{ lot.lot_number }}</td><td>{{ lot.item.sku }}</td>
+<td>{{ lot.get_status_display }}</td><td>{{ lot.quantity_remaining|floatformat:2 }}</td></tr>{% endfor %}</tbody></table></div>
+{% endif %}
+{% endblock %}

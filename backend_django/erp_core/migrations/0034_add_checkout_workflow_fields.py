@@ -1,7 +1,7 @@
 # Generated manually for checkout workflow enhancements
 
-from django.db import migrations, models
 import django.db.models.deletion
+from django.db import migrations, models
 from django.utils import timezone
 
 
@@ -12,7 +12,154 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        # Update SalesOrder status choices
+        migrations.CreateModel(
+            name='CustomerNumberSequence',
+            fields=[
+                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
+                ('sequence_number', models.IntegerField(default=0)),
+                ('last_updated', models.DateTimeField(auto_now=True)),
+            ],
+            options={'ordering': ['-sequence_number']},
+        ),
+        migrations.CreateModel(
+            name='Customer',
+            fields=[
+                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
+                ('customer_id', models.CharField(db_index=True, help_text='Unique customer identifier', max_length=100, unique=True)),
+                ('name', models.CharField(max_length=255)),
+                ('contact_name', models.CharField(blank=True, max_length=255, null=True)),
+                ('email', models.EmailField(blank=True, max_length=254, null=True)),
+                ('phone', models.CharField(blank=True, max_length=50, null=True)),
+                ('address', models.TextField(blank=True, null=True)),
+                ('city', models.CharField(blank=True, max_length=100, null=True)),
+                ('state', models.CharField(blank=True, max_length=50, null=True)),
+                ('zip_code', models.CharField(blank=True, max_length=20, null=True)),
+                ('country', models.CharField(blank=True, default='USA', max_length=100, null=True)),
+                ('payment_terms', models.CharField(blank=True, help_text='Payment terms (e.g., "Net 30", "Net 15", "Due on Receipt")', max_length=50, null=True)),
+                ('notes', models.TextField(blank=True, null=True)),
+                ('is_active', models.BooleanField(default=True)),
+                ('created_at', models.DateTimeField(auto_now_add=True)),
+                ('updated_at', models.DateTimeField(auto_now=True)),
+            ],
+            options={'ordering': ['name']},
+        ),
+        migrations.CreateModel(
+            name='ShipToLocation',
+            fields=[
+                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
+                ('location_name', models.CharField(help_text='Name/identifier for this location (e.g., "Main Warehouse", "West Coast Facility")', max_length=255)),
+                ('contact_name', models.CharField(blank=True, max_length=255, null=True)),
+                ('email', models.EmailField(blank=True, max_length=254, null=True)),
+                ('phone', models.CharField(blank=True, max_length=50, null=True)),
+                ('address', models.TextField()),
+                ('city', models.CharField(max_length=100)),
+                ('state', models.CharField(blank=True, max_length=50, null=True)),
+                ('zip_code', models.CharField(max_length=20)),
+                ('country', models.CharField(default='USA', max_length=100)),
+                ('is_default', models.BooleanField(default=False, help_text='Default ship-to location for this customer')),
+                ('is_active', models.BooleanField(default=True)),
+                ('notes', models.TextField(blank=True, null=True)),
+                ('created_at', models.DateTimeField(auto_now_add=True)),
+                ('updated_at', models.DateTimeField(auto_now=True)),
+                ('customer', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='ship_to_locations', to='erp_core.customer')),
+            ],
+            options={'ordering': ['-is_default', 'location_name'], 'verbose_name_plural': 'Ship-to Locations'},
+        ),
+        migrations.CreateModel(
+            name='CustomerContact',
+            fields=[
+                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
+                ('first_name', models.CharField(max_length=100)),
+                ('last_name', models.CharField(max_length=100)),
+                ('title', models.CharField(blank=True, help_text='Job title/position', max_length=100, null=True)),
+                ('email', models.EmailField(blank=True, max_length=254, null=True)),
+                ('phone', models.CharField(blank=True, max_length=50, null=True)),
+                ('mobile', models.CharField(blank=True, max_length=50, null=True)),
+                ('is_primary', models.BooleanField(default=False, help_text='Primary contact for this customer')),
+                ('is_active', models.BooleanField(default=True)),
+                ('notes', models.TextField(blank=True, null=True)),
+                ('created_at', models.DateTimeField(auto_now_add=True)),
+                ('updated_at', models.DateTimeField(auto_now=True)),
+                ('customer', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='contacts', to='erp_core.customer')),
+            ],
+            options={'ordering': ['-is_primary', 'last_name', 'first_name']},
+        ),
+        migrations.CreateModel(
+            name='SalesCall',
+            fields=[
+                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
+                ('call_date', models.DateTimeField(default=timezone.now)),
+                ('call_type', models.CharField(choices=[('phone', 'Phone Call'), ('email', 'Email'), ('meeting', 'In-Person Meeting'), ('video', 'Video Call'), ('other', 'Other')], default='phone', max_length=20)),
+                ('subject', models.CharField(blank=True, max_length=255, null=True)),
+                ('notes', models.TextField(help_text='Call notes, discussion points, outcomes')),
+                ('follow_up_required', models.BooleanField(default=False)),
+                ('follow_up_date', models.DateTimeField(blank=True, null=True)),
+                ('created_by', models.CharField(blank=True, help_text='User who logged the call', max_length=255, null=True)),
+                ('created_at', models.DateTimeField(auto_now_add=True)),
+                ('updated_at', models.DateTimeField(auto_now=True)),
+                ('contact', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='sales_calls', to='erp_core.customercontact')),
+                ('customer', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='sales_calls', to='erp_core.customer')),
+            ],
+            options={'ordering': ['-call_date']},
+        ),
+        migrations.CreateModel(
+            name='CustomerForecast',
+            fields=[
+                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
+                ('forecast_period', models.CharField(help_text='Period identifier (e.g., "2025-Q1", "2025-01")', max_length=20)),
+                ('forecast_quantity', models.FloatField(help_text='Forecasted quantity')),
+                ('unit_of_measure', models.CharField(choices=[('lbs', 'Pounds'), ('kg', 'Kilograms'), ('ea', 'Each')], default='lbs', max_length=10)),
+                ('notes', models.TextField(blank=True, null=True)),
+                ('created_by', models.CharField(blank=True, max_length=255, null=True)),
+                ('created_at', models.DateTimeField(auto_now_add=True)),
+                ('updated_at', models.DateTimeField(auto_now=True)),
+                ('customer', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='forecasts', to='erp_core.customer')),
+                ('item', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='customer_forecasts', to='erp_core.item')),
+            ],
+            options={'ordering': ['-forecast_period', 'item__sku'], 'unique_together': {('customer', 'item', 'forecast_period')}},
+        ),
+        migrations.CreateModel(
+            name='CustomerPricing',
+            fields=[
+                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
+                ('unit_price', models.FloatField()),
+                ('unit_of_measure', models.CharField(choices=[('lbs', 'Pounds'), ('kg', 'Kilograms'), ('ea', 'Each')], default='lbs', max_length=10)),
+                ('effective_date', models.DateField()),
+                ('expiry_date', models.DateField(blank=True, null=True)),
+                ('is_active', models.BooleanField(default=True)),
+                ('notes', models.TextField(blank=True, null=True)),
+                ('created_at', models.DateTimeField(auto_now_add=True)),
+                ('updated_at', models.DateTimeField(auto_now=True)),
+                ('customer', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='pricing', to='erp_core.customer')),
+                ('item', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='customer_pricing', to='erp_core.item')),
+            ],
+            options={
+                'ordering': ['customer', 'item', '-effective_date'],
+                'unique_together': {('customer', 'item', 'effective_date')},
+                'indexes': [models.Index(fields=['customer', 'item', 'is_active'], name='erp_core_cu_custome_idx')],
+            },
+        ),
+        migrations.CreateModel(
+            name='SalesOrderLot',
+            fields=[
+                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
+                ('quantity_allocated', models.FloatField()),
+                ('created_at', models.DateTimeField(auto_now_add=True)),
+                ('lot', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='sales_order_allocations', to='erp_core.lot')),
+                ('sales_order_item', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='allocated_lots', to='erp_core.salesorderitem')),
+            ],
+            options={'ordering': ['sales_order_item', 'lot'], 'unique_together': {('sales_order_item', 'lot')}},
+        ),
+        migrations.RenameField(
+            model_name='salesorder',
+            old_name='customer_id',
+            new_name='customer_legacy_id',
+        ),
+        migrations.AddField(
+            model_name='salesorder',
+            name='customer',
+            field=models.ForeignKey(blank=True, help_text='Customer from customer database', null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='sales_orders', to='erp_core.customer'),
+        ),
         migrations.AlterField(
             model_name='salesorder',
             name='status',
@@ -27,22 +174,9 @@ class Migration(migrations.Migration):
                     ('cancelled', 'Cancelled'),
                 ],
                 default='draft',
-                max_length=20
+                max_length=20,
             ),
         ),
-        # Add payment_terms to Customer
-        # Note: Customer model may not exist in migration state, field added directly to DB
-        # migrations.AddField(
-        #     model_name='customer',
-        #     name='payment_terms',
-        #     field=models.CharField(
-        #         blank=True,
-        #         help_text='Payment terms (e.g., "Net 30", "Net 15", "Due on Receipt")',
-        #         max_length=50,
-        #         null=True
-        #     ),
-        # ),
-        # Update ProductionBatch status choices (add scheduled)
         migrations.AlterField(
             model_name='productionbatch',
             name='status',
@@ -54,57 +188,40 @@ class Migration(migrations.Migration):
                     ('closed', 'Closed'),
                 ],
                 default='in_progress',
-                max_length=20
+                max_length=20,
             ),
         ),
-        # Note: Invoice and InvoiceItem models already exist from migration 0007
-        # These operations are commented out because models don't exist in migration state
-        # but changes are already applied to the database
-        # migrations.AddField(
-        #     model_name='invoice',
-        #     name='sales_order',
-        #     field=models.ForeignKey(
-        #         blank=True,
-        #         null=True,
-        #         on_delete=django.db.models.deletion.CASCADE,
-        #         related_name='invoices',
-        #         to='erp_core.salesorder'
-        #     ),
-        # ),
-        # migrations.AddField(
-        #     model_name='invoice',
-        #     name='freight',
-        #     field=models.FloatField(default=0.0),
-        # ),
-        # migrations.AddField(
-        #     model_name='invoice',
-        #     name='discount',
-        #     field=models.FloatField(default=0.0),
-        # ),
-        # migrations.RenameField(
-        #     model_name='invoice',
-        #     old_name='total_amount',
-        #     new_name='grand_total',
-        # ),
-        # migrations.RenameField(
-        #     model_name='invoice',
-        #     old_name='tax_amount',
-        #     new_name='tax',
-        # ),
-        # migrations.AddField(
-        #     model_name='invoiceitem',
-        #     name='sales_order_item',
-        #     field=models.ForeignKey(
-        #         blank=True,
-        #         null=True,
-        #         on_delete=django.db.models.deletion.CASCADE,
-        #         related_name='invoice_items',
-        #         to='erp_core.salesorderitem'
-        #     ),
-        # ),
-        # migrations.RenameField(
-        #     model_name='invoiceitem',
-        #     old_name='line_total',
-        #     new_name='total',
-        # ),
+        migrations.CreateModel(
+            name='Invoice',
+            fields=[
+                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
+                ('invoice_number', models.CharField(db_index=True, max_length=100, unique=True)),
+                ('invoice_date', models.DateField()),
+                ('due_date', models.DateField(help_text='Calculated from invoice_date + payment_terms')),
+                ('status', models.CharField(choices=[('draft', 'Draft'), ('sent', 'Sent'), ('paid', 'Paid'), ('overdue', 'Overdue'), ('cancelled', 'Cancelled')], default='draft', max_length=20)),
+                ('subtotal', models.FloatField(default=0.0)),
+                ('freight', models.FloatField(default=0.0)),
+                ('tax', models.FloatField(default=0.0)),
+                ('discount', models.FloatField(default=0.0)),
+                ('grand_total', models.FloatField(default=0.0)),
+                ('notes', models.TextField(blank=True, null=True)),
+                ('created_at', models.DateTimeField(auto_now_add=True)),
+                ('updated_at', models.DateTimeField(auto_now=True)),
+                ('sales_order', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='invoices', to='erp_core.salesorder')),
+            ],
+            options={'ordering': ['-invoice_date', '-created_at']},
+        ),
+        migrations.CreateModel(
+            name='InvoiceItem',
+            fields=[
+                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
+                ('description', models.CharField(max_length=255)),
+                ('quantity', models.FloatField()),
+                ('unit_price', models.FloatField()),
+                ('total', models.FloatField()),
+                ('invoice', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='items', to='erp_core.invoice')),
+                ('sales_order_item', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='invoice_items', to='erp_core.salesorderitem')),
+            ],
+            options={'ordering': ['id']},
+        ),
     ]

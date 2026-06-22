@@ -1,0 +1,12 @@
+{% extends "erp/base.html" %}
+{% block title %}Check In — SLURP ERP{% endblock %}
+{% block content %}
+<div class="page-header"><h1>Check In</h1><a href="{% url 'inventory_dashboard' %}" class="btn btn-secondary">Back</a></div>
+<div class="card">
+  <form method="post">
+    {% csrf_token %}
+    {% for field in form %}<div class="form-row"><label>{{ field.label }}</label>{{ field }}{% if field.errors %}<span style="color:#991b1b;">{{ field.errors }}</span>{% endif %}</div>{% endfor %}
+    <button type="submit" class="btn btn-primary">Check In</button>
+  </form>
+</div>
+{% endblock %}

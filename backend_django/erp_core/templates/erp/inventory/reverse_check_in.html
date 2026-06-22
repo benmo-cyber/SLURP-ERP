@@ -1,0 +1,20 @@
+{% extends "erp/base.html" %}
+{% block title %}Reverse Check-In — SLURP ERP{% endblock %}
+{% block content %}
+<div class="page-header"><h1>Reverse Check-In (UNFK)</h1><a href="{% url 'inventory_dashboard' %}" class="btn btn-secondary">Back</a></div>
+<div class="card">
+  <form method="post">
+    {% csrf_token %}
+    <div class="form-row">
+      <label>Select lot (unused only)</label>
+      <select name="lot_id" required>
+        <option value="">— Select lot —</option>
+        {% for lot in lots %}
+        <option value="{{ lot.pk }}">{{ lot.lot_number }} — {{ lot.item.sku }} ({{ lot.quantity_remaining }} remaining)</option>
+        {% endfor %}
+      </select>
+    </div>
+    <button type="submit" class="btn btn-danger">Reverse Check-In</button>
+  </form>
+</div>
+{% endblock %}

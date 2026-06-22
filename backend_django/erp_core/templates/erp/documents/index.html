@@ -1,0 +1,21 @@
+{% extends "erp/base.html" %}
+{% block title %}Example Documents — SLURP ERP{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>Example Documents</h1>
+  <p class="muted">PDF samples using the legacy Wildwood templates (BP-13 batch ticket, packing list, invoice).</p>
+</div>
+<div class="card">
+  <ul class="doc-links">
+    <li><a href="{% url 'example_batch_ticket' %}" target="_blank">Batch Ticket — BT-2026-0042 (PDF)</a></li>
+    <li><a href="{% url 'example_packing_list' %}" target="_blank">Packing List — SO-1024 (PDF)</a></li>
+    <li><a href="{% url 'example_invoice' %}" target="_blank">Invoice — INV-2026-0156 (PDF)</a></li>
+  </ul>
+</div>
+<style>
+.doc-links { list-style: none; padding: 0; margin: 0; }
+.doc-links li { margin: 0.75rem 0; font-size: 1.05rem; }
+.doc-links a { font-weight: 600; }
+.muted { color: #666; margin-top: 0.25rem; }
+</style>
+{% endblock %}

@@ -1,0 +1,42 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}SLURP ERP{% endblock %}</title>
+  <link rel="stylesheet" href="{% static 'erp/css/main.css' %}">
+</head>
+<body>
+  {% if user.is_authenticated %}
+  <header class="topbar">
+    <a class="brand" href="{% url 'inventory_dashboard' %}">SLURP ERP</a>
+    <nav>
+      <a href="{% url 'inventory_dashboard' %}" {% if module == 'inventory' %}class="active"{% endif %}>Inventory</a>
+      <a href="{% url 'finance_dashboard' %}" {% if module == 'finance' %}class="active"{% endif %}>Finance</a>
+      <a href="{% url 'production_dashboard' %}" {% if module == 'production' %}class="active"{% endif %}>Production</a>
+      <a href="{% url 'quality_dashboard' %}" {% if module == 'quality' %}class="active"{% endif %}>Quality</a>
+      <a href="{% url 'sales_dashboard' %}" {% if module == 'sales' %}class="active"{% endif %}>Sales</a>
+    </nav>
+    <div class="user">
+      {{ user.username }}
+      <form method="post" action="{% url 'logout' %}" style="display:inline;margin-left:0.75rem;">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-sm btn-secondary">Logout</button>
+      </form>
+    </div>
+  </header>
+  {% endif %}
+
+  <main class="container">
+    {% if messages %}
+    <ul class="messages">
+      {% for message in messages %}
+      <li class="{{ message.tags }}">{{ message }}</li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

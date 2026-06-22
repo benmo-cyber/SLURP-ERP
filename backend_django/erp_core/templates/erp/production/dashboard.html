@@ -1,0 +1,26 @@
+{% extends "erp/base.html" %}
+{% block title %}Production — SLURP ERP{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>Production</h1>
+  <a href="{% url 'production_batch_create' %}" class="btn btn-primary">New Batch Ticket</a>
+</div>
+<div class="card">
+  <table class="data">
+    <thead><tr><th>Batch #</th><th>Type</th><th>Item</th><th>Qty</th><th>Status</th><th>Date</th><th></th></tr></thead>
+    <tbody>
+      {% for batch in batches %}
+      <tr>
+        <td><a href="{% url 'production_batch_detail' batch.pk %}">{{ batch.batch_number }}</a></td>
+        <td>{{ batch.get_batch_type_display }}</td>
+        <td>{{ batch.finished_good_item.sku }}</td>
+        <td>{{ batch.quantity_produced|floatformat:2 }}</td>
+        <td><span class="badge badge-{{ batch.status }}">{{ batch.get_status_display }}</span></td>
+        <td>{{ batch.production_date|date:"Y-m-d" }}</td>
+        <td><a href="{% url 'production_batch_detail' batch.pk %}" class="btn btn-sm btn-secondary">View</a></td>
+      </tr>
+      {% empty %}<tr><td colspan="7">No batches.</td></tr>{% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}
