@@ -1,0 +1,40 @@
+{% extends "slurp_ui/base.html" %}
+{% block title %}Indirect Checkout — SLURP{% endblock %}
+{% block content %}
+<div class="modal-page" style="max-width:560px;margin:2rem auto">
+  <h2>Checkout Indirect Material</h2>
+  <form method="post">
+    {% csrf_token %}
+    <div class="form-group">
+      <label for="lot_id">Lot</label>
+      <select id="lot_id" name="lot_id" required>
+        <option value="">Select lot…</option>
+        {% for row in lot_choices %}
+        <option value="{{ row.lot.id }}">
+          {{ row.lot.item.sku }} — {{ row.lot.lot_number }} (avail {{ row.available|floatformat:2 }} {{ row.lot.item.unit_of_measure }})
+        </option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="form-group">
+      <label for="quantity">Quantity</label>
+      <input id="quantity" name="quantity" type="number" step="0.01" min="0.01" required />
+    </div>
+    <div class="form-group">
+      <label for="reference_number">Reference #</label>
+      <input id="reference_number" name="reference_number" />
+    </div>
+    <div class="form-group">
+      <label for="notes">Notes</label>
+      <textarea id="notes" name="notes" rows="2"></textarea>
+    </div>
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">Checkout</button>
+      <a class="btn btn-secondary" href="{% url 'slurp_ui:inventory' %}?tab=indirect_material">Cancel</a>
+    </div>
+  </form>
+  {% if not lot_choices %}
+  <p style="margin-top:1rem;color:#64748b">No indirect material lots with available quantity.</p>
+  {% endif %}
+</div>
+{% endblock %}

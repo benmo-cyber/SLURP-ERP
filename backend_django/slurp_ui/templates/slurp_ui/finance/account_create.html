@@ -1,0 +1,22 @@
+﻿{% extends "slurp_ui/base_module.html" %}
+{% block title %}Create Account — SLURP{% endblock %}
+{% block module_title %}Finance{% endblock %}
+{% block main %}
+<h2>Create account</h2>
+<form method="post">{% csrf_token %}
+  <label>Account #<input name="account_number" required /></label>
+  <label>Name<input name="name" required /></label>
+  <label>Type
+    <select name="account_type">
+      <option value="asset">Asset</option><option value="liability">Liability</option>
+      <option value="equity">Equity</option><option value="revenue">Revenue</option><option value="expense">Expense</option>
+    </select>
+  </label>
+  <label>Parent
+    <select name="parent_account"><option value="">—</option>{% for a in parent_accounts %}<option value="{{ a.id }}">{{ a.account_number }} — {{ a.name }}</option>{% endfor %}</select>
+  </label>
+  <label>Description<textarea name="description"></textarea></label>
+  <button class="btn btn-primary" type="submit">Save</button>
+  <a class="btn btn-secondary" href="{% url 'slurp_ui:finance_ledger' %}">Cancel</a>
+</form>
+{% endblock %}

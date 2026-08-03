@@ -107,7 +107,7 @@ function RawMaterialLotCosts() {
 
   const varDisplay = (row: { variance_per_kg: number | null }) => {
     if (row.variance_per_kg == null) return '—'
-    const v = unit === 'kg' ? row.variance_per_kg : row.variance_per_kg / 2.20462
+    const v = unit === 'kg' ? row.variance_per_kg : row.variance_per_kg / 2.2
     const sign = v > 0 ? '+' : ''
     return `${sign}$${formatNumber(v, 4)}/${unit}`
   }

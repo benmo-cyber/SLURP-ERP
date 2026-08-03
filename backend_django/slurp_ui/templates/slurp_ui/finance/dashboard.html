@@ -1,0 +1,144 @@
+﻿{% extends "slurp_ui/base_module.html" %}
+{% block title %}Finance — SLURP{% endblock %}
+{% block module_title %}Finance{% endblock %}
+{% block header_actions %}
+  <a class="btn btn-primary" href="{% url 'slurp_ui:finance_invoice_create' %}">Create invoice</a>
+  <a class="btn btn-secondary" href="{% url 'slurp_ui:finance_invoices' %}">All invoices</a>
+{% endblock %}
+{% block main %}
+<section class="finance-home">
+  <header class="finance-home__intro">
+    <h2>Invoicing</h2>
+    <p>Issue drafts, collect A/R, and keep ship/invoice paperwork in one place. Accounting and reports stay in the sidebar when you need them.</p>
+  </header>
+
+  <div class="finance-home__strip">
+    <a class="finance-home__stat" href="{% url 'slurp_ui:finance_invoices' %}?status=draft">
+      <span class="finance-home__stat-label">Draft</span>
+      <span class="finance-home__stat-value">{{ draft_count }}</span>
+    </a>
+    <a class="finance-home__stat" href="{% url 'slurp_ui:finance_invoices' %}?status=sent">
+      <span class="finance-home__stat-label">Issued / unpaid</span>
+      <span class="finance-home__stat-value">{{ issued_count }}</span>
+    </a>
+    <a class="finance-home__stat" href="{% url 'slurp_ui:finance_invoices' %}?status=paid">
+      <span class="finance-home__stat-label">Paid</span>
+      <span class="finance-home__stat-value">{{ paid_count }}</span>
+    </a>
+    <a class="finance-home__stat" href="{% url 'slurp_ui:finance_ar' %}">
+      <span class="finance-home__stat-label">Open A/R</span>
+      <span class="finance-home__stat-value">{{ ar_open }}</span>
+    </a>
+    <a class="finance-home__stat" href="{% url 'slurp_ui:finance_ap' %}">
+      <span class="finance-home__stat-label">Open A/P</span>
+      <span class="finance-home__stat-value">{{ ap_open }}</span>
+    </a>
+  </div>
+
+  <div class="finance-home__panel">
+    <div class="finance-home__panel-head">
+      <h3>Draft invoices needing attention</h3>
+      <a href="{% url 'slurp_ui:finance_invoices' %}?status=draft">View all drafts</a>
+    </div>
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Invoice #</th>
+          <th>Customer</th>
+          <th>SO</th>
+          <th>Date</th>
+          <th>Total</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for inv in draft_invoices %}
+        <tr>
+          <td><a href="{% url 'slurp_ui:finance_invoice_detail' inv.id %}">{{ inv.invoice_number }}</a></td>
+          <td>{{ inv.customer_vendor_name }}</td>
+          <td>{{ inv.sales_order.so_number|default:"—" }}</td>
+          <td>{{ inv.invoice_date }}</td>
+          <td>${{ inv.grand_total|floatformat:2 }}</td>
+          <td>
+            <a class="btn btn-primary" style="padding:0.3rem 0.65rem;font-size:0.85rem"
+               href="{% url 'slurp_ui:finance_invoice_issue' inv.id %}">Issue</a>
+          </td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="6">No draft invoices. Shipments create drafts automatically, or use Create invoice.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<style>
+  .finance-home__intro {
+    max-width: 40rem;
+    margin-bottom: 1.75rem;
+  }
+  .finance-home__intro h2 {
+    margin: 0 0 0.4rem;
+    font-size: 1.65rem;
+    font-weight: 650;
+    letter-spacing: -0.02em;
+    color: #1e293b;
+  }
+  .finance-home__intro p {
+    margin: 0;
+    color: #64748b;
+    line-height: 1.5;
+    font-size: 0.98rem;
+  }
+  .finance-home__strip {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0;
+    border-top: 1px solid #cbd5e1;
+    border-bottom: 1px solid #cbd5e1;
+    margin-bottom: 2rem;
+  }
+  .finance-home__stat {
+    flex: 1 1 7rem;
+    min-width: 6.5rem;
+    padding: 1rem 1.1rem;
+    text-decoration: none;
+    color: inherit;
+    border-right: 1px solid #e2e8f0;
+  }
+  .finance-home__stat:last-child { border-right: none; }
+  .finance-home__stat:hover { background: #f8fafc; }
+  .finance-home__stat-label {
+    display: block;
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #64748b;
+    margin-bottom: 0.35rem;
+  }
+  .finance-home__stat-value {
+    display: block;
+    font-size: 1.75rem;
+    font-weight: 650;
+    color: #0f172a;
+    letter-spacing: -0.03em;
+  }
+  .finance-home__panel-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 1rem;
+    margin-bottom: 0.75rem;
+  }
+  .finance-home__panel-head h3 {
+    margin: 0;
+    font-size: 1.05rem;
+    font-weight: 600;
+    color: #1e293b;
+  }
+  .finance-home__panel-head a {
+    font-size: 0.9rem;
+    color: #1e40af;
+  }
+</style>
+{% endblock %}

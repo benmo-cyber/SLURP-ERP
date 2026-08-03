@@ -1,0 +1,83 @@
+{% extends "slurp_ui/base.html" %}
+{% block title %}Create Item — SLURP{% endblock %}
+{% block content %}
+<div class="modal-page create-item-modal" style="max-width:720px">
+  <h2>{% if mode == 'add-vendor' %}Add vendor to existing SKU{% else %}Create catalog item{% endif %}</h2>
+  <form method="post">
+    {% csrf_token %}
+    <input type="hidden" name="action" value="create" />
+    <input type="hidden" name="mode" value="{{ mode }}" />
+
+    {% if mode == 'add-vendor' %}
+    <div class="form-row"><label>Existing SKU *</label>
+      <input name="existing_sku" required placeholder="D1307L0040" list="sku-list" />
+      <datalist id="sku-list">
+        {% for m in master_items %}<option value="{{ m.sku }}"></option>{% endfor %}
+      </datalist>
+    </div>
+    {% else %}
+    <div class="form-row"><label>WWI SKU *</label><input name="sku" required placeholder="D1307 or D1307L0040" /></div>
+    <div class="form-row"><label>Parent item (pack variant)</label>
+      <select name="sku_parent_item">
+        <option value="">—</option>
+        {% for m in master_items %}
+        <option value="{{ m.pk }}" {% if selected_parent.pk == m.pk %}selected{% endif %}>{{ m.sku }} — {{ m.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    {% endif %}
+
+    <div class="form-row"><label>Vendor *</label>
+      <select name="vendor" required>
+        <option value="">Select approved vendor</option>
+        {% for v in vendors %}<option value="{{ v.name }}">{{ v.name }}</option>{% endfor %}
+      </select>
+    </div>
+    <div class="form-row"><label>WWI name *</label><input name="name" required /></div>
+    <div class="form-row"><label>Description</label><textarea name="description" rows="2"></textarea></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem">
+      <div class="form-row"><label>Vendor item name</label><input name="vendor_item_name" /></div>
+      <div class="form-row"><label>Vendor item #</label><input name="vendor_item_number" /></div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem">
+      <div class="form-row"><label>Type</label>
+        <select name="item_type">
+          {% for val, label in item_type_choices %}
+          <option value="{{ val }}">{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="form-row"><label>Product category</label>
+        <select name="product_category">
+          <option value="">—</option>
+          {% for val, label in product_category_choices %}
+          <option value="{{ val }}">{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0.5rem">
+      <div class="form-row"><label>UoM</label>
+        <select name="unit_of_measure">
+          {% for val, label in uom_choices %}<option value="{{ val }}">{{ label }}</option>{% endfor %}
+        </select>
+      </div>
+      <div class="form-row"><label>Pack size</label><input type="number" step="any" name="pack_size" /></div>
+      <div class="form-row"><label>Pack unit</label>
+        <select name="pack_size_unit">
+          {% for val, label in pack_unit_choices %}<option value="{{ val }}">{{ label }}</option>{% endfor %}
+        </select>
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem">
+      <div class="form-row"><label>Price</label><input type="number" step="any" name="price" /></div>
+      <div class="form-row"><label>HTS code</label><input name="hts_code" /></div>
+    </div>
+    <div class="form-row"><label>Country of origin</label><input name="country_of_origin" /></div>
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">Create item</button>
+      <a class="btn btn-secondary" href="{% url 'slurp_ui:inventory_items' %}">Cancel</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

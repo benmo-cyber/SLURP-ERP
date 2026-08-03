@@ -1,0 +1,31 @@
+{% extends "slurp_ui/base_module.html" %}
+{% block title %}R&amp;D Formulas — SLURP{% endblock %}
+{% block module_title %}Quality{% endblock %}
+{% block header_actions %}
+<a class="btn btn-primary" href="{% url 'slurp_ui:quality_rd_formula_create' %}">New R&amp;D formula</a>
+{% endblock %}
+{% block main %}
+<table class="data-table">
+  <thead>
+    <tr>
+      <th>Name</th>
+      <th>Status</th>
+      <th>Total $/lb</th>
+      <th>Updated</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for f in formulas %}
+    <tr>
+      <td><a href="{% url 'slurp_ui:quality_rd_formula_detail' f.id %}">{{ f.name }}</a></td>
+      <td>{{ f.get_status_display }}</td>
+      <td>${{ f.total_cost_per_lb|floatformat:2 }}</td>
+      <td>{{ f.updated_at|date:"M j, Y" }}</td>
+    </tr>
+    {% empty %}
+    <tr><td colspan="4">No R&amp;D formulas yet.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}
+

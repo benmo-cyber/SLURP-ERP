@@ -1,0 +1,70 @@
+{% extends "slurp_ui/base_module.html" %}
+{% block title %}Logs — SLURP{% endblock %}
+{% block module_title %}Activity Logs{% endblock %}
+{% block main %}
+<nav style="display:flex;flex-wrap:wrap;gap:0.35rem;margin-bottom:1rem">
+  {% for tid, tlabel in log_types %}
+  <a href="?type={{ tid }}" class="btn btn-secondary {% if log_type == tid %}active{% endif %}">{{ tlabel }}</a>
+  {% endfor %}
+</nav>
+
+<form method="get" style="display:flex;flex-wrap:wrap;gap:0.5rem;margin-bottom:1rem;align-items:flex-end">
+  <input type="hidden" name="type" value="{{ log_type }}" />
+  {% if log_type == "transactions" %}
+  <div class="form-row"><label>Lot #</label><input name="lot_number" value="{{ filters.lot_number|default:'' }}" /></div>
+  <div class="form-row"><label>SKU</label><input name="sku" value="{{ filters.sku|default:'' }}" /></div>
+  <div class="form-row"><label>Type</label><input name="transaction_type" value="{{ filters.transaction_type|default:'' }}" /></div>
+  <div class="form-row"><label>Reference</label><input name="reference_number" value="{{ filters.reference_number|default:'' }}" /></div>
+  {% elif log_type == "depletion" %}
+  <div class="form-row"><label>Lot #</label><input name="lot_number" value="{{ filters.lot_number|default:'' }}" /></div>
+  <div class="form-row"><label>SKU</label><input name="sku" value="{{ filters.sku|default:'' }}" /></div>
+  <div class="form-row"><label>Method</label><input name="method" value="{{ filters.method|default:'' }}" /></div>
+  {% elif log_type == "purchase-orders" %}
+  <div class="form-row"><label>PO #</label><input name="po_number" value="{{ filters.po_number|default:'' }}" /></div>
+  <div class="form-row"><label>Vendor</label><input name="vendor" value="{{ filters.vendor|default:'' }}" /></div>
+  <div class="form-row"><label>Action</label><input name="action" value="{{ filters.action|default:'' }}" /></div>
+  {% elif log_type == "production" %}
+  <div class="form-row"><label>Batch #</label><input name="batch_number" value="{{ filters.batch_number|default:'' }}" /></div>
+  <div class="form-row"><label>SKU</label><input name="sku" value="{{ filters.sku|default:'' }}" /></div>
+  {% elif log_type == "check-ins" %}
+  <div class="form-row"><label>SKU</label><input name="item_sku" value="{{ filters.item_sku|default:'' }}" /></div>
+  <div class="form-row"><label>PO #</label><input name="po_number" value="{{ filters.po_number|default:'' }}" /></div>
+  {% elif log_type == "lot-attribute-changes" %}
+  <div class="form-row"><label>Lot #</label><input name="lot_number" value="{{ filters.lot_number|default:'' }}" /></div>
+  <div class="form-row"><label>SKU</label><input name="sku" value="{{ filters.sku|default:'' }}" /></div>
+  <div class="form-row"><label>Field</label><input name="field_name" value="{{ filters.field_name|default:'' }}" /></div>
+  {% endif %}
+  <div class="form-row"><label>From</label><input type="date" name="date_from" value="{{ filters.date_from|default:'' }}" /></div>
+  <div class="form-row"><label>To</label><input type="date" name="date_to" value="{{ filters.date_to|default:'' }}" /></div>
+  <button type="submit" class="btn btn-primary">Filter</button>
+</form>
+
+<div style="overflow-x:auto">
+{% if log_type == "transactions" %}
+<table class="data-table"><thead><tr><th>When</th><th>Lot</th><th>SKU</th><th>Type</th><th>Qty</th><th>Reference</th><th>User</th></tr></thead><tbody>
+{% for r in rows %}<tr><td>{{ r.logged_at }}</td><td>{{ r.lot_number }}</td><td>{{ r.item_sku }}</td><td>{{ r.transaction_type }}</td><td>{{ r.quantity }}</td><td>{{ r.reference_number|default:"—" }}</td><td>{{ r.logged_by|default:"—" }}</td></tr>{% empty %}<tr><td colspan="7">No rows.</td></tr>{% endfor %}
+</tbody></table>
+{% elif log_type == "depletion" %}
+<table class="data-table"><thead><tr><th>When</th><th>Lot</th><th>SKU</th><th>Method</th><th>Qty</th><th>Reference</th></tr></thead><tbody>
+{% for r in rows %}<tr><td>{{ r.depleted_at }}</td><td>{{ r.lot_number }}</td><td>{{ r.item_sku }}</td><td>{{ r.depletion_method }}</td><td>{{ r.quantity_depleted }}</td><td>{{ r.reference_number|default:"—" }}</td></tr>{% empty %}<tr><td colspan="6">No rows.</td></tr>{% endfor %}
+</tbody></table>
+{% elif log_type == "purchase-orders" %}
+<table class="data-table"><thead><tr><th>When</th><th>PO</th><th>Vendor</th><th>Action</th><th>Lot</th><th>Details</th></tr></thead><tbody>
+{% for r in rows %}<tr><td>{{ r.logged_at }}</td><td>{{ r.po_number }}</td><td>{{ r.vendor_name|default:"—" }}</td><td>{{ r.action }}</td><td>{{ r.lot_number|default:"—" }}</td><td>{{ r.details|default:"—" }}</td></tr>{% empty %}<tr><td colspan="6">No rows.</td></tr>{% endfor %}
+</tbody></table>
+{% elif log_type == "production" %}
+<table class="data-table"><thead><tr><th>When</th><th>Batch</th><th>SKU</th><th>Type</th><th>Qty</th></tr></thead><tbody>
+{% for r in rows %}<tr><td>{{ r.logged_at }}</td><td>{{ r.batch_number }}</td><td>{{ r.finished_good_sku }}</td><td>{{ r.batch_type }}</td><td>{{ r.quantity_produced }}</td></tr>{% empty %}<tr><td colspan="5">No rows.</td></tr>{% endfor %}
+</tbody></table>
+{% elif log_type == "check-ins" %}
+<table class="data-table"><thead><tr><th>When</th><th>SKU</th><th>Lot</th><th>PO</th><th>Qty</th><th>User</th></tr></thead><tbody>
+{% for r in rows %}<tr><td>{{ r.checked_in_at }}</td><td>{{ r.item_sku }}</td><td>{{ r.lot_number }}</td><td>{{ r.po_number|default:"—" }}</td><td>{{ r.quantity }}</td><td>{{ r.checked_in_by|default:"—" }}</td></tr>{% empty %}<tr><td colspan="6">No rows.</td></tr>{% endfor %}
+</tbody></table>
+{% elif log_type == "lot-attribute-changes" %}
+<table class="data-table"><thead><tr><th>When</th><th>Lot</th><th>SKU</th><th>Field</th><th>Old</th><th>New</th><th>User</th></tr></thead><tbody>
+{% for r in rows %}<tr><td>{{ r.changed_at }}</td><td>{{ r.lot.lot_number }}</td><td>{{ r.lot.item.sku }}</td><td>{{ r.field_name }}</td><td>{{ r.old_value|default:"—" }}</td><td>{{ r.new_value|default:"—" }}</td><td>{{ r.changed_by|default:"—" }}</td></tr>{% empty %}<tr><td colspan="7">No rows.</td></tr>{% endfor %}
+</tbody></table>
+{% endif %}
+</div>
+<p style="font-size:0.85rem;color:#64748b;margin-top:0.75rem">Showing up to 200 most recent rows. Unit toggle (lbs/kg) not ported — quantities shown in native UoM.</p>
+{% endblock %}

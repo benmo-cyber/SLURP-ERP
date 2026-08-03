@@ -1,0 +1,8 @@
+.formulas-table th.sortable {
+  cursor: pointer;
+  user-select: none;
+}
+.formulas-table th.sortable:hover {
+  background-color: var(--table-header-hover-bg);
+}
+

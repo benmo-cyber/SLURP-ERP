@@ -1,0 +1,21 @@
+﻿{% extends "slurp_ui/base_module.html" %}
+{% block title %}P&L Actual — SLURP{% endblock %}
+{% block module_title %}Finance{% endblock %}
+{% block main %}
+<form method="get" style="margin-bottom:1rem;display:flex;gap:0.5rem;flex-wrap:wrap">
+  <label>Start <input type="date" name="start_date" value="{{ start_date }}" /></label>
+  <label>End <input type="date" name="end_date" value="{{ end_date }}" /></label>
+  <button class="btn btn-primary" type="submit">Refresh</button>
+</form>
+{% if data %}
+  <h3>Revenue</h3>
+  <table class="data-table" style="width:100%"><thead><tr><th>Account</th><th>Amount</th></tr></thead>
+  <tbody>{% for r in data.revenues %}<tr><td>{{ r.account_number }} — {{ r.account_name }}</td><td>{{ r.amount }}</td></tr>{% empty %}<tr><td colspan="2">—</td></tr>{% endfor %}</tbody></table>
+  <h3>Expenses</h3>
+  <table class="data-table" style="width:100%"><thead><tr><th>Account</th><th>Amount</th></tr></thead>
+  <tbody>{% for r in data.expenses %}<tr><td>{{ r.account_number }} — {{ r.account_name }}</td><td>{{ r.amount }}</td></tr>{% empty %}<tr><td colspan="2">—</td></tr>{% endfor %}</tbody></table>
+  <p style="margin-top:1rem"><strong>Revenue:</strong> {{ data.total_revenue }} · <strong>Expenses:</strong> {{ data.total_expenses }} · <strong>Net:</strong> {{ data.net_income }}</p>
+{% else %}
+<p>No P&L data.</p>
+{% endif %}
+{% endblock %}

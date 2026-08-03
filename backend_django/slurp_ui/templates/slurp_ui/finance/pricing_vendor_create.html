@@ -1,0 +1,17 @@
+﻿{% extends "slurp_ui/base_module.html" %}
+{% block title %}Vendor Pricing — SLURP{% endblock %}
+{% block module_title %}Finance{% endblock %}
+{% block main %}
+<h2>Create vendor pricing</h2>
+<form method="post">{% csrf_token %}
+  <label>Vendor name<input name="vendor_name" required /></label>
+  <label>Item<select name="item" required>{% for i in items %}<option value="{{ i.id }}">{{ i.sku }}</option>{% endfor %}</select></label>
+  <label>Unit price<input type="number" step="0.0001" name="unit_price" required /></label>
+  <label>UoM<input name="unit_of_measure" value="lbs" /></label>
+  <label>Effective<input type="date" name="effective_date" required /></label>
+  <label>Vendor item #<input name="vendor_item_number" /></label>
+  <label>Expiry<input type="date" name="expiry_date" /></label>
+  <label>Notes<textarea name="notes"></textarea></label>
+  <button class="btn btn-primary" type="submit">Save</button>
+</form>
+{% endblock %}

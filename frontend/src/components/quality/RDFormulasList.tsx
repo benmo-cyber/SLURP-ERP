@@ -5,7 +5,7 @@ import { getCostMasterByProductCode } from '../../api/costMaster'
 import { formatAppDate } from '../../utils/appDateFormat'
 import './RDFormulasList.css'
 
-const LB_PER_KG = 2.20462
+const LB_PER_KG = 2.2
 
 function roundMoney2(n: number): number {
   return Math.round(n * 100) / 100

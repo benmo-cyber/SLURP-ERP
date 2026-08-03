@@ -563,21 +563,21 @@ function CreatePurchaseOrder({ onClose, onSuccess }: CreatePurchaseOrderProps) {
           } else if (newUnit === 'kg' && costMaster.price_per_kg) {
             newPrice = costMaster.price_per_kg
           } else if (newUnit === 'lbs' && costMaster.price_per_kg) {
-            newPrice = costMaster.price_per_kg / 2.20462
+            newPrice = costMaster.price_per_kg / 2.2
           } else if (newUnit === 'kg' && costMaster.price_per_lb) {
-            newPrice = costMaster.price_per_lb * 2.20462
+            newPrice = costMaster.price_per_lb * 2.2
           } else {
             if (oldUnit === 'lbs' && newUnit === 'kg') {
-              newPrice = Number.isFinite(parsedLineCost) ? parsedLineCost * 2.20462 : NaN
+              newPrice = Number.isFinite(parsedLineCost) ? parsedLineCost * 2.2 : NaN
             } else if (oldUnit === 'kg' && newUnit === 'lbs') {
-              newPrice = Number.isFinite(parsedLineCost) ? parsedLineCost / 2.20462 : NaN
+              newPrice = Number.isFinite(parsedLineCost) ? parsedLineCost / 2.2 : NaN
             }
           }
         } else {
           if (oldUnit === 'lbs' && newUnit === 'kg') {
-            newPrice = Number.isFinite(parsedLineCost) ? parsedLineCost * 2.20462 : NaN
+            newPrice = Number.isFinite(parsedLineCost) ? parsedLineCost * 2.2 : NaN
           } else if (oldUnit === 'kg' && newUnit === 'lbs') {
-            newPrice = Number.isFinite(parsedLineCost) ? parsedLineCost / 2.20462 : NaN
+            newPrice = Number.isFinite(parsedLineCost) ? parsedLineCost / 2.2 : NaN
           }
         }
 
@@ -650,11 +650,11 @@ function CreatePurchaseOrder({ onClose, onSuccess }: CreatePurchaseOrderProps) {
             priceSet = true
           } else if (originalUnit === 'lbs' && costMaster.price_per_kg) {
             // Convert kg to lbs
-            priceToSet = costMaster.price_per_kg / 2.20462
+            priceToSet = costMaster.price_per_kg / 2.2
             priceSet = true
           } else if (originalUnit === 'kg' && costMaster.price_per_lb) {
             // Convert lbs to kg
-            priceToSet = costMaster.price_per_lb * 2.20462
+            priceToSet = costMaster.price_per_lb * 2.2
             priceSet = true
           }
         }
@@ -679,11 +679,11 @@ function CreatePurchaseOrder({ onClose, onSuccess }: CreatePurchaseOrderProps) {
             priceSet = true
           } else if (originalUnit === 'lbs' && costMaster.price_per_kg) {
             // Convert kg to lbs
-            priceToSet = costMaster.price_per_kg / 2.20462
+            priceToSet = costMaster.price_per_kg / 2.2
             priceSet = true
           } else if (originalUnit === 'kg' && costMaster.price_per_lb) {
             // Convert lbs to kg
-            priceToSet = costMaster.price_per_lb * 2.20462
+            priceToSet = costMaster.price_per_lb * 2.2
             priceSet = true
           }
         }

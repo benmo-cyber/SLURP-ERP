@@ -1,0 +1,21 @@
+﻿{% extends "slurp_ui/base_module.html" %}
+{% block title %}Accounts Receivable — SLURP{% endblock %}
+{% block module_title %}Finance{% endblock %}
+{% block header_actions %}<a class="btn btn-primary" href="{% url 'slurp_ui:finance_payment_entry' %}?type=ar_payment">Record payment</a>{% endblock %}
+{% block main %}
+<form method="get" style="margin-bottom:1rem"><select name="status" onchange="this.form.submit()">
+  <option value="">All</option>
+  {% for s in "open,partial,paid,overdue,cancelled"|make_list %}{% endfor %}
+  <option value="open" {% if status_filter == "open" %}selected{% endif %}>Open</option>
+  <option value="partial" {% if status_filter == "partial" %}selected{% endif %}>Partial</option>
+  <option value="paid" {% if status_filter == "paid" %}selected{% endif %}>Paid</option>
+  <option value="overdue" {% if status_filter == "overdue" %}selected{% endif %}>Overdue</option>
+</select></form>
+<table class="data-table" style="width:100%"><thead><tr><th>Customer</th><th>Invoice</th><th>Due</th><th>Balance</th><th>Status</th><th></th></tr></thead>
+<tbody>{% for r in entries %}<tr>
+  <td>{{ r.customer_name }}</td>
+  <td>{% if r.invoice %}<a href="{% url 'slurp_ui:finance_invoice_detail' r.invoice_id %}">{{ r.invoice.invoice_number }}</a>{% else %}—{% endif %}</td>
+  <td>{{ r.due_date }}</td><td>{{ r.balance|floatformat:2 }}</td><td>{{ r.status }}</td>
+  <td>{% if r.status != "paid" %}<a href="{% url 'slurp_ui:finance_payment_entry' %}?type=ar_payment&ar_entry={{ r.id }}">Pay</a>{% endif %}</td>
+</tr>{% empty %}<tr><td colspan="6">No AR entries.</td></tr>{% endfor %}</tbody></table>
+{% endblock %}

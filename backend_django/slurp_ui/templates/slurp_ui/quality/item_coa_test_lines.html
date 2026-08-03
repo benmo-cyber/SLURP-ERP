@@ -1,0 +1,151 @@
+{% extends "slurp_ui/base_module.html" %}
+
+{% block title %}COA tests — {{ item.sku }} — SLURP{% endblock %}
+
+{% block module_title %}Quality{% endblock %}
+
+{% block main %}
+
+<div style="max-width:1100px">
+
+  <div style="display:flex;justify-content:space-between;gap:1rem;flex-wrap:wrap;margin-bottom:1rem">
+
+    <div>
+
+      <h2 style="margin:0">COA / micro tests</h2>
+
+      <p style="margin:0.25rem 0 0"><strong>{{ item.sku }}</strong> — {{ item.name }}</p>
+
+    </div>
+
+    <div style="display:flex;gap:0.5rem">
+
+      <a class="btn btn-secondary" href="{% url 'slurp_ui:quality_finished_good_detail' item.id %}">Back to formula</a>
+
+    </div>
+
+  </div>
+
+
+
+  <h3>Add test line</h3>
+
+  <form method="post" style="margin-bottom:1.5rem;padding:1rem;border:1px solid #e2e8f0;border-radius:6px">
+
+    {% csrf_token %}
+
+    <input type="hidden" name="line_id" value="new" />
+
+    <div style="display:grid;grid-template-columns:80px 1fr 1fr;gap:0.5rem">
+
+      <div class="form-row"><label>Order</label><input name="sort_order" type="number" value="0" /></div>
+
+      <div class="form-row"><label>Test name *</label><input name="test_name" required /></div>
+
+      <div class="form-row">
+
+        <label>Result kind</label>
+
+        <select name="result_kind">
+
+          {% for val, label in result_kind_choices %}
+
+          <option value="{{ val }}">{{ label }}</option>
+
+          {% endfor %}
+
+        </select>
+
+      </div>
+
+    </div>
+
+    <div class="form-row"><label>Specification *</label><textarea name="specification_text" rows="2" required></textarea></div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem">
+
+      <div class="form-row"><label>Numeric min</label><input name="numeric_min" type="number" step="any" /></div>
+
+      <div class="form-row"><label>Numeric max</label><input name="numeric_max" type="number" step="any" /></div>
+
+    </div>
+
+    <button type="submit" class="btn btn-primary">Add line</button>
+
+  </form>
+
+
+
+  {% for line in lines %}
+
+  <form method="post" style="margin-bottom:1rem;padding:1rem;border:1px solid #e2e8f0;border-radius:6px">
+
+    {% csrf_token %}
+
+    <input type="hidden" name="line_id" value="{{ line.id }}" />
+
+    <div style="display:grid;grid-template-columns:80px 1fr 1fr;gap:0.5rem">
+
+      <div class="form-row"><label>Order</label><input name="sort_order" type="number" value="{{ line.sort_order }}" /></div>
+
+      <div class="form-row"><label>Test name</label><input name="test_name" value="{{ line.test_name }}" required /></div>
+
+      <div class="form-row">
+
+        <label>Result kind</label>
+
+        <select name="result_kind">
+
+          {% for val, label in result_kind_choices %}
+
+          <option value="{{ val }}" {% if line.result_kind == val %}selected{% endif %}>{{ label }}</option>
+
+          {% endfor %}
+
+        </select>
+
+      </div>
+
+    </div>
+
+    <div class="form-row"><label>Specification</label><textarea name="specification_text" rows="2" required>{{ line.specification_text }}</textarea></div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem">
+
+      <div class="form-row"><label>Numeric min</label><input name="numeric_min" type="number" step="any" value="{{ line.numeric_min|default_if_none:'' }}" /></div>
+
+      <div class="form-row"><label>Numeric max</label><input name="numeric_max" type="number" step="any" value="{{ line.numeric_max|default_if_none:'' }}" /></div>
+
+    </div>
+
+    <div class="form-actions">
+
+      <button type="submit" class="btn btn-primary">Save</button>
+
+    </div>
+
+  </form>
+
+  <form method="post" style="margin-top:-0.5rem;margin-bottom:1rem" onsubmit="return confirm('Delete this test line?');">
+
+    {% csrf_token %}
+
+    <input type="hidden" name="action" value="delete" />
+
+    <input type="hidden" name="line_id" value="{{ line.id }}" />
+
+    <button type="submit" class="btn btn-danger btn-sm">Delete line</button>
+
+  </form>
+
+  {% empty %}
+
+  <p>No COA test lines yet.</p>
+
+  {% endfor %}
+
+</div>
+
+{% endblock %}
+
+

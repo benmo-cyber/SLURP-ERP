@@ -1,0 +1,69 @@
+{% extends "slurp_ui/base.html" %}
+{% block title %}Close Batch — SLURP{% endblock %}
+{% block content %}
+<div class="modal-page" style="max-width:720px">
+  <h2>Close Batch {{ batch.batch_number }}</h2>
+  <p style="margin-bottom:1rem;color:#64748b">
+    {{ batch.finished_good_item.sku }} · ticket target
+    <strong>{{ batch.quantity_produced|floatformat:2 }}</strong>
+    {% if batch.batch_type == 'production' %} lbs{% endif %}
+    · status {{ batch.status }}
+  </p>
+
+  <h3 style="margin-bottom:0.5rem">Inputs</h3>
+  <ul style="margin-bottom:1rem">
+    {% for inp in batch.inputs.all %}
+    <li>{{ inp.lot.lot_number }} — {{ inp.lot.item.sku }}: {{ inp.quantity_used|floatformat:2 }} {{ inp.lot.item.unit_of_measure }}</li>
+    {% empty %}
+    <li>No inputs.</li>
+    {% endfor %}
+  </ul>
+
+  <form method="post">
+    {% csrf_token %}
+    <div class="form-row">
+      <label for="quantity_actual">Quantity actual (produced into inventory) *</label>
+      <input id="quantity_actual" name="quantity_actual" type="number" step="any"
+             value="{{ batch.quantity_produced }}" required />
+    </div>
+    {% if batch.batch_type == 'production' %}
+    <p style="font-size:0.9rem;color:#64748b;margin-bottom:0.75rem">
+      If actual is below the batch ticket, wastes + spills must equal the shortfall.
+    </p>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem">
+      <div class="form-row">
+        <label for="wastes">Wastes</label>
+        <input id="wastes" name="wastes" type="number" step="any" value="0" />
+      </div>
+      <div class="form-row">
+        <label for="spills">Spills</label>
+        <input id="spills" name="spills" type="number" step="any" value="0" />
+      </div>
+    </div>
+    {% endif %}
+
+    <h3 style="margin:1rem 0 0.5rem">QC</h3>
+    <div class="form-row">
+      <label for="qc_parameter">QC parameters</label>
+      <input id="qc_parameter" name="qc_parameter" />
+    </div>
+    <div class="form-row">
+      <label for="qc_actual">QC actual</label>
+      <input id="qc_actual" name="qc_actual" />
+    </div>
+    <div class="form-row">
+      <label for="qc_initials">QC initials</label>
+      <input id="qc_initials" name="qc_initials" maxlength="20" style="max-width:8rem" />
+    </div>
+    <div class="form-row">
+      <label for="notes">Additional notes</label>
+      <textarea id="notes" name="notes" rows="2"></textarea>
+    </div>
+
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">Close batch</button>
+      <a class="btn btn-secondary" href="{% url 'slurp_ui:production_batch_detail' batch.id %}">Cancel</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

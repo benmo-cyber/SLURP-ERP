@@ -1,0 +1,30 @@
+{% extends "slurp_ui/base_module.html" %}
+{% block title %}Unlink Finished Good — SLURP{% endblock %}
+{% block module_title %}Quality{% endblock %}
+{% block main %}
+<div style="max-width:640px">
+  <div style="display:flex;justify-content:space-between;margin-bottom:1rem">
+    <h2 style="margin:0">Unlink finished good</h2>
+    <a class="btn btn-secondary" href="{% url 'slurp_ui:quality_finished_goods' %}">Back</a>
+  </div>
+  <p style="color:#b45309;background:#fffbeb;padding:0.75rem;border-radius:6px">
+    Permanently removes the finished good from the catalog. This does not reverse batches or receipts. Cannot be undone.
+  </p>
+  <form method="post" onsubmit="return confirm('Permanently remove this finished good?');">
+    {% csrf_token %}
+    <div class="form-row">
+      <label for="item_id">Select finished good *</label>
+      <select id="item_id" name="item_id" required>
+        <option value="">—</option>
+        {% for row in rows %}
+        <option value="{{ row.item.id }}">
+          {{ row.item.sku }} — {{ row.item.name }}{% if row.has_formula %} (has formula){% endif %}
+        </option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="form-actions"><button type="submit" class="btn btn-danger">Unlink finished good</button></div>
+  </form>
+</div>
+{% endblock %}
+

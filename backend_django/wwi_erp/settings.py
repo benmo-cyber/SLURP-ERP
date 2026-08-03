@@ -29,6 +29,7 @@ INSTALLED_APPS = [
     'rest_framework',
     'corsheaders',
     'erp_core.apps.ErpCoreConfig',
+    'slurp_ui.apps.SlurpUiConfig',
 ]
 
 MIDDLEWARE = [
@@ -55,10 +56,15 @@ TEMPLATES = [
                 'django.template.context_processors.request',
                 'django.contrib.auth.context_processors.auth',
                 'django.contrib.messages.context_processors.messages',
+                'slurp_ui.context_processors.slurp_ui',
             ],
         },
     },
 ]
+
+LOGIN_URL = 'slurp_ui:login'
+LOGIN_REDIRECT_URL = 'slurp_ui:inventory'
+LOGOUT_REDIRECT_URL = 'slurp_ui:login'
 
 WSGI_APPLICATION = 'wwi_erp.wsgi.application'
 
@@ -97,6 +103,7 @@ USE_TZ = True
 
 # Static files (CSS, JavaScript, Images)
 STATIC_URL = 'static/'
+STATICFILES_DIRS = []
 
 # Media files (user uploads)
 MEDIA_URL = '/media/'

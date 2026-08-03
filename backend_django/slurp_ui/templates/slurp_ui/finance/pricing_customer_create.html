@@ -1,0 +1,18 @@
+﻿{% extends "slurp_ui/base_module.html" %}
+{% block title %}Customer Pricing — SLURP{% endblock %}
+{% block module_title %}Finance{% endblock %}
+{% block main %}
+<h2>Create customer pricing</h2>
+<form method="post">{% csrf_token %}
+  <label>Customer<select name="customer" required>{% for c in customers %}<option value="{{ c.id }}">{{ c.name }}</option>{% endfor %}</select></label>
+  <label>Item<select name="item" required>{% for i in items %}<option value="{{ i.id }}">{{ i.sku }} — {{ i.name }}</option>{% endfor %}</select></label>
+  <label>Unit price<input type="number" step="0.0001" name="unit_price" required /></label>
+  <label>UoM<input name="unit_of_measure" value="lbs" /></label>
+  <label>Effective<input type="date" name="effective_date" required /></label>
+  <label>Expiry<input type="date" name="expiry_date" /></label>
+  <label>Incoterms<input name="incoterms" /></label>
+  <label>Place<input name="incoterms_place" /></label>
+  <label>Notes<textarea name="notes"></textarea></label>
+  <button class="btn btn-primary" type="submit">Save</button>
+</form>
+{% endblock %}

@@ -20,7 +20,7 @@ CONFIDENTIALITY_FOOTER = (
 )
 BATCH_TICKET_UPDATED = "Batch Ticket – Updated 02/06/2026 (GDM) – Reviewed by GM – Effective Date 02/06/2026 (BP-13)"
 
-LB_PER_KG = 2.20462
+LB_PER_KG = 2.2  # plant standard; see mass_quantity.LBS_PER_KG
 
 
 def _normalize_mass_unit_param(value):

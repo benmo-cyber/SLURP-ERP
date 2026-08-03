@@ -1,0 +1,77 @@
+{% extends "slurp_ui/base_module.html" %}
+{% block title %}CRM — SLURP{% endblock %}
+{% block module_title %}Customer Relationship Management{% endblock %}
+{% block header_actions %}
+  <a href="{% url 'slurp_ui:sales_customers' %}" class="btn btn-primary">+ Add Customer</a>
+{% endblock %}
+{% block main %}
+<div class="crm-toolbar" style="margin-bottom:1rem;display:flex;flex-wrap:wrap;gap:0.75rem;align-items:center">
+  <form method="get" style="display:flex;gap:0.5rem;flex:1;min-width:200px">
+    <input type="search" name="q" value="{{ q }}" placeholder="Search customers…" class="crm-search" style="flex:1;padding:0.5rem" />
+    {% if active_filter %}<input type="hidden" name="active" value="{{ active_filter }}" />{% endif %}
+    <button class="btn btn-primary" type="submit">Search</button>
+  </form>
+  <div class="crm-filter-pills">
+    <a href="?{% if q %}q={{ q|urlencode }}&{% endif %}active=" class="btn btn-secondary {% if not active_filter %}active{% endif %}">All</a>
+    <a href="?{% if q %}q={{ q|urlencode }}&{% endif %}active=true" class="btn btn-secondary {% if active_filter == 'true' %}active{% endif %}">Active</a>
+    <a href="?{% if q %}q={{ q|urlencode }}&{% endif %}active=false" class="btn btn-secondary {% if active_filter == 'false' %}active{% endif %}">Inactive</a>
+  </div>
+</div>
+
+<div style="display:grid;grid-template-columns:2fr 1fr;gap:1rem;margin-bottom:1rem">
+  <div class="crm-table-wrap">
+    <table class="data-table crm-table">
+      <thead>
+        <tr>
+          <th>Customer</th><th>Email</th><th>Phone</th><th>Location</th>
+          <th>Locations</th><th>Contacts</th><th>Calls</th><th>Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for c in customers %}
+        <tr class="crm-row {% if not c.is_active %}inactive{% endif %}">
+          <td>
+            <a href="{% url 'slurp_ui:sales_customer_profile' c.pk %}"><strong>{{ c.name }}</strong></a><br />
+            <span class="crm-customer-id">{{ c.customer_id }}</span>
+          </td>
+          <td>{{ c.email|default:"—" }}</td>
+          <td>{{ c.phone|default:"—" }}</td>
+          <td>{% if c.city or c.state %}{{ c.city }}{% if c.city and c.state %}, {% endif %}{{ c.state }}{% else %}—{% endif %}</td>
+          <td>{{ c.ship_to_locations_count|default:0 }}</td>
+          <td>{{ c.contacts_count|default:0 }}</td>
+          <td>{{ c.sales_calls_count|default:0 }}</td>
+          <td>{% if c.is_active %}Active{% else %}Inactive{% endif %}</td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="8">No customers found.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <aside>
+    <h3 style="margin-top:0">Recent sales activity</h3>
+    {% if recent_calls %}
+    <ul style="list-style:none;padding:0;margin:0">
+      {% for call in recent_calls %}
+      <li style="padding:0.5rem 0;border-bottom:1px solid #e2e8f0">
+        <a href="{% url 'slurp_ui:sales_customer_profile' call.customer_id %}?tab=sales-calls">{{ call.customer.name }}</a><br />
+        <small>{{ call.call_date|date:"M j, Y g:i A" }} · {{ call.get_call_type_display }}</small>
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p style="color:#64748b">No recent sales calls logged.</p>
+    {% endif %}
+    <h3>Top ship-to counts</h3>
+    {% if ship_to_summary %}
+    <ul style="list-style:none;padding:0">
+      {% for row in ship_to_summary %}
+      <li style="padding:0.25rem 0"><a href="{% url 'slurp_ui:sales_customer_profile' row.customer_id %}?tab=ship-to">{{ row.customer__name }}</a> — {{ row.loc_count }}</li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p style="color:#64748b">No active ship-to locations.</p>
+    {% endif %}
+  </aside>
+</div>
+{% endblock %}

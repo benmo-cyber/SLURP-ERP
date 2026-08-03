@@ -1,0 +1,31 @@
+{% extends "slurp_ui/base.html" %}
+{% block title %}{% if location %}Edit{% else %}Add{% endif %} Ship-To — SLURP{% endblock %}
+{% block content %}
+<div class="modal-page" style="max-width:640px">
+  <h2>{% if location %}Edit{% else %}Add{% endif %} ship-to — {{ customer.name }}</h2>
+  <form method="post">
+    {% csrf_token %}
+    <div class="form-row"><label>Location name *</label><input name="location_name" required value="{{ location.location_name|default:'' }}" /></div>
+    <div class="form-row"><label>Contact</label><input name="contact_name" value="{{ location.contact_name|default:'' }}" /></div>
+    <div class="form-row"><label>Email</label><input type="email" name="email" value="{{ location.email|default:'' }}" /></div>
+    <div class="form-row"><label>Phone</label><input name="phone" value="{{ location.phone|default:'' }}" /></div>
+    <div class="form-row"><label>Address *</label><textarea name="address" required rows="2">{{ location.address|default:'' }}</textarea></div>
+    <div style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:0.5rem">
+      <div class="form-row"><label>City *</label><input name="city" required value="{{ location.city|default:'' }}" /></div>
+      <div class="form-row"><label>State</label><input name="state" value="{{ location.state|default:'' }}" /></div>
+      <div class="form-row"><label>ZIP *</label><input name="zip_code" required value="{{ location.zip_code|default:'' }}" /></div>
+    </div>
+    <div class="form-row"><label>Country</label><input name="country" value="{{ location.country|default:'USA' }}" /></div>
+    <div class="form-row"><label><input type="checkbox" name="is_default" {% if location.is_default %}checked{% endif %} /> Default location</label></div>
+    <div class="form-row"><label><input type="checkbox" name="is_active" {% if not location or location.is_active %}checked{% endif %} /> Active</label></div>
+    <div class="form-row"><label>Notes</label><textarea name="notes" rows="2">{{ location.notes|default:'' }}</textarea></div>
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">Save</button>
+      <a class="btn btn-secondary" href="{% url 'slurp_ui:sales_customer_profile' customer.pk %}?tab=ship-to">Cancel</a>
+      {% if location %}
+      <button type="submit" name="action" value="delete" class="btn btn-secondary" style="color:#b91c1c" onclick="return confirm('Delete this location?');">Delete</button>
+      {% endif %}
+    </div>
+  </form>
+</div>
+{% endblock %}

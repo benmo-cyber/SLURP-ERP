@@ -1,0 +1,235 @@
+.financial-reports {
+  padding: 20px;
+}
+
+.reports-header {
+  margin-bottom: 20px;
+}
+
+.reports-header h2 {
+  margin-bottom: 8px;
+}
+
+.reports-related-links {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.reports-related-links .related-label,
+.invoices-related-links .related-label,
+.ar-related-links .related-label {
+  font-size: 0.875rem;
+  color: #6b7280;
+  font-weight: 500;
+}
+
+.reports-related-links .link-btn,
+.invoices-related-links .link-btn,
+.ar-related-links .link-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 0.875rem;
+  color: #2563eb;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.reports-related-links .link-btn:hover,
+.invoices-related-links .link-btn:hover,
+.ar-related-links .link-btn:hover {
+  color: #1d4ed8;
+}
+
+.reports-related-links .related-sep,
+.invoices-related-links .related-sep,
+.ar-related-links .related-sep {
+  color: #d1d5db;
+  font-size: 0.875rem;
+}
+
+.report-filters {
+  display: flex;
+  gap: 15px;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  margin-bottom: 20px;
+  padding: 15px;
+  background: #f5f5f5;
+  border-radius: 4px;
+}
+
+.filter-group {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.filter-group label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #666;
+}
+
+.filter-group select,
+.filter-group input {
+  padding: 8px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 14px;
+}
+
+.financial-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 20px;
+  background: white;
+}
+
+.financial-table th {
+  background: var(--app-header-bg);
+  color: var(--app-header-text);
+  padding: 12px;
+  text-align: left;
+  border-bottom: 2px solid var(--table-header-border);
+  font-weight: 600;
+}
+
+.financial-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid #dee2e6;
+}
+
+.financial-table tbody tr:hover {
+  background: #f8f9fa;
+}
+
+.financial-table .amount {
+  text-align: right;
+  font-family: 'Courier New', monospace;
+}
+
+.financial-table .total-row {
+  background: #e9ecef;
+  font-weight: 600;
+  border-top: 2px solid #dee2e6;
+}
+
+.financial-table .total-row td {
+  padding: 12px;
+}
+
+.financial-table .section-header {
+  background: #f8f9fa;
+  font-weight: 600;
+}
+
+.financial-table .section-header td {
+  padding: 12px;
+  border-top: 2px solid #dee2e6;
+  border-bottom: 1px solid #dee2e6;
+}
+
+.financial-table .net-income-row {
+  background: #fff3cd;
+  border-top: 3px solid #ffc107;
+}
+
+.financial-table .net-income-row td {
+  padding: 15px 12px;
+  font-size: 16px;
+}
+
+.financial-table .positive {
+  color: #28a745;
+}
+
+.financial-table .negative {
+  color: #dc3545;
+}
+
+.balance-status {
+  padding: 12px;
+  border-radius: 4px;
+  margin-top: 15px;
+  font-weight: 600;
+}
+
+.balance-status.balanced {
+  background: #d4edda;
+  color: #155724;
+  border: 1px solid #c3e6cb;
+}
+
+.balance-status.unbalanced {
+  background: #f8d7da;
+  color: #721c24;
+  border: 1px solid #f5c6cb;
+}
+
+.balance-sheet-content {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 30px;
+  margin-top: 20px;
+}
+
+.balance-sheet-column h4 {
+  margin-bottom: 15px;
+  padding-bottom: 10px;
+  border-bottom: 2px solid #dee2e6;
+}
+
+.trial-balance-report,
+.balance-sheet-report,
+.income-statement-report,
+.cash-flow-report {
+  background: white;
+  padding: 20px;
+  border-radius: 4px;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.trial-balance-report h3,
+.balance-sheet-report h3,
+.income-statement-report h3,
+.cash-flow-report h3 {
+  margin-bottom: 20px;
+  padding-bottom: 10px;
+  border-bottom: 2px solid #dee2e6;
+}
+
+.report-period {
+  color: #666;
+  margin-bottom: 15px;
+  font-style: italic;
+}
+
+.loading {
+  text-align: center;
+  padding: 40px;
+  font-size: 16px;
+  color: #666;
+}
+
+.btn {
+  padding: 8px 16px;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  transition: background-color 0.2s;
+}
+
+.btn-primary {
+  background: #007bff;
+  color: white;
+}
+
+.btn-primary:hover {
+  background: #0056b3;
+}

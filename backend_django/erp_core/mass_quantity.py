@@ -19,6 +19,8 @@ AGGREGATE_MASS_SNAP_TOLERANCE = 0.05
 def normalize_mass_quantity(value: float | int | None) -> float:
     """
     Round to 2 dp, then if within MASS_INT_SNAP_TOLERANCE of a whole number, return that integer as float.
+
+    Uses a tiny epsilon so IEEE floats like abs(99.99-100)==0.010000000000005 still snap.
     """
     if value is None:
         return 0.0
@@ -27,7 +29,7 @@ def normalize_mass_quantity(value: float | int | None) -> float:
         return v
     v = round(v, 2)
     n = round(v)
-    if abs(v - n) <= MASS_INT_SNAP_TOLERANCE:
+    if abs(v - n) <= MASS_INT_SNAP_TOLERANCE + 1e-9:
         return float(n)
     return v
 
@@ -84,3 +86,41 @@ def snap_stored_batch_input_quantity(value: float | int | None, unit_of_measure:
     so DB rows and SUM() match user intent (optional backfill / save hooks).
     """
     return normalize_aggregate_quantity_by_uom(value, unit_of_measure)
+
+
+# Plant standard: 2.2 lb = 1 kg (single source of truth for inventory mass conversion)
+LBS_PER_KG = 2.2
+
+
+def convert_mass_uom(
+    quantity: float | int | None,
+    from_uom: str | None,
+    to_uom: str | None,
+) -> float:
+    """
+    Convert a mass quantity between lbs and kg using ``LBS_PER_KG`` (2.2).
+    Identical units (or ea) return normalize_quantity_by_uom.
+    Raises ValueError for unsupported conversions.
+    """
+    if quantity is None:
+        return 0.0
+    src = (from_uom or "").strip().lower()
+    dst = (to_uom or "").strip().lower()
+    q = float(quantity)
+    if not math.isfinite(q):
+        return q
+    if src in ("lb", "lbs"):
+        src = "lbs"
+    if dst in ("lb", "lbs"):
+        dst = "lbs"
+    if src == dst or not src or not dst:
+        return normalize_quantity_by_uom(q, dst or src)
+    if src == "ea" or dst == "ea":
+        if src == dst:
+            return normalize_quantity_by_uom(q, "ea")
+        raise ValueError(f"Cannot convert between '{from_uom}' and '{to_uom}'")
+    if src == "lbs" and dst == "kg":
+        return normalize_mass_quantity(q / LBS_PER_KG)
+    if src == "kg" and dst == "lbs":
+        return normalize_mass_quantity(q * LBS_PER_KG)
+    raise ValueError(f"Unsupported mass conversion {from_uom!r} → {to_uom!r}")

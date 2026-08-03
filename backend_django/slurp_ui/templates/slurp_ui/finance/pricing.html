@@ -1,0 +1,22 @@
+﻿{% extends "slurp_ui/base_module.html" %}
+{% block title %}Pricing — SLURP{% endblock %}
+{% block module_title %}Finance{% endblock %}
+{% block header_actions %}
+<a class="btn btn-primary" href="{% url 'slurp_ui:finance_pricing_customer_create' %}">Customer price</a>
+<a class="btn btn-secondary" href="{% url 'slurp_ui:finance_pricing_vendor_create' %}">Vendor price</a>
+{% endblock %}
+{% block main %}
+<p>
+  <a href="?tab=customer" class="btn {% if tab != 'vendor' %}btn-primary{% else %}btn-secondary{% endif %}">Customer</a>
+  <a href="?tab=vendor" class="btn {% if tab == 'vendor' %}btn-primary{% else %}btn-secondary{% endif %}">Vendor</a>
+</p>
+{% if tab == "vendor" %}
+<table class="data-table" style="width:100%"><thead><tr><th>Vendor</th><th>SKU</th><th>Price</th><th>Effective</th></tr></thead>
+<tbody>{% for r in vendor_rows %}<tr><td>{{ r.vendor_name }}</td><td>{{ r.item.sku }}</td><td>{{ r.unit_price }}</td><td>{{ r.effective_date }}</td></tr>
+{% empty %}<tr><td colspan="4">No vendor pricing.</td></tr>{% endfor %}</tbody></table>
+{% else %}
+<table class="data-table" style="width:100%"><thead><tr><th>Customer</th><th>SKU</th><th>Price</th><th>Effective</th></tr></thead>
+<tbody>{% for r in customer_rows %}<tr><td>{{ r.customer.name }}</td><td>{{ r.item.sku }}</td><td>{{ r.unit_price }}</td><td>{{ r.effective_date }}</td></tr>
+{% empty %}<tr><td colspan="4">No customer pricing.</td></tr>{% endfor %}</tbody></table>
+{% endif %}
+{% endblock %}

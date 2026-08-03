@@ -1547,10 +1547,10 @@ class ItemViewSet(viewsets.ModelViewSet):
                 
                 if unit_of_measure == 'lbs':
                     price_per_lb = price
-                    price_per_kg = price * 2.20462  # Convert lb to kg
+                    price_per_kg = price * 2.2  # Convert lb to kg
                 elif unit_of_measure == 'kg':
                     price_per_kg = price
-                    price_per_lb = price / 2.20462  # Convert kg to lb
+                    price_per_lb = price / 2.2  # Convert kg to lb
                 else:
                     # For 'ea', use price as-is for both (or handle differently)
                     price_per_kg = price
@@ -1565,7 +1565,7 @@ class ItemViewSet(viewsets.ModelViewSet):
                 landed_cost_per_kg = (price_per_kg * (1 + tariff)) + freight_per_kg
             if price_per_lb is not None:
                 # Convert freight to lb and apply same formula
-                landed_cost_per_lb = (price_per_lb * (1 + tariff)) + (freight_per_kg / 2.20462)
+                landed_cost_per_lb = (price_per_lb * (1 + tariff)) + (freight_per_kg / 2.2)
             
             # Get or create CostMaster entry (one per SKU + vendor combination)
             # Tariff is manual only (HTS/country of origin kept for reference; no external API)
@@ -1890,10 +1890,10 @@ class ItemViewSet(viewsets.ModelViewSet):
                 
                 if unit_of_measure == 'lbs':
                     new_price_per_lb = price
-                    new_price_per_kg = price * 2.20462
+                    new_price_per_kg = price * 2.2
                 elif unit_of_measure == 'kg':
                     new_price_per_kg = price
-                    new_price_per_lb = price / 2.20462
+                    new_price_per_lb = price / 2.2
                 else:
                     new_price_per_kg = price
                     new_price_per_lb = price
@@ -2484,142 +2484,46 @@ class LotViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'])
     def checkout_indirect_material(self, request, pk=None):
         """Checkout indirect material from a lot (simple checkout without batch)"""
-        from .models import InventoryTransaction
-        
+        from .lot_services import LotFlowError, checkout_indirect_material
+
         lot = self.get_object()
-        
-        # Verify it's an indirect material
-        if lot.item.item_type != 'indirect_material':
-            return Response(
-                {'error': 'This lot is not an indirect material'},
-                status=status.HTTP_400_BAD_REQUEST
+        try:
+            lot = checkout_indirect_material(
+                request.user,
+                lot,
+                request.data.get('quantity'),
+                notes=request.data.get('notes', '') or '',
+                reference_number=request.data.get('reference_number', '') or '',
             )
-        
-        quantity = request.data.get('quantity')
-        notes = request.data.get('notes', '')
-        reference_number = request.data.get('reference_number', '')
-        
-        if not quantity or float(quantity) <= 0:
-            return Response(
-                {'error': 'Valid quantity is required'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        quantity = round(float(quantity), 2)
-        
-        max_use = float(compute_lot_quantity_breakdown(lot)["quantity_available_for_use"])
-        if quantity > max_use + 1e-6:
-            return Response(
-                {'error': f'Insufficient quantity. Available: {max_use}, Requested: {quantity}'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        # Create inventory transaction
-        quantity_before = lot.quantity_remaining
-        transaction = InventoryTransaction.objects.create(
-            transaction_type='indirect_material_checkout',
-            lot=lot,
-            quantity=round(-quantity, 2),
-            notes=notes or f'Indirect material checkout - {lot.item.name}',
-            reference_number=reference_number
-        )
-        
-        # Log the transaction
-        log_lot_transaction(
-            lot=lot,
-            quantity_before=quantity_before,
-            quantity_change=-quantity,
-            transaction_type='indirect_material_checkout',
-            reference_number=reference_number,
-            reference_type='checkout',
-            transaction_id=transaction.id,
-            notes=notes or f'Indirect material checkout - {lot.item.name}'
-        )
-        
-        # Update lot quantity_remaining
-        lot.quantity_remaining = round(lot.quantity_remaining - quantity, 2)
-        lot.save()
-        
+        except LotFlowError as e:
+            return Response({'error': e.message}, status=e.status_code)
         serializer = self.get_serializer(lot)
         return Response(serializer.data, status=status.HTTP_200_OK)
     
     @action(detail=True, methods=['post'])
     def put_on_hold(self, request, pk=None):
         """Put a partial or full amount of this lot on hold. Body: { quantity }."""
+        from .lot_services import LotFlowError, put_on_hold
+
         lot = self.get_object()
         try:
-            quantity = round(float(request.data.get('quantity', 0)), 2)
-        except (TypeError, ValueError):
-            return Response({'error': 'Valid quantity is required'}, status=status.HTTP_400_BAD_REQUEST)
-        if quantity <= 0:
-            return Response({'error': 'Quantity must be positive'}, status=status.HTTP_400_BAD_REQUEST)
-        available = float(compute_lot_quantity_breakdown(lot)['quantity_available_for_use'])
-        if quantity > available:
-            return Response(
-                {'error': f'Only {available} available to put on hold (remaining minus sales/prod allocations and current on hold)'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        current_hold = getattr(lot, 'quantity_on_hold', 0.0)
-        lot.quantity_on_hold = round(current_hold + quantity, 2)
-        lot.on_hold = True
-        if lot.quantity_on_hold >= lot.quantity_remaining:
-            lot.status = 'on_hold'
-        lot.save(update_fields=['quantity_on_hold', 'on_hold', 'status'])
+            lot = put_on_hold(lot, request.data.get('quantity', 0))
+        except LotFlowError as e:
+            return Response({'error': e.message}, status=e.status_code)
         serializer = self.get_serializer(lot)
         return Response(serializer.data, status=status.HTTP_200_OK)
     
     @action(detail=True, methods=['get'])
     def coa_release_preview(self, request, pk=None):
         """Before release_from_hold: whether COA/micro data is required and template lines + formula QC."""
+        from .lot_services import LotFlowError, coa_release_preview
+
         lot = self.get_object()
-        from .models import ItemCoaTestLine, Formula, LotCoaCertificate
-        from .coa_logic import coa_required_for_full_release, manufactured_item_types
-        from .serializers import ItemCoaTestLineSerializer
-
         try:
-            rq = round(float(request.query_params.get('release_qty', 0)), 2)
-        except (TypeError, ValueError):
-            return Response({'error': 'release_qty query parameter is required (number)'}, status=status.HTTP_400_BAD_REQUEST)
-        if rq <= 0:
-            return Response({'error': 'release_qty must be positive'}, status=status.HTTP_400_BAD_REQUEST)
-        current_hold = float(getattr(lot, 'quantity_on_hold', 0.0) or 0.0)
-        if rq > current_hold + 1e-6:
-            return Response(
-                {'error': f'Only {current_hold} on hold; cannot release more than that'},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        new_hold = round(current_hold - rq, 2)
-        full_clear = new_hold <= 0
-        has_cert = LotCoaCertificate.objects.filter(lot=lot).exists()
-        coa_required = bool(full_clear and coa_required_for_full_release(lot) and not has_cert)
-
-        lines = []
-        if getattr(lot.item, 'item_type', None) in manufactured_item_types():
-            lines = ItemCoaTestLineSerializer(
-                ItemCoaTestLine.objects.filter(item=lot.item).order_by('sort_order', 'id'),
-                many=True,
-            ).data
-
-        formula_qc = None
-        try:
-            f = Formula.objects.get(finished_good_id=lot.item_id)
-            if (f.qc_parameter_name or '').strip():
-                formula_qc = {
-                    'qc_parameter_name': f.qc_parameter_name,
-                    'qc_spec_min': f.qc_spec_min,
-                    'qc_spec_max': f.qc_spec_max,
-                }
-        except Formula.DoesNotExist:
-            pass
-
-        return Response(
-            {
-                'full_clear_from_hold': full_clear,
-                'coa_required': coa_required,
-                'template_lines': lines,
-                'formula_qc': formula_qc,
-            }
-        )
+            data = coa_release_preview(lot, request.query_params.get('release_qty', 0))
+        except LotFlowError as e:
+            return Response({'error': e.message}, status=e.status_code)
+        return Response(data)
 
     @action(detail=True, methods=['post'])
     def release_from_hold(self, request, pk=None):
@@ -2627,202 +2531,38 @@ class LotViewSet(viewsets.ModelViewSet):
 
         Master COA (no customer/PO) is stored on the lot; customer-facing PDFs are created when the lot is allocated on a sales order.
         """
-        from django.db import transaction
-        from .models import ItemCoaTestLine, Formula, LotCoaCertificate, LotCoaLineResult
-        from .coa_logic import (
-            coa_required_for_full_release,
-            evaluate_item_line_pass,
-            evaluate_qc_numeric_pass,
-        )
-        from .coa_pdf_html import save_coa_pdf_to_certificate
-        from .coa_allocation import sync_customer_coas_for_lot
+        from .lot_services import LotFlowError, release_from_hold
 
         lot = self.get_object()
         try:
-            quantity = round(float(request.data.get('quantity', 0)), 2)
-        except (TypeError, ValueError):
-            return Response({'error': 'Valid quantity is required'}, status=status.HTTP_400_BAD_REQUEST)
-        if quantity <= 0:
-            return Response({'error': 'Quantity must be positive'}, status=status.HTTP_400_BAD_REQUEST)
-        current_hold = float(getattr(lot, 'quantity_on_hold', 0.0) or 0.0)
-        if quantity > current_hold:
-            return Response(
-                {'error': f'Only {current_hold} on hold; cannot release more'},
-                status=status.HTTP_400_BAD_REQUEST,
+            lot = release_from_hold(
+                request.user,
+                lot,
+                request.data.get('quantity', 0),
+                coa_payload=request.data.get('coa'),
             )
-
-        new_hold = round(current_hold - quantity, 2)
-        will_full_clear = new_hold <= 0
-
-        needs_coa = (
-            will_full_clear
-            and coa_required_for_full_release(lot)
-            and not LotCoaCertificate.objects.filter(lot=lot).exists()
-        )
-        coa_payload = request.data.get('coa')
-        lines_qs = []
-        by_id = {}
-        has_qc = False
-        formula = None
-        qc_val = None
-
-        if needs_coa:
-            if not isinstance(coa_payload, dict):
-                return Response(
-                    {
-                        'error': (
-                            'This release clears hold on a manufactured lot. Enter micro/QC results in a "coa" object. '
-                            'Call GET /lots/{id}/coa_release_preview/?release_qty=... first.'
-                        )
-                    },
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-
-            lines_qs = list(ItemCoaTestLine.objects.filter(item=lot.item).order_by('sort_order', 'id'))
-            for row in coa_payload.get('line_results') or []:
-                try:
-                    lid = int(row.get('item_line_id'))
-                    by_id[lid] = (row.get('result_text') or '').strip()
-                except (TypeError, ValueError):
-                    continue
-
-            for line in lines_qs:
-                if line.id not in by_id:
-                    return Response(
-                        {'error': f'Missing micro/COA result for line: {line.test_name}'},
-                        status=status.HTTP_400_BAD_REQUEST,
-                    )
-
-            try:
-                formula = Formula.objects.get(finished_good_id=lot.item_id)
-            except Formula.DoesNotExist:
-                formula = None
-            has_qc = bool(formula and (formula.qc_parameter_name or '').strip())
-            if has_qc:
-                raw_qc = coa_payload.get('qc_result_value')
-                if raw_qc is None or (isinstance(raw_qc, str) and not str(raw_qc).strip()):
-                    return Response(
-                        {'error': f'QC result required for parameter: {formula.qc_parameter_name}'},
-                        status=status.HTTP_400_BAD_REQUEST,
-                    )
-                try:
-                    qc_val = float(raw_qc)
-                except (TypeError, ValueError):
-                    return Response({'error': 'qc_result_value must be a number'}, status=status.HTTP_400_BAD_REQUEST)
-
-        with transaction.atomic():
-            lot_locked = Lot.objects.select_for_update().get(pk=lot.pk)
-            ch = float(getattr(lot_locked, 'quantity_on_hold', 0.0) or 0.0)
-            if quantity > ch:
-                raise ValidationError(f'Only {ch} on hold; cannot release more')
-            nh = round(ch - quantity, 2)
-            full_clear = nh <= 0
-            if full_clear:
-                nh = 0.0
-
-            need_cert_here = (
-                full_clear
-                and coa_required_for_full_release(lot_locked)
-                and not LotCoaCertificate.objects.filter(lot=lot_locked).exists()
-            )
-            if need_cert_here and not isinstance(coa_payload, dict):
-                raise ValidationError('COA payload required')
-
-            lot_locked.quantity_on_hold = nh
-            if lot_locked.quantity_on_hold <= 0:
-                lot_locked.quantity_on_hold = 0.0
-                lot_locked.on_hold = False
-                lot_locked.status = 'accepted'
-            else:
-                lot_locked.on_hold = True
-                lot_locked.status = 'on_hold'
-            lot_locked.save(update_fields=['quantity_on_hold', 'on_hold', 'status'])
-
-            if need_cert_here:
-                cert = LotCoaCertificate(
-                    lot=lot_locked,
-                    customer_name='',
-                    customer_po='',
-                    quantity_snapshot=float(lot_locked.quantity_remaining or 0),
-                    recorded_by=getattr(request.user, 'username', None)
-                    or getattr(request.user, 'email', None)
-                    or '',
-                )
-                if has_qc and formula:
-                    cert.qc_parameter_name_snapshot = formula.qc_parameter_name or ''
-                    cert.qc_spec_min_snapshot = formula.qc_spec_min
-                    cert.qc_spec_max_snapshot = formula.qc_spec_max
-                    cert.qc_result_value = qc_val
-                    cert.qc_result_pass = evaluate_qc_numeric_pass(
-                        qc_val, formula.qc_spec_min, formula.qc_spec_max
-                    )
-                cert.save()
-
-                for line in lines_qs:
-                    rt = by_id.get(line.id, '')
-                    passes = evaluate_item_line_pass(line, rt)
-                    LotCoaLineResult.objects.create(
-                        certificate=cert,
-                        item_line=line,
-                        test_name=line.test_name,
-                        specification_text=line.specification_text,
-                        result_text=str(rt)[:500],
-                        passes=passes,
-                    )
-
-                save_coa_pdf_to_certificate(cert)
-                lot_pk = lot_locked.pk
-                transaction.on_commit(lambda pk=lot_pk: sync_customer_coas_for_lot(pk))
-
-        lot_locked.refresh_from_db()
-        serializer = self.get_serializer(lot_locked)
+        except LotFlowError as e:
+            return Response({'error': e.message}, status=e.status_code)
+        except ValidationError as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        serializer = self.get_serializer(lot)
         return Response(serializer.data, status=status.HTTP_200_OK)
     
     @action(detail=True, methods=['post'])
     def reconcile(self, request, pk=None):
         """Admin override: set quantity_remaining to match reality. Requires staff or superuser."""
-        if not getattr(request.user, 'is_authenticated', True) or (
-            not getattr(request.user, 'is_staff', False) and not getattr(request.user, 'is_superuser', False)
-        ):
-            return Response({'error': 'Admin override requires staff or superuser.'}, status=status.HTTP_403_FORBIDDEN)
+        from .lot_services import LotFlowError, reconcile_lot
+
         lot = self.get_object()
         try:
-            new_remaining = round(float(request.data.get('quantity_remaining')), 2)
-        except (TypeError, ValueError):
-            return Response({'error': 'Valid quantity_remaining is required'}, status=status.HTTP_400_BAD_REQUEST)
-        if new_remaining < 0:
-            return Response({'error': 'quantity_remaining cannot be negative'}, status=status.HTTP_400_BAD_REQUEST)
-        reason = (request.data.get('reason') or '').strip() or 'Admin reconcile'
-        quantity_before = lot.quantity_remaining
-        quantity_change = new_remaining - quantity_before
-        if quantity_change == 0:
-            serializer = self.get_serializer(lot)
-            return Response(serializer.data, status=status.HTTP_200_OK)
-        lot.quantity_remaining = new_remaining
-        if new_remaining > 0:
-            lot.depleted_at = None
-        lot.save(update_fields=['quantity_remaining', 'depleted_at'])
-        try:
-            from .models import LotTransactionLog
-            LotTransactionLog.objects.create(
-                lot=lot,
-                lot_number=lot.lot_number or '',
-                item_sku=lot.item.sku,
-                item_name=lot.item.name,
-                vendor=lot.item.vendor or '',
-                transaction_type='adjustment',
-                quantity_before=quantity_before,
-                quantity_change=quantity_change,
-                quantity_after=new_remaining,
-                unit_of_measure=lot.item.unit_of_measure,
-                reference_number=None,
-                reference_type='admin_reconcile',
-                notes=reason,
-                logged_by=getattr(request.user, 'username', None) or getattr(request.user, 'email', None) or 'admin'
+            lot = reconcile_lot(
+                request.user,
+                lot,
+                request.data.get('quantity_remaining'),
+                reason=(request.data.get('reason') or ''),
             )
-        except Exception as e:
-            import logging
-            logging.getLogger(__name__).warning(f'Failed to log reconcile: {e}')
+        except LotFlowError as e:
+            return Response({'error': e.message}, status=e.status_code)
         serializer = self.get_serializer(lot)
         return Response(serializer.data, status=status.HTTP_200_OK)
     
@@ -3461,262 +3201,24 @@ class LotViewSet(viewsets.ModelViewSet):
             return Response([])
     
     def create(self, request, *args, **kwargs):
-        # Get the item to check if it's a raw material
-        item_id = request.data.get('item_id')
-        item = None
-        if item_id:
-            try:
-                item = Item.objects.get(id=item_id)
-            except Item.DoesNotExist:
-                pass
-        
-        # Internal lot number (lot_number): always WWI system format (generate_lot_number) unless staff overrides.
-        # Vendor/supplier lot is vendor_lot_number only — never copy vendor lot into internal lot_number.
-        manual_lot = (request.data.get('lot_number') or '').strip() or None
-        if manual_lot:
-            if not getattr(request.user, 'is_staff', False):
-                manual_lot = None
-            elif Lot.objects.filter(lot_number=manual_lot).exists():
-                return Response(
-                    {'error': f'Lot number "{manual_lot}" already exists. Use a different number or leave blank for auto-assignment.'},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
+        from rest_framework.exceptions import ValidationError as DRFValidationError
 
-        if item and item.item_type == 'raw_material':
-            vendor_lot_number = request.data.get('vendor_lot_number')
-            if vendor_lot_number is None:
-                vendor_lot_number = ''
-            elif isinstance(vendor_lot_number, str):
-                vendor_lot_number = vendor_lot_number.strip()
-            else:
-                vendor_lot_number = str(vendor_lot_number).strip()
-            if not vendor_lot_number:
-                return Response(
-                    {'error': 'Vendor lot number is required for raw materials'},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
+        from .buy_services import BuyFlowError, check_in_lot
 
-        po_number_raw = (request.data.get('po_number') or '')
-        if isinstance(po_number_raw, str):
-            po_number_raw = po_number_raw.strip()
-        else:
-            po_number_raw = str(po_number_raw or '').strip()
-        if po_number_raw:
-            po_ds = PurchaseOrder.objects.filter(po_number=po_number_raw).only('id', 'po_number', 'drop_ship').first()
-            if po_ds and po_ds.drop_ship:
-                return Response(
-                    {
-                        'error': f'PO {po_ds.po_number} is drop ship. Product goes direct to the customer — do not check in to inventory.',
-                    },
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-
-        # Get lot_status from request data (renamed to avoid shadowing status module)
-        lot_status = request.data.get('status', 'accepted')
-
-        if manual_lot:
-            lot_number = manual_lot
-        else:
-            lot_number = generate_lot_number()
-
-        serializer_data = {
-            **request.data,
-            'status': lot_status,
-            'lot_number': lot_number,
-        }
-        
-        serializer = self.get_serializer(data=serializer_data)
-        serializer.is_valid(raise_exception=True)
-        lot = serializer.save()
-        
-        # Handle pack_size_id if provided
-        pack_size_id = request.data.get('pack_size_id')
-        if pack_size_id:
-            try:
-                pack_size = ItemPackSize.objects.get(id=pack_size_id, item=lot.item, is_active=True)
-                lot.pack_size = pack_size
-                lot.save()
-            except ItemPackSize.DoesNotExist:
-                # If pack_size_id doesn't exist or doesn't match item, try to find default
-                default_pack_size = ItemPackSize.objects.filter(item=lot.item, is_default=True, is_active=True).first()
-                if default_pack_size:
-                    lot.pack_size = default_pack_size
-                    lot.save()
-        else:
-            # If no pack_size_id provided, try to set default
-            default_pack_size = ItemPackSize.objects.filter(item=lot.item, is_default=True, is_active=True).first()
-            if default_pack_size:
-                lot.pack_size = default_pack_size
-                lot.save()
-        
-        # Ensure vendor_lot_number is persisted when provided (serializer may already have saved it)
-        vn = request.data.get('vendor_lot_number')
-        if vn is not None:
-            if isinstance(vn, str):
-                vn = vn.strip()
-            else:
-                vn = str(vn).strip()
-            if vn and lot.vendor_lot_number != vn:
-                lot.vendor_lot_number = vn
-                lot.save(update_fields=['vendor_lot_number'])
-        
-        # Set quantity_remaining and on_hold based on lot_status
-        if lot_status == 'accepted':
-            lot.quantity_remaining = lot.quantity
-            lot.on_hold = False
-        elif lot_status == 'rejected':
-            lot.quantity_remaining = 0
-            lot.on_hold = False
-        elif lot_status == 'on_hold':
-            lot.quantity_remaining = lot.quantity  # Physical qty in house; not available until released
-            lot.on_hold = True
-        lot.save()
-        
-        # Only create inventory transaction for accepted lots
-        if lot_status == 'accepted':
-            transaction = InventoryTransaction.objects.create(
-                transaction_type='receipt',
-                lot=lot,
-                quantity=lot.quantity,
-            )
-            
-            # Get PO if exists for logging
-            po = None
-            if lot.po_number:
-                try:
-                    from .models import PurchaseOrder, PurchaseOrderItem
-                    po = PurchaseOrder.objects.get(po_number=lot.po_number)
-                except PurchaseOrder.DoesNotExist:
-                    pass
-            
-            # Log the transaction
-            log_lot_transaction(
-                lot=lot,
-                quantity_before=0.0,  # New lot, no previous quantity
-                quantity_change=lot.quantity,
-                transaction_type='receipt',
-                reference_number=lot.po_number,
-                reference_type='po_number',
-                transaction_id=transaction.id,
-                purchase_order_id=po.id if po else None,
-                notes=f'Lot received - PO: {lot.po_number}' if lot.po_number else 'Lot received'
-            )
-            
-            # Update on_order and PO item if PO number is provided
-            if lot.po_number and po:
-                try:
-                    for po_item in po.items.all():
-                        if po_item.item == lot.item:
-                            # Update quantity received
-                            po_item.quantity_received += lot.quantity
-                            po_item.save()
-                            
-                            # Reduce on_order by the quantity received
-                            item = lot.item
-                            item.on_order = max(0, (item.on_order or 0) - lot.quantity)
-                            item.save()
-                            
-                            # If quantity received is less than ordered, keep remaining on_order
-                            # The outstanding balance stays on_order until fully received
-                            remaining_ordered = po_item.quantity_ordered - po_item.quantity_received
-                            if remaining_ordered > 0:
-                                # Outstanding quantity remains on_order
-                                pass
-                            break
-                    
-                    # Check if all items are fully received
-                    # Use a small tolerance for floating point comparison
-                    all_received = True
-                    for po_item in po.items.all():
-                        # Allow small tolerance (0.01) for floating point precision
-                        if po_item.quantity_received < (po_item.quantity_ordered - 0.01):
-                            all_received = False
-                            break
-                    
-                    # If all items are fully received, update PO status to 'received'
-                    if all_received and po.status == 'issued':
-                        po.status = 'received'
-                        po.save()
-                        log_purchase_order_action(po, 'completed', lot=lot, notes='All items fully received')
-                    else:
-                        # Partial check-in
-                        log_purchase_order_action(po, 'partial_check_in', lot=lot, notes=f'Partial check-in: {lot.quantity} received')
-                except PurchaseOrder.DoesNotExist:
-                    pass
-        
-        # Log check-in to CheckInLog with all form data
         try:
-            from .models import CheckInLog
-            
-            # Get all check-in form fields from request
-            coa = request.data.get('coa', False)
-            if isinstance(coa, str):
-                coa = coa.lower() in ('true', '1', 'yes')
-            
-            prod_free_pests = request.data.get('prod_free_pests', False)
-            if isinstance(prod_free_pests, str):
-                prod_free_pests = prod_free_pests.lower() in ('true', '1', 'yes')
-            
-            carrier_free_pests = request.data.get('carrier_free_pests', False)
-            if isinstance(carrier_free_pests, str):
-                carrier_free_pests = carrier_free_pests.lower() in ('true', '1', 'yes')
-            
-            shipment_accepted = request.data.get('shipment_accepted', False)
-            if isinstance(shipment_accepted, str):
-                shipment_accepted = shipment_accepted.lower() in ('true', '1', 'yes')
-
-            carrier_val = request.data.get('carrier', '')
-            if isinstance(carrier_val, str):
-                carrier_val = carrier_val.strip()
-            else:
-                carrier_val = str(carrier_val or '').strip()
-            if not carrier_val and lot.po_number:
-                try:
-                    po_row = PurchaseOrder.objects.filter(po_number=lot.po_number).only('carrier').first()
-                    if po_row and po_row.carrier:
-                        carrier_val = (po_row.carrier or '').strip()
-                except Exception:
-                    pass
-            
-            CheckInLog.objects.create(
-                lot=lot,
-                lot_number=lot.lot_number or '',
-                item_id=lot.item.id,
-                item_sku=lot.item.sku,
-                item_name=lot.item.name,
-                item_type=lot.item.item_type,
-                item_unit_of_measure=lot.item.unit_of_measure,
-                po_number=lot.po_number,
-                vendor_name=lot.item.vendor if hasattr(lot.item, 'vendor') and lot.item.vendor else None,
-                received_date=lot.received_date,
-                manufacture_date=lot.manufacture_date,
-                expiration_date=lot.expiration_date,
-                vendor_lot_number=lot.vendor_lot_number,
-                quantity=lot.quantity,
-                quantity_unit=lot.item.unit_of_measure,  # Use item's native unit
-                status=lot_status,
-                short_reason=lot.short_reason,
-                coa=coa,
-                prod_free_pests=prod_free_pests,
-                carrier_free_pests=carrier_free_pests,
-                shipment_accepted=shipment_accepted,
-                initials=request.data.get('initials') or '',
-                carrier=carrier_val,
-                freight_actual=lot.freight_actual,
-                notes=request.data.get('notes') or '',
-                checked_in_by=request.user.username if hasattr(request, 'user') and hasattr(request.user, 'username') else 'system'
-            )
+            data = request.data.copy() if hasattr(request.data, "copy") else dict(request.data)
+            lot = check_in_lot(request.user, data)
+        except BuyFlowError as e:
+            return Response({"error": e.message}, status=e.status_code)
+        except DRFValidationError as e:
+            return Response(e.detail, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
-            # Log error but don't fail the check-in (e.g. missing DB table — run migrations or add_checkin_log script)
-            import logging
-            logger = logging.getLogger(__name__)
-            logger.error(
-                'Failed to persist CheckInLog for lot %s: %s',
-                getattr(lot, 'lot_number', None),
-                e,
-                exc_info=True,
+            return Response(
+                {"error": f"Failed to check in lot: {e}"},
+                status=status.HTTP_400_BAD_REQUEST,
             )
-        
+
+        serializer = self.get_serializer(lot)
         headers = self.get_success_headers(serializer.data)
         return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
 
@@ -3949,382 +3451,28 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
     
     def create(self, request, *args, **kwargs):
         """Handle batch creation for both production and repack batches"""
-        data = request.data.copy()
-        inputs_data = data.pop('inputs', [])
-        outputs_data = data.pop('outputs', [])
-        indirect_materials_data = data.pop('indirect_materials', [])  # Separate indirect materials
-        work_in_partials_data = data.pop('work_in_partials', [])  # Partial lots to work into this batch
-        batch_type = data.get('batch_type', 'production')
-        
-        # Convert production_date from date string to datetime if needed
-        if 'production_date' in data and isinstance(data['production_date'], str):
-            from django.utils.dateparse import parse_date, parse_datetime
-            # Try parsing as datetime first
-            parsed = parse_datetime(data['production_date'])
-            if not parsed:
-                # Try parsing as date and convert to datetime
-                date_obj = parse_date(data['production_date'])
-                if date_obj:
-                    # Create datetime at noon in local timezone (CST) to avoid timezone conversion issues
-                    # This ensures the date stays the same regardless of timezone
-                    # We use noon instead of midnight to avoid edge cases with DST
-                    from datetime import time as dt_time
-                    local_tz = timezone.get_current_timezone()
-                    local_midday = local_tz.localize(datetime.combine(date_obj, dt_time(12, 0, 0)))
-                    parsed = local_midday
-            if parsed:
-                data['production_date'] = parsed
-            else:
-                # If parsing fails, use current time
-                data['production_date'] = timezone.now()
-        
-        # Auto-generate batch number if not provided or if it already exists
-        if 'batch_number' not in data or not data.get('batch_number'):
-            data['batch_number'] = generate_batch_number(batch_type)
-        else:
-            # Check if the provided batch number already exists
-            existing_batch = ProductionBatch.objects.filter(batch_number=data['batch_number']).first()
-            if existing_batch:
-                # Generate a new unique batch number
-                data['batch_number'] = generate_batch_number(batch_type)
-        
-        # Ensure finished_good_item_id is set (required for both production and repack)
-        if 'finished_good_item_id' not in data or not data.get('finished_good_item_id'):
-            if batch_type == 'production':
-                return Response(
-                    {'error': 'finished_good_item_id is required for production batches'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-            # For repack, we'll set it from the input lots below
-        
-        # For repack batches, ensure we have the item and inputs
-        if batch_type == 'repack':
-            if not inputs_data:
-                return Response(
-                    {'error': 'Repack batches require at least one input lot'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-            
-            # Get the item from the first input lot
-            try:
-                first_lot = Lot.objects.get(id=inputs_data[0]['lot_id'])
-                item = first_lot.item
-                
-                # Validate that all input lots are for the same item
-                for input_data in inputs_data:
-                    lot = Lot.objects.get(id=input_data['lot_id'])
-                    if lot.item.id != item.id:
-                        return Response(
-                            {'error': 'All input lots must be for the same item in a repack batch'},
-                            status=status.HTTP_400_BAD_REQUEST
-                        )
-                
-                # Set the finished_good_item to the item (even though it's not a finished good)
-                data['finished_good_item_id'] = item.id
-            except Lot.DoesNotExist:
-                return Response(
-                    {'error': 'Invalid lot ID in inputs'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-        
-        # Validate inputs before creating batch
-        from .models import ProductionBatchInput, ProductionBatchOutput, InventoryTransaction
-        quantity_produced_from_request = normalize_mass_quantity(round(float(data.get('quantity_produced', 0)), 2))
-        total_input_quantity_in_lbs = 0.0  # Track total in lbs for validation
-        total_input_quantity_native = 0.0  # Track total in item's native unit (for repack batches)
-        
-        # First pass: validate all inputs and calculate total
-        for input_data in inputs_data:
-            lot_id = input_data.get('lot_id')
-            raw_quantity = float(input_data.get('quantity_used', 0))
-            if not lot_id:
-                return Response(
-                    {'error': 'Invalid input data: lot_id and quantity_used are required'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-            try:
-                lot = Lot.objects.get(id=lot_id)
-            except Lot.DoesNotExist:
-                return Response(
-                    {'error': f'Lot with id {lot_id} not found'},
-                    status=status.HTTP_404_NOT_FOUND
-                )
-            quantity_used = _round_production_quantity_used(raw_quantity, lot)
-            if quantity_used <= 0:
-                return Response(
-                    {'error': 'Invalid input data: lot_id and quantity_used are required'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-            # Same rule as LotSerializer / inventory UI: net after sales, minus hold & in-progress prod
-            available = float(compute_lot_quantity_breakdown(lot)["quantity_available_for_use"])
-            if quantity_used > available + 1e-6:
-                return Response(
-                    {'error': f'Insufficient quantity in lot {lot.lot_number}. Available: {available}, Requested: {quantity_used}'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-            # Convert quantity to lbs for validation
-            quantity_used_in_lbs = quantity_used
-            if lot.item.unit_of_measure == 'kg':
-                quantity_used_in_lbs = quantity_used * 2.20462  # Convert kg to lbs
-            elif lot.item.unit_of_measure == 'ea':
-                # For "each" items, assume 1:1 ratio (may need adjustment based on business rules)
-                quantity_used_in_lbs = quantity_used
-            total_input_quantity_in_lbs += quantity_used_in_lbs
-            total_input_quantity_native += quantity_used  # Keep in native unit
-        
-        # For repack batches, quantity_produced should be in the item's native unit (not lbs)
-        # For production batches, quantity_produced is in lbs
-        tolerance = 0.02  # Allow for kg/lbs conversion rounding (e.g. 700.01 vs 700.00)
-        if batch_type == 'repack':
-            quantity_produced = normalize_mass_quantity(round(total_input_quantity_native, 2))
-            if abs(total_input_quantity_native - quantity_produced_from_request) > tolerance:
-                return Response(
-                    {
-                        'error': f'Quantity mismatch: Total quantity used ({total_input_quantity_native:.2f} {lot.item.unit_of_measure}) must equal quantity to produce ({quantity_produced_from_request:.2f} {lot.item.unit_of_measure})'
-                    },
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-        else:
-            # Use actual total input (rounded) as quantity_produced so inventory never drifts from conversion rounding
-            total_rounded = normalize_mass_quantity(round(total_input_quantity_in_lbs, 2))
-            if abs(total_input_quantity_in_lbs - quantity_produced_from_request) > tolerance:
-                return Response(
-                    {
-                        'error': f'Quantity mismatch: Total quantity used ({total_input_quantity_in_lbs:.2f} lbs) must equal quantity to produce ({quantity_produced_from_request:.2f} lbs)'
-                    },
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-            quantity_produced = total_rounded  # Normalized sum of inputs (snaps 699.99→700, etc.)
-        data['quantity_produced'] = quantity_produced
-        
-        # Store work_in_partials in notes if provided (will be processed when closing)
-        if work_in_partials_data:
-            import json
-            partials_json = json.dumps(work_in_partials_data)
-            if data.get('notes'):
-                data['notes'] = f"{data['notes']}\n[WORK_IN_PARTIALS:{partials_json}]"
-            else:
-                data['notes'] = f"[WORK_IN_PARTIALS:{partials_json}]"
-        
-        # Create the batch
-        serializer = self.get_serializer(data=data)
-        if not serializer.is_valid():
-            import logging
-            logger = logging.getLogger(__name__)
-            logger.error(f'Serializer validation failed: {serializer.errors}')
-            logger.error(f'Data being validated: {data}')
-            return Response(
-                serializer.errors,
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        batch = serializer.save()
-        
-        # If batch is created as 'closed', work_in_partials will be processed in the update method
-        # when the status changes to closed. For now, we'll just ensure the batch gets saved with the notes.
-        
-        # Create inputs (second pass: actually create them - validation already done above)
-        for input_data in inputs_data:
-            lot_id = input_data.get('lot_id')
-            raw_quantity = float(input_data.get('quantity_used', 0))
-            lot = Lot.objects.get(id=lot_id)
-            quantity_used = _round_production_quantity_used(raw_quantity, lot)
-            ProductionBatchInput.objects.create(
-                batch=batch,
-                lot=lot,
-                quantity_used=quantity_used
-            )
-            # Do NOT reduce lot.quantity_remaining here. Lots are reduced when the batch is closed.
-            # This way "Available" in inventory = quantity_remaining - allocated_to_production shows correctly
-            # (e.g. 5000 received - 140 committed = 4860 available).
-        
-        # Validate that total input quantity equals quantity to produce (with tolerance for conversion rounding)
-        # This is a second validation check after batch creation
-        tolerance = 0.02  # Allow for kg/lbs conversion and floating point (e.g. 700.01 vs 700.00)
-        if batch_type == 'repack':
-            # For repack, we need to get the item to know the unit
-            if inputs_data:
-                first_lot = Lot.objects.get(id=inputs_data[0]['lot_id'])
-                item_unit = first_lot.item.unit_of_measure
-                if abs(total_input_quantity_native - quantity_produced) > tolerance:
-                    batch.delete()
-                    return Response(
-                        {
-                            'error': f'Quantity mismatch: Total quantity used ({total_input_quantity_native:.2f} {item_unit}) must equal quantity to produce ({quantity_produced:.2f} {item_unit})'
-                        },
-                        status=status.HTTP_400_BAD_REQUEST
-                    )
-        else:
-            if abs(total_input_quantity_in_lbs - quantity_produced) > tolerance:
-                batch.delete()
-                return Response(
-                    {
-                        'error': f'Quantity mismatch: Total quantity used ({total_input_quantity_in_lbs:.2f} lbs) must equal quantity to produce ({quantity_produced:.2f} lbs)'
-                    },
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-        
-        # Create outputs
-        # NOTE: For both production and repack batches, output lots are created when the batch is closed, not on creation
-        # This ensures internal lot numbers are only generated when batches are completed
-        if batch_type == 'repack':
-            # For repack, don't create output lot yet - it will be created when batch is closed
-            # Just validate that we have the necessary data
-            if not outputs_data:
-                # Calculate total_input_quantity for validation
-                total_input_quantity = 0.0
-                for input_data in inputs_data:
-                    lot_id = input_data.get('lot_id')
-                    raw_quantity = float(input_data.get('quantity_used', 0))
-                    lot = Lot.objects.get(id=lot_id)
-                    quantity_used = _round_production_quantity_used(raw_quantity, lot)
-                    total_input_quantity += quantity_used  # quantity_used is already in lot's native unit
-                
-                # Output lot will be created when batch is closed with lot number generated at that time
-            else:
-                # Use provided outputs
-                for output_data in outputs_data:
-                    lot_id = output_data.get('lot_id')
-                    quantity_produced = float(output_data.get('quantity_produced', 0))
-                    
-                    if not lot_id or quantity_produced <= 0:
-                        batch.delete()
-                        return Response(
-                            {'error': 'Invalid output data: lot_id and quantity_produced are required'},
-                            status=status.HTTP_400_BAD_REQUEST
-                        )
-                    
-                    try:
-                        lot = Lot.objects.get(id=lot_id)
-                        ProductionBatchOutput.objects.create(
-                            batch=batch,
-                            lot=lot,
-                            quantity_produced=quantity_produced
-                        )
-                        
-                        # Create inventory transaction
-                        transaction = InventoryTransaction.objects.create(
-                            transaction_type='repack_output' if batch_type == 'repack' else 'production_output',
-                            lot=lot,
-                            quantity=quantity_produced,
-                            notes=f'{"Repack" if batch_type == "repack" else "Production"} batch {batch.batch_number} output',
-                            reference_number=batch.batch_number
-                        )
-                        
-                        # Log the transaction for repacks
-                        if batch_type == 'repack':
-                            log_lot_transaction(
-                                lot=lot,
-                                quantity_before=0.0,  # New lot
-                                quantity_change=quantity_produced,
-                                transaction_type='repack_output',
-                                reference_number=batch.batch_number,
-                                reference_type='batch_number',
-                                transaction_id=transaction.id,
-                                batch_id=batch.id,
-                                notes=f'Repack batch {batch.batch_number} output - Distributed item relabeled/repacked'
-                            )
-                    except Lot.DoesNotExist:
-                        batch.delete()
-                        return Response(
-                            {'error': f'Lot with id {lot_id} not found'},
-                            status=status.HTTP_404_NOT_FOUND
-                        )
-        else:
-            # For production batches, use provided outputs (existing behavior)
-            for output_data in outputs_data:
-                lot_id = output_data.get('lot_id')
-                quantity_produced = round(float(output_data.get('quantity_produced', 0)), 2)  # Round to 2 decimal places
-                
-                if lot_id and quantity_produced > 0:
-                    try:
-                        lot = Lot.objects.get(id=lot_id)
-                        ProductionBatchOutput.objects.create(
-                            batch=batch,
-                            lot=lot,
-                            quantity_produced=quantity_produced
-                        )
-                        
-                        InventoryTransaction.objects.create(
-                            transaction_type='production_output',
-                            lot=lot,
-                            quantity=round(quantity_produced, 2),
-                            notes=f'Batch {batch.batch_number} output',
-                            reference_number=batch.batch_number
-                        )
-                    except Lot.DoesNotExist:
-                        pass  # Allow production batches to be created without outputs initially
-        
-        # Process indirect materials consumption
-        for indirect_data in indirect_materials_data:
-            lot_id = indirect_data.get('lot_id')
-            raw_qty = float(indirect_data.get('quantity_used', 0))
-            if not lot_id or raw_qty <= 0:
-                continue  # Skip invalid entries
-            try:
-                lot = Lot.objects.get(id=lot_id)
-                # Verify it's an indirect material
-                if lot.item.item_type != 'indirect_material':
-                    continue  # Skip if not an indirect material
-                quantity_used = _round_production_quantity_used(raw_qty, lot)
-                if quantity_used <= 0:
-                    continue
-                max_use = float(compute_lot_quantity_breakdown(lot)["quantity_available_for_use"])
-                if quantity_used > max_use + 1e-6:
-                    batch.delete()
-                    return Response(
-                        {'error': f'Insufficient quantity in indirect material lot {lot.lot_number}. Available: {max_use}, Requested: {quantity_used}'},
-                        status=status.HTTP_400_BAD_REQUEST
-                    )
-                
-                # Create ProductionBatchInput for indirect material (reusing the same model)
-                ProductionBatchInput.objects.create(
-                    batch=batch,
-                    lot=lot,
-                    quantity_used=quantity_used
-                )
-                
-                # Create inventory transaction
-                quantity_before = lot.quantity_remaining
-                transaction = InventoryTransaction.objects.create(
-                    transaction_type='indirect_material_consumption',
-                    lot=lot,
-                    quantity=-quantity_used,
-                    notes=f'{batch.get_batch_type_display()} batch {batch.batch_number} - indirect material consumption',
-                    reference_number=batch.batch_number
-                )
-                
-                # Log the transaction
-                log_lot_transaction(
-                    lot=lot,
-                    quantity_before=quantity_before,
-                    quantity_change=-quantity_used,
-                    transaction_type='indirect_material_consumption',
-                    reference_number=batch.batch_number,
-                    reference_type='batch_number',
-                    transaction_id=transaction.id,
-                    batch_id=batch.id,
-                    notes=f'Indirect material consumed in {batch.get_batch_type_display()} batch {batch.batch_number}'
-                )
-                
-                # Update lot quantity_remaining
-                lot.quantity_remaining = _round_lot_qty_remaining(lot.quantity_remaining - quantity_used, lot)
-                lot.save()
-                
-            except Lot.DoesNotExist:
-                batch.delete()
-                return Response(
-                    {'error': f'Indirect material lot with id {lot_id} not found'},
-                    status=status.HTTP_404_NOT_FOUND
-                )
-        
-        # Return the created batch
+        from .make_services import MakeFlowError, create_batch_ticket
+
+        try:
+            data = request.data.copy() if hasattr(request.data, "copy") else dict(request.data)
+            batch = create_batch_ticket(request.user, data)
+        except MakeFlowError as e:
+            if "_serializer_errors" in e.extra:
+                return Response(e.extra["_serializer_errors"], status=status.HTTP_400_BAD_REQUEST)
+            body = {"error": e.message, **{k: v for k, v in e.extra.items() if not k.startswith("_")}}
+            if e.message:
+                body.setdefault("error", e.message)
+            return Response(body, status=e.status_code)
+
         serializer = self.get_serializer(batch)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
     
     def update(self, request, *args, **kwargs):
         """Update batch and handle status changes"""
-        from .models import ProductionBatchInput, ProductionBatchOutput, InventoryTransaction
-        
+        from django.db import transaction as db_transaction
+
+        from .make_services import MakeFlowError, adjust_batch_inputs, close_batch_ticket
+
         partial = kwargs.pop('partial', False)
         instance = self.get_object()
         old_status = instance.status
@@ -4353,322 +3501,43 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
                 data['batch_number'] = new_bn
                 old_bn_for_sync = instance.batch_number
 
-        # Handle work_in_partials (partial lots to work into this batch)
         work_in_partials_data = data.pop('work_in_partials', [])
-        
-        # Handle inputs update if provided
         inputs_data = data.pop('inputs', None)
+
+        closing = old_status != 'closed' and new_status == 'closed'
+
         if inputs_data is not None:
-            # Round quantity_produced if provided
-            if 'quantity_produced' in data:
-                data['quantity_produced'] = normalize_mass_quantity(round(float(data['quantity_produced']), 2))
-            
-            # Delete existing inputs; restore lot only if we had reduced (legacy: transaction exists)
-            for existing_input in instance.inputs.all():
-                lot = existing_input.lot
-                # Only restore if there's a consumption transaction (we now only reduce at batch close)
-                old_transactions = InventoryTransaction.objects.filter(
-                    lot=lot,
-                    reference_number=instance.batch_number,
-                    transaction_type__in=['production_input', 'repack_input'],
-                    quantity__lt=0
-                ).order_by('-transaction_date')
-                for old_txn in old_transactions:
-                    if abs(abs(old_txn.quantity) - existing_input.quantity_used) < 0.01:
-                        lot.quantity_remaining = round(lot.quantity_remaining + existing_input.quantity_used, 2)
-                        lot.save()
-                        break
-                for old_txn in list(old_transactions):
-                    if abs(abs(old_txn.quantity) - existing_input.quantity_used) < 0.01:
-                        old_txn.delete()
-                from .models import LotTransactionLog
-                LotTransactionLog.objects.filter(
-                    lot=lot,
-                    reference_number=instance.batch_number,
-                    transaction_type__in=['production_input', 'repack_input'],
-                    batch_id=instance.id
-                ).delete()
-                existing_input.delete()
-            
-            # Create new inputs with rounded quantities
-            for input_data in inputs_data:
-                lot_id = input_data.get('lot_id')
-                raw_quantity = float(input_data.get('quantity_used', 0))
-                if lot_id and raw_quantity > 0:
-                    try:
-                        lot = Lot.objects.get(id=lot_id)
-                        quantity_used = _round_production_quantity_used(raw_quantity, lot)
-                        if quantity_used <= 0:
-                            continue
-                        available = float(compute_lot_quantity_breakdown(lot)["quantity_available_for_use"])
-                        if quantity_used > available + 1e-6:
-                            return Response(
-                                {'error': f'Insufficient quantity in lot {lot.lot_number}. Available: {available}, Requested: {quantity_used}'},
-                                status=status.HTTP_400_BAD_REQUEST
-                            )
-                        ProductionBatchInput.objects.create(
-                            batch=instance,
-                            lot=lot,
-                            quantity_used=quantity_used
-                        )
-                        # Do NOT reduce lot here; we reduce when the batch is closed.
-                    except Lot.DoesNotExist:
-                        return Response(
-                            {'error': f'Lot with id {lot_id} not found'},
-                            status=status.HTTP_404_NOT_FOUND
-                        )
-        
-        # Update the batch
+            try:
+                adjust_payload = {'inputs': inputs_data}
+                if 'quantity_produced' in data:
+                    adjust_payload['quantity_produced'] = data.pop('quantity_produced')
+                adjust_batch_inputs(instance, adjust_payload)
+            except MakeFlowError as e:
+                return Response({'error': e.message, **e.extra}, status=e.status_code)
+
         serializer = self.get_serializer(instance, data=data, partial=partial)
         serializer.is_valid(raise_exception=True)
-        from django.db import transaction as db_transaction
 
         with db_transaction.atomic():
             batch = serializer.save()
             if old_bn_for_sync:
                 _sync_production_batch_number_references(old_bn_for_sync, batch.batch_number, batch.id)
 
-        # If status changed to 'closed', create output lots if they don't exist and log the closure
-        if old_status != 'closed' and new_status == 'closed':
-            # Set closed_date if not already set
-            if not batch.closed_date:
-                batch.closed_date = timezone.now()
-                batch.save()
-            
-            # Extract work_in_partials from notes if they were stored there (from earlier update or creation)
-            work_in_partials_from_notes = []
-            if batch.notes:
-                import json
-                import re
-                # Look for [WORK_IN_PARTIALS:...] in notes
-                match = re.search(r'\[WORK_IN_PARTIALS:(.*?)\]', batch.notes)
-                if match:
-                    try:
-                        work_in_partials_from_notes = json.loads(match.group(1))
-                    except json.JSONDecodeError:
-                        pass
-            
-            # Use work_in_partials_data from request if provided, otherwise from notes
-            final_work_in_partials = work_in_partials_data if work_in_partials_data else work_in_partials_from_notes
-            
-            # Log production batch closure
-            log_production_batch_closure(batch, notes=f'Batch {batch.batch_number} closed')
-            
-            # Reduce input lot quantities now that batch is closed (we don't reduce at batch create).
-            # Indirect materials are the exception: they are reduced when the batch is created (see create()).
-            batch_type_label = 'repack' if batch.batch_type == 'repack' else 'production'
-            input_transaction_type = 'repack_input' if batch.batch_type == 'repack' else 'production_input'
-            for batch_input in batch.inputs.select_related('lot__item').all():
-                lot = batch_input.lot
-                if lot.item.item_type == 'indirect_material':
-                    continue
-                qty = batch_input.quantity_used
-                rounded_qty = _round_production_quantity_used(qty, lot)
-                quantity_before = lot.quantity_remaining
-                if lot.quantity_remaining < rounded_qty:
-                    continue  # Should not happen if create validation was correct
-                lot.quantity_remaining = _round_lot_qty_remaining(lot.quantity_remaining - rounded_qty, lot)
-                lot.save()
-                InventoryTransaction.objects.create(
-                    transaction_type=input_transaction_type,
-                    lot=lot,
-                    quantity=-rounded_qty,
-                    notes=f'{batch_type_label.capitalize()} batch {batch.batch_number} input (closed)',
-                    reference_number=batch.batch_number
-                )
-                log_lot_transaction(
-                    lot=lot,
-                    quantity_before=quantity_before,
-                    quantity_change=-rounded_qty,
-                    transaction_type=input_transaction_type,
-                    reference_number=batch.batch_number,
-                    reference_type='batch_number',
-                    transaction_id=None,
-                    batch_id=batch.id,
-                    notes=f'Used in {batch_type_label} batch {batch.batch_number} (closed)'
-                )
-            
-            # Check if batch has outputs
-            if batch.outputs.exists():
-                # Log that outputs already exist (batch may have been closed before)
-                import logging
-                logger = logging.getLogger(__name__)
-                existing_output = batch.outputs.first()
-                logger.info(f'Batch {batch.batch_number} already has output lot {existing_output.lot.lot_number if existing_output else "unknown"}')
-            else:
-                # Create output lot for production batches
-                if batch.batch_type == 'production':
-                    # Total weight produced (goes to inventory). Wastes/spills on the batch explain
-                    # variance vs the batch ticket; they do not reduce the output lot quantity.
-                    base_quantity = batch.quantity_actual if batch.quantity_actual and batch.quantity_actual > 0 else batch.quantity_produced
-                    main_output_qty = round(max(0.0, float(base_quantity)), 2)
-                    item = batch.finished_good_item
-                    closed_dt = batch.closed_date or timezone.now()
-                    output_expiration = _expiration_datetime_for_fg_output(item, closed_dt)
+        if closing:
+            close_data = {
+                '_prior_status': old_status,
+                'work_in_partials': work_in_partials_data,
+            }
+            for key in ('quantity_actual', 'wastes', 'spills', 'variance', 'notes', 'closed_date'):
+                if key in request.data:
+                    close_data[key] = request.data.get(key)
+            try:
+                batch = close_batch_ticket(batch, request.user, close_data)
+            except MakeFlowError as e:
+                if "_serializer_errors" in e.extra:
+                    return Response(e.extra["_serializer_errors"], status=status.HTTP_400_BAD_REQUEST)
+                return Response({'error': e.message, **e.extra}, status=e.status_code)
 
-                    # Calculate total from partials worked in (if any)
-                    partial_quantities = []
-                    partial_lots_to_delete = []
-                    if final_work_in_partials:
-                        for partial_data in final_work_in_partials:
-                            partial_lot_id = partial_data.get('lot_id')
-                            if partial_lot_id:
-                                try:
-                                    partial_lot = Lot.objects.get(id=partial_lot_id, item=item, status='accepted')
-                                    if partial_lot.quantity_remaining > 0:
-                                        partial_qty = partial_lot.quantity_remaining
-                                        partial_quantities.append(partial_qty)
-                                        partial_lots_to_delete.append(partial_lot)
-                                except Lot.DoesNotExist:
-                                    pass
-                    
-                    # Add partial quantities to output quantity
-                    total_partial_qty = sum(partial_quantities)
-                    combined_output_quantity = round(main_output_qty + total_partial_qty, 2)
-                    
-                    # Generate new lot number
-                    lot_number = generate_lot_number()
-                    
-                    # Get pack size for the lot (use default pack size for this item)
-                    pack_size = ItemPackSize.objects.filter(item=item, is_default=True, is_active=True).first()
-                    
-                    # Create new combined lot (on hold until micro testing results)
-                    new_lot = Lot.objects.create(
-                        lot_number=lot_number,
-                        item=item,
-                        pack_size=pack_size,
-                        quantity=combined_output_quantity,
-                        quantity_remaining=combined_output_quantity,
-                        quantity_on_hold=combined_output_quantity,
-                        received_date=closed_dt,
-                        expiration_date=output_expiration,
-                        status='on_hold',
-                        on_hold=True
-                    )
-                    
-                    # Create output record
-                    ProductionBatchOutput.objects.create(
-                        batch=batch,
-                        lot=new_lot,
-                        quantity_produced=combined_output_quantity
-                    )
-                    
-                    _uom = getattr(item, 'unit_of_measure', None) or 'lbs'
-                    doc_bits = []
-                    if (batch.wastes or 0) > 0:
-                        doc_bits.append(f'wastes {batch.wastes} {_uom} documented')
-                    if (batch.spills or 0) > 0:
-                        doc_bits.append(f'spills {batch.spills} {_uom} documented')
-                    doc_suffix = f' — {", ".join(doc_bits)}' if doc_bits else ''
-                    InventoryTransaction.objects.create(
-                        transaction_type='production_output',
-                        lot=new_lot,
-                        quantity=round(main_output_qty, 2),
-                        notes=f'Production batch {batch.batch_number} output ({main_output_qty} {_uom} produced{doc_suffix})',
-                        reference_number=batch.batch_number
-                    )
-                    
-                    # Create transactions for partials worked in and delete partial lots
-                    for partial_lot, partial_qty in zip(partial_lots_to_delete, partial_quantities):
-                        # Transaction for partial being worked in
-                        InventoryTransaction.objects.create(
-                            transaction_type='production_output',
-                            lot=new_lot,
-                            quantity=round(partial_qty, 2),
-                            notes=f'Production batch {batch.batch_number} - worked in partial from lot {partial_lot.lot_number}',
-                            reference_number=batch.batch_number
-                        )
-                        
-                        # Transaction to remove partial lot
-                        InventoryTransaction.objects.create(
-                            transaction_type='adjustment',
-                            lot=partial_lot,
-                            quantity=round(-partial_qty, 2),
-                            notes=f'Worked into batch {batch.batch_number}',
-                            reference_number=batch.batch_number
-                        )
-                        
-                        # Delete the partial lot
-                        partial_lot.delete()
-                    
-                    # Log the created lot for debugging
-                    import logging
-                    logger = logging.getLogger(__name__)
-                    work_in_note = f', worked in {total_partial_qty} lbs from partials' if total_partial_qty > 0 else ''
-                    logger.info(
-                        f'Created output lot {new_lot.lot_number} for batch {batch.batch_number}: '
-                        f'item={item.sku}, quantity={combined_output_quantity} lbs (produced: {main_output_qty}{work_in_note}), status={new_lot.status}'
-                    )
-                
-                # For repack batches, create output lot when batch is closed (similar to production batches)
-                elif batch.batch_type == 'repack':
-                    # Check if batch has outputs
-                    if not batch.outputs.exists():
-                        # Calculate output quantity from inputs
-                        total_input_quantity = 0.0
-                        for input_item in batch.inputs.all():
-                            total_input_quantity += input_item.quantity_used
-                        
-                        output_quantity = round(total_input_quantity, 2)
-                        item = batch.finished_good_item
-                        closed_dt = batch.closed_date or timezone.now()
-                        output_expiration = _expiration_datetime_for_fg_output(item, closed_dt)
-
-                        # Get pack_size from first input or use default
-                        pack_size = None
-                        first_input = batch.inputs.first()
-                        if first_input and first_input.lot and first_input.lot.pack_size:
-                            pack_size = first_input.lot.pack_size
-                        else:
-                            pack_size = ItemPackSize.objects.filter(item=item, is_default=True, is_active=True).first()
-                        
-                        # Generate new lot number (ONLY on batch closure)
-                        lot_number = generate_lot_number()
-                        
-                        # Create new lot (on hold until micro testing results)
-                        new_lot = Lot.objects.create(
-                            lot_number=lot_number,
-                            item=item,
-                            pack_size=pack_size,
-                            quantity=output_quantity,
-                            quantity_remaining=output_quantity,
-                            quantity_on_hold=output_quantity,
-                            received_date=closed_dt,
-                            expiration_date=output_expiration,
-                            status='on_hold',
-                            on_hold=True
-                        )
-                        
-                        # Create output record
-                        ProductionBatchOutput.objects.create(
-                            batch=batch,
-                            lot=new_lot,
-                            quantity_produced=output_quantity
-                        )
-                        
-                        # Create inventory transaction for output (add quantity)
-                        transaction = InventoryTransaction.objects.create(
-                            transaction_type='repack_output',
-                            lot=new_lot,
-                            quantity=output_quantity,
-                            notes=f'Repack batch {batch.batch_number} output',
-                            reference_number=batch.batch_number
-                        )
-                        
-                        # Log the transaction
-                        log_lot_transaction(
-                            lot=new_lot,
-                            quantity_before=0.0,  # New lot
-                            quantity_change=output_quantity,
-                            transaction_type='repack_output',
-                            reference_number=batch.batch_number,
-                            reference_type='batch_number',
-                            transaction_id=transaction.id,
-                            batch_id=batch.id,
-                            notes=f'Repack batch {batch.batch_number} output - Distributed item relabeled/repacked'
-                        )
-        
-        # Return the updated batch
         serializer = self.get_serializer(batch)
         return Response(serializer.data)
     
@@ -4708,7 +3577,7 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
                 
                 # Convert pack size to lbs if needed for comparison
                 if pack_size_unit == 'kg':
-                    pack_size_in_lbs = pack_size_value * 2.20462
+                    pack_size_in_lbs = pack_size_value * 2.2
                 elif pack_size_unit == 'lbs':
                     pack_size_in_lbs = pack_size_value
                 else:
@@ -4764,199 +3633,24 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'])
     def reverse(self, request, pk=None):
         batch = self.get_object()
-        from .reversal_guard import build_batch_reversal_plan, get_production_batch_reversal_blockers
-
-        blockers = get_production_batch_reversal_blockers(batch)
-        if blockers:
-            return Response(
-                {
-                    'error': 'Cannot reverse this batch until dependencies are cleared.',
-                    'blockers': blockers,
-                    'reversal_plan': build_batch_reversal_plan(batch),
-                },
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        from .make_services import MakeFlowError, reverse_batch_ticket
 
         try:
-            # Store batch number for error messages
-            batch_number = batch.batch_number
-            
-            # BEFORE reversing, create a log entry for the unclose action
-            # This preserves the audit trail - the original closure log stays, and we add a new entry
-            try:
-                import json
-                from django.utils import timezone
-                
-                # Get input materials information
-                input_materials = []
-                input_lots = []
-                for input_item in batch.inputs.all():
-                    try:
-                        input_materials.append({
-                            'item_sku': input_item.lot.item.sku,
-                            'item_name': input_item.lot.item.name,
-                            'quantity_used': input_item.quantity_used
-                        })
-                        input_lots.append(input_item.lot.lot_number)
-                    except Exception:
-                        pass
-                
-                # Get output lot information
-                output_lot_number = None
-                output_quantity = None
-                output = batch.outputs.first()
-                if output:
-                    try:
-                        output_lot_number = output.lot.lot_number
-                        output_quantity = output.quantity_produced
-                    except Exception:
-                        pass
-                
-                # Create log entry for unclose action BEFORE batch is deleted
-                # Since ProductionLog.batch now allows NULL (SET_NULL on delete),
-                # the log entry will be preserved even after batch deletion
-                ProductionLog.objects.create(
-                    batch=batch,  # Will be set to NULL when batch is deleted (SET_NULL)
-                    batch_number=batch.batch_number,
-                    batch_type=batch.batch_type,
-                    finished_good_sku=batch.finished_good_item.sku,
-                    finished_good_name=batch.finished_good_item.name,
-                    quantity_produced=batch.quantity_produced,
-                    quantity_actual=batch.quantity_actual,
-                    variance=batch.variance,
-                    wastes=batch.wastes,
-                    spills=batch.spills,
-                    production_date=batch.production_date,
-                    closed_date=batch.closed_date or timezone.now(),  # Keep original closed_date
-                    input_materials=json.dumps(input_materials),
-                    input_lots=json.dumps(input_lots),
-                    output_lot_number=output_lot_number,
-                    output_quantity=output_quantity,
-                    notes=f"BATCH UNCLOSED/REVERSED - {batch.notes or ''}",
-                    recipe_snapshot=getattr(batch, 'recipe_snapshot', None) or None,
-                    closed_by=None,  # Clear closed_by since it's being unclosed
-                    logged_at=timezone.now()
-                )
-            except Exception as log_error:
-                # Log error but don't fail the reversal
-                import logging
-                logger = logging.getLogger(__name__)
-                logger.warning(f'Failed to create unclose log entry for batch {batch_number}: {str(log_error)}')
-            
-            # CRITICAL: Get all lot IDs BEFORE doing anything else
-            # Get output lot IDs and lot objects before deleting anything
-            output_lot_ids = []
-            output_lots_to_delete = []
-            try:
-                for batch_output in batch.outputs.all():
-                    lot_id = batch_output.lot_id
-                    if lot_id:
-                        output_lot_ids.append(lot_id)
-                        try:
-                            lot = Lot.objects.get(id=lot_id)
-                            output_lots_to_delete.append(lot)
-                        except Lot.DoesNotExist:
-                            pass
-            except Exception:
-                pass
-            
-            # Get input lot IDs before processing (for reversing transactions)
-            input_lot_ids = list(batch.inputs.values_list('lot_id', flat=True))
-            
-            # Restore input lot quantities only if batch was closed (we reduce lots at close, not at create)
-            if batch.status == 'closed':
-                for batch_input in batch.inputs.all():
-                    try:
-                        lot_id = batch_input.lot_id
-                        if lot_id:
-                            lot = Lot.objects.get(id=lot_id)
-                            lot.quantity_remaining = round(lot.quantity_remaining + batch_input.quantity_used, 2)
-                            lot.save()
-                    except (Lot.DoesNotExist, AttributeError, ValueError):
-                        pass
-            
-            # Delete output lots FIRST (these were created by the batch)
-            # This must happen before deleting the batch to avoid foreign key issues
-            from .models import InventoryTransaction
-            
-            # Delete all transactions for output lots first
-            if output_lot_ids:
-                InventoryTransaction.objects.filter(lot_id__in=output_lot_ids).delete()
-            
-            # Then delete the output lots themselves
-            for lot in output_lots_to_delete:
-                try:
-                    lot.delete()
-                except Exception:
-                    pass
-            
-            # Reverse all inventory transactions for this batch
-            # Find transactions by looking at lots associated with batch inputs/outputs
-            
-            # Find and reverse transactions for input lots using reference_number (more reliable than notes)
-            # Note: output lots are already deleted, so we only need to reverse input lot transactions
-            if input_lot_ids:
-                # Find transactions by reference_number and transaction type
-                transactions = InventoryTransaction.objects.filter(
-                    lot_id__in=input_lot_ids,
-                    reference_number=batch_number,
-                    transaction_type__in=['production_input', 'repack_input']
-                )
-                
-                for transaction in transactions:
-                    try:
-                        lot_id = transaction.lot_id
-                        if not lot_id:
-                            continue
-                        
-                        # Check if lot still exists before creating reverse transaction
-                        try:
-                            lot = Lot.objects.get(id=lot_id)
-                            # Create reversal transaction - positive quantity to add back to inventory
-                            reverse_quantity = abs(transaction.quantity)  # Make it positive
-                            reverse_transaction = InventoryTransaction.objects.create(
-                                transaction_type='adjustment',
-                                lot=lot,
-                                quantity=reverse_quantity,
-                                reference_number=batch_number,
-                                notes=f'UNFK: Reverse batch {batch_number} - Return input to inventory'
-                            )
-                            
-                            # Log the reversal transaction
-                            from .models import LotTransactionLog
-                            log_lot_transaction(
-                                lot=lot,
-                                quantity_before=lot.quantity_remaining - reverse_quantity,
-                                quantity_change=reverse_quantity,
-                                transaction_type='adjustment',
-                                reference_number=batch_number,
-                                reference_type='batch_number',
-                                transaction_id=reverse_transaction.id,
-                                batch_id=batch.id if hasattr(batch, 'id') else None,
-                                notes=f'UNFK: Reversed batch {batch_number} - Input returned to inventory'
-                            )
-                        except Lot.DoesNotExist:
-                            # Lot doesn't exist anymore, skip
-                            pass
-                    except (AttributeError, ValueError, TypeError) as e:
-                        # Handle any field access errors
-                        import traceback
-                        print(f"Error processing transaction {transaction.id}: {e}")
-                        traceback.print_exc()
-                        pass
-            
-            # Delete the batch (this will cascade delete ProductionBatchInput and ProductionBatchOutput records)
-            batch.delete()
-            
-            return Response({'message': 'Batch ticket reversed successfully'}, status=status.HTTP_200_OK)
+            result = reverse_batch_ticket(batch)
+        except MakeFlowError as e:
+            return Response(
+                {'error': e.message, **e.extra},
+                status=e.status_code,
+            )
         except Exception as e:
             import traceback
-            error_msg = str(e)
             traceback.print_exc()
             return Response(
-                {'error': f'Failed to reverse batch: {error_msg}'},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                {'error': f'Failed to reverse batch: {e}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
+
+        return Response(result, status=status.HTTP_200_OK)
 
 
 class ItemCoaTestLineViewSet(viewsets.ModelViewSet):
@@ -5206,114 +3900,28 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
             raise
     
     def create(self, request, *args, **kwargs):
-        # Make a mutable copy of request.data
-        data = request.data.copy()
-        if not request.user.is_staff:
-            data.pop('order_date', None)
-            data.pop('issue_date', None)
-        items_data = data.pop('items', [])
-        
-        # Handle vendor_id -> vendor_customer_name mapping
-        if 'vendor_id' in data:
-            vendor_id = data.pop('vendor_id')
-            try:
-                vendor = Vendor.objects.get(id=vendor_id)
-                data['vendor_customer_name'] = vendor.name
-                data['vendor_customer_id'] = str(vendor.id)
-            except Vendor.DoesNotExist:
-                return Response(
-                    {'error': f'Vendor with id {vendor_id} not found'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-        
-        # Generate PO number if not provided (format: 2yy000)
-        if not data.get('po_number'):
-            data['po_number'] = generate_po_number()
-        
-        # Ensure po_type is set
-        if 'po_type' not in data:
-            data['po_type'] = 'vendor'
-        
-        # Set required_date from expected_delivery_date if not provided
-        if not data.get('required_date') and data.get('expected_delivery_date'):
-            data['required_date'] = data['expected_delivery_date']
-        
-        # Set expected_delivery_date to match required_date if not provided
-        if not data.get('expected_delivery_date') and data.get('required_date'):
-            data['expected_delivery_date'] = data['required_date']
-        
-        # Create the purchase order
+        from .buy_services import BuyFlowError, create_purchase_order
+
         try:
-            serializer = self.get_serializer(data=data)
-            serializer.is_valid(raise_exception=True)
-            purchase_order = serializer.save()
+            data = request.data.copy() if hasattr(request.data, "copy") else dict(request.data)
+            # Preserve nested items list (QueryDict may flatten)
+            if hasattr(request.data, "getlist") and "items" not in data:
+                pass
+            if "items" not in data and isinstance(request.data, dict):
+                data["items"] = request.data.get("items", [])
+            purchase_order = create_purchase_order(request.user, data)
+        except BuyFlowError as e:
+            return Response({"error": e.message}, status=e.status_code)
         except Exception as e:
-            import traceback
-            print(f"Error creating PurchaseOrder: {e}")
-            traceback.print_exc()
+            from rest_framework.exceptions import ValidationError as DRFValidationError
+
+            if isinstance(e, DRFValidationError):
+                return Response(e.detail, status=status.HTTP_400_BAD_REQUEST)
             return Response(
-                {'error': f'Failed to create purchase order: {str(e)}', 'details': str(e)},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                {"error": f"Failed to create purchase order: {e}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
-        if purchase_order.drop_ship and purchase_order.fulfillment_sales_order_id:
-            try:
-                so = SalesOrder.objects.select_related('ship_to_location', 'customer').get(
-                    pk=purchase_order.fulfillment_sales_order_id
-                )
-                apply_sales_order_ship_to_to_purchase_order(purchase_order, so)
-                purchase_order.save(
-                    update_fields=[
-                        'ship_to_name', 'ship_to_address', 'ship_to_city',
-                        'ship_to_state', 'ship_to_zip', 'ship_to_country',
-                    ]
-                )
-            except SalesOrder.DoesNotExist:
-                pass
-        
-        # Create purchase order items
-        for item_data in items_data:
-            try:
-                item_id = item_data.get('item_id')
-                if not item_id:
-                    raise ValueError(f'item_id is required for item: {item_data}')
-                
-                # Map unit_cost to unit_price (database has unit_price, not unit_cost)
-                unit_price = item_data.get('unit_cost', item_data.get('unit_price', 0))
-                quantity_ordered = item_data.get('quantity', item_data.get('quantity_ordered', 0))
-                
-                if quantity_ordered <= 0:
-                    raise ValueError(f'quantity must be greater than 0, got: {quantity_ordered}')
-                
-                PurchaseOrderItem.objects.create(
-                    purchase_order=purchase_order,
-                    item_id=item_id,
-                    quantity_ordered=quantity_ordered,
-                    unit_price=unit_price,  # Use unit_price as that's what exists in DB
-                    order_uom=(item_data.get('order_uom') or '').strip() or None,
-                    notes=item_data.get('notes', ''),
-                )
-            except Exception as e:
-                import traceback
-                print(f"Error creating PurchaseOrderItem: {e}")
-                print(f"Item data: {item_data}")
-                traceback.print_exc()
-                # Delete the purchase order if item creation fails
-                purchase_order.delete()
-                return Response(
-                    {'error': f'Failed to create purchase order item: {str(e)}', 'item_data': item_data},
-                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
-                )
-        
-        # Calculate totals if method exists
-        if hasattr(purchase_order, 'calculate_totals'):
-            purchase_order.calculate_totals()
-            purchase_order.save()
-        
-        # Log purchase order creation
-        log_purchase_order_action(purchase_order, 'created', notes='Purchase order created')
-        
-        # Return the created purchase order with items
         response_serializer = self.get_serializer(purchase_order)
         headers = self.get_success_headers(response_serializer.data)
         return Response(response_serializer.data, status=status.HTTP_201_CREATED, headers=headers)
@@ -5321,58 +3929,15 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'])
     def issue(self, request, pk=None):
         """Issue a purchase order - changes status to 'issued' and updates inventory"""
-        purchase_order = self.get_object()
-        
-        if purchase_order.status != 'draft':
-            return Response(
-                {'error': f'Purchase order must be in draft status to issue. Current status: {purchase_order.status}'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        raw_date = request.data.get('issue_date') or request.data.get('order_date')
-        if raw_date is not None and str(raw_date).strip() != '':
-            if not request.user.is_staff:
-                return Response(
-                    {'error': 'Only staff can set a custom issue date (God mode).'},
-                    status=status.HTTP_403_FORBIDDEN
-                )
-            parsed = _parse_staff_datetime(raw_date)
-            if parsed is None:
-                return Response(
-                    {'error': 'Invalid issue_date or order_date. Use YYYY-MM-DD or ISO datetime.'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-            purchase_order.order_date = parsed
+        from .buy_services import BuyFlowError, issue_purchase_order
 
-        # Update status to issued
-        purchase_order.status = 'issued'
-        purchase_order.save()
-        
-        # Log status change
-        log_purchase_order_action(purchase_order, 'updated', notes='Purchase order issued')
-        
-        # Increment on_order for each item (skip drop ship — goods never hit our inventory)
-        if not purchase_order.drop_ship:
-            for po_item in purchase_order.items.all():
-                if po_item.item:
-                    item = po_item.item
-                    item.on_order = (item.on_order or 0) + po_item.quantity_ordered
-                    item.save()
-        
-        # Generate PDF and send email
+        purchase_order = self.get_object()
+        raw_date = request.data.get("issue_date") or request.data.get("order_date")
         try:
-            from .po_pdf_html import generate_po_pdf_from_html
-            pdf_content = generate_po_pdf_from_html(purchase_order)
-            if not pdf_content:
-                raise RuntimeError("PO HTML PDF generation failed")
-            send_purchase_order_email(purchase_order, pdf_content)
-        except Exception as e:
-            import logging
-            logger = logging.getLogger(__name__)
-            logger.error(f"Failed to send purchase order email: {str(e)}")
-            # Don't fail the request if email fails
-        
-        # Return updated purchase order
+            purchase_order = issue_purchase_order(purchase_order, request.user, issue_date=raw_date)
+        except BuyFlowError as e:
+            return Response({"error": e.message}, status=e.status_code)
+
         serializer = self.get_serializer(purchase_order)
         return Response(serializer.data, status=status.HTTP_200_OK)
     
@@ -5407,21 +3972,18 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
             parsed = _parse_staff_datetime(raw_recv)
             if parsed is None:
                 return Response(
-                    {'error': 'Invalid received_date or received_at. Use YYYY-MM-DD or ISO datetime.'},
+                    {'error': 'Invalid received_date. Use YYYY-MM-DD or ISO datetime.'},
                     status=status.HTTP_400_BAD_REQUEST
                 )
             received_dt = parsed
-
-        purchase_order.status = 'received'
         purchase_order.received_date = received_dt
+        purchase_order.status = 'received'
         purchase_order.save()
-        
-        # Log status change
+        try:
+            create_ap_entry_from_po(purchase_order)
+        except Exception:
+            pass
         log_purchase_order_action(purchase_order, 'updated', notes='Purchase order marked as received')
-        
-        # Create AP entry when PO is received
-        create_ap_entry_from_po(purchase_order)
-        
         serializer = self.get_serializer(purchase_order)
         return Response(serializer.data, status=status.HTTP_200_OK)
     
@@ -5626,6 +4188,17 @@ class PurchaseOrderItemViewSet(viewsets.ModelViewSet):
             po.calculate_totals()
 
 
+def _sell_flow_error_response(error):
+    """Map a SellFlowError from sell_services onto the Response shape the React API expects."""
+    extra = dict(getattr(error, 'extra', None) or {})
+    serializer_errors = extra.pop('_serializer_errors', None)
+    if serializer_errors is not None:
+        return Response(serializer_errors, status=status.HTTP_400_BAD_REQUEST)
+    body = {'error': error.message}
+    body.update(extra)
+    return Response(body, status=error.status_code)
+
+
 class SalesOrderViewSet(viewsets.ModelViewSet):
     queryset = SalesOrder.objects.all()
     serializer_class = SalesOrderSerializer
@@ -5655,185 +4228,18 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
         return qs
     
     def create(self, request, *args, **kwargs):
-        # Make a mutable copy of request.data
-        data = request.data.copy()
-        if not request.user.is_staff:
-            data.pop('order_date', None)
-            data.pop('issue_date', None)
-        items_data = data.pop('items', [])
-        
-        # Generate sales order number if not provided (format: 3yy0000)
-        if not data.get('so_number'):
-            data['so_number'] = generate_sales_order_number()
-        
-        # Handle customer - if customer or customer_id is provided, set customer FK
-        customer_id = data.get('customer') or data.get('customer_id')
-        if customer_id:
-            try:
-                customer = Customer.objects.get(id=customer_id)
-                data['customer'] = customer.id
-                # Auto-populate customer_name if not provided
-                if not data.get('customer_name'):
-                    data['customer_name'] = customer.name
-                if not data.get('customer_reference_number') and data.get('customer_id'):
-                    data['customer_reference_number'] = data.get('customer_id')
-            except Customer.DoesNotExist:
-                pass
-        
-        # Handle ship_to_location - if ship_to_location is provided, validate it belongs to the customer
-        ship_to_location_id = data.get('ship_to_location')
-        if ship_to_location_id:
-            try:
-                from .models import ShipToLocation
-                ship_to_location = ShipToLocation.objects.get(id=ship_to_location_id)
-                # Validate that ship-to location belongs to the selected customer
-                cust_pk = None
-                if customer_id is not None:
-                    try:
-                        cust_pk = int(customer_id)
-                    except (TypeError, ValueError):
-                        cust_pk = None
-                if cust_pk is not None and ship_to_location.customer_id != cust_pk:
-                    return Response(
-                        {'error': 'Ship-to location does not belong to the selected customer'},
-                        status=status.HTTP_400_BAD_REQUEST
-                    )
-                # Auto-populate address fields from ship-to location if not provided
-                if not data.get('customer_address'):
-                    data['customer_address'] = ship_to_location.address
-                if not data.get('customer_city'):
-                    data['customer_city'] = ship_to_location.city
-                if not data.get('customer_state'):
-                    data['customer_state'] = ship_to_location.state or ''
-                if not data.get('customer_zip'):
-                    data['customer_zip'] = ship_to_location.zip_code
-                if not data.get('customer_country'):
-                    data['customer_country'] = ship_to_location.country
-                if not data.get('customer_phone'):
-                    data['customer_phone'] = ship_to_location.phone or ''
-            except ShipToLocation.DoesNotExist:
-                return Response(
-                    {'error': 'Ship-to location not found'},
-                    status=status.HTTP_404_NOT_FOUND
-                )
-        
-        # Validate the data first (but don't save yet)
-        serializer = self.get_serializer(data=data)
-        serializer.is_valid(raise_exception=True)
-        validated_data = serializer.validated_data
+        from .sell_services import SellFlowError, create_sales_order
 
-        # customer is a SerializerMethodField (read-only); resolve FK from request payload
-        customer_obj = validated_data.get('customer')
-        if customer_obj is None:
-            raw_c = data.get('customer') or data.get('customer_id')
-            if raw_c is not None:
-                try:
-                    customer_obj = Customer.objects.get(pk=int(raw_c))
-                except (ValueError, TypeError, Customer.DoesNotExist):
-                    customer_obj = None
-
-        ship_to_obj = validated_data.get('ship_to_location')
-
-        from django.db import connection, transaction
-        from django.utils import timezone
-
-        now = timezone.now()
-        order_date_val = now
-        if request.user.is_staff and data.get('order_date'):
-            parsed_od = _parse_staff_datetime(data.get('order_date'))
-            if parsed_od:
-                order_date_val = parsed_od
-
-        for row in items_data:
-            iid = row.get('item_id') or row.get('item')
-            if not iid:
-                return Response(
-                    {'error': 'item_id is required for each sales order item'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-
+        data = request.data.copy() if hasattr(request.data, 'copy') else dict(request.data)
         try:
-            with transaction.atomic():
-                sales_order = SalesOrder.objects.create(
-                    so_number=validated_data['so_number'],
-                    customer=customer_obj,
-                    ship_to_location=ship_to_obj,
-                    customer_name=validated_data.get('customer_name') or '',
-                    customer_legacy_id=validated_data.get('customer_legacy_id'),
-                    customer_reference_number=validated_data.get('customer_reference_number'),
-                    customer_address=validated_data.get('customer_address'),
-                    customer_city=validated_data.get('customer_city'),
-                    customer_state=validated_data.get('customer_state'),
-                    customer_zip=validated_data.get('customer_zip'),
-                    customer_country=validated_data.get('customer_country'),
-                    customer_phone=validated_data.get('customer_phone'),
-                    contact=validated_data.get('contact'),
-                    order_date=order_date_val,
-                    expected_ship_date=validated_data.get('expected_ship_date'),
-                    actual_ship_date=validated_data.get('actual_ship_date'),
-                    status=validated_data.get('status', 'draft'),
-                    notes=validated_data.get('notes'),
-                    carrier=validated_data.get('carrier'),
-                    tracking_number=validated_data.get('tracking_number'),
-                    drop_ship=bool(validated_data.get('drop_ship', False)),
-                )
-
-                # Create sales order items with lot allocations
-                for item_data in items_data:
-                    allocated_lots_data = item_data.pop('allocated_lots', [])
-
-                    item_id = item_data.get('item_id') or item_data.get('item')
-                    so_item = SalesOrderItem.objects.create(
-                        sales_order=sales_order,
-                        item_id=item_id,
-                        quantity_ordered=item_data.get('quantity_ordered', 0),
-                        unit_price=item_data.get('unit_price'),
-                        notes=item_data.get('notes')
-                    )
-
-                    if allocated_lots_data:
-                        try:
-                            with connection.cursor() as cursor:
-                                cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='erp_core_salesorderlot'")
-                                if cursor.fetchone():
-                                    for lot_data in allocated_lots_data:
-                                        SalesOrderLot.objects.create(
-                                            sales_order_item=so_item,
-                                            lot_id=lot_data.get('lot_id'),
-                                            quantity_allocated=lot_data.get('quantity_allocated', 0)
-                                        )
-
-                                        so_item.quantity_allocated += lot_data.get('quantity_allocated', 0)
-                                    so_item.save()
-                        except Exception as e:
-                            import logging
-                            logger = logging.getLogger(__name__)
-                            logger.warning(f'SalesOrderLot table does not exist, skipping lot allocations: {str(e)}')
-
-        except Exception as e:
-            import logging
-            import traceback
-            logger = logging.getLogger(__name__)
-            error_msg = str(e)
-            logger.error(f'Failed to create sales order: {error_msg}')
-            logger.error(f'Traceback: {traceback.format_exc()}')
-            return Response(
-                {
-                    'error': 'Failed to create sales order',
-                    'detail': error_msg,
-                    'debug_info': {
-                        'so_number': validated_data.get('so_number'),
-                        'customer_id': getattr(customer_obj, 'id', None) if customer_obj else None,
-                        'ship_to_id': ship_to_obj.id if ship_to_obj else None,
-                    }
-                },
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
+            sales_order = create_sales_order(request.user, data)
+        except SellFlowError as e:
+            return _sell_flow_error_response(e)
 
         # Refresh the sales order from database to get all related items
         try:
             sales_order.refresh_from_db()
-            
+
             # Return the created sales order with items
             serializer = self.get_serializer(sales_order)
             response_data = serializer.data
@@ -6037,949 +4443,48 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'])
     def allocate(self, request, pk=None):
         """Allocate lots to sales order items. Creates distributed item lots if raw materials are checked in."""
-        from django.db import transaction
-        
+        from .sell_services import SellFlowError, allocate_sales_order
+
         sales_order = self.get_object()
-        items_data = request.data.get('items', [])
-        allow_prerepack_allocation = bool(request.data.get('allow_prerepack_allocation'))
+        try:
+            sales_order = allocate_sales_order(sales_order, request.data)
+        except SellFlowError as e:
+            return _sell_flow_error_response(e)
 
-        from erp_core.inventory_fg_visibility import GATED_PRODUCT_CATEGORIES, lot_allowed_for_gated_fg_allocation
-
-        closed_batch_output_lot_ids = set(
-            ProductionBatchOutput.objects.filter(batch__status='closed').values_list('lot_id', flat=True)
-        )
-
-        if sales_order.drop_ship:
-            with transaction.atomic():
-                for so_item in sales_order.items.all():
-                    SalesOrderLot.objects.filter(sales_order_item=so_item).delete()
-                    so_item.quantity_allocated = float(so_item.quantity_ordered or 0)
-                    so_item.save(update_fields=['quantity_allocated'])
-                sales_order.status = 'ready_for_shipment'
-                sales_order.save(update_fields=['status'])
-            serializer = self.get_serializer(sales_order)
-            return Response(serializer.data, status=status.HTTP_200_OK)
-        
-        with transaction.atomic():
-            for item_data in items_data:
-                item_id = item_data.get('item_id')
-                is_distributed = item_data.get('is_distributed', False)
-                allocations = item_data.get('allocations', [])
-                raw_materials = item_data.get('raw_materials', [])
-                
-                try:
-                    so_item = SalesOrderItem.objects.get(sales_order=sales_order, item_id=item_id)
-                except SalesOrderItem.DoesNotExist:
-                    return Response(
-                        {'error': f'Sales order item for item {item_id} not found'},
-                        status=status.HTTP_404_NOT_FOUND
-                    )
-                
-                # Delete existing allocations for this item
-                SalesOrderLot.objects.filter(sales_order_item=so_item).delete()
-                so_item.quantity_allocated = 0.0
-                
-                if is_distributed and raw_materials:
-                    # For distributed items, create new lot from raw materials
-                    # Only if raw materials are checked into inventory (have lots with status='accepted')
-                    distributed_item = so_item.item
-                    total_quantity = 0.0
-                    raw_material_lots = []
-                    
-                    for rm_data in raw_materials:
-                        lot_id = rm_data.get('lot_id')
-                        quantity = float(rm_data.get('quantity', 0))
-                        
-                        try:
-                            lot = Lot.objects.get(id=lot_id, status='accepted')
-                            max_use = float(compute_lot_quantity_breakdown(lot)["quantity_available_for_use"])
-                            if quantity > max_use + 1e-6:
-                                return Response(
-                                    {'error': f'Insufficient quantity in lot {lot.lot_number}. Available: {max_use}, Requested: {quantity}'},
-                                    status=status.HTTP_400_BAD_REQUEST
-                                )
-                            raw_material_lots.append((lot, quantity))
-                            total_quantity += quantity
-                        except Lot.DoesNotExist:
-                            return Response(
-                                {'error': f'Lot {lot_id} not found or not accepted'},
-                                status=status.HTTP_404_NOT_FOUND
-                            )
-                    
-                    # Create new lot for distributed item
-                    new_lot_number = generate_lot_number()
-                    new_lot = Lot.objects.create(
-                        lot_number=new_lot_number,
-                        item=distributed_item,
-                        quantity=total_quantity,
-                        quantity_remaining=total_quantity,
-                        received_date=timezone.now(),
-                        status='accepted'
-                    )
-                    
-                    # Reduce raw material lot quantities and create transactions
-                    for raw_lot, qty in raw_material_lots:
-                        quantity_before = raw_lot.quantity_remaining
-                        raw_lot.quantity_remaining -= qty
-                        raw_lot.save()
-                        
-                        transaction = InventoryTransaction.objects.create(
-                            transaction_type='production',
-                            lot=raw_lot,
-                            quantity=-qty,
-                            reference_number=sales_order.so_number,
-                            notes=f'Allocated to distributed item lot {new_lot_number}'
-                        )
-                        
-                        # Log the transaction
-                        log_lot_transaction(
-                            lot=raw_lot,
-                            quantity_before=quantity_before,
-                            quantity_change=-qty,
-                            transaction_type='production_input',
-                            reference_number=sales_order.so_number,
-                            reference_type='so_number',
-                            transaction_id=transaction.id,
-                            sales_order_id=sales_order.id,
-                            notes=f'Used for distributed item lot {new_lot_number} in sales order {sales_order.so_number}'
-                        )
-                        
-                        # Log depletion if lot reaches zero or below
-                        log_lot_depletion(
-                            lot=raw_lot,
-                            quantity_before=quantity_before,
-                            quantity_used=qty,
-                            depletion_method='production',
-                            reference_number=sales_order.so_number,
-                            reference_type='so_number',
-                            sales_order_id=sales_order.id,
-                            transaction_id=transaction.id,
-                            notes=f'Used for distributed item lot {new_lot_number} in sales order {sales_order.so_number}'
-                        )
-                    
-                    # Create transaction for new lot
-                    transaction = InventoryTransaction.objects.create(
-                        transaction_type='production',
-                        lot=new_lot,
-                        quantity=total_quantity,
-                        reference_number=sales_order.so_number,
-                        notes=f'Created from raw materials for sales order {sales_order.so_number}'
-                    )
-                    
-                    # Log the transaction
-                    log_lot_transaction(
-                        lot=new_lot,
-                        quantity_before=0.0,  # New lot
-                        quantity_change=total_quantity,
-                        transaction_type='production_output',
-                        reference_number=sales_order.so_number,
-                        reference_type='so_number',
-                        transaction_id=transaction.id,
-                        sales_order_id=sales_order.id,
-                        notes=f'Created from raw materials for sales order {sales_order.so_number}'
-                    )
-                    
-                    # Allocate the new lot to sales order
-                    SalesOrderLot.objects.create(
-                        sales_order_item=so_item,
-                        lot=new_lot,
-                        quantity_allocated=total_quantity
-                    )
-                    so_item.quantity_allocated = total_quantity
-                    
-                else:
-                    # Regular items - allocate from existing lots
-                    for allocation in allocations:
-                        lot_id = allocation.get('lot_id')
-                        quantity = float(allocation.get('quantity', 0))
-                        
-                        try:
-                            lot = Lot.objects.select_related('item').filter(
-                                id=lot_id,
-                                status__in=['accepted', 'on_hold'],
-                            ).first()
-                            if not lot:
-                                return Response(
-                                    {'error': f'Lot {lot_id} not found or not in accepted/on-hold status'},
-                                    status=status.HTTP_404_NOT_FOUND,
-                                )
-                            if lot.item_id != int(item_id):
-                                line_sku = (getattr(so_item.item, 'sku', None) or '').strip().upper()
-                                lot_sku = (getattr(lot.item, 'sku', None) or '').strip().upper()
-                                if not line_sku or line_sku != lot_sku:
-                                    return Response(
-                                        {'error': f'Lot {lot.lot_number} is for a different item than this order line.'},
-                                        status=status.HTTP_400_BAD_REQUEST,
-                                    )
-                            max_use = float(compute_lot_quantity_breakdown(lot)["quantity_available_for_use"])
-                            if quantity > max_use + 1e-6:
-                                return Response(
-                                    {'error': f'Insufficient quantity in lot {lot.lot_number}. Available: {max_use}, Requested: {quantity}'},
-                                    status=status.HTTP_400_BAD_REQUEST
-                                )
-                            # Distributed items: only repack output lots (same as Finished Good inventory tab),
-                            # unless the client explicitly allows pre-repack / raw-inventory allocation (vendor-labeled stock).
-                            if (getattr(so_item.item, 'item_type', None) or '').strip() == 'distributed_item':
-                                if not allow_prerepack_allocation and not ProductionBatchOutput.objects.filter(
-                                    lot_id=lot.id,
-                                    batch__batch_type='repack',
-                                    batch__status='closed',
-                                ).exists():
-                                    return Response(
-                                        {
-                                            'error': (
-                                                f'Lot {lot.lot_number} is pre-repack or vendor stock. '
-                                                'For distributed items, allocate only from lots created by a completed repack batch, '
-                                                'or enable "include raw / pre-repack lots" when saving allocations.'
-                                            )
-                                        },
-                                        status=status.HTTP_400_BAD_REQUEST,
-                                    )
-
-                            itype = (getattr(so_item.item, 'item_type', None) or '').strip()
-                            pcat = (getattr(so_item.item, 'product_category', None) or '').strip()
-                            if itype == 'finished_good' and pcat in GATED_PRODUCT_CATEGORIES:
-                                if not lot_allowed_for_gated_fg_allocation(
-                                    lot,
-                                    so_item.item,
-                                    closed_batch_output_lot_ids,
-                                    allow_prerepack_allocation,
-                                ):
-                                    return Response(
-                                        {
-                                            'error': (
-                                                f'Lot {lot.lot_number} is not from a closed repack or production batch. '
-                                                f'For gated finished goods ({pcat.replace("_", " ")}), pick batch output lots only, '
-                                                f'or enable "include raw / pre-repack lots" when saving allocations.'
-                                            )
-                                        },
-                                        status=status.HTTP_400_BAD_REQUEST,
-                                    )
-
-                            SalesOrderLot.objects.create(
-                                sales_order_item=so_item,
-                                lot=lot,
-                                quantity_allocated=quantity
-                            )
-                            so_item.quantity_allocated += quantity
-                        except Lot.DoesNotExist:
-                            return Response(
-                                {'error': f'Lot {lot_id} not found for item {item_id}'},
-                                status=status.HTTP_404_NOT_FOUND
-                            )
-                
-                so_item.save()
-            
-            # Refresh sales order to get updated items
-            sales_order.refresh_from_db()
-            
-            # Check if all items are fully allocated
-            all_fully_allocated = all(
-                item.quantity_allocated >= item.quantity_ordered 
-                for item in sales_order.items.all()
-            )
-            
-            # Update sales order status based on allocation state
-            if all_fully_allocated:
-                sales_order.status = 'ready_for_shipment'
-            else:
-                # If any allocations exist, set to 'allocated'
-                # But preserve 'issued' status if the order was issued and is partially allocated
-                total_allocated = sum(item.quantity_allocated for item in sales_order.items.all())
-                if total_allocated > 0:
-                    # If order was 'issued' and now has partial allocations, keep it as 'issued'
-                    # Otherwise set to 'allocated'
-                    if sales_order.status == 'issued':
-                        # Keep as 'issued' for partial allocation, user can continue allocating
-                        pass
-                    else:
-                        sales_order.status = 'allocated'
-                else:
-                    # No allocations - only set to 'draft' if it wasn't 'issued'
-                    if sales_order.status != 'issued':
-                        sales_order.status = 'draft'
-            sales_order.save()
-        
+        sales_order.refresh_from_db()
         serializer = self.get_serializer(sales_order)
         return Response(serializer.data, status=status.HTTP_200_OK)
     
     @action(detail=True, methods=['post'])
     def ship(self, request, pk=None):
         """Ship the sales order (supports partial shipments), update tracking, and create invoice."""
-        from django.db import transaction, IntegrityError
-        from datetime import datetime, timedelta
-        import json
-        import re
-        from django.core.serializers.json import DjangoJSONEncoder
-        from .models import Shipment, ShipmentItem, ShipIdempotency
+        from .sell_services import SellFlowError, ship_sales_order
 
         sales_order = self.get_object()
+        idem_key = (
+            request.headers.get('X-Idempotency-Key')
+            or request.META.get('HTTP_X_IDEMPOTENCY_KEY')
+            or ''
+        ).strip()[:128]
 
-        idem_key = (request.headers.get('X-Idempotency-Key') or request.META.get('HTTP_X_IDEMPOTENCY_KEY') or '').strip()[:128]
-        if idem_key:
-            prev = ShipIdempotency.objects.filter(key=idem_key).first()
-            if prev:
-                if prev.sales_order_id != sales_order.id:
-                    return Response(
-                        {'error': 'This idempotency key was already used for another sales order.'},
-                        status=status.HTTP_409_CONFLICT,
-                    )
-                return Response(json.loads(prev.response_json), status=status.HTTP_200_OK)
-        ship_date_str = request.data.get('ship_date')
-        invoice_date_str = request.data.get('invoice_date', ship_date_str)
-        tracking_number = request.data.get('tracking_number', '').strip()
-        carrier = (request.data.get('carrier') or '').strip()
-        items_to_ship = request.data.get('items', [])  # List of {item_id, quantity} for partial shipments
-        combined_shipment_key = None
-        raw_ck = request.data.get('combined_shipment_key')
-        if raw_ck:
-            import uuid as _uuid
-
-            try:
-                combined_shipment_key = _uuid.UUID(str(raw_ck))
-            except (ValueError, TypeError, AttributeError):
-                combined_shipment_key = None
-        combined_freight_skip = bool(request.data.get('combined_freight_skip'))
-        
-        # Validate order is issued or ready_for_shipment and has allocations
-        if sales_order.status not in ('issued', 'ready_for_shipment'):
-            return Response(
-                {'error': f'Sales order must be issued or ready for shipment to checkout. Current status: {sales_order.status}'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        # Check if order has any allocations (drop ship uses virtual allocation only)
-        total_allocated = sum(item.quantity_allocated for item in sales_order.items.all())
-        if total_allocated == 0 and not sales_order.drop_ship:
-            return Response(
-                {'error': 'Sales order must have material allocated before checkout'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        if not ship_date_str:
-            return Response(
-                {'error': 'ship_date is required'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        # Tracking number is optional - can be added later in Finance
-        # if not tracking_number:
-        #     return Response(
-        #         {'error': 'tracking_number is required'},
-        #         status=status.HTTP_400_BAD_REQUEST
-        #     )
-        
         try:
-            ship_date = datetime.strptime(ship_date_str, '%Y-%m-%d').date()
-            invoice_date = datetime.strptime(invoice_date_str, '%Y-%m-%d').date() if invoice_date_str else ship_date
-        except ValueError:
-            return Response(
-                {'error': 'Invalid date format. Use YYYY-MM-DD'},
-                status=status.HTTP_400_BAD_REQUEST
+            response_payload = ship_sales_order(
+                sales_order,
+                request.user,
+                request.data,
+                idempotency_key=idem_key,
+                serializer_context=self.get_serializer_context(),
             )
-        
-        # If items_to_ship is provided, use it for partial shipment
-        # Otherwise, ship all allocated quantities
-        use_partial = bool(items_to_ship)
-        
-        try:
-            with transaction.atomic():
-                # Serialize concurrent ship() calls (prevents duplicate shipments from double-submit / races).
-                sales_order = self.get_queryset().select_for_update().get(pk=sales_order.pk)
-                if sales_order.status not in ('issued', 'ready_for_shipment'):
-                    return Response(
-                        {
-                            'error': (
-                                f'Sales order must be issued or ready for shipment to checkout. '
-                                f'Current status: {sales_order.status}'
-                            )
-                        },
-                        status=status.HTTP_400_BAD_REQUEST,
-                    )
-                total_allocated_locked = sum(item.quantity_allocated for item in sales_order.items.all())
-                if total_allocated_locked == 0 and not sales_order.drop_ship:
-                    return Response(
-                        {'error': 'Sales order must have material allocated before checkout'},
-                        status=status.HTTP_400_BAD_REQUEST,
-                    )
-
-                # Checkout requires carrier, piece count, per-piece dimensions & weights (packing list). Tracking optional.
-                if not carrier:
-                    return Response(
-                        {'error': 'Carrier is required at checkout (shown on packing list and invoice).'},
-                        status=status.HTTP_400_BAD_REQUEST,
-                    )
-                pieces_raw = request.data.get('pieces')
-                try:
-                    pieces_int = int(pieces_raw)
-                except (TypeError, ValueError):
-                    return Response(
-                        {'error': 'pieces must be a positive integer.'},
-                        status=status.HTTP_400_BAD_REQUEST,
-                    )
-                if pieces_int < 1:
-                    return Response(
-                        {'error': 'pieces must be at least 1.'},
-                        status=status.HTTP_400_BAD_REQUEST,
-                    )
-                piece_dims_in = request.data.get('piece_dimensions')
-                if not isinstance(piece_dims_in, list):
-                    return Response(
-                        {
-                            'error': 'piece_dimensions must be a JSON array with one dimension string per piece.',
-                        },
-                        status=status.HTTP_400_BAD_REQUEST,
-                    )
-                if len(piece_dims_in) != pieces_int:
-                    return Response(
-                        {
-                            'error': (
-                                f'piece_dimensions must have {pieces_int} entries (one per piece); '
-                                f'got {len(piece_dims_in)}.'
-                            ),
-                        },
-                        status=status.HTTP_400_BAD_REQUEST,
-                    )
-                piece_dims_clean = []
-                for idx, d in enumerate(piece_dims_in):
-                    s = (str(d) if d is not None else '').strip()
-                    if not s:
-                        return Response(
-                            {'error': f'Dimensions are required for piece {idx + 1}.'},
-                            status=status.HTTP_400_BAD_REQUEST,
-                        )
-                    piece_dims_clean.append(s)
-
-                piece_weights_in = request.data.get('piece_weights')
-                if not isinstance(piece_weights_in, list):
-                    return Response(
-                        {
-                            'error': 'piece_weights must be a JSON array with one weight per piece.',
-                        },
-                        status=status.HTTP_400_BAD_REQUEST,
-                    )
-                if len(piece_weights_in) != pieces_int:
-                    return Response(
-                        {
-                            'error': (
-                                f'piece_weights must have {pieces_int} entries (one per piece); '
-                                f'got {len(piece_weights_in)}.'
-                            ),
-                        },
-                        status=status.HTTP_400_BAD_REQUEST,
-                    )
-                piece_weights_clean = []
-                for idx, w in enumerate(piece_weights_in):
-                    s = (str(w) if w is not None else '').strip()
-                    if not s:
-                        return Response(
-                            {'error': f'Weight is required for piece {idx + 1}.'},
-                            status=status.HTTP_400_BAD_REQUEST,
-                        )
-                    piece_weights_clean.append(s)
-
-                dimensions_summary = '; '.join(
-                    f'Piece {i + 1}: {d} | {wt}'
-                    for i, (d, wt) in enumerate(zip(piece_dims_clean, piece_weights_clean))
-                )
-
-                # Create shipment record (tracking number, dimensions, pieces can be set at checkout)
-                ship_dt = timezone.make_aware(datetime.combine(ship_date, datetime.min.time()))
-                expected_dt = None
-                if request.data.get('expected_ship_date'):
-                    try:
-                        from django.utils.dateparse import parse_datetime
-                        expected_dt = parse_datetime(request.data.get('expected_ship_date'))
-                        if expected_dt and timezone.is_naive(expected_dt):
-                            expected_dt = timezone.make_aware(expected_dt)
-                    except Exception:
-                        pass
-                if expected_dt is None and sales_order.expected_ship_date:
-                    expected_dt = sales_order.expected_ship_date
-                shipment = Shipment.objects.create(
-                    sales_order=sales_order,
-                    expected_ship_date=expected_dt,
-                    ship_date=ship_dt,
-                    tracking_number=tracking_number or '',
-                    notes=request.data.get('notes', ''),
-                    dimensions=dimensions_summary,
-                    pieces=pieces_int,
-                    piece_dimensions=piece_dims_clean,
-                    piece_weights=piece_weights_clean,
-                    combined_shipment_key=combined_shipment_key,
-                )
-                
-                # Process items to ship - normalize item_id to int for dict lookup (JSON may send string)
-                items_shipped_map = {}
-                if use_partial:
-                    for item_data in items_to_ship:
-                        raw_id = item_data.get('item_id') or item_data.get('sales_order_item_id')
-                        item_id = int(raw_id) if raw_id is not None else None
-                        quantity_to_ship = float(item_data.get('quantity', 0))
-                        if item_id is not None and quantity_to_ship > 0:
-                            items_shipped_map[item_id] = quantity_to_ship
-                else:
-                    for so_item in sales_order.items.all():
-                        if so_item.quantity_allocated > 0:
-                            items_shipped_map[so_item.id] = so_item.quantity_allocated
-                
-                # Reduce lot quantities and create inventory transactions
-                for so_item in sales_order.items.all():
-                    raw_qty = items_shipped_map.get(so_item.id, 0)
-                    if raw_qty <= 0:
-                        continue
-                    uom = getattr(so_item.item, 'unit_of_measure', None) or ''
-                    ok, quantity_to_ship = _normalize_checkout_ship_quantity(
-                        raw_qty, so_item.quantity_allocated, uom
-                    )
-                    if not ok:
-                        return Response(
-                            {
-                                'error': (
-                                    f'Cannot ship {raw_qty} of {so_item.item.name}. '
-                                    f'Only {so_item.quantity_allocated} is allocated.'
-                                )
-                            },
-                            status=status.HTTP_400_BAD_REQUEST,
-                        )
-
-                    # Ship from allocated lots proportionally or FIFO
-                    remaining_to_ship = quantity_to_ship
-                    allocations = SalesOrderLot.objects.filter(sales_order_item=so_item).order_by('created_at')
-
-                    if sales_order.drop_ship and not allocations.exists():
-                        so_item.quantity_shipped += quantity_to_ship
-                        so_item.quantity_allocated -= quantity_to_ship
-                        so_item.save(update_fields=['quantity_shipped', 'quantity_allocated'])
-                        ShipmentItem.objects.create(
-                            shipment=shipment,
-                            sales_order_item=so_item,
-                            quantity_shipped=quantity_to_ship
-                        )
-                        continue
-                    
-                    for allocation in allocations:
-                        if remaining_to_ship <= 0:
-                            break
-                        
-                        lot = allocation.lot
-                        # Ship from this allocation (up to the allocated amount)
-                        quantity_from_allocation = min(remaining_to_ship, allocation.quantity_allocated)
-                        
-                        if lot.quantity_remaining < quantity_from_allocation:
-                            return Response(
-                                {'error': f'Insufficient quantity in lot {lot.lot_number}. Available: {lot.quantity_remaining}, Required: {quantity_from_allocation}'},
-                                status=status.HTTP_400_BAD_REQUEST
-                            )
-                        
-                        quantity_before = lot.quantity_remaining
-                        
-                        inv_txn = InventoryTransaction.objects.create(
-                            transaction_type='adjustment',
-                            lot=lot,
-                            quantity=-quantity_from_allocation,
-                            reference_number=sales_order.so_number,
-                            notes=f'Shipped for sales order {sales_order.so_number} - Shipment {shipment.id}'
-                        )
-                        
-                        # Log the transaction
-                        log_lot_transaction(
-                            lot=lot,
-                            quantity_before=quantity_before,
-                            quantity_change=-quantity_from_allocation,
-                            transaction_type='sale',
-                            reference_number=sales_order.so_number,
-                            reference_type='so_number',
-                            transaction_id=inv_txn.id,
-                            sales_order_id=sales_order.id,
-                            notes=f'Shipped for sales order {sales_order.so_number} - Shipment {shipment.id}'
-                        )
-                        
-                        lot.quantity_remaining -= quantity_from_allocation
-                        lot.save()
-                        
-                        # Reduce the allocation by the shipped quantity.
-                        # Keep the SalesOrderLot row at quantity 0 after a full ship so customer COA
-                        # (LotCoaCustomerCopy) and list/detail APIs still expose allocation history.
-                        allocation.quantity_allocated -= quantity_from_allocation
-                        if allocation.quantity_allocated <= 0:
-                            allocation.quantity_allocated = 0.0
-                        allocation.save()
-                        
-                        # Log depletion if lot reaches zero or below
-                        log_lot_depletion(
-                            lot=lot,
-                            quantity_before=quantity_before,
-                            quantity_used=quantity_from_allocation,
-                            depletion_method='sales',
-                            reference_number=sales_order.so_number,
-                            reference_type='so_number',
-                            sales_order_id=sales_order.id,
-                            transaction_id=inv_txn.id,
-                            notes=f'Shipped for sales order {sales_order.so_number} - Shipment {shipment.id}'
-                        )
-                        
-                        remaining_to_ship -= quantity_from_allocation
-                    
-                    # Update quantity_shipped on sales order item
-                    so_item.quantity_shipped += quantity_to_ship
-                    so_item.quantity_allocated -= quantity_to_ship  # Reduce allocated by shipped amount
-                    so_item.save()
-                    
-                    # Create shipment item record
-                    ShipmentItem.objects.create(
-                        shipment=shipment,
-                        sales_order_item=so_item,
-                        quantity_shipped=quantity_to_ship
-                    )
-                
-                # Update sales order status, tracking, and carrier
-                sales_order.actual_ship_date = timezone.make_aware(datetime.combine(ship_date, datetime.min.time()))
-                if not sales_order.tracking_number:
-                    sales_order.tracking_number = tracking_number
-                if carrier:
-                    sales_order.carrier = carrier
-                
-                # Check if order is fully shipped
-                all_fully_shipped = all(
-                    item.quantity_shipped >= item.quantity_ordered 
-                    for item in sales_order.items.all()
-                )
-                
-                if all_fully_shipped:
-                    sales_order.status = 'completed'
-                else:
-                    # Still has outstanding balance - keep as issued or ready_for_shipment
-                    # Check if there are still allocations
-                    total_remaining_allocated = sum(item.quantity_allocated for item in sales_order.items.all())
-                    if total_remaining_allocated > 0:
-                        sales_order.status = 'ready_for_shipment'
-                    else:
-                        sales_order.status = 'issued'  # Can allocate more if needed
-                
-                sales_order.save()
-                
-                # Create invoice for this shipment
-                invoice_number = generate_invoice_number()
-                
-                # Calculate due date from payment terms
-                due_date = invoice_date
-                if sales_order.customer and sales_order.customer.payment_terms:
-                    payment_terms = sales_order.customer.payment_terms
-                    # Parse payment terms (e.g., "Net 30" -> 30 days)
-                    match = re.search(r'(\d+)', payment_terms)
-                    if match:
-                        days = int(match.group(1))
-                        due_date = invoice_date + timedelta(days=days)
-                
-                # Calculate totals from shipped quantities in this shipment
-                subtotal = sum(
-                    item.sales_order_item.unit_price * item.quantity_shipped 
-                    for item in shipment.items.all() 
-                    if item.sales_order_item.unit_price
-                )
-                # Get freight, discount, tax from sales order if available, otherwise 0
-                freight = getattr(sales_order, 'freight', 0.0) or 0.0
-                if combined_freight_skip:
-                    freight = 0.0
-                discount = getattr(sales_order, 'discount', 0.0) or 0.0
-                tax = 0.0  # Calculate tax if needed
-                grand_total = subtotal + freight + tax - discount
-                
-                # Check what columns actually exist in Invoice table and which are NOT NULL
-                from django.db import connection
-                available_columns = set()
-                not_null_columns = set()
-                try:
-                    with connection.cursor() as cursor:
-                        cursor.execute("PRAGMA table_info(erp_core_invoice)")
-                        for row in cursor.fetchall():
-                            col_name = row[1]
-                            is_not_null = row[3]  # 1 if NOT NULL, 0 if nullable
-                            available_columns.add(col_name)
-                            if is_not_null and col_name != 'id':  # id is auto-generated
-                                not_null_columns.add(col_name)
-                except Exception:
-                    # If we can't check, use minimal set
-                    available_columns = {'id', 'invoice_number', 'invoice_date', 'created_at', 'updated_at'}
-                    not_null_columns = {'invoice_number', 'invoice_date'}
-                
-                # If sales_order_id column doesn't exist, use raw SQL to avoid Django ORM trying to set it
-                if 'sales_order_id' not in available_columns:
-                    # Use raw SQL to insert invoice without sales_order_id
-                    # Build column list and values dynamically based on what exists
-                    now = timezone.now()
-                    columns = ['invoice_number']
-                    values = [invoice_number]
-                    placeholders = ['?']
-                    
-                    # Required fields that must be included if they exist
-                    # invoice_type is required (NOT NULL) - always include if column exists
-                    if 'invoice_type' in available_columns:
-                        columns.append('invoice_type')
-                        values.append('customer')  # Default to customer invoice
-                        placeholders.append('?')
-                    # customer_vendor_name is required (NOT NULL) - always include if column exists
-                    if 'customer_vendor_name' in available_columns:
-                        columns.append('customer_vendor_name')
-                        customer_name = sales_order.customer_name
-                        if not customer_name and sales_order.customer:
-                            customer_name = sales_order.customer.name
-                        if not customer_name:
-                            customer_name = 'Unknown Customer'
-                        values.append(customer_name)
-                        placeholders.append('?')
-                    # customer_vendor_id is optional
-                    if 'customer_vendor_id' in available_columns:
-                        columns.append('customer_vendor_id')
-                        customer_id = sales_order.customer_legacy_id
-                        if not customer_id and sales_order.customer:
-                            customer_id = str(sales_order.customer.id)
-                        values.append(customer_id)
-                        placeholders.append('?')
-                    
-                    # Optional fields
-                    if 'invoice_date' in available_columns:
-                        columns.append('invoice_date')
-                        values.append(invoice_date)
-                        placeholders.append('?')
-                    if 'due_date' in available_columns:
-                        columns.append('due_date')
-                        values.append(due_date)
-                        placeholders.append('?')
-                    if 'status' in available_columns:
-                        columns.append('status')
-                        values.append('draft')
-                        placeholders.append('?')
-                    if 'subtotal' in available_columns:
-                        columns.append('subtotal')
-                        values.append(subtotal)
-                        placeholders.append('?')
-                    if 'freight' in available_columns:
-                        columns.append('freight')
-                        values.append(freight)
-                        placeholders.append('?')
-                    if 'tax' in available_columns:
-                        columns.append('tax')
-                        values.append(tax)
-                        placeholders.append('?')
-                    if 'tax_amount' in available_columns:
-                        columns.append('tax_amount')
-                        values.append(tax)
-                        placeholders.append('?')
-                    if 'discount' in available_columns:
-                        columns.append('discount')
-                        values.append(discount)
-                        placeholders.append('?')
-                    if 'grand_total' in available_columns:
-                        columns.append('grand_total')
-                        values.append(grand_total)
-                        placeholders.append('?')
-                    if 'total_amount' in available_columns:
-                        columns.append('total_amount')
-                        values.append(grand_total)
-                        placeholders.append('?')
-                    if 'paid_amount' in available_columns:
-                        columns.append('paid_amount')
-                        values.append(0.0)
-                        placeholders.append('?')
-                    if 'notes' in available_columns:
-                        columns.append('notes')
-                        # Escape % characters to avoid issues with Django's query logging
-                        notes_text = f'Auto-generated from sales order {sales_order.so_number} - Shipment {shipment.id}'
-                        # Replace % with %% to escape it (SQLite doesn't need this, but Django's logging does)
-                        notes_text = notes_text.replace('%', '%%')
-                        values.append(notes_text)
-                        placeholders.append('?')
-                    if 'created_at' in available_columns:
-                        columns.append('created_at')
-                        values.append(now)
-                        placeholders.append('?')
-                    if 'updated_at' in available_columns:
-                        columns.append('updated_at')
-                        values.append(now)
-                        placeholders.append('?')
-                    
-                    # Ensure all NOT NULL columns are included
-                    for col in not_null_columns:
-                        if col not in columns and col != 'id':  # Skip id (auto-generated)
-                            # Add default values for required columns we haven't handled
-                            if col == 'invoice_type' and 'invoice_type' in available_columns:
-                                columns.append('invoice_type')
-                                values.append('customer')
-                                placeholders.append('?')
-                            elif col == 'customer_vendor_name' and 'customer_vendor_name' in available_columns:
-                                columns.append('customer_vendor_name')
-                                customer_name = sales_order.customer_name or (sales_order.customer.name if sales_order.customer else 'Unknown Customer')
-                                values.append(customer_name)
-                                placeholders.append('?')
-                            elif col == 'invoice_date' and 'invoice_date' in available_columns:
-                                columns.append('invoice_date')
-                                values.append(invoice_date)
-                                placeholders.append('?')
-                            elif col == 'status' and 'status' in available_columns:
-                                columns.append('status')
-                                values.append('draft')
-                                placeholders.append('?')
-                            elif col == 'subtotal' and 'subtotal' in available_columns:
-                                columns.append('subtotal')
-                                values.append(subtotal)
-                                placeholders.append('?')
-                            elif col == 'tax_amount' and 'tax_amount' in available_columns:
-                                columns.append('tax_amount')
-                                values.append(tax)
-                                placeholders.append('?')
-                            elif col == 'total_amount' and 'total_amount' in available_columns:
-                                columns.append('total_amount')
-                                values.append(grand_total)
-                                placeholders.append('?')
-                            elif col == 'paid_amount' and 'paid_amount' in available_columns:
-                                columns.append('paid_amount')
-                                values.append(0.0)
-                                placeholders.append('?')
-                    
-                    # Ensure we have the same number of placeholders as values
-                    if len(placeholders) != len(values):
-                        raise ValueError(f"Placeholder count ({len(placeholders)}) doesn't match value count ({len(values)}). Columns: {columns}")
-                    
-                    # Build SQL with proper parameterization
-                    # Use string concatenation to build SQL to avoid f-string % formatting issues
-                    columns_str = ', '.join(columns)
-                    placeholders_str = ', '.join(placeholders)
-                    sql = "INSERT INTO erp_core_invoice (" + columns_str + ") VALUES (" + placeholders_str + ")"
-                    
-                    # Execute using Django's cursor with proper parameterization
-                    # The issue is Django's debug SQL formatter tries to do sql % params for logging
-                    # This fails when the SQL string itself contains % characters in the notes field
-                    # Solution: Disable query logging temporarily and use execute with proper parameterization
-                    from django.conf import settings
-                    import logging
-                    logger = logging.getLogger(__name__)
-                    
-                    invoice_id = None
-                    
-                    # Use Django's connection so we stay in the same transaction (avoids "database is locked")
-                    with connection.cursor() as raw_cursor:
-                        raw_cursor.execute(sql, tuple(values))
-                        invoice_id = raw_cursor.lastrowid
-                    
-                    if not invoice_id:
-                        raise ValueError("Failed to create invoice - no ID returned")
-                    
-                    # After creating with raw SQL, update sales_order_id if column exists
-                    with connection.cursor() as check_cursor:
-                        check_cursor.execute("PRAGMA table_info(erp_core_invoice)")
-                        columns = [row[1] for row in check_cursor.fetchall()]
-                        if 'sales_order_id' in columns:
-                            # Update the invoice with sales_order_id
-                            check_cursor.execute(
-                                "UPDATE erp_core_invoice SET sales_order_id = ? WHERE id = ?",
-                                [sales_order.id, invoice_id]
-                            )
-                    
-                    invoice = Invoice.objects.get(id=invoice_id)
-                    
-                    # Create AR entry when invoice is created
-                    create_ar_entry_from_invoice(invoice)
-                else:
-                    # Use ORM - pass fields that exist on the Invoice model and any required DB columns (e.g. invoice_type from migrations)
-                    invoice_data = {
-                        'invoice_number': invoice_number,
-                        'sales_order': sales_order,
-                        'invoice_date': invoice_date,
-                        'due_date': due_date,
-                        'status': 'draft',
-                        'subtotal': subtotal,
-                        'freight': freight,
-                        'tax': tax,
-                        'discount': discount,
-                        'grand_total': grand_total,
-                        'notes': f'Auto-generated from sales order {sales_order.so_number} - Shipment {shipment.id}',
-                    }
-                    invoice_data['invoice_type'] = 'customer'
-                    customer_name = getattr(sales_order, 'customer_name', None) or (sales_order.customer.name if sales_order.customer else None) or 'Unknown Customer'
-                    invoice_data['customer_vendor_name'] = customer_name or 'Unknown Customer'
-                    invoice_data['tax_amount'] = tax
-                    invoice_data['total_amount'] = grand_total
-                    invoice_data['paid_amount'] = 0.0
-                    try:
-                        invoice = Invoice.objects.create(**invoice_data)
-                    except Exception as e:
-                        import logging
-                        logger = logging.getLogger(__name__)
-                        logger.error(f"Error creating invoice with ORM: {e}")
-                        logger.error(f"Invoice data keys: {list(invoice_data.keys())}")
-                        raise
-                    
-                    # Create AR entry when invoice is created
-                    create_ar_entry_from_invoice(invoice)
-                    
-                    # Send invoice email if status is 'sent' (auto-send when created from shipment)
-                    if invoice.status == 'sent':
-                        try:
-                            from .invoice_pdf_html import generate_invoice_pdf_from_html
-                            pdf_content = generate_invoice_pdf_from_html(invoice)
-                            send_invoice_email(invoice, pdf_content)
-                        except Exception as e:
-                            from django.db import DatabaseError
-                            if isinstance(e, DatabaseError):
-                                raise
-                            import logging
-                            logger = logging.getLogger(__name__)
-                            logger.error(f"Failed to send invoice email: {str(e)}")
-                            # Don't fail the request if email fails
-                
-                # Create invoice items from shipped quantities in this shipment
-                for shipment_item in shipment.items.all():
-                    if shipment_item.quantity_shipped > 0:
-                        so_item = shipment_item.sales_order_item
-                        line_total = (so_item.unit_price or 0.0) * shipment_item.quantity_shipped
-                        InvoiceItem.objects.create(
-                            invoice=invoice,
-                            item=so_item.item,
-                            sales_order_item=so_item,
-                            description=so_item.item.name,
-                            quantity=shipment_item.quantity_shipped,
-                            unit_price=so_item.unit_price or 0.0,
-                            total=line_total,
-                            notes=''
-                        )
-            
-            invoice_serializer = InvoiceSerializer(invoice)
-            
-            serializer = self.get_serializer(sales_order)
-            response_payload = {
-                'sales_order': serializer.data,
-                'invoice': invoice_serializer.data,
-                'shipment': {
-                    'id': shipment.id,
-                    'ship_date': shipment.ship_date.isoformat(),
-                    'tracking_number': shipment.tracking_number,
-                    'combined_shipment_key': (
-                        str(combined_shipment_key) if combined_shipment_key else None
-                    ),
-                }
-            }
-            if idem_key:
-                try:
-                    ShipIdempotency.objects.create(
-                        key=idem_key,
-                        sales_order=sales_order,
-                        shipment=shipment,
-                        response_json=json.dumps(response_payload, cls=DjangoJSONEncoder),
-                    )
-                except IntegrityError:
-                    prev = ShipIdempotency.objects.filter(key=idem_key).first()
-                    if prev:
-                        return Response(json.loads(prev.response_json), status=status.HTTP_200_OK)
-                    raise
-            return Response(response_payload, status=status.HTTP_200_OK)
+        except SellFlowError as e:
+            return _sell_flow_error_response(e)
         except Exception as e:
             import traceback
             return Response({
                 'error': str(e),
                 'detail': traceback.format_exc()
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        return Response(response_payload, status=status.HTTP_200_OK)
 
     @action(detail=False, methods=['post'], url_path='combined-ship')
     def combined_ship(self, request):
@@ -7132,44 +4637,15 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'])
     def issue(self, request, pk=None):
         """Issue a sales order - changes status from 'draft' to 'issued'"""
-        sales_order = self.get_object()
-        
-        if sales_order.status != 'draft':
-            return Response(
-                {'error': f'Sales order must be in draft status to issue. Current status: {sales_order.status}'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        raw_date = request.data.get('issue_date') or request.data.get('order_date')
-        if raw_date is not None and str(raw_date).strip() != '':
-            if not request.user.is_staff:
-                return Response(
-                    {'error': 'Only staff can set a custom issue date (God mode).'},
-                    status=status.HTTP_403_FORBIDDEN
-                )
-            parsed = _parse_staff_datetime(raw_date)
-            if parsed is None:
-                return Response(
-                    {'error': 'Invalid issue_date or order_date. Use YYYY-MM-DD or ISO datetime.'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-            sales_order.order_date = parsed
+        from .sell_services import SellFlowError, issue_sales_order
 
-        # Update status to issued
-        sales_order.status = 'issued'
-        sales_order.save()
-        
-        # Generate PDF and send confirmation email (HTML → xhtml2pdf)
+        sales_order = self.get_object()
+        raw_date = request.data.get('issue_date') or request.data.get('order_date')
         try:
-            from .sales_order_pdf_html import generate_sales_order_pdf_from_html
-            pdf_content = generate_sales_order_pdf_from_html(sales_order)
-            send_sales_order_confirmation_email(sales_order, pdf_content)
-        except Exception as e:
-            import logging
-            logger = logging.getLogger(__name__)
-            logger.error(f"Failed to send sales order confirmation email: {str(e)}")
-            # Don't fail the request if email fails
-        
+            sales_order = issue_sales_order(sales_order, request.user, issue_date=raw_date)
+        except SellFlowError as e:
+            return _sell_flow_error_response(e)
+
         # Return updated sales order
         serializer = self.get_serializer(sales_order)
         return Response(serializer.data, status=status.HTTP_200_OK)
@@ -10230,7 +7706,7 @@ class CostMasterViewSet(viewsets.ModelViewSet):
         """
         from collections import defaultdict
 
-        LBS_PER_KG = 2.20462
+        LBS_PER_KG = 2.2  # plant standard; see mass_quantity
         TOLERANCE_PCT = 0.05  # 5%: within this, consider "ok"
 
         # Build per-shipment (AP) metrics: AP entries with PO and at least freight or tariff entered

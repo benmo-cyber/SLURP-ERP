@@ -18,7 +18,7 @@ Payments on AP do not change these amounts — invoice fields (original_amount, 
 
 from collections import defaultdict
 
-LBS_PER_KG = 2.20462
+LBS_PER_KG = 2.2  # plant standard; see mass_quantity
 TOLERANCE_PCT = 0.05
 
 

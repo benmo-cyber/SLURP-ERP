@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react'
 import { getCostMasters, deleteCostMaster, updateCostMaster, getCostMasterActuals } from '../../api/costMaster'
 import './CostMasterList.css'
 
-const LBS_PER_KG = 2.20462
+const LBS_PER_KG = 2.2
 
 type ActualsMap = Record<number, {
   avg_tariff_pct?: number
@@ -203,7 +203,7 @@ function CostMasterList() {
                 const isEa = (cm.unit_of_measure || '').toLowerCase() === 'ea'
                 const priceUnit = isEa ? 'EA' : unitToggle
                 const price = isEa ? (cm.price_per_lb ?? cm.price_per_kg) : (unitToggle === 'lbs' ? cm.price_per_lb : cm.price_per_kg)
-                const freight = isEa ? cm.freight_per_kg : (unitToggle === 'lbs' ? (cm.freight_per_kg / 2.20462) : cm.freight_per_kg)
+                const freight = isEa ? cm.freight_per_kg : (unitToggle === 'lbs' ? (cm.freight_per_kg / 2.2) : cm.freight_per_kg)
                 const landedCost = isEa ? (cm.landed_cost_per_kg ?? cm.landed_cost_per_lb) : (unitToggle === 'lbs' ? cm.landed_cost_per_lb : cm.landed_cost_per_kg)
                 const act = actuals[cm.id]
                 const hasActuals = act && act.shipments_count > 0
@@ -275,12 +275,12 @@ function CostMasterList() {
                         type="number"
                         step="0.01"
                         min={0}
-                        value={isEa ? (editForm.freight_per_kg ?? cm.freight_per_kg) : (unitToggle === 'kg' ? (editForm.freight_per_kg ?? cm.freight_per_kg) : ((editForm.freight_per_kg ?? cm.freight_per_kg) / 2.20462))}
+                        value={isEa ? (editForm.freight_per_kg ?? cm.freight_per_kg) : (unitToggle === 'kg' ? (editForm.freight_per_kg ?? cm.freight_per_kg) : ((editForm.freight_per_kg ?? cm.freight_per_kg) / 2.2))}
                         onChange={(e) => {
                           const val = parseFloat(e.target.value) || 0
                           setEditForm({
                             ...editForm,
-                            freight_per_kg: isEa ? val : (unitToggle === 'kg' ? val : val * 2.20462)
+                            freight_per_kg: isEa ? val : (unitToggle === 'kg' ? val : val * 2.2)
                           })
                         }}
                         className="edit-input"

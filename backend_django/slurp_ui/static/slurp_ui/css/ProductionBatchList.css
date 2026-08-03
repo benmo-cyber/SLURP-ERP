@@ -1,0 +1,231 @@
+.batch-list-container {
+  display: flex;
+  flex-direction: column;
+  gap: 2rem;
+}
+
+.batch-section {
+  background: white;
+  border-radius: 8px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  padding: 1.5rem;
+}
+
+.batch-section h2 {
+  margin: 0 0 1.5rem 0;
+  color: #2c3e50;
+  font-size: 1.5rem;
+  border-bottom: 2px solid #e0e0e0;
+  padding-bottom: 0.75rem;
+}
+
+.batch-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.batch-table thead {
+  background-color: var(--app-header-bg);
+  color: var(--app-header-text);
+}
+
+.batch-table th {
+  padding: 1rem;
+  text-align: left;
+  font-weight: 600;
+  font-size: 0.9rem;
+  color: var(--app-header-text);
+  background-color: var(--app-header-bg);
+}
+
+.batch-table th.sortable {
+  cursor: pointer;
+  user-select: none;
+}
+.batch-table th.sortable:hover {
+  background-color: var(--table-header-hover-bg);
+}
+
+.batch-table td {
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid #e0e0e0;
+}
+
+.batch-table tbody tr:hover {
+  background-color: #f8f9fa;
+}
+
+.batch-number {
+  font-weight: 600;
+  color: #3498db;
+}
+
+.batch-number-cell-god {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.batch-number-input {
+  min-width: 10rem;
+  max-width: 16rem;
+  padding: 0.25rem 0.5rem;
+  font: inherit;
+  font-weight: 600;
+  color: #1a5276;
+  border: 1px solid #85c1e9;
+  border-radius: 4px;
+  background: #fff;
+}
+
+.batch-number-pdf-link {
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: #0066cc;
+  text-decoration: underline;
+}
+
+.status-badge {
+  display: inline-block;
+  padding: 0.25rem 0.75rem;
+  border-radius: 4px;
+  font-size: 0.85rem;
+  font-weight: 500;
+  text-transform: capitalize;
+}
+
+.status-open,
+.status-in_progress {
+  background-color: #f39c12;
+  color: white;
+}
+
+.status-closed {
+  background-color: #27ae60;
+  color: white;
+}
+
+.positive {
+  color: #27ae60;
+  font-weight: 600;
+}
+
+.negative {
+  color: #e74c3c;
+  font-weight: 600;
+}
+
+.empty-state {
+  text-align: center;
+  padding: 3rem;
+  color: #7f8c8d;
+}
+
+.loading {
+  text-align: center;
+  padding: 3rem;
+  color: #7f8c8d;
+  font-size: 1.1rem;
+}
+
+.btn {
+  padding: 0.5rem 1rem;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-weight: 500;
+  transition: all 0.2s;
+}
+
+.btn-primary {
+  background-color: #3498db;
+  color: white;
+}
+
+.btn-primary:hover {
+  background-color: #2980b9;
+}
+
+.btn-sm {
+  padding: 0.4rem 0.8rem;
+  font-size: 0.85rem;
+}
+
+.action-buttons {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.btn-secondary {
+  background-color: #95a5a6;
+  color: white;
+}
+
+.btn-secondary:hover {
+  background-color: #7f8c8d;
+}
+
+.btn-danger {
+  background-color: #e74c3c;
+  color: white;
+}
+
+.btn-danger:hover {
+  background-color: #c0392b;
+}
+
+.btn-info {
+  background-color: #17a2b8;
+  color: white;
+}
+
+.btn-info:hover {
+  background-color: #138496;
+}
+
+.unit-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.unit-toggle label {
+  font-weight: 500;
+  color: #333;
+  font-size: 0.9rem;
+}
+
+.unit-toggle .toggle-btn {
+  padding: 0.4rem 0.8rem;
+  border: 1px solid #ccc;
+  background-color: white;
+  color: #333;
+  cursor: pointer;
+  font-size: 0.875rem;
+  transition: all 0.2s;
+}
+
+.unit-toggle .toggle-btn:first-of-type {
+  border-top-left-radius: 4px;
+  border-bottom-left-radius: 4px;
+  border-right: none;
+}
+
+.unit-toggle .toggle-btn:last-of-type {
+  border-top-right-radius: 4px;
+  border-bottom-right-radius: 4px;
+}
+
+.unit-toggle .toggle-btn:hover {
+  background-color: #f0f0f0;
+}
+
+.unit-toggle .toggle-btn.active {
+  background-color: #007bff;
+  color: white;
+  border-color: #007bff;
+}
+

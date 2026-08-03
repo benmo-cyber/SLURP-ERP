@@ -1,0 +1,114 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{% block title %}SLURP{% endblock %}</title>
+  <link rel="stylesheet" href="{% static 'slurp_ui/css/index.css' %}" />
+  <link rel="stylesheet" href="{% static 'slurp_ui/css/App.css' %}" />
+  {% for sheet in page_css %}
+  <link rel="stylesheet" href="{% static 'slurp_ui/css/' %}{{ sheet }}" />
+  {% endfor %}
+  {% block extra_css %}{% endblock %}
+  <style>
+    /* SLURP 2.0 chrome tweaks — keep React class names */
+    a.nav-link { text-decoration: none; }
+    .port-banner {
+      background: #fff3cd;
+      color: #664d03;
+      border-bottom: 1px solid #ffecb5;
+      padding: 0.5rem 2rem;
+      font-size: 0.9rem;
+    }
+    .port-banner.ok { background: #d1e7dd; color: #0f5132; border-color: #badbcc; }
+    .messages { max-width: 1400px; margin: 0.75rem auto; padding: 0 2rem; }
+    .messages .msg { padding: 0.6rem 0.9rem; border-radius: 4px; margin-bottom: 0.4rem; }
+    .messages .success { background: #d1e7dd; color: #0f5132; }
+    .messages .warning { background: #fff3cd; color: #664d03; }
+    .messages .error { background: #f8d7da; color: #842029; }
+    .data-table { width: 100%; border-collapse: collapse; background: #fff; }
+    .data-table th, .data-table td { padding: 0.55rem 0.75rem; border-bottom: 1px solid #e5e7eb; text-align: left; font-size: 0.9rem; }
+    .data-table th { background: #2c3e50; color: #fff; }
+    .data-table tr:hover td { background: #f8fafc; }
+    .modal-page { max-width: 720px; margin: 1.5rem auto; background: #fff; padding: 1.5rem; border-radius: 8px; box-shadow: 0 4px 24px rgba(0,0,0,.12); }
+    .modal-page h2 { margin-bottom: 1rem; }
+    .form-row { margin-bottom: 0.85rem; }
+    .form-row label { display: block; font-weight: 500; margin-bottom: 0.25rem; }
+    .form-row input, .form-row select, .form-row textarea {
+      width: 100%; padding: 0.5rem 0.65rem; border: 1px solid #cbd5e1; border-radius: 4px;
+    }
+    .form-actions { display: flex; gap: 0.75rem; margin-top: 1.25rem; }
+  </style>
+</head>
+<body>
+  <div class="App">
+    <header class="app-header">
+      <div class="header-content">
+        <div class="header-brand">
+          <img src="{% static 'slurp_ui/logo.png' %}" alt="Wildwood Ingredients" class="header-logo" />
+          <h1>SLURP</h1>
+        </div>
+        <nav class="main-nav">
+          {% for tab in slurp_main_tabs %}
+            <a href="{% url tab.url_name %}"
+               class="nav-link {% if module == tab.id %}active{% endif %}">{{ tab.label }}</a>
+          {% endfor %}
+        </nav>
+        <div class="header-user">
+          {% if slurp_can_god_mode %}
+          <form method="post" action="{% url 'slurp_ui:import_sample_xml' %}" class="header-sample-import" style="display:inline">
+            {% csrf_token %}
+            <button type="submit" class="header-sample-import-btn"
+                    title="Loads all .xml files from server folder data/private_sample_data/">
+              Import sample XML
+            </button>
+          </form>
+          <form method="post" action="{% url 'slurp_ui:toggle_god_mode' %}" class="header-god-mode-toggle">
+            {% csrf_token %}
+            <label>
+              <input type="checkbox" name="god_mode" value="on"
+                     {% if slurp_god_mode %}checked{% endif %}
+                     onchange="this.form.submit()"
+                     title="God mode: set any date on forms and flows (staff only)" />
+              <span>God mode</span>
+            </label>
+          </form>
+          {% endif %}
+          <span class="header-username">{{ user.username }}</span>
+          <span class="header-role">({{ slurp_user_role }})</span>
+          <form method="post" action="{% url 'slurp_ui:logout' %}" style="display:inline">
+            {% csrf_token %}
+            <button type="submit" class="header-logout">Sign out</button>
+          </form>
+        </div>
+      </div>
+    </header>
+
+    {% if port_status %}
+    <div class="port-banner {% if port_status == 'full' %}ok{% endif %}">
+      SLURP 2.0 (Django templates) —
+      {% if port_status == 'full' %}
+        this screen is fully ported.
+      {% elif port_status == 'partial' %}
+        partial port (layout + core data; some actions still pending).
+      {% else %}
+        shell/UI only — workflow logic not fully ported yet.
+      {% endif %}
+    </div>
+    {% endif %}
+
+    {% if messages %}
+    <div class="messages">
+      {% for message in messages %}
+        <div class="msg {{ message.tags }}">{{ message }}</div>
+      {% endfor %}
+    </div>
+    {% endif %}
+
+    <main class="app-main">
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+</body>
+</html>

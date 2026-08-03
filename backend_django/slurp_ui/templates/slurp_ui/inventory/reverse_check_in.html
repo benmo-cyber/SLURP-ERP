@@ -1,0 +1,49 @@
+{% extends "slurp_ui/base.html" %}
+{% block title %}Reverse check-in — SLURP{% endblock %}
+{% block content %}
+<div class="modal-page" style="max-width:900px">
+  <h2>Reverse check-in</h2>
+  <p style="margin-bottom:1rem;color:#64748b">
+    Only unused receipt lots (quantity remaining = received qty) can be reversed.
+    Rollback restores PO received qty and <code>on_order</code>.
+  </p>
+
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Lot</th>
+        <th>SKU</th>
+        <th>PO</th>
+        <th>Qty</th>
+        <th>Received</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for lot in eligible_lots %}
+      <tr>
+        <td>{{ lot.lot_number }}{% if lot.vendor_lot_number %}<br><small>{{ lot.vendor_lot_number }}</small>{% endif %}</td>
+        <td>{{ lot.item.sku }}</td>
+        <td>{{ lot.po_number }}</td>
+        <td>{{ lot.quantity|floatformat:2 }} {{ lot.item.unit_of_measure }}</td>
+        <td>{{ lot.received_date|date:"Y-m-d" }}</td>
+        <td>
+          <form method="post" style="display:inline">
+            {% csrf_token %}
+            <input type="hidden" name="lot_id" value="{{ lot.id }}" />
+            <button type="submit" class="btn btn-danger" style="padding:0.35rem 0.7rem;font-size:0.85rem"
+                    onclick="return confirm('Reverse check-in for lot {{ lot.lot_number }}?');">Reverse</button>
+          </form>
+        </td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="6">No eligible lots to reverse.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <div class="form-actions">
+    <a class="btn btn-secondary" href="{% url 'slurp_ui:inventory' %}">Back</a>
+  </div>
+</div>
+{% endblock %}

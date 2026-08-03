@@ -74,8 +74,8 @@ function Logs({ defaultLogType = 'transactions' }: LogsProps) {
   const convertQuantity = (quantity: number, fromUnit: 'lbs' | 'kg' | 'ea', toUnit: 'lbs' | 'kg'): number => {
     if (fromUnit === 'ea' || toUnit === 'ea') return quantity
     if (fromUnit === toUnit) return quantity
-    if (fromUnit === 'lbs' && toUnit === 'kg') return quantity * 0.453592
-    if (fromUnit === 'kg' && toUnit === 'lbs') return quantity * 2.20462
+    if (fromUnit === 'lbs' && toUnit === 'kg') return quantity / 2.2
+    if (fromUnit === 'kg' && toUnit === 'lbs') return quantity * 2.2
     return quantity
   }
 

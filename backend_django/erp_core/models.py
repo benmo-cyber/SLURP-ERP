@@ -1426,12 +1426,12 @@ class CostMaster(models.Model):
             # Formula: (Price per kg * (1 + Tariff)) + Freight per kg
             self.landed_cost_per_kg = (self.price_per_kg * (1 + (self.tariff or 0))) + (self.freight_per_kg or 0)
             # Convert to lb
-            self.landed_cost_per_lb = self.landed_cost_per_kg / 2.20462
+            self.landed_cost_per_lb = self.landed_cost_per_kg / 2.2
         elif self.price_per_lb is not None:
             # If only price_per_lb is available, convert to kg first
-            price_per_kg = self.price_per_lb * 2.20462
+            price_per_kg = self.price_per_lb * 2.2
             self.landed_cost_per_kg = (price_per_kg * (1 + (self.tariff or 0))) + (self.freight_per_kg or 0)
-            self.landed_cost_per_lb = self.landed_cost_per_kg / 2.20462
+            self.landed_cost_per_lb = self.landed_cost_per_kg / 2.2
         else:
             self.landed_cost_per_kg = None
             self.landed_cost_per_lb = None

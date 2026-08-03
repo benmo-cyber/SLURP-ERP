@@ -1,0 +1,113 @@
+{% extends "slurp_ui/base.html" %}
+{% block title %}{{ order.so_number }} — SLURP{% endblock %}
+{% block content %}
+<div class="modal-page" style="max-width:960px">
+  <div style="display:flex;justify-content:space-between;gap:1rem;flex-wrap:wrap;align-items:start">
+    <div>
+      <h2>{{ order.so_number }}</h2>
+      <p style="color:#64748b;margin:0.25rem 0 0">
+        {{ order.customer_name }} · <strong>{{ order.status }}</strong>
+        {% if order.drop_ship %} · drop ship{% endif %}
+      </p>
+    </div>
+    <div style="display:flex;gap:0.5rem;flex-wrap:wrap">
+      {% if order.status == 'draft' %}
+      <form method="post" action="{% url 'slurp_ui:sales_issue_order' order.id %}">{% csrf_token %}
+        <button class="btn btn-primary" type="submit">Issue</button>
+      </form>
+      {% endif %}
+      {% if order.status != 'completed' and order.status != 'cancelled' and order.status != 'shipped' %}
+      <a class="btn btn-secondary" href="{% url 'slurp_ui:sales_allocate_order' order.id %}">Allocate</a>
+      {% endif %}
+      {% if order.status == 'issued' or order.status == 'ready_for_shipment' %}
+      <a class="btn btn-primary" href="{% url 'slurp_ui:sales_checkout' %}?so={{ order.id }}">Check Out</a>
+      {% endif %}
+      {% if order.status != 'draft' %}
+      <a class="btn btn-secondary" href="{% url 'slurp_ui:sales_pick_list_pdf' order.id %}" target="_blank">Pick list PDF</a>
+      <a class="btn btn-secondary" href="{% url 'slurp_ui:sales_packing_list_pdf' order.id %}" target="_blank">Packing list PDF</a>
+      {% endif %}
+      {% if can_revert %}
+      <form method="post" action="{% url 'slurp_ui:sales_revert_order' order.id %}">{% csrf_token %}
+        <button class="btn btn-danger" type="submit"
+                onclick="return confirm('Revert {{ order.so_number }} to draft? Releases allocations.');">
+          Revert to draft
+        </button>
+      </form>
+      {% endif %}
+      <a class="btn btn-secondary" href="{% url 'slurp_ui:sales_orders' %}">Back</a>
+    </div>
+  </div>
+
+  <h3 style="margin:1.25rem 0 0.5rem">Lines</h3>
+  <table class="data-table">
+    <thead>
+      <tr><th>Item</th><th>Ordered</th><th>Allocated</th><th>Shipped</th><th>Price</th></tr>
+    </thead>
+    <tbody>
+      {% for line in order.items.all %}
+      <tr>
+        <td>{{ line.item.sku }}</td>
+        <td>{{ line.quantity_ordered|floatformat:2 }}</td>
+        <td>{{ line.quantity_allocated|floatformat:2 }}</td>
+        <td>{{ line.quantity_shipped|floatformat:2 }}</td>
+        <td>{% if line.unit_price != None %}${{ line.unit_price|floatformat:2 }}{% else %}—{% endif %}</td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="5">No lines.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <h3 style="margin:1.25rem 0 0.5rem">Shipments / releases</h3>
+  {% if order.shipments.all %}
+  <table class="data-table">
+    <thead>
+      <tr><th>ID</th><th>Ship date</th><th>Tracking</th><th>Pieces</th><th>Actions</th></tr>
+    </thead>
+    <tbody>
+      {% for sh in order.shipments.all %}
+      <tr>
+        <td>#{{ sh.id }}</td>
+        <td>{{ sh.ship_date|date:"Y-m-d"|default:"—" }}</td>
+        <td>{{ sh.tracking_number|default:"—" }}</td>
+        <td>{{ sh.pieces|default:"—" }}</td>
+        <td>
+          <a class="btn btn-secondary" style="padding:0.35rem 0.7rem;font-size:0.85rem"
+             href="{% url 'slurp_ui:sales_packing_list_pdf' order.id %}" target="_blank">Packing PDF</a>
+          {% if sh.combined_shipment_key %}
+          <a class="btn btn-secondary" style="padding:0.35rem 0.7rem;font-size:0.85rem"
+             href="{% url 'slurp_ui:sales_combined_packing_list_pdf' %}?key={{ sh.combined_shipment_key }}" target="_blank">Combined</a>
+          {% endif %}
+          {% if is_staff %}
+          <form method="post" action="{% url 'slurp_ui:sales_reverse_shipment' sh.id %}" style="display:inline">
+            {% csrf_token %}
+            <button type="submit" class="btn btn-danger" style="padding:0.35rem 0.7rem;font-size:0.85rem"
+                    onclick="return confirm('Reverse shipment #{{ sh.id }}? Restores inventory and deletes linked draft/cancelled invoice.');">
+              Reverse
+            </button>
+          </form>
+          {% else %}
+          <span style="color:#64748b">Staff only</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p style="color:#64748b">No shipments yet.</p>
+  {% endif %}
+
+  <h3 style="margin:1.25rem 0 0.5rem">Invoices</h3>
+  <ul>
+    {% for inv in order.invoices.all %}
+    <li>
+      <a href="{% url 'slurp_ui:finance_invoice_detail' inv.id %}">{{ inv.invoice_number }}</a>
+      — {{ inv.status }} — ${{ inv.grand_total|floatformat:2 }}
+    </li>
+    {% empty %}
+    <li style="color:#64748b">None</li>
+    {% endfor %}
+  </ul>
+</div>
+{% endblock %}

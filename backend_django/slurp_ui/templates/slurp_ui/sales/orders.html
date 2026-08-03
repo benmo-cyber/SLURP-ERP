@@ -1,0 +1,66 @@
+{% extends "slurp_ui/base_module.html" %}
+{% block title %}Sales Orders — SLURP{% endblock %}
+{% block module_title %}Sales{% endblock %}
+{% block header_actions %}
+  <a href="{% url 'slurp_ui:sales_customers' %}" class="btn btn-secondary">Manage Customers</a>
+  <a href="{% url 'slurp_ui:sales_combined_checkout' %}" class="btn btn-secondary">Combined Check Out</a>
+  <a href="{% url 'slurp_ui:sales_checkout' %}" class="btn btn-primary">Check Out</a>
+  <a href="{% url 'slurp_ui:sales_create_order' %}" class="btn btn-primary">Create Sales Order</a>
+{% endblock %}
+{% block main %}
+<table class="data-table">
+  <thead>
+    <tr>
+      <th>SO #</th>
+      <th>Customer</th>
+      <th>Status</th>
+      <th>Order date</th>
+      <th>Customer PO</th>
+      <th>Allocated</th>
+      <th>Actions</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for o in orders %}
+    <tr>
+      <td><a href="{% url 'slurp_ui:sales_order_detail' o.id %}">{{ o.so_number }}</a>{% if o.drop_ship %} · DS{% endif %}</td>
+      <td>{{ o.customer_name }}</td>
+      <td>{{ o.status }}</td>
+      <td>{{ o.order_date|date:"Y-m-d" }}</td>
+      <td>{{ o.customer_reference_number|default:"—" }}</td>
+      <td>{{ o.total_allocated|default_if_none:0|floatformat:2 }}</td>
+      <td style="white-space:nowrap">
+        {% if o.status == 'draft' %}
+        <form method="post" action="{% url 'slurp_ui:sales_issue_order' o.id %}" style="display:inline">
+          {% csrf_token %}
+          {% if god_mode %}
+          <input type="date" name="issue_date" value="{{ o.order_date|date:'Y-m-d' }}" style="max-width:9rem" />
+          {% endif %}
+          <button type="submit" class="btn btn-primary" style="padding:0.35rem 0.7rem;font-size:0.85rem"
+                  onclick="return confirm('Issue {{ o.so_number }}?');">Issue</button>
+        </form>
+        {% endif %}
+        {% if o.status != 'completed' and o.status != 'cancelled' and o.status != 'shipped' %}
+        <a class="btn btn-secondary" style="padding:0.35rem 0.7rem;font-size:0.85rem"
+           href="{% url 'slurp_ui:sales_allocate_order' o.id %}">Allocate</a>
+        {% endif %}
+        {% if o.status == 'issued' or o.status == 'ready_for_shipment' %}
+          {% if o.drop_ship or o.total_allocated %}
+          <a class="btn btn-primary" style="padding:0.35rem 0.7rem;font-size:0.85rem"
+             href="{% url 'slurp_ui:sales_checkout' %}?so={{ o.id }}">Check Out</a>
+          {% endif %}
+        {% endif %}
+        {% if o.status != 'draft' %}
+        <a class="btn btn-secondary" style="padding:0.35rem 0.7rem;font-size:0.85rem"
+           href="{% url 'slurp_ui:sales_pick_list_pdf' o.id %}" target="_blank">Pick list</a>
+        <a class="btn btn-secondary" style="padding:0.35rem 0.7rem;font-size:0.85rem"
+           href="{% url 'slurp_ui:sales_packing_list_pdf' o.id %}" target="_blank">Packing</a>
+        {% endif %}
+      </td>
+    </tr>
+    {% empty %}
+    <tr><td colspan="7">No sales orders.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

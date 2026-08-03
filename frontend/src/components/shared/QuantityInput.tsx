@@ -50,9 +50,9 @@ function QuantityInput({
     let convertedValue = numValue
     if (itemUnit && displayUnit !== itemUnit) {
       if (displayUnit === 'lbs' && itemUnit === 'kg') {
-        convertedValue = numValue / 2.20462
+        convertedValue = numValue / 2.2
       } else if (displayUnit === 'kg' && itemUnit === 'lbs') {
-        convertedValue = numValue * 2.20462
+        convertedValue = numValue * 2.2
       }
     }
     
@@ -68,9 +68,9 @@ function QuantityInput({
     
     // Convert value
     if (newUnit === 'lbs' && displayUnit === 'kg') {
-      convertedValue = currentValue * 2.20462
+      convertedValue = currentValue * 2.2
     } else if (newUnit === 'kg' && displayUnit === 'lbs') {
-      convertedValue = currentValue / 2.20462
+      convertedValue = currentValue / 2.2
     }
     
     setDisplayUnit(newUnit)
@@ -80,9 +80,9 @@ function QuantityInput({
     let finalValue = convertedValue
     if (itemUnit && newUnit !== itemUnit) {
       if (newUnit === 'lbs' && itemUnit === 'kg') {
-        finalValue = convertedValue / 2.20462
+        finalValue = convertedValue / 2.2
       } else if (newUnit === 'kg' && itemUnit === 'lbs') {
-        finalValue = convertedValue * 2.20462
+        finalValue = convertedValue * 2.2
       }
     }
     

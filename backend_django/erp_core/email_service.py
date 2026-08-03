@@ -60,13 +60,15 @@ def send_invoice_email(invoice, pdf_content=None):
 
         recipient_emails = []
         if invoice.sales_order and invoice.sales_order.customer:
-            # Prefer contacts marked as A/P contact
+            # Prefer contacts marked as A/P contact (emails is JSONField, not email)
             ap_contacts = CustomerContact.objects.filter(
                 customer_id=invoice.sales_order.customer_id,
                 is_ap_contact=True,
-                is_active=True
-            ).exclude(email__isnull=True).exclude(email='')
-            recipient_emails = [c.email for c in ap_contacts]
+                is_active=True,
+            )
+            for contact in ap_contacts:
+                recipient_emails.extend(_emails_from_customer_contact(contact))
+            recipient_emails = list(dict.fromkeys(recipient_emails))
         if not recipient_emails and invoice.sales_order and invoice.sales_order.customer:
             if invoice.sales_order.customer.email:
                 recipient_emails = [invoice.sales_order.customer.email]

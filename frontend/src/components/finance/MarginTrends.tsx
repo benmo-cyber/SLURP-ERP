@@ -101,7 +101,7 @@ function MarginTrends() {
           if (!sku || !skus.includes(sku)) return
           const date = entry.effective_date?.slice(0, 10)
           if (!date) return
-          const costPerLb = entry.price_per_lb ?? (entry.price_per_kg != null ? entry.price_per_kg / 2.20462 : null)
+          const costPerLb = entry.price_per_lb ?? (entry.price_per_kg != null ? entry.price_per_kg / 2.2 : null)
           if (costPerLb == null) return
           if (!dateMap.has(date)) dateMap.set(date, {})
           const row = dateMap.get(date)!
@@ -114,7 +114,7 @@ function MarginTrends() {
           const date = entry.effective_date?.slice(0, 10)
           if (!date) return
           let pricePerLb = entry.unit_price
-          if (entry.unit_of_measure === 'kg') pricePerLb = entry.unit_price / 2.20462
+          if (entry.unit_of_measure === 'kg') pricePerLb = entry.unit_price / 2.2
           if (!dateMap.has(date)) dateMap.set(date, {})
           const row = dateMap.get(date)!
           if (!row[entry.sku]) row[entry.sku] = {}

@@ -73,9 +73,9 @@ function CloseBatch({ batch, onClose, onSuccess }: CloseBatchProps) {
   const convertQuantity = (quantity: number, fromUnit: string = finishedGoodUnit) => {
     if (fromUnit === 'ea') return quantity
     if (unitDisplay === 'kg' && fromUnit === 'lbs') {
-      return quantity * 0.453592
+      return quantity / 2.2
     } else if (unitDisplay === 'lbs' && fromUnit === 'kg') {
-      return quantity * 2.20462
+      return quantity * 2.2
     }
     return quantity
   }
@@ -84,9 +84,9 @@ function CloseBatch({ batch, onClose, onSuccess }: CloseBatchProps) {
   const convertFromDisplay = (quantity: number, toUnit: string = finishedGoodUnit) => {
     if (toUnit === 'ea') return quantity
     if (unitDisplay === 'kg' && toUnit === 'lbs') {
-      return quantity / 0.453592
+      return quantity / (1/2.2)
     } else if (unitDisplay === 'lbs' && toUnit === 'kg') {
-      return quantity / 2.20462
+      return quantity / 2.2
     }
     return quantity
   }

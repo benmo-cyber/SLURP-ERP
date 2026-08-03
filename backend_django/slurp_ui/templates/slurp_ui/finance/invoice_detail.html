@@ -1,0 +1,85 @@
+{% extends "slurp_ui/base.html" %}
+{% block title %}Invoice {{ invoice.invoice_number }} — SLURP{% endblock %}
+{% block content %}
+<div class="modal-page" style="max-width:900px">
+  <div style="display:flex;justify-content:space-between;align-items:start;gap:1rem;flex-wrap:wrap">
+    <div>
+      <h2>Invoice {{ invoice.invoice_number }}</h2>
+      <p style="color:#64748b;margin:0.25rem 0 0">
+        {{ status_label }} · {{ invoice.customer_vendor_name }}
+        {% if invoice.sales_order %} · SO {{ invoice.sales_order.so_number }}{% endif %}
+      </p>
+    </div>
+    <div style="display:flex;gap:0.5rem;flex-wrap:wrap">
+      <a class="btn btn-secondary" href="{% url 'slurp_ui:finance_invoice_pdf' invoice.id %}">View PDF</a>
+      <a class="btn btn-secondary" href="{% url 'slurp_ui:finance_invoice_pdf' invoice.id %}?download=1">Download PDF</a>
+      {% if invoice.status == 'draft' %}
+      <a class="btn btn-primary" href="{% url 'slurp_ui:finance_invoice_issue' invoice.id %}">Issue</a>
+      {% endif %}
+      {% if invoice.status == 'sent' or invoice.status == 'overdue' %}
+      <form method="post" action="{% url 'slurp_ui:finance_invoice_mark_paid' invoice.id %}" style="display:inline">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-primary" onclick="return confirm('Mark invoice paid?');">Mark paid</button>
+      </form>
+      {% endif %}
+      {% if invoice.status != 'cancelled' and invoice.status != 'paid' %}
+      <form method="post" action="{% url 'slurp_ui:finance_invoice_cancel' invoice.id %}" style="display:inline">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-danger"
+                onclick="return confirm('Void {{ invoice.invoice_number }}? Required before reversing an issued-invoice shipment.');">
+          Void
+        </button>
+      </form>
+      {% endif %}
+      <a class="btn btn-secondary" href="{% url 'slurp_ui:finance_invoices' %}">Back to list</a>
+    </div>
+  </div>
+
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem;margin:1.25rem 0">
+    <div><strong>Invoice date</strong><br>{{ invoice.invoice_date }}</div>
+    <div><strong>Due date</strong><br>{{ invoice.due_date|default:"—" }}</div>
+    <div><strong>Subtotal</strong><br>${{ invoice.subtotal|floatformat:2 }}</div>
+    <div><strong>Freight</strong><br>${{ invoice.freight|floatformat:2 }}</div>
+    <div><strong>Tax</strong><br>${{ invoice.tax|floatformat:2 }}</div>
+    <div><strong>Discount</strong><br>${{ invoice.discount|floatformat:2 }}</div>
+    <div><strong>Grand total</strong><br>${{ invoice.grand_total|floatformat:2 }}</div>
+    {% if invoice.sales_order %}
+    <div>
+      <strong>Carrier / tracking</strong><br>
+      {{ invoice.sales_order.carrier|default:"—" }} /
+      {{ invoice.sales_order.tracking_number|default:"—" }}
+    </div>
+    {% endif %}
+  </div>
+
+  {% if invoice.notes %}
+  <p style="color:#64748b;font-size:0.9rem;margin-bottom:1rem">{{ invoice.notes }}</p>
+  {% endif %}
+
+  <h3 style="margin-bottom:0.5rem">Lines</h3>
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Item</th>
+        <th>Description</th>
+        <th>Qty</th>
+        <th>Unit price</th>
+        <th>Total</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for line in invoice.items.all %}
+      <tr>
+        <td>{% if line.item %}{{ line.item.sku }}{% else %}—{% endif %}</td>
+        <td>{{ line.description|default:"—" }}</td>
+        <td>{{ line.quantity|floatformat:2 }}</td>
+        <td>${{ line.unit_price|floatformat:2 }}</td>
+        <td>${{ line.total|floatformat:2 }}</td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="5">No lines.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

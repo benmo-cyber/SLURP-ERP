@@ -1,0 +1,71 @@
+{% extends "slurp_ui/base_module.html" %}
+{% block title %}{% if rd %}{{ rd.name }}{% else %}New R&amp;D Formula{% endif %} — SLURP{% endblock %}
+{% block module_title %}Quality{% endblock %}
+{% block main %}
+<div style="max-width:1100px">
+  <div style="display:flex;justify-content:space-between;margin-bottom:1rem">
+    <h2 style="margin:0">{% if rd %}Edit{% else %}New{% endif %} R&amp;D formula</h2>
+    <a class="btn btn-secondary" href="{% url 'slurp_ui:quality_rd_formulas' %}">Back to list</a>
+  </div>
+  <form method="post">
+    {% csrf_token %}
+    <div style="display:grid;grid-template-columns:2fr 1fr;gap:0.75rem">
+      <div class="form-row"><label>Name *</label><input name="name" value="{{ rd.name|default:'' }}" required /></div>
+      <div class="form-row">
+        <label>Status</label>
+        <select name="status">
+          {% for val, label in status_choices %}
+          <option value="{{ val }}" {% if rd and rd.status == val %}selected{% elif not rd and val == 'draft' %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+    </div>
+    <div class="form-row"><label>Notes</label><textarea name="notes" rows="2">{{ rd.notes|default:'' }}</textarea></div>
+
+    <h3 style="margin-top:1rem">BOM lines</h3>
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Row</th>
+          <th>Type</th>
+          <th>Item</th>
+          <th>Description</th>
+          <th>Comp %</th>
+          <th>$/lb</th>
+          <th>Labor $</th>
+          <th>Cost</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in line_rows %}
+        <tr>
+          <td>{{ row.row_id }}</td>
+          <td>{{ row.line_type }}</td>
+          <td>
+            <select name="item_{{ forloop.counter0 }}">
+              <option value="">—</option>
+              {% for it in catalog_items %}
+              <option value="{{ it.id }}" {% if row.line and row.line.item_id == it.id %}selected{% endif %}>{{ it.sku }}</option>
+              {% endfor %}
+            </select>
+          </td>
+          <td><input name="desc_{{ forloop.counter0 }}" value="{% if row.line %}{{ row.line.description|default:'' }}{% endif %}" style="width:100%" /></td>
+          <td><input name="comp_{{ forloop.counter0 }}" type="number" step="any" value="{% if row.line and row.line.composition_pct != None %}{{ row.line.composition_pct }}{% endif %}" style="width:5rem" /></td>
+          <td><input name="price_{{ forloop.counter0 }}" type="number" step="any" value="{% if row.line and row.line.price_per_lb != None %}{{ row.line.price_per_lb }}{% endif %}" style="width:5rem" /></td>
+          <td><input name="labor_{{ forloop.counter0 }}" type="number" step="any" value="{% if row.line and row.line.labor_flat_amount != None %}{{ row.line.labor_flat_amount }}{% endif %}" style="width:5rem" /></td>
+          <td>{% if row.line and row.line.formula_cost != None %}${{ row.line.formula_cost|floatformat:2 }}{% else %}—{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <p style="margin-top:0.75rem"><strong>Total estimated cost:</strong> ${{ total_cost|floatformat:2 }}/lb</p>
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">Save formula</button>
+      {% if rd %}
+      <button type="submit" name="action" value="delete" class="btn btn-danger" onclick="return confirm('Delete this R&amp;D formula?');">Delete</button>
+      {% endif %}
+    </div>
+  </form>
+</div>
+{% endblock %}
+

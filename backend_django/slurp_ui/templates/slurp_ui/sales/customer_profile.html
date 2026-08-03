@@ -1,0 +1,141 @@
+{% extends "slurp_ui/base_module.html" %}
+{% block title %}{{ customer.name }} — SLURP{% endblock %}
+{% block module_title %}{{ customer.name }}{% endblock %}
+{% block header_actions %}
+  <a href="{% url 'slurp_ui:sales' %}" class="btn btn-secondary">CRM</a>
+  <a href="{% url 'slurp_ui:sales_create_order' %}?customer={{ customer.pk }}" class="btn btn-primary">Create SO</a>
+{% endblock %}
+{% block main %}
+<p style="color:#64748b;margin-top:0">{{ customer.customer_id }}{% if customer.payment_terms %} · {{ customer.payment_terms }}{% endif %}</p>
+<nav style="display:flex;flex-wrap:wrap;gap:0.5rem;margin:1rem 0;border-bottom:1px solid #e2e8f0;padding-bottom:0.5rem">
+  {% for tid, tlabel in tabs %}
+  <a href="?tab={{ tid }}" class="btn btn-secondary {% if tab == tid %}active{% endif %}">{{ tlabel }}</a>
+  {% endfor %}
+</nav>
+
+{% if tab == "overview" %}
+<form method="post">
+  {% csrf_token %}
+  <input type="hidden" name="action" value="save_profile" />
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem">
+    <div class="form-row"><label>Name</label><input name="name" value="{{ customer.name }}" required /></div>
+    <div class="form-row"><label>Contact</label><input name="contact_name" value="{{ customer.contact_name|default:'' }}" /></div>
+    <div class="form-row"><label>Email</label><input type="email" name="email" value="{{ customer.email|default:'' }}" /></div>
+    <div class="form-row"><label>Phone</label><input name="phone" value="{{ customer.phone|default:'' }}" /></div>
+    <div class="form-row"><label>Payment terms</label><input name="payment_terms" value="{{ customer.payment_terms|default:'' }}" /></div>
+    <div class="form-row"><label><input type="checkbox" name="is_active" {% if customer.is_active %}checked{% endif %} /> Active</label></div>
+  </div>
+  <div class="form-row"><label>HQ address</label><textarea name="address" rows="2">{{ customer.address|default:'' }}</textarea></div>
+  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:0.5rem">
+    <div class="form-row"><label>City</label><input name="city" value="{{ customer.city|default:'' }}" /></div>
+    <div class="form-row"><label>State</label><input name="state" value="{{ customer.state|default:'' }}" /></div>
+    <div class="form-row"><label>ZIP</label><input name="zip_code" value="{{ customer.zip_code|default:'' }}" /></div>
+    <div class="form-row"><label>Country</label><input name="country" value="{{ customer.country|default:'USA' }}" /></div>
+  </div>
+  <div class="form-row"><label>Notes</label><textarea name="notes" rows="2">{{ customer.notes|default:'' }}</textarea></div>
+  <button type="submit" class="btn btn-primary">Save profile</button>
+</form>
+
+{% elif tab == "pricing" %}
+<p><a href="{% url 'slurp_ui:sales_customer_pricing_new' customer.pk %}" class="btn btn-primary">+ Add pricing</a></p>
+<table class="data-table">
+  <thead><tr><th>SKU</th><th>Price</th><th>UoM</th><th>Effective</th><th>Expiry</th><th>Active</th><th></th></tr></thead>
+  <tbody>
+    {% for p in pricing %}
+    <tr>
+      <td>{{ p.item.sku }}</td>
+      <td>${{ p.unit_price }}</td>
+      <td>{{ p.unit_of_measure }}</td>
+      <td>{{ p.effective_date }}</td>
+      <td>{{ p.expiry_date|default:"—" }}</td>
+      <td>{% if p.is_active %}Yes{% else %}No{% endif %}</td>
+      <td><a href="{% url 'slurp_ui:sales_customer_pricing_edit' customer.pk p.pk %}">Edit</a></td>
+    </tr>
+    {% empty %}<tr><td colspan="7">No pricing records.</td></tr>{% endfor %}
+  </tbody>
+</table>
+
+{% elif tab == "ship-to" %}
+<p><a href="{% url 'slurp_ui:sales_customer_ship_to_new' customer.pk %}" class="btn btn-primary">+ Add ship-to</a></p>
+<table class="data-table">
+  <thead><tr><th>Name</th><th>Address</th><th>Default</th><th>Active</th><th></th></tr></thead>
+  <tbody>
+    {% for loc in ship_tos %}
+    <tr>
+      <td>{{ loc.location_name }}</td>
+      <td>{{ loc.address }}, {{ loc.city }} {{ loc.state }} {{ loc.zip_code }}</td>
+      <td>{% if loc.is_default %}Yes{% else %}—{% endif %}</td>
+      <td>{% if loc.is_active %}Yes{% else %}No{% endif %}</td>
+      <td><a href="{% url 'slurp_ui:sales_customer_ship_to_edit' customer.pk loc.pk %}">Edit</a></td>
+    </tr>
+    {% empty %}<tr><td colspan="5">No ship-to locations.</td></tr>{% endfor %}
+  </tbody>
+</table>
+
+{% elif tab == "contacts" %}
+<p><a href="{% url 'slurp_ui:sales_customer_contact_new' customer.pk %}" class="btn btn-primary">+ Add contact</a></p>
+<table class="data-table">
+  <thead><tr><th>Name</th><th>Type</th><th>Email</th><th>Phone</th><th>Flags</th><th></th></tr></thead>
+  <tbody>
+    {% for c in contacts %}
+    <tr>
+      <td>{{ c.first_name }} {{ c.last_name }}{% if c.is_primary %} ★{% endif %}</td>
+      <td>{{ c.get_contact_type_display }}</td>
+      <td>{{ c.emails|join:", "|default:"—" }}</td>
+      <td>{{ c.phone|default:"—" }}</td>
+      <td>{% if c.is_ap_contact %}AP {% endif %}{% if c.is_purchasing_contact %}Purch{% endif %}</td>
+      <td><a href="{% url 'slurp_ui:sales_customer_contact_edit' customer.pk c.pk %}">Edit</a></td>
+    </tr>
+    {% empty %}<tr><td colspan="6">No contacts.</td></tr>{% endfor %}
+  </tbody>
+</table>
+
+{% elif tab == "sales-calls" %}
+<p><a href="{% url 'slurp_ui:sales_customer_call_new' customer.pk %}" class="btn btn-primary">+ Log call</a></p>
+<table class="data-table">
+  <thead><tr><th>Date</th><th>Type</th><th>Subject</th><th>Contact</th><th></th></tr></thead>
+  <tbody>
+    {% for call in sales_calls %}
+    <tr>
+      <td>{{ call.call_date|date:"M j, Y g:i A" }}</td>
+      <td>{{ call.get_call_type_display }}</td>
+      <td>{{ call.subject|default:"—" }}</td>
+      <td>{% if call.contact %}{{ call.contact.first_name }} {{ call.contact.last_name }}{% else %}—{% endif %}</td>
+      <td><a href="{% url 'slurp_ui:sales_customer_call_edit' customer.pk call.pk %}">Edit</a></td>
+    </tr>
+    {% empty %}<tr><td colspan="5">No sales calls.</td></tr>{% endfor %}
+  </tbody>
+</table>
+
+{% elif tab == "forecast" %}
+<p><a href="{% url 'slurp_ui:sales_customer_forecast_new' customer.pk %}" class="btn btn-primary">+ Add forecast</a></p>
+<table class="data-table">
+  <thead><tr><th>Period</th><th>SKU</th><th>Qty</th><th>UoM</th><th></th></tr></thead>
+  <tbody>
+    {% for f in forecasts %}
+    <tr>
+      <td>{{ f.forecast_period }}</td>
+      <td>{{ f.item.sku }}</td>
+      <td>{{ f.forecast_quantity }}</td>
+      <td>{{ f.unit_of_measure }}</td>
+      <td><a href="{% url 'slurp_ui:sales_customer_forecast_edit' customer.pk f.pk %}">Edit</a></td>
+    </tr>
+    {% empty %}<tr><td colspan="5">No forecasts.</td></tr>{% endfor %}
+  </tbody>
+</table>
+
+{% elif tab == "usage" %}
+<table class="data-table">
+  <thead><tr><th>SKU</th><th>Name</th><th>Shipped qty</th></tr></thead>
+  <tbody>
+    {% for row in usage_rows %}
+    <tr>
+      <td>{{ row.items__item__sku|default:"—" }}</td>
+      <td>{{ row.items__item__name|default:"—" }}</td>
+      <td>{{ row.total_qty|default:0 }}</td>
+    </tr>
+    {% empty %}<tr><td colspan="3">No shipped volume on file.</td></tr>{% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endblock %}

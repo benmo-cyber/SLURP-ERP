@@ -87,9 +87,9 @@ function AdjustBatch({ batch, onClose, onSuccess }: AdjustBatchProps) {
           let displayQty = storedQty
           if (quantityUnit !== lotUnit) {
             if (quantityUnit === 'kg' && lotUnit === 'lbs') {
-              displayQty = storedQty / 2.20462
+              displayQty = storedQty / 2.2
             } else if (quantityUnit === 'lbs' && lotUnit === 'kg') {
-              displayQty = storedQty * 2.20462
+              displayQty = storedQty * 2.2
             }
           }
           
@@ -134,9 +134,9 @@ function AdjustBatch({ batch, onClose, onSuccess }: AdjustBatchProps) {
           let displayQty = storedQty
           if (quantityUnit !== lotUnit) {
             if (quantityUnit === 'kg' && lotUnit === 'lbs') {
-              displayQty = storedQty / 2.20462
+              displayQty = storedQty / 2.2
             } else if (quantityUnit === 'lbs' && lotUnit === 'kg') {
-              displayQty = storedQty * 2.20462
+              displayQty = storedQty * 2.2
             }
           }
           
@@ -194,11 +194,11 @@ function AdjustBatch({ batch, onClose, onSuccess }: AdjustBatchProps) {
   const convertWeight = (value: number, from: 'lbs' | 'kg', to: 'lbs' | 'kg'): number => {
     if (from === to) return normalizeMassQuantity(value)
     if (from === 'lbs' && to === 'kg') {
-      const converted = value / 2.20462
+      const converted = value / 2.2
       return normalizeMassQuantity(Math.round(converted * 100) / 100)
     }
     if (from === 'kg' && to === 'lbs') {
-      const converted = value * 2.20462
+      const converted = value * 2.2
       return normalizeMassQuantity(Math.round(converted * 100) / 100)
     }
     return value
@@ -262,9 +262,9 @@ function AdjustBatch({ batch, onClose, onSuccess }: AdjustBatchProps) {
       // Convert quantity if needed and round to 2 decimal places
       let quantityToProduce = parseFloat(quantity)
       if (quantityUnit === 'kg' && batchDetails?.finished_good_item?.unit_of_measure === 'lbs') {
-        quantityToProduce = quantityToProduce * 2.20462
+        quantityToProduce = quantityToProduce * 2.2
       } else if (quantityUnit === 'lbs' && batchDetails?.finished_good_item?.unit_of_measure === 'kg') {
-        quantityToProduce = quantityToProduce / 2.20462
+        quantityToProduce = quantityToProduce / 2.2
       }
       quantityToProduce = normalizeMassQuantity(Math.round(quantityToProduce * 100) / 100)
 

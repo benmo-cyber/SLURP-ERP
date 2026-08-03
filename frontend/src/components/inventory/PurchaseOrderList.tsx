@@ -754,11 +754,11 @@ function PurchaseOrderList() {
       let qty = parseFloat(d.quantity) || 0
       let uc = parseFloat(d.unit_cost) || 0
       if (d.order_uom === 'lbs' && newUom === 'kg') {
-        qty = qty / 2.20462
-        uc = uc * 2.20462
+        qty = qty / 2.2
+        uc = uc * 2.2
       } else if (d.order_uom === 'kg' && newUom === 'lbs') {
-        qty = qty * 2.20462
-        uc = uc / 2.20462
+        qty = qty * 2.2
+        uc = uc / 2.2
       }
       return {
         ...prev,
@@ -1039,9 +1039,9 @@ function PurchaseOrderList() {
   const convertQuantity = (quantity: number, itemUnit: string) => {
     if (itemUnit === 'ea') return formatNumber(quantity, 0)
     if (unitDisplay === 'kg' && itemUnit === 'lbs') {
-      return formatNumber(quantity * 0.453592)
+      return formatNumber(quantity / 2.2)
     } else if (unitDisplay === 'lbs' && itemUnit === 'kg') {
-      return formatNumber(quantity * 2.20462)
+      return formatNumber(quantity * 2.2)
     }
     return formatNumber(quantity)
   }
@@ -1065,9 +1065,9 @@ function PurchaseOrderList() {
         continue
       }
       if (unitDisplay === 'kg' && lineUom === 'lbs') {
-        total += qty * 0.453592
+        total += qty / 2.2
       } else if (unitDisplay === 'lbs' && lineUom === 'kg') {
-        total += qty * 2.20462
+        total += qty * 2.2
       } else {
         total += qty
       }

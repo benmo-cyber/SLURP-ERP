@@ -1,0 +1,32 @@
+{% extends "slurp_ui/base.html" %}
+{% block title %}Issue {{ invoice.invoice_number }} — SLURP{% endblock %}
+{% block content %}
+<div class="modal-page" style="max-width:560px">
+  <h2>Issue invoice {{ invoice.invoice_number }}</h2>
+  <p style="color:#64748b;margin-bottom:1rem">
+    Moves status from Draft → Issued (sent) and emails the PDF (best-effort).
+    Carrier and tracking are required on the sales order.
+  </p>
+
+  <form method="post">
+    {% csrf_token %}
+    {% if so %}
+    <div class="form-row">
+      <label for="carrier">Carrier *</label>
+      <input id="carrier" name="carrier" value="{{ so.carrier|default:'' }}" required />
+    </div>
+    <div class="form-row">
+      <label for="tracking_number">Tracking number *</label>
+      <input id="tracking_number" name="tracking_number" value="{{ so.tracking_number|default:'' }}" required />
+    </div>
+    {% else %}
+    <p>No linked sales order — issue will proceed without carrier/tracking check.</p>
+    {% endif %}
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary"
+              onclick="return confirm('Issue {{ invoice.invoice_number }}?');">Issue invoice</button>
+      <a class="btn btn-secondary" href="{% url 'slurp_ui:finance_invoice_detail' invoice.id %}">Cancel</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

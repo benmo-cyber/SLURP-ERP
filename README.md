@@ -69,6 +69,14 @@ From the repo root in PowerShell:
 
 This opens two windows: `backend_django\run-server.ps1` (Python 3.12 venv) and `npm run dev` in `frontend/`.
 
+### SLURP 2.0 (Django templates — branch `SLURP-2.0`)
+
+Server-rendered UI lives in `backend_django/slurp_ui/`. With Django running, open:
+
+**http://127.0.0.1:8000/**
+
+(Legacy React remains on Vite **http://localhost:5173/** against `/api/`.) Port status: `docs/SLURP_2_PORT_REPORT.md`.
+
 ## Vendor addresses (list + detail)
 
 The API adds **`display_address`** on each vendor (built from street/city/legacy `address` and supplier survey JSON). The Vendor Approval table and vendor Overview use this.

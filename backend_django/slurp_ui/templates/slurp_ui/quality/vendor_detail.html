@@ -1,0 +1,619 @@
+{% extends "slurp_ui/base_module.html" %}
+
+{% block title %}{{ vendor.name }} — SLURP{% endblock %}
+
+{% block module_title %}Quality{% endblock %}
+
+{% block main %}
+
+<div class="vendor-detail" style="max-width:1100px">
+
+  <div style="display:flex;justify-content:space-between;gap:1rem;flex-wrap:wrap;align-items:start;margin-bottom:1rem">
+
+    <div>
+
+      <h2 style="margin:0">{{ vendor.name }}</h2>
+
+      <p style="color:#64748b;margin:0.25rem 0 0">{{ vendor.approval_status }} · {{ display_address|default:"No address" }}</p>
+
+    </div>
+
+    <a class="btn btn-secondary" href="{% url 'slurp_ui:quality' %}">Back to vendors</a>
+
+  </div>
+
+
+
+  <div class="vendor-detail-tabs" style="display:flex;flex-wrap:wrap;gap:0.35rem;margin-bottom:1rem;border-bottom:1px solid #e2e8f0;padding-bottom:0.5rem">
+
+    {% for t in vendor_tabs %}
+
+    <a href="?tab={{ t }}" class="btn btn-secondary{% if tab == t %} btn-primary{% endif %}" style="text-transform:capitalize">{{ t }}</a>
+
+    {% endfor %}
+
+  </div>
+
+
+
+  {% if tab == 'overview' %}
+
+  {% if vendor.approval_status != 'approved' %}
+
+  <form method="post" style="margin-bottom:1rem">
+
+    {% csrf_token %}
+
+    <input type="hidden" name="action" value="approve" />
+
+    <button type="submit" class="btn btn-primary" onclick="return confirm('Approve {{ vendor.name }}?');">Approve vendor</button>
+
+  </form>
+
+  {% endif %}
+
+  <form method="post">
+
+    {% csrf_token %}
+
+    <input type="hidden" name="action" value="save" />
+
+    <input type="hidden" name="tab" value="overview" />
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem">
+
+      <div class="form-row"><label for="name">Name *</label><input id="name" name="name" value="{{ vendor.name }}" required /></div>
+
+      <div class="form-row"><label for="vendor_id">Vendor ID</label><input id="vendor_id" name="vendor_id" value="{{ vendor.vendor_id|default:'' }}" /></div>
+
+      <div class="form-row">
+
+        <label for="approval_status">Approval status</label>
+
+        <select id="approval_status" name="approval_status">
+
+          {% for val, label in approval_choices %}
+
+          <option value="{{ val }}" {% if vendor.approval_status == val %}selected{% endif %}>{{ label }}</option>
+
+          {% endfor %}
+
+        </select>
+
+      </div>
+
+      <div class="form-row">
+
+        <label for="risk_profile">Risk</label>
+
+        <select id="risk_profile" name="risk_profile">
+
+          {% for val, label in risk_choices %}
+
+          <option value="{{ val }}" {% if vendor.risk_profile == val %}selected{% endif %}>{{ label }}</option>
+
+          {% endfor %}
+
+        </select>
+
+      </div>
+
+      <div class="form-row"><label for="contact_name">Contact</label><input id="contact_name" name="contact_name" value="{{ vendor.contact_name|default:'' }}" /></div>
+
+      <div class="form-row"><label for="email">Email</label><input id="email" name="email" type="email" value="{{ vendor.email|default:'' }}" /></div>
+
+      <div class="form-row"><label for="phone">Phone</label><input id="phone" name="phone" value="{{ vendor.phone|default:'' }}" /></div>
+
+      <div class="form-row"><label for="payment_terms">Payment terms</label><input id="payment_terms" name="payment_terms" value="{{ vendor.payment_terms|default:'' }}" /></div>
+
+    </div>
+
+    <div class="form-row" style="margin-top:0.75rem">
+
+      <label><input type="checkbox" name="is_service_vendor" {% if vendor.is_service_vendor %}checked{% endif %} /> Service vendor</label>
+
+    </div>
+
+    <div class="form-row">
+
+      <label for="service_vendor_type">Service type</label>
+
+      <select id="service_vendor_type" name="service_vendor_type">
+
+        <option value="">—</option>
+
+        {% for val, label in service_type_choices %}
+
+        {% if val %}<option value="{{ val }}" {% if vendor.service_vendor_type == val %}selected{% endif %}>{{ label }}</option>{% endif %}
+
+        {% endfor %}
+
+      </select>
+
+    </div>
+
+    <h3 style="margin:1rem 0 0.5rem">Address</h3>
+
+    <div class="form-row"><label for="street_address">Street</label><input id="street_address" name="street_address" value="{{ vendor.street_address|default:'' }}" /></div>
+
+    <div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr;gap:0.5rem">
+
+      <div class="form-row"><label>City</label><input name="city" value="{{ vendor.city|default:'' }}" /></div>
+
+      <div class="form-row"><label>State</label><input name="state" value="{{ vendor.state|default:'' }}" /></div>
+
+      <div class="form-row"><label>ZIP</label><input name="zip_code" value="{{ vendor.zip_code|default:'' }}" /></div>
+
+      <div class="form-row"><label>Country</label><input name="country" value="{{ vendor.country|default:'USA' }}" /></div>
+
+    </div>
+
+    <div class="form-row"><label for="notes">Notes</label><textarea id="notes" name="notes" rows="2">{{ vendor.notes|default:'' }}</textarea></div>
+
+    <div class="form-actions"><button type="submit" class="btn btn-primary">Save</button></div>
+
+  </form>
+
+
+
+  {% elif tab == 'contacts' %}
+
+  <h3>Contacts</h3>
+
+  {% if edit_contact %}
+
+  <form method="post" style="margin:1rem 0;padding:1rem;border:1px solid #e2e8f0;border-radius:6px">
+
+    {% csrf_token %}
+
+    <input type="hidden" name="action" value="save_contact" />
+
+    <input type="hidden" name="contact_id" value="{{ edit_contact.id }}" />
+
+    <div class="form-row"><label>Name *</label><input name="contact_name" value="{{ edit_contact.name }}" required /></div>
+
+    <div class="form-row"><label>Title</label><input name="contact_title" value="{{ edit_contact.title|default:'' }}" /></div>
+
+    <div class="form-row"><label>Emails (one per line)</label><textarea name="contact_emails" rows="3">{% for e in edit_contact.emails %}{{ e }}{% if not forloop.last %}
+
+{% endif %}{% endfor %}</textarea></div>
+
+    <div class="form-row"><label>Phone</label><input name="contact_phone" value="{{ edit_contact.phone|default:'' }}" /></div>
+
+    <div class="form-row"><label>Location / port</label><input name="contact_location" value="{{ edit_contact.location_label|default:'' }}" /></div>
+
+    <div class="form-row"><label>Notes</label><input name="contact_notes" value="{{ edit_contact.notes|default:'' }}" /></div>
+
+    <div class="form-actions">
+
+      <a class="btn btn-secondary" href="?tab=contacts">Cancel</a>
+
+      <button type="submit" class="btn btn-primary">Save contact</button>
+
+    </div>
+
+  </form>
+
+  {% else %}
+
+  <details style="margin-bottom:1rem">
+
+    <summary class="btn btn-primary" style="display:inline-block;cursor:pointer">Add contact</summary>
+
+    <form method="post" style="margin-top:1rem;padding:1rem;border:1px solid #e2e8f0;border-radius:6px">
+
+      {% csrf_token %}
+
+      <input type="hidden" name="action" value="save_contact" />
+
+      <div class="form-row"><label>Name *</label><input name="contact_name" required /></div>
+
+      <div class="form-row"><label>Title</label><input name="contact_title" /></div>
+
+      <div class="form-row"><label>Emails</label><textarea name="contact_emails" rows="3"></textarea></div>
+
+      <div class="form-row"><label>Phone</label><input name="contact_phone" /></div>
+
+      <div class="form-row"><label>Location / port</label><input name="contact_location" /></div>
+
+      <div class="form-row"><label>Notes</label><input name="contact_notes" /></div>
+
+      <button type="submit" class="btn btn-primary">Add contact</button>
+
+    </form>
+
+  </details>
+
+  {% endif %}
+
+  <table class="data-table">
+
+    <thead><tr><th>Name</th><th>Title</th><th>Location</th><th>Email(s)</th><th>Phone</th><th></th></tr></thead>
+
+    <tbody>
+
+      {% for c in contacts %}
+
+      <tr>
+
+        <td>{{ c.name }}</td>
+
+        <td>{{ c.title|default:"—" }}</td>
+
+        <td>{{ c.location_label|default:"—" }}</td>
+
+        <td>{% if c.emails %}{{ c.emails|join:", " }}{% else %}—{% endif %}</td>
+
+        <td>{{ c.phone|default:"—" }}</td>
+
+        <td style="white-space:nowrap">
+
+          <a class="btn btn-secondary btn-sm" href="?tab=contacts&amp;edit_contact={{ c.id }}">Edit</a>
+
+          <form method="post" style="display:inline" onsubmit="return confirm('Delete contact?');">
+
+            {% csrf_token %}
+
+            <input type="hidden" name="action" value="delete_contact" />
+
+            <input type="hidden" name="contact_id" value="{{ c.id }}" />
+
+            <button type="submit" class="btn btn-danger btn-sm">Delete</button>
+
+          </form>
+
+        </td>
+
+      </tr>
+
+      {% empty %}
+
+      <tr><td colspan="6">No contacts yet.</td></tr>
+
+      {% endfor %}
+
+    </tbody>
+
+  </table>
+
+
+
+  {% elif tab == 'survey' %}
+
+  {% if survey %}
+
+  <h3>Supplier Quality Survey</h3>
+
+  <p><strong>Status:</strong> {{ survey.get_status_display }}</p>
+
+  {% if survey.status != 'approved' %}
+
+  <form method="post" style="margin:1rem 0">
+
+    {% csrf_token %}
+
+    <input type="hidden" name="action" value="approve_survey" />
+
+    <button type="submit" class="btn btn-primary">Approve survey</button>
+
+  </form>
+
+  {% endif %}
+
+  {% if survey.company_info %}
+
+  <h4>Company information</h4>
+
+  <pre style="background:#f8fafc;padding:0.75rem;overflow:auto">{{ survey.company_info }}</pre>
+
+  {% endif %}
+
+  {% if survey.compliance_responses %}
+
+  <h4>Compliance responses</h4>
+
+  <pre style="background:#f8fafc;padding:0.75rem;overflow:auto">{{ survey.compliance_responses }}</pre>
+
+  {% endif %}
+
+  {% if survey.quality_program_responses %}
+
+  <h4>Quality program</h4>
+
+  <pre style="background:#f8fafc;padding:0.75rem;overflow:auto">{{ survey.quality_program_responses }}</pre>
+
+  {% endif %}
+
+  {% else %}
+
+  <p>No survey has been submitted for this vendor yet.</p>
+
+  {% endif %}
+
+
+
+  {% elif tab == 'documents' %}
+
+  <h3>Required documents</h3>
+
+  <ul style="list-style:none;padding:0">
+
+    {% for row in doc_checklist %}
+
+    <li style="margin-bottom:0.35rem">
+
+      {% if row.doc %}✓{% else %}○{% endif %}
+
+      {{ row.label }}
+
+      {% if row.doc %}<a href="{% url 'slurp_ui:quality_vendor_document_download' vendor.id row.doc.id %}" target="_blank">View</a>{% endif %}
+
+    </li>
+
+    {% endfor %}
+
+  </ul>
+
+  <h4 style="margin-top:1.5rem">Upload document</h4>
+
+  <form method="post" enctype="multipart/form-data" style="max-width:520px">
+
+    {% csrf_token %}
+
+    <input type="hidden" name="action" value="upload_document" />
+
+    <div class="form-row">
+
+      <label>Type</label>
+
+      <select name="document_type" required>
+
+        {% for val, label in document_type_choices %}
+
+        <option value="{{ val }}">{{ label }}</option>
+
+        {% endfor %}
+
+      </select>
+
+    </div>
+
+    <div class="form-row"><label>Name</label><input name="document_name" required /></div>
+
+    <div class="form-row"><label>File</label><input type="file" name="file" accept=".pdf,.doc,.docx" required /></div>
+
+    <button type="submit" class="btn btn-primary">Upload</button>
+
+  </form>
+
+  {% if documents %}
+
+  <h4 style="margin-top:1.5rem">Uploaded documents</h4>
+
+  <table class="data-table">
+
+    <thead><tr><th>Name</th><th>Type</th><th>Uploaded</th><th>Expiration</th><th></th></tr></thead>
+
+    <tbody>
+
+      {% for doc in documents %}
+
+      <tr>
+
+        <td>{{ doc.document_name }}</td>
+
+        <td>{{ doc.get_document_type_display }}</td>
+
+        <td>{{ doc.uploaded_at|date:"M j, Y" }}</td>
+
+        <td>{{ doc.expiration_date|date:"M j, Y"|default:"—" }}</td>
+
+        <td><a class="btn btn-secondary btn-sm" href="{% url 'slurp_ui:quality_vendor_document_download' vendor.id doc.id %}" target="_blank">View</a></td>
+
+      </tr>
+
+      {% endfor %}
+
+    </tbody>
+
+  </table>
+
+  {% endif %}
+
+
+
+  {% elif tab == 'items' %}
+
+  <h3>Approved items</h3>
+
+  <table class="data-table">
+
+    <thead><tr><th>SKU</th><th>Name</th><th>UOM</th><th>Pack</th><th>Price</th><th>YTD usage</th></tr></thead>
+
+    <tbody>
+
+      {% for row in vendor_items %}
+
+      <tr>
+
+        <td>{{ row.item.sku }}</td>
+
+        <td>{{ row.item.name }}</td>
+
+        <td>{{ row.item.unit_of_measure }}</td>
+
+        <td>{% if row.item.pack_size %}{{ row.item.pack_size }} {{ row.item.unit_of_measure }}{% else %}—{% endif %}</td>
+
+        <td>{% if row.item.price %}${{ row.item.price|floatformat:2 }}{% else %}—{% endif %}</td>
+
+        <td>{{ row.ytd_usage|floatformat:2 }} {{ row.item.unit_of_measure }}</td>
+
+      </tr>
+
+      {% empty %}
+
+      <tr><td colspan="6">No items for this vendor.</td></tr>
+
+      {% endfor %}
+
+    </tbody>
+
+  </table>
+
+
+
+  {% elif tab == 'exceptions' %}
+
+  <h3>Temporary exceptions</h3>
+
+  <details style="margin-bottom:1rem">
+
+    <summary class="btn btn-primary" style="display:inline-block;cursor:pointer">Request exception</summary>
+
+    <form method="post" style="margin-top:1rem;max-width:640px">
+
+      {% csrf_token %}
+
+      <input type="hidden" name="action" value="add_exception" />
+
+      <div class="form-row"><label>Material / commodity *</label><input name="material_commodity" required /></div>
+
+      <div class="form-row"><label>Country of origin</label><input name="country_of_origin" /></div>
+
+      <div class="form-row"><label>Intended use *</label><textarea name="intended_use" rows="2" required></textarea></div>
+
+      <div class="form-row"><label>PO #</label><input name="po_number" /></div>
+
+      <div class="form-row"><label>Lot #</label><input name="lot_number" /></div>
+
+      <div class="form-row"><label>Justification *</label><textarea name="justification" rows="3" required></textarea></div>
+
+      <div class="form-row"><label>Risk summary</label><textarea name="risk_summary" rows="2"></textarea></div>
+
+      <button type="submit" class="btn btn-primary">Submit request</button>
+
+    </form>
+
+  </details>
+
+  <table class="data-table">
+
+    <thead><tr><th>Material</th><th>Status</th><th>Requested</th><th>PO / Lot</th><th></th></tr></thead>
+
+    <tbody>
+
+      {% for exc in exceptions %}
+
+      <tr>
+
+        <td>{{ exc.material_commodity }}</td>
+
+        <td>{{ exc.get_status_display }}</td>
+
+        <td>{{ exc.requested_date|date:"M j, Y" }}</td>
+
+        <td>{{ exc.po_number|default:"—" }} / {{ exc.lot_number|default:"—" }}</td>
+
+        <td>
+
+          {% if exc.status == 'pending' %}
+
+          <form method="post" style="display:inline">
+
+            {% csrf_token %}
+
+            <input type="hidden" name="action" value="approve_exception" />
+
+            <input type="hidden" name="exception_id" value="{{ exc.id }}" />
+
+            <button type="submit" class="btn btn-primary btn-sm">Approve</button>
+
+          </form>
+
+          {% endif %}
+
+        </td>
+
+      </tr>
+
+      {% empty %}
+
+      <tr><td colspan="5">No exceptions on file.</td></tr>
+
+      {% endfor %}
+
+    </tbody>
+
+  </table>
+
+
+
+  {% elif tab == 'history' %}
+
+  <h3>Vendor history</h3>
+
+  <form method="post" style="max-width:640px;margin-bottom:1rem">
+
+    {% csrf_token %}
+
+    <input type="hidden" name="action" value="add_history" />
+
+    <div class="form-row">
+
+      <label>Type</label>
+
+      <select name="history_type">
+
+        {% for val, label in history_type_choices %}
+
+        <option value="{{ val }}">{{ label }}</option>
+
+        {% endfor %}
+
+      </select>
+
+    </div>
+
+    <div class="form-row"><label>Description *</label><textarea name="description" rows="3" required></textarea></div>
+
+    <button type="submit" class="btn btn-primary">Add entry</button>
+
+  </form>
+
+  <table class="data-table">
+
+    <thead><tr><th>Date</th><th>Type</th><th>Description</th><th>By</th></tr></thead>
+
+    <tbody>
+
+      {% for h in history_entries %}
+
+      <tr>
+
+        <td>{{ h.date|date:"M j, Y" }}</td>
+
+        <td>{{ h.get_history_type_display }}</td>
+
+        <td>{{ h.description }}</td>
+
+        <td>{{ h.created_by|default:"—" }}</td>
+
+      </tr>
+
+      {% empty %}
+
+      <tr><td colspan="4">No history entries.</td></tr>
+
+      {% endfor %}
+
+    </tbody>
+
+  </table>
+
+  {% endif %}
+
+</div>
+
+{% endblock %}
+
+

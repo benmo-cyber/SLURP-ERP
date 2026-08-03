@@ -282,10 +282,10 @@ function AllocateModal({ salesOrderId, onClose, onSuccess }: AllocateModalProps)
   const convertQuantity = (quantity: number, unit: string): number => {
     const u = (unit || '').toLowerCase()
     if (unitDisplay === 'kg' && u === 'lbs') {
-      return quantity * 0.453592  // lbs → kg
+      return quantity / 2.2  // lbs → kg
     }
     if (unitDisplay === 'lbs' && u === 'kg') {
-      return quantity * 2.20462  // kg → lbs
+      return quantity * 2.2  // kg → lbs
     }
     return quantity
   }
@@ -294,10 +294,10 @@ function AllocateModal({ salesOrderId, onClose, onSuccess }: AllocateModalProps)
   const convertDisplayToUnit = (value: number, lotUnit: string): number => {
     const u = (lotUnit || '').toLowerCase()
     if (unitDisplay === 'lbs' && u === 'kg') {
-      return value / 2.20462  // user entered lbs → store kg
+      return value / 2.2  // user entered lbs → store kg
     }
     if (unitDisplay === 'kg' && u === 'lbs') {
-      return value / 0.453592  // user entered kg → store lbs (1/0.453592 = 2.20462)
+      return value * 2.2  // user entered kg → store lbs
     }
     return value
   }

@@ -1,0 +1,33 @@
+{% extends "slurp_ui/base.html" %}
+{% block content %}
+<div class="{{ module }}-page">
+  <header class="{{ module }}-header">
+    <h1>{% block module_title %}{% endblock %}</h1>
+    <div class="{{ module }}-header-actions">
+      {% block header_actions %}{% endblock %}
+    </div>
+  </header>
+  <div class="{{ module }}-layout">
+    <nav class="{{ module }}-sidebar">
+      {% for section in sidebar_nav %}
+      <div class="{{ module }}-nav-section">
+        <div class="{{ module }}-nav-section-label">{{ section.label }}</div>
+        <ul class="{{ module }}-nav-list">
+          {% for item in section.items %}
+          <li>
+            <a href="{% url item.url_name %}"
+               class="{{ module }}-nav-item {% if active_tab == item.id %}active{% endif %}">
+              {{ item.label }}
+            </a>
+          </li>
+          {% endfor %}
+        </ul>
+      </div>
+      {% endfor %}
+    </nav>
+    <main class="{{ module }}-main">
+      {% block main %}{% endblock %}
+    </main>
+  </div>
+</div>
+{% endblock %}

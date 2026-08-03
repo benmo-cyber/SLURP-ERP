@@ -331,9 +331,9 @@ function CheckOutModal({ onClose, onSuccess }: CheckOutModalProps) {
 
   const convertQuantity = (quantity: number, unit: string): number => {
     if (unitDisplay === 'kg' && unit === 'lbs') {
-      return quantity * 0.453592
+      return quantity / 2.2
     } else if (unitDisplay === 'lbs' && unit === 'kg') {
-      return quantity * 2.20462
+      return quantity * 2.2
     }
     return quantity
   }

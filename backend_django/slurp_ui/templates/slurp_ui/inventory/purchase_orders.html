@@ -1,0 +1,70 @@
+{% extends "slurp_ui/base_module.html" %}
+{% block title %}Purchase Orders — SLURP{% endblock %}
+{% block module_title %}Inventory{% endblock %}
+{% block header_actions %}
+  <a href="{% url 'slurp_ui:inventory_create_po' %}" class="btn btn-primary">Create Purchase Order</a>
+{% endblock %}
+{% block main %}
+<table class="data-table">
+  <thead>
+    <tr>
+      <th>PO #</th>
+      <th>Vendor</th>
+      <th>Status</th>
+      <th>Order date</th>
+      <th>Required</th>
+      <th>Total</th>
+      <th>Lines</th>
+      <th>Actions</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for po in purchase_orders %}
+    <tr>
+      <td>{{ po.po_number }}{% if po.revision_number %} (r{{ po.revision_number }}){% endif %}{% if po.drop_ship %} · DS{% endif %}</td>
+      <td>{{ po.vendor_customer_name }}</td>
+      <td>{{ po.status }}</td>
+      <td>{{ po.order_date|date:"Y-m-d" }}</td>
+      <td>{{ po.required_date|default:"—" }}</td>
+      <td>${{ po.total|floatformat:2 }}</td>
+      <td>
+        {% for li in po.items.all %}
+          {{ li.item.sku }}: {{ li.quantity_received|floatformat:1 }}/{{ li.quantity_ordered|floatformat:1 }}{% if not forloop.last %}<br>{% endif %}
+        {% empty %}—{% endfor %}
+      </td>
+      <td style="white-space:nowrap">
+        <a class="btn btn-secondary" style="padding:0.35rem 0.7rem;font-size:0.85rem"
+           href="{% url 'slurp_ui:inventory_po_pdf' po.id %}" target="_blank">PDF</a>
+        {% if po.status == 'draft' %}
+        <form method="post" action="{% url 'slurp_ui:inventory_issue_po' po.id %}" style="display:inline">
+          {% csrf_token %}
+          {% if slurp_god_mode %}
+          <input type="date" name="issue_date" value="{{ po.order_date|date:'Y-m-d' }}" style="max-width:9rem" />
+          {% endif %}
+          <button type="submit" class="btn btn-primary" style="padding:0.35rem 0.7rem;font-size:0.85rem"
+                  onclick="return confirm('Issue PO {{ po.po_number }}?');">Issue</button>
+        </form>
+        {% elif po.status == 'issued' and not po.drop_ship %}
+        <a class="btn btn-secondary" style="padding:0.35rem 0.7rem;font-size:0.85rem"
+           href="{% url 'slurp_ui:inventory_check_in' %}?po={{ po.id }}">Check-In</a>
+        {% endif %}
+        {% if po.status != 'completed' and po.status != 'cancelled' and po.status != 'superseded' %}
+        <form method="post" action="{% url 'slurp_ui:inventory_revise_po' po.id %}" style="display:inline">
+          {% csrf_token %}
+          <button type="submit" class="btn btn-secondary" style="padding:0.35rem 0.7rem;font-size:0.85rem"
+                  onclick="return confirm('Create a new draft revision of {{ po.po_number }}?');">Revise</button>
+        </form>
+        <form method="post" action="{% url 'slurp_ui:inventory_cancel_po' po.id %}" style="display:inline">
+          {% csrf_token %}
+          <button type="submit" class="btn btn-danger" style="padding:0.35rem 0.7rem;font-size:0.85rem"
+                  onclick="return confirm('Cancel PO {{ po.po_number }}?');">Cancel</button>
+        </form>
+        {% endif %}
+      </td>
+    </tr>
+    {% empty %}
+    <tr><td colspan="8">No purchase orders.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

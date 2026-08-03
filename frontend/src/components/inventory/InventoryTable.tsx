@@ -922,7 +922,7 @@ function InventoryTable() {
                                                 return
                                               }
                                               const reason = window.prompt('Reason for reconcile (optional):') || 'Admin reconcile'
-                                              const valueInItemUnit = lotUnit === 'ea' ? qty : (unitDisplay === 'kg' && lotUnit === 'lbs' ? qty * 2.20462 : unitDisplay === 'lbs' && lotUnit === 'kg' ? qty / 2.20462 : qty)
+                                              const valueInItemUnit = lotUnit === 'ea' ? qty : (unitDisplay === 'kg' && lotUnit === 'lbs' ? qty * 2.2 : unitDisplay === 'lbs' && lotUnit === 'kg' ? qty / 2.2 : qty)
                                               try {
                                                 const updated = await reconcileLot(lot.id, valueInItemUnit, reason)
                                                 const updatedLots = vendorLots.map(l => l.id === lot.id ? { ...l, ...updated } : l)

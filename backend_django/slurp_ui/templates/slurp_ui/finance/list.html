@@ -1,0 +1,47 @@
+{% extends "slurp_ui/base_module.html" %}
+{% block title %}{{ title }} — SLURP{% endblock %}
+{% block module_title %}Finance{% endblock %}
+{% block header_actions %}
+  {% if create_url %}<a href="{{ create_url }}" class="btn btn-primary">{{ create_label|default:"Create" }}</a>{% endif %}
+{% endblock %}
+{% block main %}
+<h2 style="margin-bottom:.75rem">{{ title }}</h2>
+{% if filters %}
+<form method="get" style="display:flex;gap:0.5rem;margin-bottom:1rem;flex-wrap:wrap">
+  {% for f in filters %}
+  <label style="display:flex;flex-direction:column;font-size:0.85rem">
+    {{ f.label }}
+    {% if f.type == "select" %}
+    <select name="{{ f.name }}">
+      {% for opt in f.options %}
+      <option value="{{ opt.value }}" {% if opt.value == f.value %}selected{% endif %}>{{ opt.label }}</option>
+      {% endfor %}
+    </select>
+    {% else %}
+    <input name="{{ f.name }}" value="{{ f.value }}" type="{{ f.type|default:'text' }}" />
+    {% endif %}
+  </label>
+  {% endfor %}
+  <button type="submit" class="btn btn-secondary" style="align-self:flex-end">Filter</button>
+</form>
+{% endif %}
+<div class="table-wrapper">
+  <table class="data-table" style="width:100%;border-collapse:collapse">
+    <thead>
+      <tr>
+        {% for col in columns %}<th style="text-align:left;padding:0.5rem;border-bottom:1px solid #e2e8f0">{{ col }}</th>{% endfor %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}
+      <tr>
+        {% for cell in row %}<td style="padding:0.5rem;border-bottom:1px solid #f1f5f9">{{ cell }}</td>{% endfor %}
+      </tr>
+      {% empty %}
+      <tr><td colspan="{{ columns|length }}" style="padding:1rem;color:#64748b">No records.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% if note %}<p style="margin-top:1rem;color:#64748b">{{ note }}</p>{% endif %}
+{% endblock %}

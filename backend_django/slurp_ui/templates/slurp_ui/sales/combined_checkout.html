@@ -1,0 +1,96 @@
+{% extends "slurp_ui/base.html" %}
+{% block title %}Combined Check Out — SLURP{% endblock %}
+{% block content %}
+<div class="modal-page" style="max-width:920px">
+  <h2>Combined Check Out</h2>
+  <p style="color:#64748b;margin-bottom:1rem">
+    Select at least two orders with the <strong>same customer and ship-to</strong>.
+    One carrier / pieces set; freight on the first order only; one combined packing list opens after checkout.
+  </p>
+
+  <form method="post">
+    {% csrf_token %}
+
+    <h3 style="margin-bottom:0.5rem">Orders</h3>
+    <div style="max-height:280px;overflow:auto;border:1px solid #e5e7eb;border-radius:6px;padding:0.5rem;margin-bottom:1rem">
+      {% for o in orders %}
+      <label style="display:block;padding:0.35rem 0.5rem;cursor:pointer">
+        <input type="checkbox" name="order_ids" value="{{ o.id }}" />
+        {{ o.so_number }} — {{ o.customer_name }}
+        {% if o.ship_to_location %} · {{ o.ship_to_location.location_name }}{% endif %}
+        ({{ o.status }}{% if o.drop_ship %} · DS{% else %} · alloc {{ o.total_allocated|floatformat:2 }}{% endif %})
+      </label>
+      {% empty %}
+      <p style="padding:0.5rem;color:#64748b">No eligible orders.</p>
+      {% endfor %}
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem">
+      <div class="form-row">
+        <label for="ship_date">Ship date *</label>
+        <input id="ship_date" name="ship_date" type="date" value="{{ today }}" required />
+      </div>
+      <div class="form-row">
+        <label for="invoice_date">Invoice date</label>
+        <input id="invoice_date" name="invoice_date" type="date" value="{{ today }}" />
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem">
+      <div class="form-row">
+        <label for="carrier">Carrier *</label>
+        <input id="carrier" name="carrier" required placeholder="e.g. FedEx Freight" />
+      </div>
+      <div class="form-row">
+        <label for="tracking_number">Tracking #</label>
+        <input id="tracking_number" name="tracking_number" />
+      </div>
+    </div>
+    <div class="form-row">
+      <label for="pieces">Pieces *</label>
+      <input id="pieces" name="pieces" type="number" min="1" max="20" value="1" />
+    </div>
+    <div id="piece-rows">
+      <div class="piece-row" style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem">
+        <div class="form-row" style="margin:0">
+          <label>Piece 1 dimensions *</label>
+          <input name="dim_0" required placeholder='e.g. 48x40x36"' />
+        </div>
+        <div class="form-row" style="margin:0">
+          <label>Piece 1 weight *</label>
+          <input name="weight_0" required placeholder="e.g. 45 lbs" />
+        </div>
+      </div>
+    </div>
+
+    <div class="form-actions" style="margin-top:1rem">
+      <button type="submit" class="btn btn-primary"
+              onclick="return confirm('Check out selected orders on one shipment?');">
+        Combined Ship
+      </button>
+      <a class="btn btn-secondary" href="{% url 'slurp_ui:sales_checkout' %}">Single checkout</a>
+      <a class="btn btn-secondary" href="{% url 'slurp_ui:sales_orders' %}">Back</a>
+    </div>
+  </form>
+  <script>
+  (function () {
+    var pieces = document.getElementById('pieces');
+    var wrap = document.getElementById('piece-rows');
+    if (!pieces || !wrap) return;
+    function rebuild() {
+      var n = Math.max(1, Math.min(20, parseInt(pieces.value || '1', 10) || 1));
+      pieces.value = String(n);
+      var html = '';
+      for (var i = 0; i < n; i++) {
+        html += '<div class="piece-row" style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem;margin-top:0.5rem">' +
+          '<div class="form-row" style="margin:0"><label>Piece ' + (i + 1) + ' dimensions *</label>' +
+          '<input name="dim_' + i + '" required /></div>' +
+          '<div class="form-row" style="margin:0"><label>Piece ' + (i + 1) + ' weight *</label>' +
+          '<input name="weight_' + i + '" required /></div></div>';
+      }
+      wrap.innerHTML = html;
+    }
+    pieces.addEventListener('change', rebuild);
+  })();
+  </script>
+</div>
+{% endblock %}

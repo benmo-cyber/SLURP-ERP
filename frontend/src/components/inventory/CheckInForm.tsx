@@ -309,9 +309,9 @@ function CheckInForm({ onClose, onSuccess }: CheckInFormProps) {
     // Convert quantity if needed
     if (row.quantity_unit !== newUnit) {
       if (row.quantity_unit === 'lbs' && newUnit === 'kg') {
-        newQty = currentQty / 2.20462
+        newQty = currentQty / 2.2
       } else if (row.quantity_unit === 'kg' && newUnit === 'lbs') {
-        newQty = currentQty * 2.20462
+        newQty = currentQty * 2.2
       }
     }
     
@@ -334,9 +334,9 @@ function CheckInForm({ onClose, onSuccess }: CheckInFormProps) {
         let poQtyInDisplayUnit = finalRow.po_quantity_ordered
         if (finalRow.product_unit !== newUnit) {
           if (finalRow.product_unit === 'lbs' && newUnit === 'kg') {
-            poQtyInDisplayUnit = finalRow.po_quantity_ordered / 2.20462
+            poQtyInDisplayUnit = finalRow.po_quantity_ordered / 2.2
           } else if (finalRow.product_unit === 'kg' && newUnit === 'lbs') {
-            poQtyInDisplayUnit = finalRow.po_quantity_ordered * 2.20462
+            poQtyInDisplayUnit = finalRow.po_quantity_ordered * 2.2
           }
         }
         const remainingToReceive = poQtyInDisplayUnit - finalRow.po_quantity_received
@@ -361,9 +361,9 @@ function CheckInForm({ onClose, onSuccess }: CheckInFormProps) {
     let poQtyInDisplayUnit = currentRow.po_quantity_ordered
     if (currentRow.product_unit !== unit) {
       if (currentRow.product_unit === 'lbs' && unit === 'kg') {
-        poQtyInDisplayUnit = currentRow.po_quantity_ordered / 2.20462
+        poQtyInDisplayUnit = currentRow.po_quantity_ordered / 2.2
       } else if (currentRow.product_unit === 'kg' && unit === 'lbs') {
-        poQtyInDisplayUnit = currentRow.po_quantity_ordered * 2.20462
+        poQtyInDisplayUnit = currentRow.po_quantity_ordered * 2.2
       }
     }
     
@@ -420,11 +420,11 @@ function CheckInForm({ onClose, onSuccess }: CheckInFormProps) {
         // Convert ordered quantity if needed
         if (row.product_unit !== row.quantity_unit) {
           if (row.product_unit === 'lbs' && row.quantity_unit === 'kg') {
-            poQtyOrderedInDisplayUnit = row.po_quantity_ordered / 2.20462
-            poQtyReceivedInDisplayUnit = (row.po_quantity_received || 0) / 2.20462
+            poQtyOrderedInDisplayUnit = row.po_quantity_ordered / 2.2
+            poQtyReceivedInDisplayUnit = (row.po_quantity_received || 0) / 2.2
           } else if (row.product_unit === 'kg' && row.quantity_unit === 'lbs') {
-            poQtyOrderedInDisplayUnit = row.po_quantity_ordered * 2.20462
-            poQtyReceivedInDisplayUnit = (row.po_quantity_received || 0) * 2.20462
+            poQtyOrderedInDisplayUnit = row.po_quantity_ordered * 2.2
+            poQtyReceivedInDisplayUnit = (row.po_quantity_received || 0) * 2.2
           }
         }
         
@@ -575,9 +575,9 @@ function CheckInForm({ onClose, onSuccess }: CheckInFormProps) {
         
         if (item && row.quantity_unit !== item.unit_of_measure) {
           if (row.quantity_unit === 'lbs' && item.unit_of_measure === 'kg') {
-            quantity = quantity / 2.20462
+            quantity = quantity / 2.2
           } else if (row.quantity_unit === 'kg' && item.unit_of_measure === 'lbs') {
-            quantity = quantity * 2.20462
+            quantity = quantity * 2.2
           }
         }
         
@@ -876,11 +876,11 @@ function CheckInForm({ onClose, onSuccess }: CheckInFormProps) {
                         let poQtyReceivedInDisplayUnit = row.po_quantity_received
                         if (row.product_unit !== row.quantity_unit) {
                           if (row.product_unit === 'lbs' && row.quantity_unit === 'kg') {
-                            poQtyOrderedInDisplayUnit = row.po_quantity_ordered / 2.20462
-                            poQtyReceivedInDisplayUnit = row.po_quantity_received / 2.20462
+                            poQtyOrderedInDisplayUnit = row.po_quantity_ordered / 2.2
+                            poQtyReceivedInDisplayUnit = row.po_quantity_received / 2.2
                           } else if (row.product_unit === 'kg' && row.quantity_unit === 'lbs') {
-                            poQtyOrderedInDisplayUnit = row.po_quantity_ordered * 2.20462
-                            poQtyReceivedInDisplayUnit = row.po_quantity_received * 2.20462
+                            poQtyOrderedInDisplayUnit = row.po_quantity_ordered * 2.2
+                            poQtyReceivedInDisplayUnit = row.po_quantity_received * 2.2
                           }
                         }
                         const remainingToReceive = poQtyOrderedInDisplayUnit - poQtyReceivedInDisplayUnit
@@ -910,11 +910,11 @@ function CheckInForm({ onClose, onSuccess }: CheckInFormProps) {
                         let poQtyReceivedInDisplayUnit = row.po_quantity_received
                         if (row.product_unit !== row.quantity_unit) {
                           if (row.product_unit === 'lbs' && row.quantity_unit === 'kg') {
-                            poQtyOrderedInDisplayUnit = row.po_quantity_ordered / 2.20462
-                            poQtyReceivedInDisplayUnit = row.po_quantity_received / 2.20462
+                            poQtyOrderedInDisplayUnit = row.po_quantity_ordered / 2.2
+                            poQtyReceivedInDisplayUnit = row.po_quantity_received / 2.2
                           } else if (row.product_unit === 'kg' && row.quantity_unit === 'lbs') {
-                            poQtyOrderedInDisplayUnit = row.po_quantity_ordered * 2.20462
-                            poQtyReceivedInDisplayUnit = row.po_quantity_received * 2.20462
+                            poQtyOrderedInDisplayUnit = row.po_quantity_ordered * 2.2
+                            poQtyReceivedInDisplayUnit = row.po_quantity_received * 2.2
                           }
                         }
                         const remainingToReceive = poQtyOrderedInDisplayUnit - poQtyReceivedInDisplayUnit

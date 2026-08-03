@@ -1,0 +1,122 @@
+{% extends "slurp_ui/base.html" %}
+{% block title %}Create Sales Order — SLURP{% endblock %}
+{% block content %}
+<div class="modal-page" style="max-width:960px">
+  <h2>Create Sales Order</h2>
+  <p style="color:#64748b;margin-bottom:1rem">
+    Create a draft SO, then <strong>Issue</strong> before allocating when possible
+    (full allocate on draft moves status out of draft and blocks Issue).
+  </p>
+
+  <form method="get" style="margin-bottom:1rem">
+    <div class="form-row">
+      <label for="customer">Customer *</label>
+      <select id="customer" name="customer" onchange="this.form.submit()" required>
+        <option value="">— Select customer —</option>
+        {% for c in customers %}
+        <option value="{{ c.id }}" {% if selected_customer and selected_customer.id == c.id %}selected{% endif %}>
+          {{ c.name }}
+        </option>
+        {% endfor %}
+      </select>
+    </div>
+  </form>
+
+  {% if selected_customer %}
+  <form method="post" id="create-so-form">
+    {% csrf_token %}
+    <input type="hidden" name="customer_id" value="{{ selected_customer.id }}" />
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem">
+      <div class="form-row">
+        <label for="ship_to_location">Ship-to</label>
+        <select id="ship_to_location" name="ship_to_location">
+          <option value="">— Optional / legacy address —</option>
+          {% for st in ship_tos %}
+          <option value="{{ st.id }}">{% if st.is_default %}★ {% endif %}{{ st.location_name }} — {{ st.city }}, {{ st.state }}</option>
+          {% empty %}
+          <option value="" disabled>No ship-to locations on file</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="form-row">
+        <label for="customer_po">Customer PO / reference</label>
+        <input id="customer_po" name="customer_po" />
+      </div>
+    </div>
+
+    {% if god_mode %}
+    <div class="form-row">
+      <label for="order_date">Order date (God mode)</label>
+      <input id="order_date" name="order_date" type="date" value="{{ today }}" />
+    </div>
+    {% endif %}
+
+    <div class="form-row">
+      <label><input type="checkbox" name="drop_ship" /> Drop ship (virtual allocate; no inventory)</label>
+    </div>
+    <div class="form-row">
+      <label for="notes">Notes</label>
+      <textarea id="notes" name="notes" rows="2"></textarea>
+    </div>
+
+    <h3 style="margin:1.25rem 0 0.5rem">Lines</h3>
+    <input type="hidden" name="line_count" id="line_count" value="1" />
+    <div id="so-lines">
+      <div class="so-line" data-index="0" style="border:1px solid #e5e7eb;padding:0.75rem;margin-bottom:0.5rem;border-radius:6px">
+        <div style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:0.5rem">
+          <div class="form-row" style="margin:0">
+            <label>Item *</label>
+            <select name="item_id_0">
+              <option value="">— Select —</option>
+              {% for it in items %}
+              <option value="{{ it.id }}">{{ it.sku }} — {{ it.name }} ({{ it.unit_of_measure }})</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="form-row" style="margin:0">
+            <label>Qty *</label>
+            <input name="qty_0" type="number" step="any" min="0" />
+          </div>
+          <div class="form-row" style="margin:0">
+            <label>Unit price</label>
+            <input name="price_0" type="number" step="0.01" min="0" />
+          </div>
+        </div>
+      </div>
+    </div>
+    <button type="button" class="btn btn-secondary" id="add-line" style="margin-bottom:1rem">Add line</button>
+
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">Create draft SO</button>
+      <a class="btn btn-secondary" href="{% url 'slurp_ui:sales_orders' %}">Cancel</a>
+    </div>
+  </form>
+  {% endif %}
+</div>
+<script>
+(function () {
+  var wrap = document.getElementById('so-lines');
+  var countInput = document.getElementById('line_count');
+  var addBtn = document.getElementById('add-line');
+  if (!wrap || !addBtn) return;
+  var itemOptions = wrap.querySelector('select').innerHTML;
+  addBtn.addEventListener('click', function () {
+    var n = parseInt(countInput.value || '1', 10);
+    if (n >= 20) return;
+    var div = document.createElement('div');
+    div.className = 'so-line';
+    div.setAttribute('data-index', String(n));
+    div.style.cssText = 'border:1px solid #e5e7eb;padding:0.75rem;margin-bottom:0.5rem;border-radius:6px';
+    div.innerHTML =
+      '<div style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:0.5rem">' +
+      '<div class="form-row" style="margin:0"><label>Item *</label><select name="item_id_' + n + '">' + itemOptions + '</select></div>' +
+      '<div class="form-row" style="margin:0"><label>Qty *</label><input name="qty_' + n + '" type="number" step="any" min="0" /></div>' +
+      '<div class="form-row" style="margin:0"><label>Unit price</label><input name="price_' + n + '" type="number" step="0.01" min="0" /></div>' +
+      '</div>';
+    wrap.appendChild(div);
+    countInput.value = String(n + 1);
+  });
+})();
+</script>
+{% endblock %}

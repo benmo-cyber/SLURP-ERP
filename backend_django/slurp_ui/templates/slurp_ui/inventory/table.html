@@ -1,0 +1,189 @@
+{% extends "slurp_ui/base_module.html" %}
+{% block title %}Inventory — SLURP{% endblock %}
+{% block module_title %}Inventory{% endblock %}
+{% block header_actions %}
+  <a href="{% url 'slurp_ui:inventory_check_in' %}" class="btn btn-primary">Check-In</a>
+  <a href="{% url 'slurp_ui:inventory_indirect_checkout' %}" class="btn btn-primary">Checkout Indirect Material</a>
+  <a href="{% url 'slurp_ui:inventory_reverse_check_in' %}" class="btn btn-danger"
+     title="Reverse a mistaken check-in (removes receipt lot, rolls back PO received qty when allowed)">Reverse check-in</a>
+{% endblock %}
+{% block main %}
+<div class="inventory-table-page">
+  <div class="inventory-table-controls" style="display:flex;justify-content:space-between;align-items:center;gap:1rem;flex-wrap:wrap;margin-bottom:1rem">
+    <div class="inventory-tabs" style="display:flex;gap:0.35rem">
+      <a class="btn {% if tab == 'finished_good' %}btn-primary{% else %}btn-secondary{% endif %}"
+         href="?tab=finished_good&uom={{ display_uom }}">Finished Goods</a>
+      <a class="btn {% if tab == 'raw_material' %}btn-primary{% else %}btn-secondary{% endif %}"
+         href="?tab=raw_material&uom={{ display_uom }}">Raw Materials</a>
+      <a class="btn {% if tab == 'indirect_material' %}btn-primary{% else %}btn-secondary{% endif %}"
+         href="?tab=indirect_material&uom={{ display_uom }}">Indirect</a>
+    </div>
+    <div class="unit-toggle" style="display:inline-flex;border:1px solid #cbd5e1;border-radius:6px;overflow:hidden">
+      <a href="?tab={{ tab }}&uom=lbs{% if expand_sku %}&sku={{ expand_sku|urlencode }}{% endif %}{% if expand_vendor != None %}&vendor={{ expand_vendor|urlencode }}{% endif %}"
+         class="toggle-btn {% if display_uom == 'lbs' %}active{% endif %}"
+         style="padding:0.4rem 0.9rem;text-decoration:none;background:{% if display_uom == 'lbs' %}#1e40af{% else %}#fff{% endif %};color:{% if display_uom == 'lbs' %}#fff{% else %}#334155{% endif %}">lbs</a>
+      <a href="?tab={{ tab }}&uom=kg{% if expand_sku %}&sku={{ expand_sku|urlencode }}{% endif %}{% if expand_vendor != None %}&vendor={{ expand_vendor|urlencode }}{% endif %}"
+         class="toggle-btn {% if display_uom == 'kg' %}active{% endif %}"
+         style="padding:0.4rem 0.9rem;text-decoration:none;background:{% if display_uom == 'kg' %}#1e40af{% else %}#fff{% endif %};color:{% if display_uom == 'kg' %}#fff{% else %}#334155{% endif %}">kg</a>
+    </div>
+  </div>
+
+  <div class="table-wrapper inventory-table-container">
+    <table class="inventory-table">
+      <thead>
+        <tr>
+          <th>SKU</th>
+          <th>Description</th>
+          <th>Type</th>
+          <th>Category</th>
+          <th>Vendor</th>
+          <th>Pack / UoM</th>
+          <th>Available</th>
+          {% if show_on_order %}<th>On Order</th>{% endif %}
+          <th>Alloc. Sales</th>
+          <th>Alloc. Prod</th>
+          <th>On Hold</th>
+          <th>Lots</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+        <tr class="sku-master-row {% if row.on_hold_flag %}on-hold{% endif %}">
+          <td>
+            <div class="sku-cell">
+              {% if row.expanded %}
+              <a class="expand-btn" href="?tab={{ tab }}&uom={{ display_uom }}" title="Collapse">▾</a>
+              {% else %}
+              <a class="expand-btn" href="?tab={{ tab }}&uom={{ display_uom }}&sku={{ row.sku|urlencode }}" title="Expand vendors">▸</a>
+              {% endif %}
+              <span class="sku-master-label">{{ row.sku }}</span>
+              {% if row.vendor_count > 1 %}<span class="vendor-count-badge">{{ row.vendor_count }}</span>{% endif %}
+            </div>
+          </td>
+          <td>{{ row.description }}</td>
+          <td><span class="inventory-type-badge inventory-type-badge--{{ row.item_type|default:'unknown' }}">{{ row.item_type }}</span></td>
+          <td><span class="inventory-category-badge">{{ row.product_category|default:"—" }}</span></td>
+          <td>—</td>
+          <td>{{ row.pack_size_unit }}</td>
+          <td class="{% if row.available > 0 %}available{% else %}unavailable{% endif %}">{{ row.available|floatformat:2 }} {{ display_uom }}</td>
+          {% if show_on_order %}<td class="{% if row.on_order > 0 %}on-order{% endif %}">{{ row.on_order|floatformat:2 }}</td>{% endif %}
+          <td>{{ row.allocated_to_sales|floatformat:2 }}</td>
+          <td>{{ row.allocated_to_production|floatformat:2 }}</td>
+          <td>{{ row.on_hold|floatformat:2 }}</td>
+          <td>{{ row.lot_count }}</td>
+        </tr>
+
+        {% if row.expanded %}
+          {% for v in row.vendors %}
+          <tr class="vendor-row {% if v.on_hold > 0 %}on-hold{% endif %}">
+            <td>
+              <div class="sku-cell" style="padding-left:1.25rem">
+                {% if v.expanded %}
+                <a class="expand-btn" href="?tab={{ tab }}&uom={{ display_uom }}&sku={{ row.sku|urlencode }}" title="Collapse lots">▾</a>
+                {% else %}
+                <a class="expand-btn" href="?tab={{ tab }}&uom={{ display_uom }}&sku={{ row.sku|urlencode }}&vendor={{ v.vendor|urlencode }}" title="Expand lots">▸</a>
+                {% endif %}
+                <span>{{ row.sku }}</span>
+              </div>
+            </td>
+            <td>{{ v.description }}</td>
+            <td><span class="inventory-type-badge">{{ v.item_type }}</span></td>
+            <td>{{ v.product_category|default:"—" }}</td>
+            <td><strong>{{ v.vendor }}</strong></td>
+            <td>{{ v.pack_size_unit }}</td>
+            <td class="{% if v.available > 0 %}available{% else %}unavailable{% endif %}">{{ v.available|floatformat:2 }} {{ display_uom }}</td>
+            {% if show_on_order %}<td>{{ v.on_order|floatformat:2 }}</td>{% endif %}
+            <td>{{ v.allocated_to_sales|floatformat:2 }}</td>
+            <td>{{ v.allocated_to_production|floatformat:2 }}</td>
+            <td>{{ v.on_hold|floatformat:2 }}</td>
+            <td>{{ v.lot_count }}</td>
+          </tr>
+
+          {% if v.expanded %}
+          <tr class="lot-details-row">
+            <td colspan="{% if show_on_order %}12{% else %}11{% endif %}" class="lot-details-cell">
+              <div class="lot-breakdown">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem">
+                  <strong>Lots — {{ row.sku }} / {{ v.vendor }}</strong>
+                  {% if not deeper %}
+                  <a class="btn btn-secondary" style="padding:0.3rem 0.6rem;font-size:0.85rem"
+                     href="?tab={{ tab }}&uom={{ display_uom }}&sku={{ row.sku|urlencode }}&vendor={{ v.vendor|urlencode }}&deeper=1">
+                    Deeper (depleted)…
+                  </a>
+                  {% else %}
+                  <a class="btn btn-secondary" style="padding:0.3rem 0.6rem;font-size:0.85rem"
+                     href="?tab={{ tab }}&uom={{ display_uom }}&sku={{ row.sku|urlencode }}&vendor={{ v.vendor|urlencode }}">
+                    Hide depleted
+                  </a>
+                  {% endif %}
+                </div>
+                <div class="lot-table-scroll">
+                  <table class="lot-table{% if deeper %} lot-table-depleted{% endif %}">
+                    <thead>
+                      <tr>
+                        <th>Vendor Lot #</th>
+                        <th>Internal Lot #</th>
+                        <th>PO</th>
+                        <th>Tracking</th>
+                        <th>Received</th>
+                        <th>Qty</th>
+                        <th>Available</th>
+                        <th>On Hold</th>
+                        <th>Status</th>
+                        <th>Committed</th>
+                        <th>Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {% for lot in lot_rows %}
+                      <tr {% if deeper %}class="lot-row-depleted"{% endif %}>
+                        <td>{{ lot.vendor_lot_number }}</td>
+                        <td>{{ lot.lot_number }}</td>
+                        <td>{{ lot.po_number }}</td>
+                        <td>{{ lot.tracking }}</td>
+                        <td>{% if lot.received_date %}{{ lot.received_date|slice:":10" }}{% else %}—{% endif %}</td>
+                        <td class="lot-table-col-qty">{{ lot.quantity|floatformat:2 }} {{ lot.uom }}</td>
+                        <td class="lot-table-col-qty">{{ lot.available|floatformat:2 }}</td>
+                        <td class="lot-table-col-qty">{{ lot.on_hold|floatformat:2 }}</td>
+                        <td><span class="status-badge status-{{ lot.status }}">{{ lot.status }}</span></td>
+                        <td class="lot-table-col-committed">
+                          S {{ lot.committed_sales|floatformat:2 }} · P {{ lot.committed_prod|floatformat:2 }}
+                        </td>
+                        <td style="white-space:nowrap">
+                          {% if lot.avail_native > 0 %}
+                          <a class="btn btn-secondary" style="padding:0.2rem 0.45rem;font-size:0.75rem"
+                             href="{% url 'slurp_ui:inventory_lot_hold' lot.id %}?tab={{ tab }}&uom={{ display_uom }}&sku={{ row.sku|urlencode }}&vendor={{ v.vendor|urlencode }}{% if deeper %}&deeper=1{% endif %}">Hold</a>
+                          {% endif %}
+                          {% if lot.hold_native > 0 %}
+                          <a class="btn btn-secondary" style="padding:0.2rem 0.45rem;font-size:0.75rem"
+                             href="{% url 'slurp_ui:inventory_lot_release' lot.id %}?tab={{ tab }}&uom={{ display_uom }}&sku={{ row.sku|urlencode }}&vendor={{ v.vendor|urlencode }}{% if deeper %}&deeper=1{% endif %}&quantity={{ lot.hold_native }}">Release</a>
+                          {% endif %}
+                          {% if request.user.is_staff %}
+                          <a class="btn btn-secondary" style="padding:0.2rem 0.45rem;font-size:0.75rem"
+                             href="{% url 'slurp_ui:inventory_lot_reconcile' lot.id %}?tab={{ tab }}&uom={{ display_uom }}&sku={{ row.sku|urlencode }}&vendor={{ v.vendor|urlencode }}{% if deeper %}&deeper=1{% endif %}">Reconcile</a>
+                          {% endif %}
+                        </td>
+                      </tr>
+                      {% empty %}
+                      <tr><td colspan="11">{% if deeper %}No depleted lots.{% else %}No on-hand lots.{% endif %}</td></tr>
+                      {% endfor %}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </td>
+          </tr>
+          {% endif %}
+          {% empty %}
+          <tr><td colspan="{% if show_on_order %}12{% else %}11{% endif %}" style="padding-left:2rem;color:#64748b">No vendor rows.</td></tr>
+          {% endfor %}
+        {% endif %}
+
+        {% empty %}
+        <tr><td colspan="{% if show_on_order %}12{% else %}11{% endif %}">No inventory for this tab.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

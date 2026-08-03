@@ -1,0 +1,37 @@
+{% extends "slurp_ui/base.html" %}
+{% block title %}{% if call %}Edit{% else %}Log{% endif %} Sales Call — SLURP{% endblock %}
+{% block content %}
+<div class="modal-page" style="max-width:640px">
+  <h2>{% if call %}Edit{% else %}Log{% endif %} sales call — {{ customer.name }}</h2>
+  <form method="post">
+    {% csrf_token %}
+    <div class="form-row"><label>Date/time</label><input type="datetime-local" name="call_date" value="{{ default_call_date }}" /></div>
+    <div class="form-row"><label>Type</label>
+      <select name="call_type">
+        {% for val, label in call_type_choices %}
+        <option value="{{ val }}" {% if call.call_type == val %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="form-row"><label>Contact</label>
+      <select name="contact">
+        <option value="">—</option>
+        {% for c in contacts %}
+        <option value="{{ c.pk }}" {% if call.contact_id == c.pk %}selected{% endif %}>{{ c.first_name }} {{ c.last_name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="form-row"><label>Subject</label><input name="subject" value="{{ call.subject|default:'' }}" /></div>
+    <div class="form-row"><label>Notes *</label><textarea name="notes" required rows="4">{{ call.notes|default:'' }}</textarea></div>
+    <div class="form-row"><label><input type="checkbox" name="follow_up_required" {% if call.follow_up_required %}checked{% endif %} /> Follow-up required</label></div>
+    <div class="form-row"><label>Follow-up date</label><input type="datetime-local" name="follow_up_date" value="{% if call.follow_up_date %}{{ call.follow_up_date|date:'Y-m-d' }}T{{ call.follow_up_date|time:'H:i' }}{% endif %}" /></div>
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">Save</button>
+      <a class="btn btn-secondary" href="{% url 'slurp_ui:sales_customer_profile' customer.pk %}?tab=sales-calls">Cancel</a>
+      {% if call %}
+      <button type="submit" name="action" value="delete" class="btn btn-secondary" style="color:#b91c1c" onclick="return confirm('Delete call?');">Delete</button>
+      {% endif %}
+    </div>
+  </form>
+</div>
+{% endblock %}

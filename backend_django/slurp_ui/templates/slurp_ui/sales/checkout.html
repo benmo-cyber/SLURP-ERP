@@ -1,0 +1,118 @@
+{% extends "slurp_ui/base.html" %}
+{% block title %}Check Out — SLURP{% endblock %}
+{% block content %}
+<div class="modal-page" style="max-width:860px">
+  <h2>Check Out</h2>
+
+  {% if not selected %}
+  <p style="color:#64748b;margin-bottom:1rem">Pick an issued / ready order with allocation, or use
+    <a href="{% url 'slurp_ui:sales_combined_checkout' %}">combined checkout</a> for multiple orders.</p>
+  <ul style="margin-bottom:1rem">
+    {% for o in orders %}
+    <li style="margin-bottom:0.35rem">
+      <a href="{% url 'slurp_ui:sales_checkout' %}?so={{ o.id }}">
+        {{ o.so_number }} — {{ o.customer_name }} ({{ o.status }})
+        {% if o.drop_ship %} · DS{% else %} · alloc {{ o.total_allocated|floatformat:2 }}{% endif %}
+      </a>
+    </li>
+    {% empty %}
+    <li>No checkout-eligible orders.</li>
+    {% endfor %}
+  </ul>
+  <a class="btn btn-secondary" href="{% url 'slurp_ui:sales_orders' %}">Back to orders</a>
+  {% else %}
+
+  <p style="margin-bottom:1rem;color:#64748b">
+    Shipping <strong>{{ selected.so_number }}</strong> — {{ selected.customer_name }}
+    · {{ selected.status }}{% if selected.drop_ship %} · drop ship{% endif %}
+  </p>
+
+  <h3 style="margin-bottom:0.5rem">Lines to ship (full remaining allocation)</h3>
+  <ul style="margin-bottom:1rem">
+    {% for line in selected.items.all %}
+    <li>
+      {{ line.item.sku }}: alloc {{ line.quantity_allocated|floatformat:2 }} /
+      ordered {{ line.quantity_ordered|floatformat:2 }} {{ line.item.unit_of_measure }}
+      {% if line.allocated_lots.all %}
+      <ul>
+        {% for al in line.allocated_lots.all %}
+        <li>{{ al.lot.lot_number }} — {{ al.quantity_allocated|floatformat:2 }}</li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+
+  <form method="post">
+    {% csrf_token %}
+    <input type="hidden" name="so_id" value="{{ selected.id }}" />
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem">
+      <div class="form-row">
+        <label for="ship_date">Ship date *</label>
+        <input id="ship_date" name="ship_date" type="date" value="{{ today }}" required />
+      </div>
+      <div class="form-row">
+        <label for="invoice_date">Invoice date</label>
+        <input id="invoice_date" name="invoice_date" type="date" value="{{ today }}" />
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem">
+      <div class="form-row">
+        <label for="carrier">Carrier *</label>
+        <input id="carrier" name="carrier" required placeholder="e.g. FedEx Freight" />
+      </div>
+      <div class="form-row">
+        <label for="tracking_number">Tracking #</label>
+        <input id="tracking_number" name="tracking_number" />
+      </div>
+    </div>
+    <div class="form-row">
+      <label for="pieces">Pieces *</label>
+      <input id="pieces" name="pieces" type="number" min="1" max="20" value="1" />
+    </div>
+    <div id="piece-rows">
+      <div class="piece-row" style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem">
+        <div class="form-row" style="margin:0">
+          <label>Piece 1 dimensions *</label>
+          <input name="dim_0" required placeholder='e.g. 48x40x36"' />
+        </div>
+        <div class="form-row" style="margin:0">
+          <label>Piece 1 weight *</label>
+          <input name="weight_0" required placeholder="e.g. 45 lbs" />
+        </div>
+      </div>
+    </div>
+
+    <div class="form-actions" style="margin-top:1rem">
+      <button type="submit" class="btn btn-primary"
+              onclick="return confirm('Ship {{ selected.so_number }} and create draft invoice?');">
+        Ship / Check Out
+      </button>
+      <a class="btn btn-secondary" href="{% url 'slurp_ui:sales_checkout' %}">Back</a>
+    </div>
+  </form>
+  <script>
+  (function () {
+    var pieces = document.getElementById('pieces');
+    var wrap = document.getElementById('piece-rows');
+    if (!pieces || !wrap) return;
+    function rebuild() {
+      var n = Math.max(1, Math.min(20, parseInt(pieces.value || '1', 10) || 1));
+      pieces.value = String(n);
+      var html = '';
+      for (var i = 0; i < n; i++) {
+        html += '<div class="piece-row" style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem;margin-top:0.5rem">' +
+          '<div class="form-row" style="margin:0"><label>Piece ' + (i + 1) + ' dimensions *</label>' +
+          '<input name="dim_' + i + '" required /></div>' +
+          '<div class="form-row" style="margin:0"><label>Piece ' + (i + 1) + ' weight *</label>' +
+          '<input name="weight_' + i + '" required /></div></div>';
+      }
+      wrap.innerHTML = html;
+    }
+    pieces.addEventListener('change', rebuild);
+  })();
+  </script>
+  {% endif %}
+</div>
+{% endblock %}

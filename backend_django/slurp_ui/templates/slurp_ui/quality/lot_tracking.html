@@ -1,0 +1,76 @@
+{% extends "slurp_ui/base_module.html" %}
+{% block title %}Lot Tracking — SLURP{% endblock %}
+{% block module_title %}Quality{% endblock %}
+{% block main %}
+<div class="lot-tracking">
+  <p style="color:#64748b;margin-top:0">Search by internal lot number or vendor lot number.</p>
+  <form method="get" class="search-box" style="display:flex;gap:0.5rem;margin:1rem 0;max-width:640px">
+    <input type="text" name="q" value="{{ search }}" placeholder="Enter lot number" class="search-input" style="flex:1" />
+    <button type="submit" class="btn btn-primary">Search</button>
+  </form>
+
+  {% if search and not lot %}
+  <p>No lot found for <strong>{{ search }}</strong>.</p>
+  {% endif %}
+
+  {% if lot %}
+  <div class="lot-info-card" style="margin:1rem 0;padding:1rem;border:1px solid #e2e8f0;border-radius:6px">
+    <h3 style="margin-top:0">Lot information</h3>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem">
+      <div><strong>Internal lot:</strong> {{ lot.lot_number|default:"—" }}</div>
+      <div><strong>Vendor lot:</strong> {{ lot.vendor_lot_number|default:"—" }}</div>
+      <div><strong>Item:</strong> {{ lot.item.name }} ({{ lot.item.sku }})</div>
+      <div><strong>Type:</strong> {{ lot.item.get_item_type_display }}</div>
+      <div><strong>Quantity:</strong> {{ lot.quantity|floatformat:2 }}</div>
+      <div><strong>Remaining:</strong> {{ lot.quantity_remaining|floatformat:2 }}</div>
+      <div><strong>Received:</strong> {{ lot.received_date|date:"M j, Y" }}</div>
+    </div>
+  </div>
+
+  <h3>Forward traceability (where used)</h3>
+  {% if forward_trace %}
+  <table class="data-table trace-table">
+    <thead><tr><th>Batch</th><th>Finished good</th><th>Qty used</th><th>Date</th></tr></thead>
+    <tbody>
+      {% for row in forward_trace %}
+      <tr>
+        <td>{{ row.batch_number }}</td>
+        <td>{{ row.finished_good }}</td>
+        <td>{{ row.quantity_used|floatformat:2 }}</td>
+        <td>{{ row.date|date:"M j, Y" }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="no-trace">This lot has not been used in any production batches.</p>
+  {% endif %}
+
+  <h3 style="margin-top:1.5rem">Backward traceability (produced from)</h3>
+  {% if backward_trace %}
+  {% for batch in backward_trace %}
+  <div style="margin-bottom:1rem;padding:0.75rem;border:1px solid #e2e8f0;border-radius:6px">
+    <p><strong>Batch {{ batch.batch_number }}</strong> · produced {{ batch.quantity_produced|floatformat:2 }} · {{ batch.date|date:"M j, Y" }}</p>
+    {% if batch.inputs %}
+    <table class="data-table">
+      <thead><tr><th>Input lot</th><th>Item</th><th>Qty used</th></tr></thead>
+      <tbody>
+        {% for inp in batch.inputs %}
+        <tr>
+          <td>{{ inp.lot.lot_number|default:inp.lot.vendor_lot_number }}</td>
+          <td>{{ inp.lot.item.sku }}</td>
+          <td>{{ inp.quantity_used|floatformat:2 }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+  </div>
+  {% endfor %}
+  {% else %}
+  <p class="no-trace">No production batch output found for this lot (backward trace applies to finished-good lots).</p>
+  {% endif %}
+  {% endif %}
+</div>
+{% endblock %}
+

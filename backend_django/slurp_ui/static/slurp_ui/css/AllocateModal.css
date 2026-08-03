@@ -1,0 +1,415 @@
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.5);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 1000;
+}
+
+.allocate-modal {
+  background: white;
+  border-radius: 8px;
+  width: 90%;
+  max-width: 1000px;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 20px;
+  border-bottom: 1px solid #e0e0e0;
+}
+
+.modal-header h2 {
+  margin: 0;
+  font-size: 1.5rem;
+}
+
+.close-button {
+  background: none;
+  border: none;
+  font-size: 24px;
+  cursor: pointer;
+  color: #666;
+  padding: 0;
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.close-button:hover {
+  color: #000;
+}
+
+.modal-content {
+  padding: 20px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.so-info {
+  background: #f8f9fa;
+  padding: 15px;
+  border-radius: 4px;
+  margin-bottom: 20px;
+}
+
+.so-info p {
+  margin: 5px 0;
+}
+
+.unit-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+  padding: 10px;
+  background: #f8f9fa;
+  border-radius: 4px;
+}
+
+.include-on-hold-toggle {
+  margin-bottom: 20px;
+  padding: 10px;
+  background: #fef3c7;
+  border-radius: 4px;
+  border: 1px solid #fcd34d;
+}
+
+.include-on-hold-toggle label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+
+.lots-table tr.lot-on-hold {
+  background: #fffbeb;
+}
+
+.lots-table tr.lot-on-hold td:first-child {
+  font-style: italic;
+  color: #92400e;
+}
+
+.lots-table tr.lot-prerepack {
+  background: #eff6ff;
+}
+
+.lots-table tr.lot-prerepack td:first-child {
+  color: #1e40af;
+}
+
+.unit-toggle label {
+  font-weight: 500;
+  color: #111827;
+}
+
+.unit-toggle button {
+  padding: 6px 12px;
+  border: 1px solid #cbd5e1;
+  background: white;
+  color: #111827;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: all 0.2s;
+}
+
+.unit-toggle button.active {
+  background: #dbeafe;
+  color: #111827;
+  border-color: #2563eb;
+  font-weight: 600;
+}
+
+.unit-toggle button:hover:not(.active) {
+  background: #f0f0f0;
+}
+
+.allocation-items {
+  display: flex;
+  flex-direction: column;
+  gap: 30px;
+}
+
+.allocation-item {
+  border: 1px solid #e0e0e0;
+  border-radius: 4px;
+  padding: 20px;
+  background: white;
+}
+
+.item-header {
+  margin-bottom: 15px;
+  padding-bottom: 15px;
+  border-bottom: 1px solid #e0e0e0;
+}
+
+.item-header h3 {
+  margin: 0 0 10px 0;
+  font-size: 1.2rem;
+}
+
+.item-stats {
+  display: flex;
+  gap: 20px;
+  flex-wrap: wrap;
+  font-size: 0.9rem;
+}
+
+.item-stats span {
+  padding: 4px 8px;
+  border-radius: 4px;
+  background: #f8f9fa;
+}
+
+.item-stats .fully-allocated {
+  background: #d1e7dd;
+  color: #155724;
+  font-weight: 500;
+}
+
+.item-stats .partially-allocated {
+  background: #fff3cd;
+  color: #856404;
+}
+
+.item-stats .remaining {
+  background: #f8d7da;
+  color: #721c24;
+}
+
+.fully-allocated-badge {
+  background: #28a745 !important;
+  color: white !important;
+  font-weight: 600;
+}
+
+.lots-list {
+  margin-top: 15px;
+}
+
+.lots-list h4 {
+  margin: 0 0 10px 0;
+  font-size: 1rem;
+  color: #666;
+}
+
+.no-lots {
+  color: #999;
+  font-style: italic;
+  padding: 20px;
+  text-align: center;
+}
+
+.lots-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 10px;
+}
+
+.lots-table thead {
+  background: var(--app-header-bg);
+}
+
+.lots-table th {
+  padding: 10px;
+  text-align: left;
+  font-weight: 600;
+  color: var(--app-header-text);
+  background: var(--app-header-bg);
+  border-bottom: 2px solid var(--table-header-border);
+}
+
+.lots-table td {
+  padding: 10px;
+  border-bottom: 1px solid #eee;
+}
+
+.allocation-input {
+  width: 100px;
+  padding: 6px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 0.9rem;
+}
+
+.allocation-input:focus {
+  outline: none;
+  border-color: #007bff;
+}
+
+.unit-label {
+  margin-left: 5px;
+  color: #666;
+  font-size: 0.85rem;
+}
+
+.btn-allocate-full,
+.btn-clear {
+  padding: 6px 12px;
+  border: 1px solid #ddd;
+  background: white;
+  cursor: pointer;
+  border-radius: 4px;
+  font-size: 0.85rem;
+  margin-right: 5px;
+  transition: all 0.2s;
+}
+
+.btn-allocate-full:hover:not(:disabled) {
+  background: #007bff;
+  color: white;
+  border-color: #007bff;
+}
+
+.btn-allocate-full:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-clear:hover {
+  background: #dc3545;
+  color: white;
+  border-color: #dc3545;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding-top: 20px;
+  border-top: 1px solid #e0e0e0;
+  margin-top: 20px;
+}
+
+.btn-cancel,
+.btn-save {
+  padding: 10px 20px;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 1rem;
+  font-weight: 500;
+  transition: all 0.2s;
+}
+
+.btn-cancel {
+  background: #6c757d;
+  color: white;
+}
+
+.btn-cancel:hover {
+  background: #5a6268;
+}
+
+.btn-save {
+  background: #007bff;
+  color: white;
+}
+
+.btn-save:hover:not(:disabled) {
+  background: #0056b3;
+}
+
+.btn-save:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.loading {
+  text-align: center;
+  padding: 40px;
+  color: #666;
+}
+
+.drop-ship-explain {
+  margin: 0 0 0.75rem;
+  line-height: 1.45;
+  color: #374151;
+  font-size: 0.9375rem;
+}
+
+.allocate-coa-link {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #2563eb;
+  text-decoration: none;
+}
+
+.allocate-coa-link:hover {
+  text-decoration: underline;
+}
+
+.allocate-coa-dash {
+  color: #9ca3af;
+  font-size: 0.85rem;
+}
+
+/* Lots shown only from current SO allocation (no free stock in pool) */
+.lot-from-existing-allocation {
+  background: #fffbeb;
+}
+
+.lot-merge-hint {
+  font-size: 0.75rem;
+  color: #92400e;
+  font-weight: 500;
+}
+
+.allocate-section {
+  margin-bottom: 1.5rem;
+}
+
+.allocate-section h4 {
+  margin: 0 0 0.35rem;
+  font-size: 1.05rem;
+}
+
+.allocate-section-blurb {
+  margin: 0 0 0.75rem;
+  font-size: 0.875rem;
+  color: #4b5563;
+  line-height: 1.45;
+}
+
+.allocate-section-blurb em {
+  font-style: italic;
+}
+
+.no-lots.muted {
+  color: #6b7280;
+  font-size: 0.9rem;
+}
+
+tr.lot-on-order-line td {
+  vertical-align: middle;
+}
+
+.allocate-data-warning {
+  color: #b45309;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  margin: 0 0 0.75rem;
+}
+
+.allocate-orphan-line {
+  padding: 0.75rem 0;
+}
+
+.btn-clear-orphan {
+  margin-top: 0.25rem;
+}

@@ -1,0 +1,46 @@
+{% extends "slurp_ui/base.html" %}
+{% block title %}{% if pricing %}Edit{% else %}Add{% endif %} Pricing — SLURP{% endblock %}
+{% block content %}
+<div class="modal-page" style="max-width:520px">
+  <h2>{% if pricing %}Edit{% else %}Add{% endif %} customer pricing — {{ customer.name }}</h2>
+  <form method="post">
+    {% csrf_token %}
+    <div class="form-row"><label>Item *</label>
+      <select name="item" required>
+        <option value="">Select item</option>
+        {% for item in items %}
+        <option value="{{ item.pk }}" {% if pricing.item_id == item.pk %}selected{% endif %}>{{ item.sku }} — {{ item.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="form-row"><label>Unit price *</label><input type="number" step="any" name="unit_price" required value="{{ pricing.unit_price|default:'' }}" /></div>
+    <div class="form-row"><label>UoM</label>
+      <select name="unit_of_measure">
+        {% for val, label in uom_choices %}
+        <option value="{{ val }}" {% if pricing.unit_of_measure == val or not pricing and val == 'lbs' %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="form-row"><label>Incoterms</label>
+      <select name="incoterms">
+        <option value="">—</option>
+        {% for code in incoterms %}
+        <option value="{{ code }}" {% if pricing.incoterms == code %}selected{% endif %}>{{ code }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="form-row"><label>Incoterms place</label><input name="incoterms_place" value="{{ pricing.incoterms_place|default:'' }}" /></div>
+    <div class="form-row"><label>Effective date *</label><input type="date" name="effective_date" required value="{{ pricing.effective_date|date:'Y-m-d'|default:today }}" /></div>
+    <div class="form-row"><label>Expiry date</label><input type="date" name="expiry_date" value="{{ pricing.expiry_date|date:'Y-m-d' }}" /></div>
+    <div class="form-row"><label><input type="checkbox" name="is_active" {% if not pricing or pricing.is_active %}checked{% endif %} /> Active</label></div>
+    <div class="form-row"><label>Notes</label><textarea name="notes" rows="2">{{ pricing.notes|default:'' }}</textarea></div>
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">Save</button>
+      <a class="btn btn-secondary" href="{% url 'slurp_ui:sales_customer_profile' customer.pk %}?tab=pricing">Cancel</a>
+      {% if pricing %}
+      <button type="submit" name="action" value="delete" class="btn btn-secondary" style="color:#b91c1c" onclick="return confirm('Delete pricing?');">Delete</button>
+      {% endif %}
+    </div>
+  </form>
+</div>
+{% endblock %}

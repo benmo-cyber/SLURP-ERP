@@ -1,0 +1,53 @@
+{% extends "slurp_ui/base_module.html" %}
+{% block title %}Production — SLURP{% endblock %}
+{% block module_title %}Production{% endblock %}
+{% block header_actions %}
+  <a href="{% url 'slurp_ui:production_create_batch' %}?batch_type=repack" class="btn btn-secondary">Create Repack</a>
+  <a href="{% url 'slurp_ui:production_create_batch' %}" class="btn btn-primary">Create Batch Ticket</a>
+{% endblock %}
+{% block main %}
+<table class="data-table">
+  <thead>
+    <tr>
+      <th>Batch #</th>
+      <th>Type</th>
+      <th>Finished good</th>
+      <th>Status</th>
+      <th>Qty</th>
+      <th>Production date</th>
+      <th>Actions</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for b in batches %}
+    <tr>
+      <td><a href="{% url 'slurp_ui:production_batch_detail' b.id %}">{{ b.batch_number }}</a></td>
+      <td>{{ b.batch_type }}</td>
+      <td>{{ b.finished_good_item.sku }}</td>
+      <td>{{ b.status }}</td>
+      <td>{{ b.quantity_produced|floatformat:2 }}{% if b.status == 'closed' %} / act {{ b.quantity_actual|floatformat:2 }}{% endif %}</td>
+      <td>{{ b.production_date|date:"Y-m-d" }}</td>
+      <td style="white-space:nowrap">
+        <a class="btn btn-secondary" style="padding:0.35rem 0.7rem;font-size:0.85rem"
+           href="{% url 'slurp_ui:production_batch_detail' b.id %}">Detail</a>
+        <a class="btn btn-secondary" style="padding:0.35rem 0.7rem;font-size:0.85rem"
+           href="{% url 'slurp_ui:production_batch_pdf' b.id %}" target="_blank">PDF</a>
+        {% if b.status != 'closed' %}
+        <a class="btn btn-secondary" style="padding:0.35rem 0.7rem;font-size:0.85rem"
+           href="{% url 'slurp_ui:production_adjust_batch' b.id %}">Adjust</a>
+        <a class="btn btn-primary" style="padding:0.35rem 0.7rem;font-size:0.85rem"
+           href="{% url 'slurp_ui:production_close_batch' b.id %}">Close</a>
+        {% endif %}
+        <form method="post" action="{% url 'slurp_ui:production_reverse_batch' b.id %}" style="display:inline">
+          {% csrf_token %}
+          <button type="submit" class="btn btn-danger" style="padding:0.35rem 0.7rem;font-size:0.85rem"
+                  onclick="return confirm('Reverse batch {{ b.batch_number }}? This restores inputs and deletes output lots.');">Reverse</button>
+        </form>
+      </td>
+    </tr>
+    {% empty %}
+    <tr><td colspan="7">No batches.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

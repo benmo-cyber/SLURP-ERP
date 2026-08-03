@@ -1,0 +1,28 @@
+{% extends "slurp_ui/base.html" %}
+{% block title %}Reconcile Lot — SLURP{% endblock %}
+{% block content %}
+<div class="modal-page" style="max-width:480px;margin:2rem auto">
+  <h2>Admin reconcile</h2>
+  <p>Lot <strong>{{ lot.lot_number }}</strong> — {{ lot.item.sku }}</p>
+  <p>Current remaining: <strong>{{ lot.quantity_remaining|floatformat:2 }}</strong> {{ lot.item.unit_of_measure }}</p>
+  <form method="post">
+    {% csrf_token %}
+    {% for key, val in request.GET.items %}
+    <input type="hidden" name="{{ key }}" value="{{ val }}" />
+    {% endfor %}
+    <div class="form-group">
+      <label for="quantity_remaining">New quantity remaining</label>
+      <input id="quantity_remaining" name="quantity_remaining" type="number" step="0.01" min="0"
+             value="{{ lot.quantity_remaining }}" required />
+    </div>
+    <div class="form-group">
+      <label for="reason">Reason</label>
+      <input id="reason" name="reason" required placeholder="Physical count adjustment" />
+    </div>
+    <div class="form-actions">
+      <button type="submit" class="btn btn-danger">Reconcile</button>
+      <a class="btn btn-secondary" href="{{ next_url }}">Cancel</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

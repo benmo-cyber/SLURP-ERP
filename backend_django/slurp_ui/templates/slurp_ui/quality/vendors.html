@@ -1,0 +1,38 @@
+{% extends "slurp_ui/base_module.html" %}
+{% block title %}Vendor Approval — SLURP{% endblock %}
+{% block module_title %}Quality{% endblock %}
+{% block header_actions %}
+<a class="btn btn-primary" href="{% url 'slurp_ui:quality_create_vendor' %}">Add vendor</a>
+{% endblock %}
+{% block main %}
+<div style="display:flex;gap:.5rem;margin-bottom:1rem">
+  <a class="btn btn-secondary" href="?status=all">All</a>
+  <a class="btn btn-secondary" href="?status=approved">Approved</a>
+  <a class="btn btn-secondary" href="?status=pending">Pending</a>
+</div>
+<table class="data-table">
+  <thead>
+    <tr>
+      <th>Vendor</th>
+      <th>Status</th>
+      <th>Address</th>
+      <th>Risk</th>
+      <th>Email</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for row in rows %}
+    <tr>
+      <td><a href="{% url 'slurp_ui:quality_vendor_detail' row.vendor.id %}">{{ row.vendor.name }}</a></td>
+      <td>{{ row.vendor.approval_status }}</td>
+      <td>{{ row.display_address|default:"—" }}</td>
+      <td>{{ row.vendor.risk_profile }}</td>
+      <td>{{ row.vendor.email|default:"—" }}</td>
+    </tr>
+    {% empty %}
+    <tr><td colspan="5">No vendors.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}
+

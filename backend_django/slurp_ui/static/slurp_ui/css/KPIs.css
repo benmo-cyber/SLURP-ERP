@@ -1,0 +1,124 @@
+.kpis-page {
+  padding: 20px;
+  background: #f5f5f5;
+  min-height: 100%;
+}
+
+.kpis-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-bottom: 24px;
+  padding-bottom: 16px;
+  border-bottom: 2px solid #e0e0e0;
+}
+
+.kpis-header h2 {
+  margin: 0;
+  font-size: 28px;
+  color: #333;
+}
+
+.kpis-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.kpis-controls label {
+  font-weight: 500;
+  color: #555;
+}
+
+.kpis-period-select {
+  padding: 8px 12px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 14px;
+  background: white;
+  cursor: pointer;
+}
+
+.kpis-period-dates {
+  font-size: 13px;
+  color: #666;
+}
+
+.kpis-section {
+  margin-bottom: 32px;
+}
+
+.kpis-section h3 {
+  margin: 0 0 16px 0;
+  font-size: 18px;
+  color: #444;
+}
+
+.kpis-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 16px;
+}
+
+.kpi-card {
+  background: white;
+  border-radius: 8px;
+  padding: 20px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  border-left: 4px solid #6c757d;
+}
+
+.kpi-card.kpi-on-time.good {
+  border-left-color: #50c878;
+}
+
+.kpi-card.kpi-on-time.medium {
+  border-left-color: #f5a623;
+}
+
+.kpi-card.kpi-late {
+  border-left-color: #d0021b;
+}
+
+.kpi-label {
+  font-size: 13px;
+  color: #666;
+  margin-bottom: 8px;
+}
+
+.kpi-value {
+  font-size: 28px;
+  font-weight: 700;
+  color: #333;
+}
+
+.kpi-sublabel {
+  font-size: 12px;
+  color: #888;
+  margin-top: 6px;
+}
+
+.kpis-no-data {
+  margin-top: 12px;
+  color: #666;
+  font-style: italic;
+}
+
+.kpis-note {
+  font-size: 13px;
+  color: #888;
+  margin-top: 24px;
+}
+
+.kpis-loading,
+.kpis-error {
+  padding: 40px;
+  text-align: center;
+  color: #666;
+}
+
+.kpis-error {
+  color: #d0021b;
+}

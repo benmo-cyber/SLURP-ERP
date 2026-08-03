@@ -1,0 +1,270 @@
+{% extends "slurp_ui/base.html" %}
+{% block title %}Create Batch Ticket — SLURP{% endblock %}
+{% block content %}
+<div class="modal-page" style="max-width:960px">
+  <h2>Create {% if batch_type == 'repack' %}Repack{% else %}Batch Ticket (Production){% endif %}</h2>
+  <p style="color:#64748b;margin-bottom:1rem">
+    {% if batch_type == 'repack' %}
+    Select an item and input lots to repack. Total quantity used must equal quantity to repack (native UoM).
+    {% else %}
+    Select a formula, enter quantity to produce, then assign lots.
+    Required ingredient weights auto-calculate from formula % × quantity.
+    {% endif %}
+    Conversion: <strong>1 kg = {{ lbs_per_kg }} lbs</strong>.
+  </p>
+
+  <div style="display:flex;gap:0.5rem;margin-bottom:1rem">
+    <a class="btn {% if batch_type == 'production' %}btn-primary{% else %}btn-secondary{% endif %}"
+       href="{% url 'slurp_ui:production_create_batch' %}?batch_type=production">Production</a>
+    <a class="btn {% if batch_type == 'repack' %}btn-primary{% else %}btn-secondary{% endif %}"
+       href="{% url 'slurp_ui:production_create_batch' %}?batch_type=repack">Repack</a>
+  </div>
+
+  {% if batch_type == 'repack' %}
+  <form method="get" style="margin-bottom:1rem">
+    <input type="hidden" name="batch_type" value="repack" />
+    <div class="form-row">
+      <label for="item">Item to repack *</label>
+      <select id="item" name="item" onchange="this.form.submit()">
+        <option value="">— Select item —</option>
+        {% for it in repack_items %}
+        <option value="{{ it.id }}" {% if selected_repack_item and selected_repack_item.id == it.id %}selected{% endif %}>
+          {{ it.sku }} — {{ it.name }} ({{ it.unit_of_measure }})
+        </option>
+        {% endfor %}
+      </select>
+    </div>
+  </form>
+
+  {% if selected_repack_item %}
+  <form method="post" id="create-repack-form">
+    {% csrf_token %}
+    <input type="hidden" name="batch_type" value="repack" />
+    <input type="hidden" name="repack_item_id" value="{{ selected_repack_item.id }}" />
+    <input type="hidden" name="batch_ticket_mass_unit" value="{{ display_uom }}" />
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem">
+      <div class="form-row">
+        <label for="quantity_produced">Quantity to repack ({{ display_uom }}) *</label>
+        <input id="quantity_produced" name="quantity_produced" type="number" step="any" min="0" required />
+      </div>
+      <div class="form-row">
+        <label for="production_date">Production date</label>
+        <input id="production_date" name="production_date" type="date" value="{{ today }}"
+               {% if not god_mode %}max="{{ today }}"{% endif %} />
+      </div>
+    </div>
+
+    <h3 style="margin:1rem 0 0.5rem">Input lots (same SKU)</h3>
+    {% for lr in repack_lot_rows %}
+    <div style="border:1px solid #e5e7eb;border-radius:6px;padding:0.75rem;margin-bottom:0.5rem">
+      <div style="display:flex;justify-content:space-between;gap:1rem;flex-wrap:wrap">
+        <div>
+          <strong>{{ lr.lot.lot_number }}</strong>
+          <span style="color:#64748b"> — avail {{ lr.available_display|floatformat:2 }} {{ display_uom }}</span>
+        </div>
+        <div class="form-row" style="margin:0;min-width:10rem">
+          <label>Qty to use ({{ display_uom }})</label>
+          <input name="repack_qty_{{ lr.lot.id }}" type="number" step="any" min="0" max="{{ lr.available_display }}" />
+        </div>
+      </div>
+    </div>
+    {% empty %}
+    <p>No available lots for this item.</p>
+    {% endfor %}
+
+    <div class="form-row">
+      <label for="notes">Notes</label>
+      <textarea id="notes" name="notes" rows="2"></textarea>
+    </div>
+
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">Create repack ticket</button>
+      <a class="btn btn-secondary" href="{% url 'slurp_ui:production' %}">Cancel</a>
+    </div>
+  </form>
+  {% endif %}
+
+  {% else %}
+  <form method="get" style="margin-bottom:1rem">
+    <input type="hidden" name="batch_type" value="production" />
+    <input type="hidden" name="uom" value="{{ display_uom }}" />
+    <div class="form-row">
+      <label for="formula">Finished good / formula *</label>
+      <select id="formula" name="formula" onchange="this.form.submit()">
+        <option value="">— Select formula —</option>
+        {% for f in formulas %}
+        <option value="{{ f.id }}" {% if selected_formula and selected_formula.id == f.id %}selected{% endif %}>
+          {{ f.finished_good.sku }} — {{ f.finished_good.name }}
+        </option>
+        {% endfor %}
+      </select>
+    </div>
+  </form>
+
+  {% if selected_formula %}
+  <form method="post" id="create-batch-form">
+    {% csrf_token %}
+    <input type="hidden" name="batch_type" value="production" />
+    <input type="hidden" name="formula_id" value="{{ selected_formula.id }}" />
+    <input type="hidden" name="batch_ticket_mass_unit" id="batch_ticket_mass_unit" value="{{ display_uom }}" />
+
+    <div style="display:flex;align-items:center;gap:1rem;margin-bottom:1rem;flex-wrap:wrap">
+      <div class="unit-toggle" style="display:inline-flex;border:1px solid #cbd5e1;border-radius:6px;overflow:hidden">
+        <button type="button" class="toggle-btn {% if display_uom == 'lbs' %}active{% endif %}" data-uom="lbs"
+                style="padding:0.4rem 0.9rem;border:0;background:{% if display_uom == 'lbs' %}#1e40af{% else %}#fff{% endif %};color:{% if display_uom == 'lbs' %}#fff{% else %}#334155{% endif %};cursor:pointer">lbs</button>
+        <button type="button" class="toggle-btn {% if display_uom == 'kg' %}active{% endif %}" data-uom="kg"
+                style="padding:0.4rem 0.9rem;border:0;background:{% if display_uom == 'kg' %}#1e40af{% else %}#fff{% endif %};color:{% if display_uom == 'kg' %}#fff{% else %}#334155{% endif %};cursor:pointer">kg</button>
+      </div>
+      <span style="color:#64748b;font-size:0.9rem">Ticket mass unit (auto-calcs &amp; inputs use this)</span>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem">
+      <div class="form-row">
+        <label for="quantity_produced">Quantity to produce (<span class="uom-label">{{ display_uom }}</span>) *</label>
+        <input id="quantity_produced" name="quantity_produced" type="number" step="any" min="0" required />
+      </div>
+      <div class="form-row">
+        <label for="production_date">Production date</label>
+        <input id="production_date" name="production_date" type="date" value="{{ today }}"
+               {% if not god_mode %}max="{{ today }}"{% endif %} />
+      </div>
+    </div>
+
+    <h3 style="margin:1rem 0 0.5rem">Ingredients</h3>
+    {% for row in ingredient_lot_choices %}
+    <div class="ingredient-row" data-ing-id="{{ row.ingredient.id }}" data-pct="{{ row.percentage }}"
+         data-native-uom="{{ row.native_uom }}"
+         style="border:1px solid #e5e7eb;border-radius:6px;padding:0.75rem;margin-bottom:0.5rem">
+      <div style="display:flex;justify-content:space-between;gap:1rem;flex-wrap:wrap">
+        <div>
+          <strong>{{ row.ingredient.item.sku }}</strong> — {{ row.ingredient.item.name }}
+          <span style="color:#64748b">(Formula: {{ row.percentage }}%)</span>
+        </div>
+        <div class="required-qty" style="color:#1e40af;font-weight:600">
+          Required: <span class="req-val">0</span> <span class="uom-label">{{ display_uom }}</span>
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:2fr 1fr;gap:0.5rem;margin-top:0.5rem">
+        <div class="form-row" style="margin:0">
+          <label>Lot</label>
+          <select name="lot_id_{{ row.ingredient.id }}" class="lot-select">
+            <option value="">— Select lot —</option>
+            {% for lr in row.lots %}
+            <option value="{{ lr.lot.id }}"
+                    data-avail-display="{{ lr.available_display }}"
+                    data-avail-native="{{ lr.available_native }}"
+                    data-native-uom="{{ lr.native_uom }}">
+              {{ lr.lot.lot_number }} — avail {{ lr.available_display|floatformat:2 }} {{ display_uom }}
+              ({{ lr.available_native|floatformat:2 }} {{ lr.native_uom }})
+            </option>
+            {% empty %}
+            <option value="" disabled>No available lots</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="form-row" style="margin:0">
+          <label>Qty used (<span class="uom-label">{{ display_uom }}</span>)</label>
+          <input name="qty_{{ row.ingredient.id }}" type="number" step="any" min="0" class="qty-input" />
+        </div>
+      </div>
+    </div>
+    {% empty %}
+    <p>This formula has no ingredients.</p>
+    {% endfor %}
+
+    <div class="form-row">
+      <label for="notes">Notes</label>
+      <textarea id="notes" name="notes" rows="2"></textarea>
+    </div>
+
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">Create batch</button>
+      <a class="btn btn-secondary" href="{% url 'slurp_ui:production' %}">Cancel</a>
+    </div>
+  </form>
+
+  <script>
+  (function () {
+    var LBS_PER_KG = {{ lbs_per_kg }};
+    var displayUom = '{{ display_uom }}';
+    var qtyInput = document.getElementById('quantity_produced');
+    var unitHidden = document.getElementById('batch_ticket_mass_unit');
+    var formulaId = '{{ selected_formula.id }}';
+
+    function round2(n) { return Math.round(n * 100) / 100; }
+    function normalize(n) {
+      var v = round2(n);
+      var i = Math.round(v);
+      if (Math.abs(v - i) <= 0.01) return i;
+      return v;
+    }
+    function convert(value, from, to) {
+      if (from === to) return normalize(value);
+      if (from === 'lbs' && to === 'kg') return normalize(value / LBS_PER_KG);
+      if (from === 'kg' && to === 'lbs') return normalize(value * LBS_PER_KG);
+      return value;
+    }
+
+    function recalcRequired() {
+      var base = parseFloat(qtyInput.value || '0');
+      if (!isFinite(base)) base = 0;
+      document.querySelectorAll('.ingredient-row').forEach(function (row) {
+        var pct = parseFloat(row.getAttribute('data-pct') || '0');
+        var req = normalize(base * (pct / 100));
+        row.querySelector('.req-val').textContent = String(req);
+        var qi = row.querySelector('.qty-input');
+        if (qi && (qi.value === '' || qi.dataset.autofilled === '1')) {
+          qi.value = base > 0 ? String(req) : '';
+          qi.dataset.autofilled = '1';
+        }
+      });
+    }
+
+    qtyInput.addEventListener('input', recalcRequired);
+    document.querySelectorAll('.qty-input').forEach(function (qi) {
+      qi.addEventListener('input', function () { qi.dataset.autofilled = '0'; });
+    });
+    document.querySelectorAll('.lot-select').forEach(function (sel) {
+      sel.addEventListener('change', function () {
+        var row = sel.closest('.ingredient-row');
+        var qi = row.querySelector('.qty-input');
+        if (qi && (!qi.value || qi.dataset.autofilled === '1')) {
+          qi.value = row.querySelector('.req-val').textContent;
+          qi.dataset.autofilled = '1';
+        }
+      });
+    });
+    document.querySelectorAll('.toggle-btn').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var newUom = btn.getAttribute('data-uom');
+        if (newUom === displayUom) return;
+        var old = displayUom;
+        if (qtyInput.value) {
+          var q = parseFloat(qtyInput.value);
+          if (isFinite(q)) qtyInput.value = String(convert(q, old, newUom));
+        }
+        unitHidden.value = newUom;
+        var url = new URL(window.location.href);
+        url.searchParams.set('formula', formulaId);
+        url.searchParams.set('uom', newUom);
+        url.searchParams.set('batch_type', 'production');
+        sessionStorage.setItem('batch_qty_' + formulaId, qtyInput.value || '');
+        sessionStorage.setItem('batch_uom_' + formulaId, newUom);
+        window.location.href = url.toString();
+      });
+    });
+    var savedUom = sessionStorage.getItem('batch_uom_' + formulaId);
+    var savedQty = sessionStorage.getItem('batch_qty_' + formulaId);
+    if (savedUom === displayUom && savedQty != null && savedQty !== '') {
+      qtyInput.value = savedQty;
+      sessionStorage.removeItem('batch_qty_' + formulaId);
+      sessionStorage.removeItem('batch_uom_' + formulaId);
+    }
+    recalcRequired();
+  })();
+  </script>
+  {% endif %}
+  {% endif %}
+</div>
+{% endblock %}

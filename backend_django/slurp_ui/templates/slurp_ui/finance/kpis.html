@@ -1,0 +1,26 @@
+{% extends "slurp_ui/base_module.html" %}
+{% block title %}KPIs — SLURP{% endblock %}
+{% block module_title %}Finance{% endblock %}
+{% block main %}
+<form method="get" style="margin-bottom:1rem">
+  <label>Months back</label>
+  <select name="months_back" onchange="this.form.submit()">
+    <option value="6" {% if months_back == 6 %}selected{% endif %}>6</option>
+    <option value="12" {% if months_back == 12 %}selected{% endif %}>12</option>
+    <option value="24" {% if months_back == 24 %}selected{% endif %}>24</option>
+  </select>
+</form>
+{% if kpis.period %}
+<p style="color:#64748b">Period: {{ kpis.period.start_date }} — {{ kpis.period.end_date }}</p>
+{% endif %}
+<table class="data-table" style="max-width:480px">
+  <tbody>
+    <tr><th>On-time shipment %</th><td>{% if kpis.shipping.on_time_shipment_pct != None %}{{ kpis.shipping.on_time_shipment_pct }}%{% else %}—{% endif %}</td></tr>
+    <tr><th>On-time count</th><td>{{ kpis.shipping.on_time_count }}</td></tr>
+    <tr><th>Late count</th><td>{{ kpis.shipping.late_count }}</td></tr>
+    <tr><th>Total shipped</th><td>{{ kpis.shipping.total_shipped }}</td></tr>
+    <tr><th>Avg days late</th><td>{{ kpis.shipping.avg_days_late|default:"—" }}</td></tr>
+  </tbody>
+</table>
+{% endblock %}
+

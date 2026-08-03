@@ -1,0 +1,453 @@
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.checkin-modal {
+  background: white;
+  border-radius: 8px;
+  max-width: 600px;
+  width: 90%;
+  max-height: 90vh;
+  overflow-y: auto;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+}
+
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1.5rem;
+  border-bottom: 1px solid #e0e0e0;
+  position: sticky;
+  top: 0;
+  background: white;
+  z-index: 10;
+}
+
+.modal-header h2 {
+  margin: 0;
+  color: #2c3e50;
+}
+
+.close-btn {
+  background: none;
+  border: none;
+  font-size: 2rem;
+  color: #7f8c8d;
+  cursor: pointer;
+  padding: 0;
+  width: 2rem;
+  height: 2rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  border-radius: 4px;
+  transition: all 0.2s;
+}
+
+.close-btn:hover {
+  color: #2c3e50;
+  background: #e0e0e0;
+}
+
+.modal-body {
+  padding: 1.5rem;
+}
+
+.checkin-form {
+  padding: 0.75rem 1rem 1rem;
+}
+
+.form-group {
+  margin-bottom: 1.5rem;
+}
+
+.form-group label {
+  display: block;
+  margin-bottom: 0.5rem;
+  font-weight: 500;
+  color: #2c3e50;
+}
+
+.form-group input,
+.form-group select,
+.form-group textarea {
+  width: 100%;
+  padding: 0.75rem;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 0.95rem;
+  font-family: inherit;
+}
+
+.form-group input:focus,
+.form-group select:focus,
+.form-group textarea:focus {
+  outline: none;
+  border-color: #3498db;
+  box-shadow: 0 0 0 3px rgba(52, 152, 219, 0.1);
+}
+
+.form-group textarea {
+  resize: vertical;
+}
+
+.unit-hint {
+  display: block;
+  margin-top: 0.25rem;
+  font-size: 0.85rem;
+  color: #7f8c8d;
+}
+
+.form-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.5rem;
+}
+
+.form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 1rem;
+  margin-top: 2rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid #e0e0e0;
+}
+
+.btn {
+  padding: 0.75rem 1.5rem;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.95rem;
+  font-weight: 500;
+  transition: all 0.2s;
+}
+
+.btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.btn-primary {
+  background-color: #3498db;
+  color: white;
+}
+
+.btn-primary:hover:not(:disabled) {
+  background-color: #2980b9;
+}
+
+.btn-secondary {
+  background-color: #95a5a6;
+  color: white;
+}
+
+.btn-secondary:hover:not(:disabled) {
+  background-color: #7f8c8d;
+}
+
+.loading {
+  text-align: center;
+  padding: 3rem;
+  color: #7f8c8d;
+  font-size: 1.1rem;
+}
+
+.read-only-input {
+  background-color: #f5f5f5;
+  cursor: not-allowed;
+  color: #666;
+}
+
+.form-hint {
+  display: block;
+  margin-top: 0.25rem;
+  font-size: 0.85rem;
+  color: #7f8c8d;
+  font-style: italic;
+}
+
+.checkin-table-modal {
+  max-width: min(1600px, 98vw);
+  width: min(1600px, 98vw);
+}
+
+.checkin-table-wrapper {
+  overflow-x: hidden;
+  margin-bottom: 1rem;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+}
+
+.checkin-table {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+  font-size: 0.8rem;
+}
+
+/* Approximate column weights — keeps the grid within the modal without horizontal scroll */
+.checkin-table th:nth-child(1),
+.checkin-table td:nth-child(1) {
+  width: 7%;
+}
+.checkin-table th:nth-child(2),
+.checkin-table td:nth-child(2) {
+  width: 8%;
+}
+.checkin-table th:nth-child(3),
+.checkin-table td:nth-child(3) {
+  width: 7%;
+}
+.checkin-table th:nth-child(4),
+.checkin-table td:nth-child(4) {
+  width: 6%;
+}
+.checkin-table th:nth-child(5),
+.checkin-table td:nth-child(5) {
+  width: 12%;
+}
+.checkin-table th:nth-child(6),
+.checkin-table td:nth-child(6) {
+  width: 7%;
+}
+.checkin-table th:nth-child(7),
+.checkin-table td:nth-child(7) {
+  width: 6%;
+}
+.checkin-table th:nth-child(8),
+.checkin-table td:nth-child(8) {
+  width: 9%;
+}
+.checkin-table th:nth-child(9),
+.checkin-table td:nth-child(9) {
+  width: 6%;
+}
+.checkin-table th:nth-child(10),
+.checkin-table td:nth-child(10) {
+  width: 7%;
+}
+.checkin-table th:nth-child(11),
+.checkin-table td:nth-child(11),
+.checkin-table th:nth-child(12),
+.checkin-table td:nth-child(12),
+.checkin-table th:nth-child(13),
+.checkin-table td:nth-child(13),
+.checkin-table th:nth-child(14),
+.checkin-table td:nth-child(14) {
+  width: 4.5%;
+}
+.checkin-table th:nth-child(15),
+.checkin-table td:nth-child(15) {
+  width: 4%;
+}
+.checkin-table th:nth-child(16),
+.checkin-table td:nth-child(16) {
+  width: 3%;
+}
+
+.checkin-table thead {
+  background-color: var(--app-header-bg);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.checkin-table th {
+  padding: 0.35rem 0.3rem;
+  text-align: center;
+  font-weight: 600;
+  color: var(--app-header-text);
+  background-color: var(--app-header-bg);
+  border-bottom: 2px solid var(--table-header-border);
+  white-space: normal;
+  line-height: 1.15;
+  font-size: 0.72rem;
+  hyphens: auto;
+  word-break: break-word;
+}
+
+.checkin-table th:first-child,
+.checkin-table td:first-child {
+  text-align: left;
+}
+
+.checkin-table td {
+  padding: 0.35rem 0.3rem;
+  border-bottom: 1px solid #e0e0e0;
+  vertical-align: top;
+}
+
+.checkin-table tbody tr:hover {
+  background-color: #f8f9fa;
+}
+
+.table-input {
+  width: 100%;
+  max-width: 100%;
+  padding: 0.35rem 0.25rem;
+  border: 1px solid #ddd;
+  border-radius: 3px;
+  font-size: 0.8rem;
+  font-family: inherit;
+  box-sizing: border-box;
+  min-height: 2rem;
+  min-width: 0;
+}
+
+.table-input:focus {
+  outline: none;
+  border-color: #3498db;
+  box-shadow: 0 0 0 2px rgba(52, 152, 219, 0.1);
+}
+
+.table-input[readonly] {
+  background-color: #f5f5f5;
+  cursor: not-allowed;
+}
+
+.initials-input {
+  width: 100%;
+  max-width: 3.5rem;
+  margin: 0 auto;
+  display: block;
+  text-align: center;
+  text-transform: uppercase;
+  min-height: 2rem;
+  font-size: 0.8rem;
+  padding: 0.35rem 0.2rem;
+  box-sizing: border-box;
+}
+
+.short-reason-input {
+  min-width: 0;
+  width: 100%;
+  font-size: 0.8rem;
+}
+
+.po-quantity-hint {
+  display: block;
+  margin-top: 0.2rem;
+  font-size: 0.65rem;
+  color: #7f8c8d;
+  font-style: italic;
+  line-height: 1.2;
+}
+
+.checkbox-cell {
+  text-align: center;
+  vertical-align: middle;
+  padding: 0.25rem !important;
+}
+
+.checkbox-cell input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+  margin: 0;
+}
+
+.checkin-th-actions {
+  padding: 0.2rem !important;
+}
+
+.checkin-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid #e0e0e0;
+}
+
+.btn-remove-row {
+  background: #e74c3c;
+  color: white;
+  border: none;
+  border-radius: 50%;
+  width: 22px;
+  height: 22px;
+  cursor: pointer;
+  font-size: 1rem;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+  padding: 0;
+  flex-shrink: 0;
+}
+
+.btn-remove-row:hover:not(:disabled) {
+  background: #c0392b;
+}
+
+.btn-remove-row:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.quantity-input-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  align-items: center;
+}
+
+.quantity-input {
+  flex: 1 1 4rem;
+  min-width: 0;
+}
+
+.unit-toggle-group {
+  display: flex;
+  gap: 0;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.unit-toggle-btn {
+  padding: 0.25rem 0.45rem;
+  border: none;
+  background: white;
+  cursor: pointer;
+  font-size: 0.7rem;
+  transition: all 0.2s;
+  border-right: 1px solid #ddd;
+}
+
+.unit-toggle-btn:last-child {
+  border-right: none;
+}
+
+.unit-toggle-btn:hover {
+  background: #f5f5f5;
+}
+
+.unit-toggle-btn.active {
+  background: #3498db;
+  color: white;
+}
+
+@media (max-width: 768px) {
+  .form-row {
+    grid-template-columns: 1fr;
+  }
+  
+  .checkin-table-modal {
+    max-width: 100vw;
+    width: 100vw;
+  }
+}

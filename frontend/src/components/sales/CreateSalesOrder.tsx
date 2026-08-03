@@ -639,12 +639,12 @@ function CreateSalesOrder({ onClose, onSuccess, salesOrder }: CreateSalesOrderPr
   }
 
   const convertUnit = (quantity: number, fromUnit: string, toUnit: string): number => {
-    // Convert lbs to kg: 1 lb = 0.453592 kg
-    // Convert kg to lbs: 1 kg = 2.20462 lbs
+    // Convert lbs to kg: 1 lb = (1/2.2) kg
+    // Convert kg to lbs: 1 kg = 2.2 lbs
     if (fromUnit.toLowerCase() === 'lbs' && toUnit.toLowerCase() === 'kg') {
-      return quantity * 0.453592
+      return quantity / 2.2
     } else if (fromUnit.toLowerCase() === 'kg' && toUnit.toLowerCase() === 'lbs') {
-      return quantity * 2.20462
+      return quantity * 2.2
     }
     return quantity // Same unit or unknown conversion
   }
@@ -653,8 +653,8 @@ function CreateSalesOrder({ onClose, onSuccess, salesOrder }: CreateSalesOrderPr
   const convertPricePerUnit = (price: number, fromUnit: string, toUnit: string): number => {
     const f = (fromUnit || '').toLowerCase()
     const t = (toUnit || '').toLowerCase()
-    if (f === 'lbs' && t === 'kg') return price * 2.20462  // $/lb → $/kg
-    if (f === 'kg' && t === 'lbs') return price / 2.20462   // $/kg → $/lb
+    if (f === 'lbs' && t === 'kg') return price * 2.2  // $/lb → $/kg
+    if (f === 'kg' && t === 'lbs') return price / 2.2   // $/kg → $/lb
     return price
   }
 
@@ -698,8 +698,8 @@ function CreateSalesOrder({ onClose, onSuccess, salesOrder }: CreateSalesOrderPr
     const price = typeof row.unit_price === 'string' ? parseFloat(row.unit_price) : row.unit_price
     if (typeof price === 'number' && isNaN(price)) return ''
     const u = (row.unit || '').toLowerCase()
-    if (u === 'lbs' && unitDisplay === 'kg') return Math.round(Number(price) * 2.20462 * 100) / 100
-    if (u === 'kg' && unitDisplay === 'lbs') return Math.round((Number(price) / 2.20462) * 100) / 100
+    if (u === 'lbs' && unitDisplay === 'kg') return Math.round(Number(price) * 2.2 * 100) / 100
+    if (u === 'kg' && unitDisplay === 'lbs') return Math.round((Number(price) / 2.2) * 100) / 100
     return price
   }
 
@@ -745,10 +745,10 @@ function CreateSalesOrder({ onClose, onSuccess, salesOrder }: CreateSalesOrderPr
     if (isNaN(parsed)) return
 
     if (u === 'lbs' && unitDisplay === 'kg') {
-      const stored = parsed / 2.20462
+      const stored = parsed / 2.2
       handleItemChange(index, 'unit_price', Math.round(stored * 100) / 100)
     } else if (u === 'kg' && unitDisplay === 'lbs') {
-      const stored = parsed * 2.20462
+      const stored = parsed * 2.2
       handleItemChange(index, 'unit_price', Math.round(stored * 100) / 100)
     } else {
       const rounded = parsed === Math.round(parsed) ? parsed : Math.round(parsed * 100) / 100

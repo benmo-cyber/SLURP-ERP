@@ -1,0 +1,37 @@
+{% extends "slurp_ui/base.html" %}
+{% block title %}{% if contact %}Edit{% else %}Add{% endif %} Contact — SLURP{% endblock %}
+{% block content %}
+<div class="modal-page" style="max-width:640px">
+  <h2>{% if contact %}Edit{% else %}Add{% endif %} contact — {{ customer.name }}</h2>
+  <form method="post">
+    {% csrf_token %}
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem">
+      <div class="form-row"><label>First name *</label><input name="first_name" required value="{{ contact.first_name|default:'' }}" /></div>
+      <div class="form-row"><label>Last name *</label><input name="last_name" required value="{{ contact.last_name|default:'' }}" /></div>
+    </div>
+    <div class="form-row"><label>Title</label><input name="title" value="{{ contact.title|default:'' }}" /></div>
+    <div class="form-row"><label>Type</label>
+      <select name="contact_type">
+        {% for val, label in contact_type_choices %}
+        <option value="{{ val }}" {% if contact.contact_type == val %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="form-row"><label>Emails (one per line)</label><textarea name="emails" rows="3">{{ emails_text }}</textarea></div>
+    <div class="form-row"><label>Phone</label><input name="phone" value="{{ contact.phone|default:'' }}" /></div>
+    <div class="form-row"><label>Mobile</label><input name="mobile" value="{{ contact.mobile|default:'' }}" /></div>
+    <div class="form-row"><label><input type="checkbox" name="is_primary" {% if contact.is_primary %}checked{% endif %} /> Primary</label></div>
+    <div class="form-row"><label><input type="checkbox" name="is_ap_contact" {% if contact.is_ap_contact %}checked{% endif %} /> A/P contact</label></div>
+    <div class="form-row"><label><input type="checkbox" name="is_purchasing_contact" {% if contact.is_purchasing_contact %}checked{% endif %} /> Purchasing contact</label></div>
+    <div class="form-row"><label><input type="checkbox" name="is_active" {% if not contact or contact.is_active %}checked{% endif %} /> Active</label></div>
+    <div class="form-row"><label>Notes</label><textarea name="notes" rows="2">{{ contact.notes|default:'' }}</textarea></div>
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">Save</button>
+      <a class="btn btn-secondary" href="{% url 'slurp_ui:sales_customer_profile' customer.pk %}?tab=contacts">Cancel</a>
+      {% if contact %}
+      <button type="submit" name="action" value="delete" class="btn btn-secondary" style="color:#b91c1c" onclick="return confirm('Delete contact?');">Delete</button>
+      {% endif %}
+    </div>
+  </form>
+</div>
+{% endblock %}

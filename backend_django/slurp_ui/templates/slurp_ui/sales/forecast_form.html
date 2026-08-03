@@ -1,0 +1,35 @@
+{% extends "slurp_ui/base.html" %}
+{% block title %}{% if forecast %}Edit{% else %}Add{% endif %} Forecast — SLURP{% endblock %}
+{% block content %}
+<div class="modal-page" style="max-width:520px">
+  <h2>{% if forecast %}Edit{% else %}Add{% endif %} forecast — {{ customer.name }}</h2>
+  <form method="post">
+    {% csrf_token %}
+    <div class="form-row"><label>Item *</label>
+      <select name="item" required>
+        <option value="">Select item</option>
+        {% for item in items %}
+        <option value="{{ item.pk }}" {% if forecast.item_id == item.pk %}selected{% endif %}>{{ item.sku }} — {{ item.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="form-row"><label>Period *</label><input name="forecast_period" required placeholder="2025-Q1" value="{{ forecast.forecast_period|default:'' }}" /></div>
+    <div class="form-row"><label>Quantity *</label><input type="number" step="any" name="forecast_quantity" required value="{{ forecast.forecast_quantity|default:'' }}" /></div>
+    <div class="form-row"><label>UoM</label>
+      <select name="unit_of_measure">
+        {% for val, label in uom_choices %}
+        <option value="{{ val }}" {% if forecast.unit_of_measure == val or not forecast and val == 'lbs' %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="form-row"><label>Notes</label><textarea name="notes" rows="2">{{ forecast.notes|default:'' }}</textarea></div>
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">Save</button>
+      <a class="btn btn-secondary" href="{% url 'slurp_ui:sales_customer_profile' customer.pk %}?tab=forecast">Cancel</a>
+      {% if forecast %}
+      <button type="submit" name="action" value="delete" class="btn btn-secondary" style="color:#b91c1c" onclick="return confirm('Delete forecast?');">Delete</button>
+      {% endif %}
+    </div>
+  </form>
+</div>
+{% endblock %}

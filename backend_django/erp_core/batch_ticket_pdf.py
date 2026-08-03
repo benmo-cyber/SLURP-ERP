@@ -1313,7 +1313,7 @@ def build_batch_ticket_pdf(batch):
         if base_unit in ('lbs', 'ea'):
             return quantity_in_lbs
         if base_unit == 'kg':
-            return quantity_in_lbs / 2.20462
+            return quantity_in_lbs / 2.2
         return quantity_in_lbs
 
     if batch.batch_type == 'repack':
@@ -1394,7 +1394,7 @@ def build_batch_ticket_pdf(batch):
                 vendor_lot = (lot.vendor_lot_number or lot.lot_number or '—').strip()
                 qty = batch_input.quantity_used
                 if (item.unit_of_measure or 'lbs') == 'kg':
-                    qty = qty * 2.20462
+                    qty = qty * 2.2
                 qty_base = convert_from_lbs_to_base(qty)
                 qty_str = f"{int(round(qty_base))}" if abs(qty_base - round(qty_base)) <= 0.01 else f"{qty_base:.2f}"
                 raw_material = (getattr(item, 'description', None) or item.name or item.sku or '').strip()
@@ -1590,7 +1590,7 @@ def build_batch_ticket_pdf(batch):
         vendor_lot = (lot.vendor_lot_number or lot.lot_number or '—').strip()
         qty = batch_input.quantity_used
         if (item.unit_of_measure or 'lbs') == 'kg':
-            qty = qty * 2.20462
+            qty = qty * 2.2
         qty_base = convert_from_lbs_to_base(qty)
         qty_str = f"{int(round(qty_base))}" if abs(qty_base - round(qty_base)) <= 0.01 else f"{qty_base:.2f}"
         pick_rows.append([item.sku or '', vendor[:14], vendor_lot[:12], qty_str, '', '', lot.lot_number or ''])

@@ -6,6 +6,8 @@ from django.conf.urls.static import static
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/', include('erp_core.urls')),
+    # SLURP 2.0 — Django server-rendered UI (keeps /api/ for legacy React if needed)
+    path('', include('slurp_ui.urls')),
 ]
 
 # Serve media files in development

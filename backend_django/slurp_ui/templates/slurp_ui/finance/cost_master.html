@@ -1,0 +1,11 @@
+﻿{% extends "slurp_ui/base_module.html" %}
+{% block title %}Cost Master — SLURP{% endblock %}
+{% block module_title %}Finance{% endblock %}
+{% block main %}
+<form method="get" style="margin-bottom:1rem"><input name="q" value="{{ search }}" placeholder="Search…" /><button class="btn btn-secondary" type="submit">Search</button></form>
+<table class="data-table" style="width:100%"><thead><tr><th>Material</th><th>WWI code</th><th>Vendor</th><th>$/lb</th><th>Actual vs est</th></tr></thead>
+<tbody>{% for r in rows %}<tr>
+  <td>{{ r.vendor_material }}</td><td>{{ r.wwi_product_code|default:"—" }}</td><td>{{ r.vendor|default:"—" }}</td>
+  <td>{{ r.landed_cost_per_lb|default:r.price_per_lb|default:"—" }}</td><td>{{ r.actual_comparison }}</td>
+</tr>{% empty %}<tr><td colspan="5">No cost master rows.</td></tr>{% endfor %}</tbody></table>
+{% endblock %}

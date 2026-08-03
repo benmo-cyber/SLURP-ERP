@@ -450,11 +450,11 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
   const convertWeight = (value: number, from: 'lbs' | 'kg', to: 'lbs' | 'kg'): number => {
     if (from === to) return normalizeMassQuantity(value)
     if (from === 'lbs' && to === 'kg') {
-      const converted = value / 2.20462
+      const converted = value / 2.2
       return normalizeMassQuantity(Math.round(converted * 100) / 100)
     }
     if (from === 'kg' && to === 'lbs') {
-      const converted = value * 2.20462
+      const converted = value * 2.2
       return normalizeMassQuantity(Math.round(converted * 100) / 100)
     }
     return value

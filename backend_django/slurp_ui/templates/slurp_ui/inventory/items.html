@@ -1,0 +1,42 @@
+{% extends "slurp_ui/base_module.html" %}
+{% block title %}Items — SLURP{% endblock %}
+{% block module_title %}Items Management{% endblock %}
+{% block header_actions %}
+  <a href="{% url 'slurp_ui:inventory_create_item' %}" class="btn btn-primary">Create New Item</a>
+  <a href="{% url 'slurp_ui:inventory_create_item' %}?mode=add-vendor" class="btn btn-secondary">Add Vendor to SKU</a>
+{% endblock %}
+{% block main %}
+<form method="get" style="display:flex;gap:0.5rem;margin-bottom:1rem;flex-wrap:wrap">
+  <input type="search" name="q" value="{{ q }}" placeholder="Search SKU, name, vendor…" style="flex:1;min-width:180px;padding:0.5rem" />
+  <select name="type">
+    <option value="">All types</option>
+    {% for val, label in item_type_choices %}
+    <option value="{{ val }}" {% if item_type == val %}selected{% endif %}>{{ label }}</option>
+    {% endfor %}
+  </select>
+  <button type="submit" class="btn btn-primary">Filter</button>
+</form>
+<table class="data-table">
+  <thead>
+    <tr>
+      <th>SKU</th><th>Name</th><th>Type</th><th>Vendor</th><th>Vendor #</th><th>UoM</th><th>Pack sizes</th><th></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for item in items %}
+    <tr>
+      <td>{{ item.sku }}</td>
+      <td>{{ item.name }}</td>
+      <td>{{ item.get_item_type_display }}</td>
+      <td>{{ item.vendor|default:"—" }}</td>
+      <td>{{ item.vendor_item_number|default:"—" }}</td>
+      <td>{{ item.unit_of_measure }}</td>
+      <td>{{ item.pack_sizes.count }}</td>
+      <td><a href="{% url 'slurp_ui:inventory_edit_item' item.pk %}">Edit</a></td>
+    </tr>
+    {% empty %}
+    <tr><td colspan="8">No items.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

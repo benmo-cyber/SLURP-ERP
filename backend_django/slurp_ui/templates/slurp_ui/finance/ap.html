@@ -1,0 +1,21 @@
+﻿{% extends "slurp_ui/base_module.html" %}
+{% block title %}Accounts Payable — SLURP{% endblock %}
+{% block module_title %}Finance{% endblock %}
+{% block header_actions %}<a class="btn btn-primary" href="{% url 'slurp_ui:finance_payment_entry' %}?type=ap_payment">Record payment</a>{% endblock %}
+{% block main %}
+<form method="get" style="margin-bottom:1rem;display:flex;gap:0.5rem">
+  <select name="status"><option value="">All</option>
+    <option value="open" {% if status_filter == "open" %}selected{% endif %}>Open</option>
+    <option value="partial" {% if status_filter == "partial" %}selected{% endif %}>Partial</option>
+    <option value="paid" {% if status_filter == "paid" %}selected{% endif %}>Paid</option>
+  </select>
+  <input name="vendor" value="{{ vendor_filter }}" placeholder="Vendor" />
+  <button class="btn btn-secondary" type="submit">Filter</button>
+</form>
+<table class="data-table" style="width:100%"><thead><tr><th>Vendor</th><th>Invoice</th><th>Due</th><th>Balance</th><th>Status</th><th></th></tr></thead>
+<tbody>{% for r in entries %}<tr>
+  <td>{{ r.vendor_name }}</td><td>{{ r.invoice_number|default:"—" }}</td><td>{{ r.due_date }}</td>
+  <td>{{ r.balance|floatformat:2 }}</td><td>{{ r.status }}</td>
+  <td>{% if r.status != "paid" %}<a href="{% url 'slurp_ui:finance_payment_entry' %}?type=ap_payment&ap_entry={{ r.id }}">Pay</a>{% endif %}</td>
+</tr>{% empty %}<tr><td colspan="6">No AP entries.</td></tr>{% endfor %}</tbody></table>
+{% endblock %}

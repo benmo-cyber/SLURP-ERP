@@ -39,6 +39,8 @@ Thumbs.db
 Sensitive/
 *.env
 .env
+*.pem
+qb-trace-keys.pem
 
 # User uploads (PDFs, FPS files, etc.) — folder exists in git via .gitkeep only
 backend_django/media/**
