@@ -2,6 +2,8 @@
 {% block title %}Vendor Pricing — SLURP{% endblock %}
 {% block module_title %}Finance{% endblock %}
 {% block main %}
+<div class="hs-bleed" style="padding:1.25rem 1.5rem 2rem">
+<div class="hs-card"><div class="hs-card-body">
 <h2>Create vendor pricing</h2>
 <form method="post">{% csrf_token %}
   <label>Vendor name<input name="vendor_name" required /></label>
@@ -12,6 +14,7 @@
   <label>Vendor item #<input name="vendor_item_number" /></label>
   <label>Expiry<input type="date" name="expiry_date" /></label>
   <label>Notes<textarea name="notes"></textarea></label>
-  <button class="btn btn-primary" type="submit">Save</button>
+  <button class="hs-btn hs-btn-primary" type="submit">Save</button>
 </form>
+</div></div></div>
 {% endblock %}

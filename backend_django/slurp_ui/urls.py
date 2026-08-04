@@ -87,6 +87,7 @@ urlpatterns = [
     path("sales/", views.sales_crm, name="sales"),
     path("sales/orders/", views.sales_orders, name="sales_orders"),
     path("sales/calendar/", views.sales_calendar, name="sales_calendar"),
+    path("sales/kpis/", views.sales_kpis, name="sales_kpis"),
     path("sales/customers/", views.sales_customers, name="sales_customers"),
     path(
         "sales/customers/<int:pk>/",
@@ -202,6 +203,7 @@ urlpatterns = [
     ),
     # Finance
     path("finance/", views.finance_dashboard, name="finance"),
+    path("finance/calendar/", views.finance_calendar, name="finance_calendar"),
     path("finance/kpis/", views.finance_kpis, name="finance_kpis"),
     path("finance/ledger/", views.finance_ledger, name="finance_ledger"),
     path("finance/ledger/create-account/", views.finance_account_create, name="finance_account_create"),
@@ -239,8 +241,18 @@ urlpatterns = [
         name="finance_invoice_mark_paid",
     ),
     path("finance/ar/", views.finance_ar, name="finance_ar"),
+    path(
+        "finance/ar/<int:pk>/mark-paid/",
+        views.finance_ar_mark_paid,
+        name="finance_ar_mark_paid",
+    ),
     path("finance/payment/", views.finance_payment_entry, name="finance_payment_entry"),
     path("finance/ap/", views.finance_ap, name="finance_ap"),
+    path(
+        "finance/ap/<int:pk>/mark-paid/",
+        views.finance_ap_mark_paid,
+        name="finance_ap_mark_paid",
+    ),
     path("finance/pricing/", views.finance_pricing, name="finance_pricing"),
     path(
         "finance/pricing/customer/create/",
@@ -252,7 +264,48 @@ urlpatterns = [
         views.finance_pricing_vendor_create,
         name="finance_pricing_vendor_create",
     ),
+    path("finance/costing/", views.finance_costing, name="finance_costing"),
+    path(
+        "finance/costing/whatif/lookup-cost/",
+        views.finance_whatif_lookup_cost,
+        name="finance_whatif_lookup_cost",
+    ),
+    path(
+        "finance/costing/whatif/line/",
+        views.finance_whatif_line_save,
+        name="finance_whatif_line_save",
+    ),
+    path(
+        "finance/costing/whatif/line/<int:pk>/delete/",
+        views.finance_whatif_line_delete,
+        name="finance_whatif_line_delete",
+    ),
+    path(
+        "finance/costing/whatif/formula/<int:pk>/",
+        views.finance_whatif_formula,
+        name="finance_whatif_formula",
+    ),
+    path(
+        "finance/costing/whatif/scenario/",
+        views.finance_whatif_scenario_save,
+        name="finance_whatif_scenario_save",
+    ),
     path("finance/cost-master/", views.finance_cost_master, name="finance_cost_master"),
+    path(
+        "finance/rd-formulas/",
+        views.finance_rd_formulas,
+        name="finance_rd_formulas",
+    ),
+    path(
+        "finance/rd-formulas/new/",
+        views.finance_rd_formula_create,
+        name="finance_rd_formula_create",
+    ),
+    path(
+        "finance/rd-formulas/<int:pk>/",
+        views.finance_rd_formula_detail,
+        name="finance_rd_formula_detail",
+    ),
     path(
         "finance/margin-trends/",
         views.finance_margin_trends,

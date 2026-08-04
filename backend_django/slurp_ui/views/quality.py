@@ -83,6 +83,8 @@ _VENDOR_TABS = (
 
     "contacts",
 
+    "payments",
+
     "survey",
 
     "documents",
@@ -966,6 +968,7 @@ def quality_vendor_detail(request: HttpRequest, pk: int) -> HttpResponse:
     vendor_tab_labels = [
         ("overview", "At a glance"),
         ("contacts", "Contacts"),
+        ("payments", "Payments"),
         ("documents", "Documents"),
         ("survey", "Survey"),
         ("items", "Items"),
@@ -1009,7 +1012,9 @@ def quality_vendor_detail(request: HttpRequest, pk: int) -> HttpResponse:
 
         edit_contact = vendor.contacts.filter(pk=edit_contact_id).first()
 
+    from ..finance_helpers import vendor_payment_timeliness
 
+    payment_history = vendor_payment_timeliness(vendor)
 
     return render(
 
@@ -1063,6 +1068,7 @@ def quality_vendor_detail(request: HttpRequest, pk: int) -> HttpResponse:
             primary_contact=primary_contact,
             open_exceptions=open_exceptions,
             vendor_initials=vendor_initials,
+            payment_history=payment_history,
             port_status="full",
         ),
     )
@@ -2036,11 +2042,15 @@ def quality_rd_formulas(request: HttpRequest) -> HttpResponse:
     # status == all -> no filter
 
     if q:
+        family_filter = Q()
+        q_stripped = q.strip()
+        if q_stripped.isalpha() and 1 <= len(q_stripped) <= 4:
+            family_filter = Q(family_letter__iexact=q_stripped)
         formulas = formulas.filter(
             Q(name__icontains=q)
             | Q(rd_code__icontains=q)
             | Q(commercial_sku__icontains=q)
-            | Q(family_letter__iexact=q[:1] if q else "")
+            | family_filter
         )
 
     formulas = list(formulas[:300])
@@ -2074,8 +2084,6 @@ def quality_rd_formula_detail(request: HttpRequest, pk: int | None = None) -> Ht
     catalog_items = Item.objects.filter(
         item_type__in=["raw_material", "distributed_item"]
     ).order_by("sku")[:500]
-
-    family_letters = [chr(c) for c in range(ord("A"), ord("Z") + 1)]
 
     if request.method == "POST":
         action = (request.POST.get("action") or "save").strip()
@@ -2194,7 +2202,6 @@ def quality_rd_formula_detail(request: HttpRequest, pk: int | None = None) -> Ht
             line_rows=line_rows,
             catalog_items=catalog_items,
             status_choices=[c for c in RDFormula.STATUS_CHOICES if c[0] != "commercialized"],
-            family_letters=family_letters,
             total_cost=total_cost,
             port_status="full",
         ),

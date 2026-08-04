@@ -1,30 +1,65 @@
 ﻿{% extends "slurp_ui/base_module.html" %}
 {% block title %}Journal Entries — SLURP{% endblock %}
-{% block module_title %}Finance{% endblock %}
-{% block header_actions %}<a class="btn btn-primary" href="{% url 'slurp_ui:finance_journal_create' %}">Create entry</a>{% endblock %}
+{% block module_title %}Journal entries{% endblock %}
+{% block header_actions %}
+  <a class="hs-btn hs-btn-primary" href="{% url 'slurp_ui:finance_journal_create' %}">+ Create entry</a>
+{% endblock %}
 {% block main %}
-<form method="get" style="margin-bottom:1rem">
-  <select name="status" onchange="this.form.submit()">
-    <option value="">All statuses</option>
-    <option value="draft" {% if status_filter == "draft" %}selected{% endif %}>Draft</option>
-    <option value="posted" {% if status_filter == "posted" %}selected{% endif %}>Posted</option>
-    <option value="reversed" {% if status_filter == "reversed" %}selected{% endif %}>Reversed</option>
-  </select>
-</form>
-<table class="data-table" style="width:100%;border-collapse:collapse">
-  <thead><tr><th>Number</th><th>Date</th><th>Status</th><th>Description</th><th>Debits</th><th>Credits</th><th></th></tr></thead>
-  <tbody>
-  {% for e in entries %}
-  <tr>
-    <td>{{ e.entry_number }}</td>
-    <td>{{ e.entry_date }}</td>
-    <td>{{ e.status }}</td>
-    <td>{{ e.description|truncatechars:60 }}</td>
-    <td>{{ e.total_debits|floatformat:2 }}</td>
-    <td>{{ e.total_credits|floatformat:2 }}</td>
-    <td>{% if e.status == "draft" %}<form method="post" action="{% url 'slurp_ui:finance_journal_post' e.id %}">{% csrf_token %}<button class="btn btn-secondary" type="submit">Post</button></form>{% endif %}</td>
-  </tr>
-  {% empty %}<tr><td colspan="7">No journal entries.</td></tr>{% endfor %}
-  </tbody>
-</table>
+<div class="hs-bleed" style="padding:1.25rem 1.5rem 2rem">
+  <div class="hs-toolbar">
+    <form method="get">
+      <select name="status" onchange="this.form.submit()" class="hs-search" style="max-width:14rem">
+        <option value="">All statuses</option>
+        <option value="draft" {% if status_filter == "draft" %}selected{% endif %}>Draft</option>
+        <option value="posted" {% if status_filter == "posted" %}selected{% endif %}>Posted</option>
+        <option value="reversed" {% if status_filter == "reversed" %}selected{% endif %}>Reversed</option>
+      </select>
+    </form>
+  </div>
+
+  <div class="hs-card">
+    <div class="hs-card-header"><h3>Journal entries</h3></div>
+    <div class="hs-card-body tight">
+      <table class="hs-table">
+        <thead>
+          <tr>
+            <th>Number</th>
+            <th>Date</th>
+            <th>Status</th>
+            <th>Description</th>
+            <th>Debits</th>
+            <th>Credits</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for e in entries %}
+          <tr>
+            <td><span class="hs-entity-name">{{ e.entry_number }}</span></td>
+            <td>{{ e.entry_date }}</td>
+            <td>
+              {% if e.status == 'posted' %}<span class="hs-badge ok">Posted</span>
+              {% elif e.status == 'draft' %}<span class="hs-badge warn">Draft</span>
+              {% else %}<span class="hs-badge">{{ e.status }}</span>{% endif %}
+            </td>
+            <td>{{ e.description|truncatechars:60 }}</td>
+            <td>{{ e.total_debits|floatformat:2 }}</td>
+            <td>{{ e.total_credits|floatformat:2 }}</td>
+            <td>
+              {% if e.status == "draft" %}
+              <form method="post" action="{% url 'slurp_ui:finance_journal_post' e.id %}">
+                {% csrf_token %}
+                <button class="hs-btn hs-btn-sm hs-btn-primary" type="submit">Post</button>
+              </form>
+              {% endif %}
+            </td>
+          </tr>
+          {% empty %}
+          <tr><td colspan="7"><div class="hs-empty">No journal entries.</div></td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
 {% endblock %}

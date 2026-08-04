@@ -1,24 +1,32 @@
-{% extends "slurp_ui/base_module.html" %}
-{% block title %}General Ledger — SLURP{% endblock %}
-{% block module_title %}Finance{% endblock %}
-{% block header_actions %}
-<a class="btn btn-primary" href="{% url 'slurp_ui:finance_account_create' %}">Create account</a>
-{% endblock %}
-{% block main %}
-<table class="data-table">
-  <thead><tr><th>Account #</th><th>Name</th><th>Type</th><th>Active</th></tr></thead>
-  <tbody>
-    {% for a in accounts %}
-    <tr>
-      <td>{{ a.account_number }}</td>
-      <td>{{ a.name }}</td>
-      <td>{{ a.get_account_type_display }}</td>
-      <td>{% if a.is_active %}Yes{% else %}No{% endif %}</td>
-    </tr>
-    {% empty %}
-    <tr><td colspan="4">No accounts.</td></tr>
-    {% endfor %}
-  </tbody>
-</table>
-{% endblock %}
-
+{% extends "slurp_ui/base_module.html" %}
+{% block title %}General Ledger — SLURP{% endblock %}
+{% block module_title %}General ledger{% endblock %}
+{% block header_actions %}
+  <a class="hs-btn hs-btn-primary" href="{% url 'slurp_ui:finance_account_create' %}">+ Create account</a>
+{% endblock %}
+{% block main %}
+<div class="hs-bleed" style="padding:1.25rem 1.5rem 2rem">
+  <div class="hs-card">
+    <div class="hs-card-header">
+      <h3>Chart of accounts</h3>
+    </div>
+    <div class="hs-card-body tight">
+      <table class="hs-table">
+        <thead><tr><th>Account #</th><th>Name</th><th>Type</th><th>Active</th></tr></thead>
+        <tbody>
+          {% for a in accounts %}
+          <tr>
+            <td><span class="hs-entity-name">{{ a.account_number }}</span></td>
+            <td>{{ a.name }}</td>
+            <td>{{ a.get_account_type_display }}</td>
+            <td>{% if a.is_active %}<span class="hs-badge ok">Yes</span>{% else %}<span class="hs-badge">No</span>{% endif %}</td>
+          </tr>
+          {% empty %}
+          <tr><td colspan="4"><div class="hs-empty">No accounts.</div></td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}

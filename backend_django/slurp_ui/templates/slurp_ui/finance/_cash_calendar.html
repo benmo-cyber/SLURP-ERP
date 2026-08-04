@@ -1,0 +1,101 @@
+{% comment %}Shared Finance cash calendar grid. Expects calendar_base, month_param, types_qs, calendar_grid, selected_day, selected_types, type_options, events, compact optional. {% endcomment %}
+<div class="hs-card {% if compact %}fin-cal-compact{% endif %}" style="margin-bottom:1rem">
+  <div class="hs-card-header">
+    <h3>{{ calendar_grid.month_label }}</h3>
+    <div class="hs-queue-actions">
+      <a class="hs-btn hs-btn-sm" href="{{ calendar_base }}?month={{ calendar_grid.prev_month|date:'Y-m' }}{{ types_qs }}">‹</a>
+      <a class="hs-btn hs-btn-sm" href="{{ calendar_base }}?month={{ calendar_grid.next_month|date:'Y-m' }}{{ types_qs }}">›</a>
+      <a class="hs-btn hs-btn-sm" href="{{ calendar_base }}?month={{ today|date:'Y-m' }}&amp;day={{ today|date:'Y-m-d' }}{{ types_qs }}">Today</a>
+      {% if compact %}
+      <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:finance_calendar' %}?month={{ month_param }}{{ types_qs }}">Full calendar</a>
+      {% endif %}
+    </div>
+  </div>
+  <div class="hs-card-body">
+    <p class="hs-section-note" style="margin-top:0">
+      AR (teal) and AP (coral) by <strong>due date</strong>. Click a day for pay actions.
+      {% if not compact %}Open items stay visible until paid/cancelled.{% endif %}
+    </p>
+    <form method="get" action="{{ calendar_base }}" class="hs-toolbar" style="margin:0 0 0.75rem">
+      <input type="hidden" name="month" value="{{ month_param }}" />
+      {% if selected_day %}<input type="hidden" name="day" value="{{ selected_day|date:'Y-m-d' }}" />{% endif %}
+      <div class="hs-pills">
+        {% for val, label in type_options %}
+        <label class="hs-pill {% if val in selected_types %}active{% endif %}" style="cursor:pointer">
+          <input type="checkbox" name="types" value="{{ val }}" {% if val in selected_types %}checked{% endif %}
+                 style="margin:0" onchange="this.form.submit()" />
+          {{ label }}
+        </label>
+        {% endfor %}
+      </div>
+    </form>
+
+    <div class="hs-cal-month" id="hs-fin-cal-month">
+      <div class="hs-cal-weekdays">
+        <div>Sun</div><div>Mon</div><div>Tue</div><div>Wed</div><div>Thu</div><div>Fri</div><div>Sat</div>
+      </div>
+      {% for week in calendar_grid.weeks %}
+      <div class="hs-cal-week">
+        {% for cell in week %}
+        <a class="hs-cal-day {% if not cell.in_month %}other{% endif %} {% if cell.is_today %}today{% endif %} {% if selected_day == cell.date %}selected{% endif %}"
+           href="{{ calendar_base }}?month={{ month_param }}&amp;day={{ cell.date|date:'Y-m-d' }}{{ types_qs }}"
+           data-date="{{ cell.date|date:'Y-m-d' }}">
+          <span class="hs-cal-daynum">{{ cell.date.day }}</span>
+          {% if cell.ar_total or cell.ap_total %}
+          <span class="fin-cal-day-totals">
+            {% if cell.ar_total %}<span class="fin-cal-in">+${{ cell.ar_total|floatformat:0 }}</span>{% endif %}
+            {% if cell.ap_total %}<span class="fin-cal-out">−${{ cell.ap_total|floatformat:0 }}</span>{% endif %}
+          </span>
+          {% endif %}
+          {% for e in cell.events %}
+          <span class="hs-cal-event type-{{ e.type }} {% if e.is_overdue %}is-overdue{% endif %}"
+                title="{{ e.title }}">
+            <span class="hs-cal-event-main">{{ e.short_label|truncatechars:26 }}</span>
+          </span>
+          {% endfor %}
+          {% if cell.more_count %}<span class="hs-cal-more">+{{ cell.more_count }} more</span>{% endif %}
+        </a>
+        {% endfor %}
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+
+<div class="hs-card" id="hs-fin-cal-day-detail">
+  <div class="hs-card-header">
+    <h3>{% if selected_day %}{{ selected_day|date:"D, M j, Y" }}{% else %}Pick a day{% endif %}</h3>
+    <span class="hs-muted" style="font-size:0.8rem">
+      {% if selected_day %}{{ events|length }} due item{{ events|length|pluralize }}{% else %}Click a day{% endif %}
+    </span>
+  </div>
+  <div class="hs-card-body tight">
+    {% if selected_day %}
+      {% for e in events %}
+      <div class="hs-cal-detail-row {% if e.is_overdue %}is-overdue{% endif %}">
+        <div class="hs-cal-detail-main">
+          {% if e.type == 'receivable' %}<span class="hs-badge ok">AR</span>
+          {% else %}<span class="hs-badge warn">AP</span>{% endif %}
+          {% if e.is_overdue %}<span class="hs-badge danger">Overdue</span>{% endif %}
+          <div class="hs-list-title">{{ e.customer_name|default:e.vendor_name }} — ${{ e.balance|floatformat:2 }}</div>
+          <div class="hs-list-sub">{{ e.subtitle }} · due {{ e.date }}</div>
+        </div>
+        <div class="hs-queue-actions">
+          {% if e.invoice_id %}
+          <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:finance_invoice_detail' e.invoice_id %}">Invoice</a>
+          {% endif %}
+          {% if e.ar_id %}
+          <a class="hs-btn hs-btn-sm hs-btn-primary" href="{% url 'slurp_ui:finance_ar_mark_paid' e.ar_id %}">Mark as paid</a>
+          {% elif e.ap_id %}
+          <a class="hs-btn hs-btn-sm hs-btn-primary" href="{% url 'slurp_ui:finance_ap_mark_paid' e.ap_id %}">Mark as paid</a>
+          {% endif %}
+        </div>
+      </div>
+      {% empty %}
+      <div class="hs-empty">Nothing due on this day.</div>
+      {% endfor %}
+    {% else %}
+      <div class="hs-empty">Select a day to review AR receipts and AP payments.</div>
+    {% endif %}
+  </div>
+</div>

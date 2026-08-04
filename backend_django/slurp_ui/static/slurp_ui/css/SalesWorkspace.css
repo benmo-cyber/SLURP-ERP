@@ -1,7 +1,8 @@
 /* HubSpot / Salesforce-inspired sales workspace chrome */
 
 .sales-page,
-.quality-page {
+.quality-page,
+.finance-page {
   --hs-bg: #f5f8fa;
   --hs-surface: #ffffff;
   --hs-border: #dfe3eb;
@@ -46,6 +47,20 @@
   --quality-nav-active-bg: #fff4f2;
   --quality-nav-active-color: #c04b33;
   --quality-nav-active-accent: var(--hs-accent);
+}
+
+.finance-page {
+  --finance-bg: var(--hs-bg);
+  --finance-header-bg: var(--hs-surface);
+  --finance-header-color: var(--hs-heading);
+  --finance-sidebar-bg: var(--hs-surface);
+  --finance-sidebar-border: var(--hs-border);
+  --finance-nav-label-color: var(--hs-muted);
+  --finance-nav-color: var(--hs-text);
+  --finance-nav-hover-bg: #f5f8fa;
+  --finance-nav-active-bg: #fff4f2;
+  --finance-nav-active-color: #c04b33;
+  --finance-nav-active-accent: var(--hs-accent);
 }
 
 .sales-main > .hs-bleed {
@@ -685,7 +700,9 @@
 }
 
 .sales-main .hs-card .form-row label,
-.quality-main .hs-card .form-row label {
+.quality-main .hs-card .form-row label,
+.finance-main .hs-card .form-row label,
+.finance-page .hs-card .form-row label {
   color: var(--hs-muted);
   font-size: 0.78rem;
   font-weight: 650;
@@ -698,7 +715,13 @@
 .sales-main .hs-card .form-row textarea,
 .quality-main .hs-card .form-row input,
 .quality-main .hs-card .form-row select,
-.quality-main .hs-card .form-row textarea {
+.quality-main .hs-card .form-row textarea,
+.finance-main .hs-card .form-row input,
+.finance-main .hs-card .form-row select,
+.finance-main .hs-card .form-row textarea,
+.finance-page .hs-card .form-row input,
+.finance-page .hs-card .form-row select,
+.finance-page .hs-card .form-row textarea {
   border: 1px solid var(--hs-border);
   border-radius: var(--hs-radius);
   color: var(--hs-text);
@@ -710,7 +733,13 @@
 .sales-main .hs-card .form-row textarea:focus,
 .quality-main .hs-card .form-row input:focus,
 .quality-main .hs-card .form-row select:focus,
-.quality-main .hs-card .form-row textarea:focus {
+.quality-main .hs-card .form-row textarea:focus,
+.finance-main .hs-card .form-row input:focus,
+.finance-main .hs-card .form-row select:focus,
+.finance-main .hs-card .form-row textarea:focus,
+.finance-page .hs-card .form-row input:focus,
+.finance-page .hs-card .form-row select:focus,
+.finance-page .hs-card .form-row textarea:focus {
   outline: none;
   border-color: var(--hs-link);
   box-shadow: 0 0 0 3px rgba(0, 145, 174, 0.12);
@@ -817,6 +846,23 @@
 .hs-cal-event.type-shipment { background: #0091ae; }
 .hs-cal-event.type-raw_material { background: #00bda5; }
 .hs-cal-event.type-production { background: #f5a623; }
+.hs-cal-event.type-receivable { background: #00bda5; }
+.hs-cal-event.type-payable { background: #ff7a59; }
+.hs-cal-event.is-overdue {
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.18);
+  opacity: 0.95;
+  background-image: repeating-linear-gradient(
+    -45deg,
+    transparent,
+    transparent 3px,
+    rgba(0, 0, 0, 0.08) 3px,
+    rgba(0, 0, 0, 0.08) 4px
+  );
+}
+
+.hs-cal-detail-row.is-overdue {
+  background: #fff8f6;
+}
 
 .hs-cal-event.is-selected {
   box-shadow: 0 0 0 2px #fff, 0 0 0 3px rgba(0,0,0,0.35);

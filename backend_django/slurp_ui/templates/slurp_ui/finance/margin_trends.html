@@ -2,9 +2,12 @@
 {% block title %}Margin Trends — SLURP{% endblock %}
 {% block module_title %}Finance{% endblock %}
 {% block main %}
+<div class="hs-bleed" style="padding:1.25rem 1.5rem 2rem">
+<div class="hs-card"><div class="hs-card-body">
 <form method="get"><label>Item IDs (comma-separated)<input name="items" value="{{ selected_ids|join:',' }}" /></label>
-<button class="btn btn-primary" type="submit">Load trends</button></form>
-<table class="data-table" style="width:100%;margin-top:1rem"><thead><tr><th>Item</th><th>Period</th><th>Margin</th><th>Price</th></tr></thead>
+<button class="hs-btn hs-btn-primary" type="submit">Load trends</button></form>
+<table class="hs-table" style="width:100%;margin-top:1rem"><thead><tr><th>Item</th><th>Period</th><th>Margin</th><th>Price</th></tr></thead>
 <tbody>{% for r in trend_rows %}<tr><td>{{ r.sku|default:r.item }}</td><td>{{ r.period|default:r.date }}</td><td>{{ r.margin|default:"—" }}</td><td>{{ r.price|default:"—" }}</td></tr>
 {% empty %}<tr><td colspan="4">Select items to view trends.</td></tr>{% endfor %}</tbody></table>
+</div></div></div>
 {% endblock %}

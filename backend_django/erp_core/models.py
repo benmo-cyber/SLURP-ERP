@@ -919,8 +919,12 @@ class FormulaItem(models.Model):
 
 
 class RDFormulaCodeSequence(models.Model):
-    """Per family-letter counter for R&D codes (format: L-R001). Never reused."""
-    family_letter = models.CharField(max_length=1, unique=True)
+    """Per family-code counter for R&D codes (format: L-R001 or HL-R001). Never reused."""
+    family_letter = models.CharField(
+        max_length=4,
+        unique=True,
+        help_text='Family code (1–4 letters), e.g. L or HL.',
+    )
     sequence_number = models.IntegerField(default=0)
     last_updated = models.DateTimeField(auto_now=True)
 
@@ -933,6 +937,37 @@ class RDFormulaCodeSequence(models.Model):
         return f"{self.family_letter}-R{self.sequence_number:03d}"
 
 
+class RDFormulaFamily(models.Model):
+    """
+    Named commercial product family for R&D codes.
+    Display: "Natural Green (HL)"; codes are 1–4 letters and drive {code}-R### allocation.
+    """
+    code = models.CharField(
+        max_length=4,
+        unique=True,
+        help_text='1–4 letter family code used in R&D / commercial SKUs (e.g. L, HL).',
+    )
+    name = models.CharField(
+        max_length=120,
+        help_text='Product line name shown in UI (e.g. Natural Green, Natural Blue).',
+    )
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['name', 'code']
+        verbose_name = 'R&D formula family'
+        verbose_name_plural = 'R&D formula families'
+
+    def __str__(self):
+        return f"{self.name} ({self.code})"
+
+    @property
+    def label(self) -> str:
+        return f"{self.name} ({self.code})"
+
+
 class RDFormula(models.Model):
     """R&D formula: pre-commercialization BOM for cost estimation; can be promoted to Finished Good."""
     STATUS_CHOICES = [
@@ -941,16 +976,19 @@ class RDFormula(models.Model):
         ('scrapped', 'Scrapped'),
         ('commercialized', 'Commercialized'),
     ]
-    name = models.CharField(max_length=255, help_text='Product name (e.g. Natural Red trial)')
+    name = models.CharField(
+        max_length=255,
+        help_text='Commercial product name wording (e.g. Natural Green). Trial/description details go in notes.',
+    )
     family_letter = models.CharField(
-        max_length=1,
-        help_text='Commercial family letter only (e.g. L for Natural Blue). Assigned at create; used in R&D code.',
+        max_length=4,
+        help_text='Commercial family code (1–4 letters), e.g. L for Natural Blue, HL for Natural Green. Used in R&D code.',
     )
     rd_code = models.CharField(
         max_length=20,
         unique=True,
         db_index=True,
-        help_text='Permanent R&D code (e.g. L-R001). Never reused, even if scrapped.',
+        help_text='Permanent R&D code (e.g. L-R001 or HL-R001). Never reused, even if scrapped.',
     )
     commercial_sku = models.CharField(
         max_length=100,
@@ -1498,6 +1536,175 @@ class CostMasterHistory(models.Model):
     
     def __str__(self):
         return f"{self.cost_master.vendor_material} - {self.effective_date.strftime('%Y-%m-%d')}"
+
+
+class PricingWhatIfScenario(models.Model):
+    """Named ingredient cost override pack for an R&D / manufactured formula."""
+    name = models.CharField(max_length=120)
+    rd_formula = models.ForeignKey(
+        'RDFormula',
+        on_delete=models.CASCADE,
+        related_name='whatif_scenarios',
+    )
+    overrides = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text='Ingredient price overrides: {"lines": {"<line_id>": {"price_per_lb": 1.2, "vendor_label": "..."}}}',
+    )
+    notes = models.TextField(blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['name', 'id']
+        verbose_name = 'Pricing what-if scenario'
+        verbose_name_plural = 'Pricing what-if scenarios'
+
+    def __str__(self):
+        return f"{self.name} ({self.rd_formula.rd_code})"
+
+
+class PricingWhatIfLine(models.Model):
+    """Customer pricing what-if pipeline row (mirrors WWI Models → Customer Pricing)."""
+    SOURCE_CHOICES = [
+        ('distributed', 'Distributed'),
+        ('manufactured', 'Manufactured'),
+        ('rd', 'R&D formula'),
+    ]
+    AGREEMENT_CHOICES = [
+        ('', '—'),
+        ('quoted', 'Quoted'),
+        ('accepted', 'Accepted'),
+        ('lost', 'Lost'),
+        ('hold', 'On hold'),
+    ]
+
+    sort_order = models.PositiveIntegerField(default=0, db_index=True)
+    customer_name = models.CharField(max_length=255, blank=True, default='')
+    customer = models.ForeignKey(
+        'Customer',
+        on_delete=models.SET_NULL,
+        blank=True,
+        null=True,
+        related_name='pricing_whatif_lines',
+    )
+    close_probability = models.FloatField(
+        default=0.0,
+        help_text='0–1 close probability',
+    )
+    source_type = models.CharField(max_length=20, choices=SOURCE_CHOICES, default='distributed')
+    product_name = models.CharField(
+        max_length=255,
+        blank=True,
+        default='',
+        help_text='Product label used to look up Cost Master / R&D formula cost',
+    )
+    catalog_key = models.CharField(
+        max_length=64,
+        blank=True,
+        default='',
+        help_text='Stable catalog id, e.g. cm:12 or rd:5',
+    )
+    cost_master = models.ForeignKey(
+        CostMaster,
+        on_delete=models.SET_NULL,
+        blank=True,
+        null=True,
+        related_name='whatif_lines',
+    )
+    rd_formula = models.ForeignKey(
+        RDFormula,
+        on_delete=models.SET_NULL,
+        blank=True,
+        null=True,
+        related_name='whatif_lines',
+    )
+    cost_scenario = models.ForeignKey(
+        'PricingWhatIfScenario',
+        on_delete=models.SET_NULL,
+        blank=True,
+        null=True,
+        related_name='whatif_lines',
+    )
+    ingredient_overrides = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text='Per-formula-line cost overrides for what-if vendor / RM pricing',
+    )
+    base_cost_per_lb = models.FloatField(
+        blank=True,
+        null=True,
+        help_text='Looked-up or manual base $/lb before additional cost',
+    )
+    cost_is_manual = models.BooleanField(
+        default=False,
+        help_text='If true, base_cost_per_lb is user-entered and not auto-refreshed',
+    )
+    additional_cost_per_lb = models.FloatField(default=0.0)
+    margin = models.FloatField(
+        blank=True,
+        null=True,
+        help_text='Target margin as fraction (e.g. 0.30 = 30%)',
+    )
+    volume_lb = models.FloatField(blank=True, null=True, help_text='Annual volume in lb')
+    volume_pct_target = models.FloatField(
+        blank=True,
+        null=True,
+        help_text='% of volume expected to hit target year (0–1)',
+    )
+    agreement = models.CharField(max_length=20, choices=AGREEMENT_CHOICES, blank=True, default='')
+    incoterms = models.CharField(max_length=100, blank=True, default='')
+    first_order_ship = models.CharField(max_length=100, blank=True, default='')
+    order_pattern = models.CharField(max_length=100, blank=True, default='')
+    notes = models.TextField(blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['sort_order', 'id']
+        verbose_name = 'Pricing what-if line'
+        verbose_name_plural = 'Pricing what-if lines'
+
+    def __str__(self):
+        return f"{self.customer_name or '?'} — {self.product_name or 'product'}"
+
+    @property
+    def unit_cost(self):
+        base = float(self.base_cost_per_lb or 0)
+        add = float(self.additional_cost_per_lb or 0)
+        return base + add
+
+    @property
+    def price_per_lb(self):
+        m = self.margin
+        if m is None or m >= 1:
+            return None
+        if self.base_cost_per_lb is None and not self.additional_cost_per_lb:
+            return None
+        return self.unit_cost / (1.0 - float(m))
+
+    @property
+    def annual_revenue(self):
+        price = self.price_per_lb
+        vol = self.volume_lb
+        if price is None or vol is None:
+            return None
+        return float(price) * float(vol)
+
+    @property
+    def gross_profit(self):
+        rev = self.annual_revenue
+        m = self.margin
+        if rev is None or m is None:
+            return None
+        return float(rev) * float(m)
+
+    @property
+    def weighted_revenue(self):
+        rev = self.annual_revenue
+        if rev is None:
+            return None
+        return float(rev) * float(self.close_probability or 0)
 
 
 class Account(models.Model):

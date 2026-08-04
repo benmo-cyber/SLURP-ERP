@@ -1,58 +1,76 @@
 {% extends "slurp_ui/base_module.html" %}
 {% block title %}Invoices — SLURP{% endblock %}
-{% block module_title %}Finance{% endblock %}
+{% block module_title %}Invoices{% endblock %}
 {% block header_actions %}
-<a class="btn btn-primary" href="{% url 'slurp_ui:finance_invoice_create' %}">Create invoice</a>
+  <a class="hs-btn hs-btn-primary" href="{% url 'slurp_ui:finance_invoice_create' %}">Create invoice</a>
 {% endblock %}
 {% block main %}
-<form method="get" style="margin-bottom:1rem;display:flex;gap:0.5rem;align-items:end">
-  <div class="form-row" style="margin:0">
-    <label for="status">Status</label>
-    <select id="status" name="status" onchange="this.form.submit()">
-      <option value="">All</option>
-      <option value="draft" {% if status_filter == 'draft' %}selected{% endif %}>Draft</option>
-      <option value="sent" {% if status_filter == 'sent' %}selected{% endif %}>Issued</option>
-      <option value="paid" {% if status_filter == 'paid' %}selected{% endif %}>Paid</option>
-      <option value="overdue" {% if status_filter == 'overdue' %}selected{% endif %}>Overdue</option>
-      <option value="cancelled" {% if status_filter == 'cancelled' %}selected{% endif %}>Cancelled</option>
-    </select>
+<div class="hs-bleed" style="padding:1.25rem 1.5rem 2rem">
+  <div class="hs-toolbar">
+    <form method="get" style="display:flex;gap:0.5rem;align-items:end">
+      <div class="form-row" style="margin:0">
+        <label for="status">Status</label>
+        <select id="status" name="status" onchange="this.form.submit()">
+          <option value="">All</option>
+          <option value="draft" {% if status_filter == 'draft' %}selected{% endif %}>Draft</option>
+          <option value="sent" {% if status_filter == 'sent' %}selected{% endif %}>Issued</option>
+          <option value="paid" {% if status_filter == 'paid' %}selected{% endif %}>Paid</option>
+          <option value="overdue" {% if status_filter == 'overdue' %}selected{% endif %}>Overdue</option>
+          <option value="cancelled" {% if status_filter == 'cancelled' %}selected{% endif %}>Cancelled</option>
+        </select>
+      </div>
+    </form>
   </div>
-</form>
-<table class="data-table">
-  <thead>
-    <tr>
-      <th>Invoice #</th>
-      <th>Customer / vendor</th>
-      <th>SO</th>
-      <th>Status</th>
-      <th>Date</th>
-      <th>Due</th>
-      <th>Total</th>
-      <th></th>
-    </tr>
-  </thead>
-  <tbody>
-    {% for inv in invoices %}
-    <tr>
-      <td><a href="{% url 'slurp_ui:finance_invoice_detail' inv.id %}">{{ inv.invoice_number }}</a></td>
-      <td>{{ inv.customer_vendor_name }}</td>
-      <td>{{ inv.sales_order.so_number|default:"—" }}</td>
-      <td>{{ inv.status_label }}</td>
-      <td>{{ inv.invoice_date }}</td>
-      <td>{{ inv.due_date }}</td>
-      <td>${{ inv.grand_total|floatformat:2 }}</td>
-      <td style="white-space:nowrap">
-        <a class="btn btn-secondary" style="padding:0.35rem 0.7rem;font-size:0.85rem"
-           href="{% url 'slurp_ui:finance_invoice_pdf' inv.id %}">PDF</a>
-        {% if inv.status == 'draft' %}
-        <a class="btn btn-primary" style="padding:0.35rem 0.7rem;font-size:0.85rem"
-           href="{% url 'slurp_ui:finance_invoice_issue' inv.id %}">Issue</a>
-        {% endif %}
-      </td>
-    </tr>
-    {% empty %}
-    <tr><td colspan="8">No invoices.</td></tr>
-    {% endfor %}
-  </tbody>
-</table>
+
+  <div class="hs-card">
+    <div class="hs-card-header">
+      <h3>Invoice register</h3>
+    </div>
+    <div class="hs-card-body tight">
+      <table class="hs-table">
+        <thead>
+          <tr>
+            <th>Invoice #</th>
+            <th>Customer / vendor</th>
+            <th>SO</th>
+            <th>Status</th>
+            <th>Date</th>
+            <th>Due</th>
+            <th>Total</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for inv in invoices %}
+          <tr>
+            <td><a class="hs-entity-name" href="{% url 'slurp_ui:finance_invoice_detail' inv.id %}">{{ inv.invoice_number }}</a></td>
+            <td>{{ inv.customer_vendor_name }}</td>
+            <td>{{ inv.sales_order.so_number|default:"—" }}</td>
+            <td>
+              {% if inv.status == 'draft' %}<span class="hs-badge warn">Draft</span>
+              {% elif inv.status == 'sent' %}<span class="hs-badge info">Issued</span>
+              {% elif inv.status == 'paid' %}<span class="hs-badge ok">Paid</span>
+              {% elif inv.status == 'cancelled' %}<span class="hs-badge danger">Cancelled</span>
+              {% else %}<span class="hs-badge">{{ inv.status_label }}</span>{% endif %}
+            </td>
+            <td>{{ inv.invoice_date }}</td>
+            <td>{{ inv.due_date }}</td>
+            <td>${{ inv.grand_total|floatformat:2 }}</td>
+            <td>
+              <div class="hs-queue-actions">
+                <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:finance_invoice_pdf' inv.id %}">PDF</a>
+                {% if inv.status == 'draft' %}
+                <a class="hs-btn hs-btn-sm hs-btn-primary" href="{% url 'slurp_ui:finance_invoice_issue' inv.id %}">Issue</a>
+                {% endif %}
+              </div>
+            </td>
+          </tr>
+          {% empty %}
+          <tr><td colspan="8"><div class="hs-empty">No invoices.</div></td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
 {% endblock %}

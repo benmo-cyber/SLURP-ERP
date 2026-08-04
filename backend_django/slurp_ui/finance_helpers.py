@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import date, timedelta
 from typing import Any
 
+from django.db import models
 from django.db.models import Exists, OuterRef, Sum
 from django.utils import timezone
 from django.utils.dateparse import parse_date
@@ -304,6 +305,7 @@ def create_payment(*, payment_type, payment_date, payment_method, amount, accoun
                    ap_entry_id=None, ar_entry_id=None, reference_number=None, notes=None):
     from erp_core.models import AccountsPayable, AccountsReceivable, Payment
     from erp_core.serializers import PaymentSerializer
+    from erp_core.views import create_ap_payment_journal_entry, create_ar_payment_journal_entry
 
     if isinstance(payment_date, str):
         payment_date = parse_date(payment_date)
@@ -339,20 +341,34 @@ def create_payment(*, payment_type, payment_date, payment_method, amount, accoun
         if ap.status in ("open", "partial") and ap.due_date < timezone.now().date():
             ap.status = "overdue"
         ap.save()
+        try:
+            create_ap_payment_journal_entry(payment, ap)
+        except Exception:
+            pass
 
     elif payment.ar_entry_id:
-        ar = AccountsReceivable.objects.get(pk=payment.ar_entry_id)
+        ar = AccountsReceivable.objects.select_related("invoice").get(pk=payment.ar_entry_id)
         ar.amount_paid += payment.amount
         ar.balance = ar.original_amount - ar.amount_paid
         if ar.balance <= 0.01:
             ar.status = "paid"
             ar.balance = 0.0
+            if ar.invoice_id and ar.invoice and ar.invoice.status != "paid":
+                try:
+                    mark_invoice_paid(ar.invoice)
+                except FinanceFormError:
+                    pass
         elif ar.amount_paid > 0:
             ar.status = "partial"
         if ar.status in ("open", "partial") and ar.due_date < timezone.now().date():
             ar.status = "overdue"
         ar.save()
+        try:
+            create_ar_payment_journal_entry(payment, ar)
+        except Exception:
+            pass
 
+    payment.refresh_from_db()
     return payment
 
 
@@ -476,6 +492,207 @@ def mark_invoice_paid(invoice):
     invoice.status = "paid"
     invoice.save(update_fields=["status", "updated_at"] if hasattr(invoice, "updated_at") else ["status"])
     return invoice
+
+
+def mark_ar_as_paid(ar_entry, *, payment_date=None, reference_number=None, notes=None, account_id=None):
+    """Record full customer payment after bank verification; keeps Payment + AR/invoice in sync."""
+    from erp_core.models import AccountsReceivable
+
+    if isinstance(ar_entry, int):
+        ar_entry = AccountsReceivable.objects.select_related("invoice").get(pk=ar_entry)
+    if ar_entry.status in ("paid", "cancelled"):
+        raise FinanceFormError("This AR entry is already closed.")
+    balance = float(ar_entry.balance or 0)
+    if balance <= 0.01:
+        raise FinanceFormError("No outstanding balance to mark paid.")
+
+    if isinstance(payment_date, str):
+        payment_date = parse_date(payment_date)
+    payment_date = payment_date or timezone.localdate()
+
+    payment = create_payment(
+        payment_type="ar_payment",
+        payment_date=payment_date,
+        payment_method="other",
+        amount=balance,
+        account_id=account_id,
+        ar_entry_id=ar_entry.id,
+        reference_number=reference_number,
+        notes=(notes or "").strip() or "Marked paid after bank verification",
+    )
+
+    ar_entry.refresh_from_db()
+    invoice = ar_entry.invoice
+    if invoice and invoice.status != "paid":
+        try:
+            mark_invoice_paid(invoice)
+        except FinanceFormError:
+            pass
+
+    days_vs_due = (payment_date - ar_entry.due_date).days if ar_entry.due_date else None
+    return payment, days_vs_due
+
+
+def mark_ap_as_paid(ap_entry, *, payment_date=None, payment_method="check", reference_number=None, notes=None, account_id=None):
+    """Record full vendor payment (check cut / ACH sent); keeps Payment + AP in sync."""
+    from erp_core.models import AccountsPayable
+
+    if isinstance(ap_entry, int):
+        ap_entry = AccountsPayable.objects.get(pk=ap_entry)
+    if ap_entry.status in ("paid", "cancelled"):
+        raise FinanceFormError("This AP entry is already closed.")
+    balance = float(ap_entry.balance or 0)
+    if balance <= 0.01:
+        raise FinanceFormError("No outstanding balance to mark paid.")
+
+    if isinstance(payment_date, str):
+        payment_date = parse_date(payment_date)
+    payment_date = payment_date or timezone.localdate()
+    method = (payment_method or "check").strip() or "check"
+
+    payment = create_payment(
+        payment_type="ap_payment",
+        payment_date=payment_date,
+        payment_method=method,
+        amount=balance,
+        account_id=account_id,
+        ap_entry_id=ap_entry.id,
+        reference_number=reference_number,
+        notes=(notes or "").strip() or "Marked paid",
+    )
+
+    ap_entry.refresh_from_db()
+    days_vs_due = (payment_date - ap_entry.due_date).days if ap_entry.due_date else None
+    return payment, days_vs_due
+
+
+def customer_payment_timeliness(customer, *, limit: int = 100) -> dict:
+    """Payment history + on-time stats for a CRM customer (from AR Payment records)."""
+    from erp_core.models import AccountsReceivable, Payment
+
+    pk_str = str(customer.id)
+    biz_id = (customer.customer_id or "").strip()
+    name = (customer.name or "").strip()
+
+    ar_qs = AccountsReceivable.objects.filter(
+        models.Q(customer_id=pk_str)
+        | models.Q(customer_id=biz_id)
+        | models.Q(customer_name__iexact=name)
+        | models.Q(sales_order__customer_id=customer.id)
+    ).distinct()
+
+    payments = list(
+        Payment.objects.filter(payment_type="ar_payment", ar_entry__in=ar_qs)
+        .select_related("ar_entry", "ar_entry__invoice")
+        .order_by("-payment_date", "-id")[:limit]
+    )
+
+    rows = []
+    days_list = []
+    on_time = 0
+    late = 0
+    early = 0
+    for p in payments:
+        ar = p.ar_entry
+        due = ar.due_date if ar else None
+        days = (p.payment_date - due).days if due else None
+        if days is not None:
+            days_list.append(days)
+            if days <= 0:
+                on_time += 1
+                if days < 0:
+                    early += 1
+            else:
+                late += 1
+        inv = ar.invoice if ar else None
+        rows.append(
+            {
+                "payment_date": p.payment_date,
+                "due_date": due,
+                "days_vs_due": days,
+                "amount": p.amount,
+                "invoice_number": inv.invoice_number if inv else None,
+                "invoice_id": inv.id if inv else None,
+                "reference": p.reference_number,
+                "status": "on_time" if days is not None and days <= 0 else ("late" if days else "unknown"),
+            }
+        )
+
+    total = on_time + late
+    avg_days = round(sum(days_list) / len(days_list), 1) if days_list else None
+    return {
+        "rows": rows,
+        "paid_count": len(rows),
+        "on_time_count": on_time,
+        "late_count": late,
+        "early_count": early,
+        "on_time_pct": round(100.0 * on_time / total, 1) if total else None,
+        "avg_days_vs_due": avg_days,
+        "open_ar_count": ar_qs.exclude(status__in=["paid", "cancelled"]).count(),
+    }
+
+
+def vendor_payment_timeliness(vendor, *, limit: int = 100) -> dict:
+    """AP payment history + on-time stats for a Quality vendor (matched by name / vendor_id)."""
+    from erp_core.models import AccountsPayable, Payment
+
+    name = (vendor.name or "").strip()
+    vid = (vendor.vendor_id or "").strip()
+    ap_filter = models.Q(vendor_name__iexact=name)
+    if vid:
+        ap_filter |= models.Q(vendor_id=vid) | models.Q(vendor_id=str(vendor.id))
+    ap_filter |= models.Q(vendor_id=str(vendor.id))
+
+    ap_qs = AccountsPayable.objects.filter(ap_filter).distinct()
+
+    payments = list(
+        Payment.objects.filter(payment_type="ap_payment", ap_entry__in=ap_qs)
+        .select_related("ap_entry")
+        .order_by("-payment_date", "-id")[:limit]
+    )
+
+    rows = []
+    days_list = []
+    on_time = 0
+    late = 0
+    early = 0
+    for p in payments:
+        ap = p.ap_entry
+        due = ap.due_date if ap else None
+        days = (p.payment_date - due).days if due else None
+        if days is not None:
+            days_list.append(days)
+            if days <= 0:
+                on_time += 1
+                if days < 0:
+                    early += 1
+            else:
+                late += 1
+        rows.append(
+            {
+                "payment_date": p.payment_date,
+                "due_date": due,
+                "days_vs_due": days,
+                "amount": p.amount,
+                "invoice_number": ap.invoice_number if ap else None,
+                "reference": p.reference_number,
+                "method": p.payment_method,
+                "status": "on_time" if days is not None and days <= 0 else ("late" if days else "unknown"),
+            }
+        )
+
+    total = on_time + late
+    avg_days = round(sum(days_list) / len(days_list), 1) if days_list else None
+    return {
+        "rows": rows,
+        "paid_count": len(rows),
+        "on_time_count": on_time,
+        "late_count": late,
+        "early_count": early,
+        "on_time_pct": round(100.0 * on_time / total, 1) if total else None,
+        "avg_days_vs_due": avg_days,
+        "open_ap_count": ap_qs.exclude(status__in=["paid", "cancelled"]).count(),
+    }
 
 
 def commercial_raw_cost_masters():

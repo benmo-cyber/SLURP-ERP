@@ -2,6 +2,8 @@
 {% block title %}Customer Pricing — SLURP{% endblock %}
 {% block module_title %}Finance{% endblock %}
 {% block main %}
+<div class="hs-bleed" style="padding:1.25rem 1.5rem 2rem">
+<div class="hs-card"><div class="hs-card-body">
 <h2>Create customer pricing</h2>
 <form method="post">{% csrf_token %}
   <label>Customer<select name="customer" required>{% for c in customers %}<option value="{{ c.id }}">{{ c.name }}</option>{% endfor %}</select></label>
@@ -13,6 +15,7 @@
   <label>Incoterms<input name="incoterms" /></label>
   <label>Place<input name="incoterms_place" /></label>
   <label>Notes<textarea name="notes"></textarea></label>
-  <button class="btn btn-primary" type="submit">Save</button>
+  <button class="hs-btn hs-btn-primary" type="submit">Save</button>
 </form>
+</div></div></div>
 {% endblock %}

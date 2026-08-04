@@ -1,21 +1,67 @@
 ﻿{% extends "slurp_ui/base_module.html" %}
 {% block title %}Accounts Payable — SLURP{% endblock %}
-{% block module_title %}Finance{% endblock %}
-{% block header_actions %}<a class="btn btn-primary" href="{% url 'slurp_ui:finance_payment_entry' %}?type=ap_payment">Record payment</a>{% endblock %}
+{% block module_title %}Accounts payable{% endblock %}
+{% block header_actions %}
+  <a class="hs-btn" href="{% url 'slurp_ui:finance_payment_entry' %}?type=ap_payment">Partial payment</a>
+{% endblock %}
 {% block main %}
-<form method="get" style="margin-bottom:1rem;display:flex;gap:0.5rem">
-  <select name="status"><option value="">All</option>
-    <option value="open" {% if status_filter == "open" %}selected{% endif %}>Open</option>
-    <option value="partial" {% if status_filter == "partial" %}selected{% endif %}>Partial</option>
-    <option value="paid" {% if status_filter == "paid" %}selected{% endif %}>Paid</option>
-  </select>
-  <input name="vendor" value="{{ vendor_filter }}" placeholder="Vendor" />
-  <button class="btn btn-secondary" type="submit">Filter</button>
-</form>
-<table class="data-table" style="width:100%"><thead><tr><th>Vendor</th><th>Invoice</th><th>Due</th><th>Balance</th><th>Status</th><th></th></tr></thead>
-<tbody>{% for r in entries %}<tr>
-  <td>{{ r.vendor_name }}</td><td>{{ r.invoice_number|default:"—" }}</td><td>{{ r.due_date }}</td>
-  <td>{{ r.balance|floatformat:2 }}</td><td>{{ r.status }}</td>
-  <td>{% if r.status != "paid" %}<a href="{% url 'slurp_ui:finance_payment_entry' %}?type=ap_payment&ap_entry={{ r.id }}">Pay</a>{% endif %}</td>
-</tr>{% empty %}<tr><td colspan="6">No AP entries.</td></tr>{% endfor %}</tbody></table>
+<div class="hs-bleed" style="padding:1.25rem 1.5rem 2rem">
+  <div class="hs-toolbar">
+    <form method="get" style="display:flex;gap:0.5rem;flex:1;flex-wrap:wrap">
+      <select name="status" class="hs-search" style="max-width:12rem">
+        <option value="">All statuses</option>
+        <option value="open" {% if status_filter == "open" %}selected{% endif %}>Open</option>
+        <option value="partial" {% if status_filter == "partial" %}selected{% endif %}>Partial</option>
+        <option value="paid" {% if status_filter == "paid" %}selected{% endif %}>Paid</option>
+        <option value="overdue" {% if status_filter == "overdue" %}selected{% endif %}>Overdue</option>
+      </select>
+      <input class="hs-search" name="vendor" value="{{ vendor_filter }}" placeholder="Vendor…" />
+      <button class="hs-btn hs-btn-primary" type="submit">Filter</button>
+    </form>
+  </div>
+
+  <div class="hs-card">
+    <div class="hs-card-header">
+      <h3>A/P entries</h3>
+      <span class="hs-muted" style="font-size:0.8rem">Mark paid after payment clears</span>
+    </div>
+    <div class="hs-card-body tight">
+      <table class="hs-table">
+        <thead>
+          <tr>
+            <th>Vendor</th>
+            <th>Invoice</th>
+            <th>Due</th>
+            <th>Balance</th>
+            <th>Status</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in entries %}
+          <tr>
+            <td>{{ r.vendor_name }}</td>
+            <td>{{ r.invoice_number|default:"—" }}</td>
+            <td>{{ r.due_date }}</td>
+            <td>${{ r.balance|floatformat:2 }}</td>
+            <td>
+              {% if r.status == 'paid' %}<span class="hs-badge ok">Paid</span>
+              {% elif r.status == 'overdue' %}<span class="hs-badge danger">Overdue</span>
+              {% elif r.status == 'partial' %}<span class="hs-badge warn">Partial</span>
+              {% else %}<span class="hs-badge info">{{ r.status|title }}</span>{% endif %}
+            </td>
+            <td>
+              {% if r.status != "paid" and r.status != "cancelled" %}
+              <a class="hs-btn hs-btn-sm hs-btn-primary" href="{% url 'slurp_ui:finance_ap_mark_paid' r.id %}">Mark as paid</a>
+              {% endif %}
+            </td>
+          </tr>
+          {% empty %}
+          <tr><td colspan="6"><div class="hs-empty">No AP entries.</div></td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
 {% endblock %}

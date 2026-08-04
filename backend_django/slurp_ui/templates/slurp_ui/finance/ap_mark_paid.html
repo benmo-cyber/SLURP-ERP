@@ -1,0 +1,51 @@
+{% extends "slurp_ui/base_module.html" %}
+{% block title %}Mark AP paid — SLURP{% endblock %}
+{% block module_title %}Mark as paid{% endblock %}
+{% block header_actions %}
+  <a class="hs-btn" href="{% url 'slurp_ui:finance_ap' %}">Back to AP</a>
+{% endblock %}
+{% block main %}
+<div class="hs-bleed" style="padding:1.25rem 1.5rem 2rem;max-width:40rem">
+  <div class="hs-card">
+    <div class="hs-card-header"><h3>{{ ap.vendor_name }}</h3></div>
+    <div class="hs-card-body">
+      <p class="hs-section-note" style="margin-top:0">
+        Confirm the vendor payment cleared (check sent / ACH), then mark this payable paid.
+      </p>
+      <div class="hs-props" style="margin-bottom:1rem">
+        <div class="hs-prop"><span class="k">Invoice</span><span class="v">{{ ap.invoice_number|default:"—" }}</span></div>
+        <div class="hs-prop"><span class="k">Due</span><span class="v">{{ ap.due_date }}</span></div>
+        <div class="hs-prop"><span class="k">Balance</span><span class="v">${{ ap.balance|floatformat:2 }}</span></div>
+      </div>
+      <form method="post">
+        {% csrf_token %}
+        <div class="form-row">
+          <label for="payment_date">Payment date *</label>
+          <input id="payment_date" type="date" name="payment_date" value="{{ today|date:'Y-m-d' }}" required />
+        </div>
+        <div class="form-row">
+          <label for="payment_method">Method</label>
+          <select id="payment_method" name="payment_method">
+            <option value="check" selected>Check</option>
+            <option value="ach">ACH</option>
+            <option value="wire">Wire</option>
+            <option value="other">Other</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <label for="reference_number">Check # / reference</label>
+          <input id="reference_number" name="reference_number" placeholder="Optional" />
+        </div>
+        <div class="form-row">
+          <label for="notes">Notes</label>
+          <textarea id="notes" name="notes" rows="2" placeholder="Optional"></textarea>
+        </div>
+        <div class="hs-form-actions" style="margin-bottom:0">
+          <button type="submit" class="hs-btn hs-btn-primary">Mark as paid</button>
+          <a class="hs-btn" href="{% url 'slurp_ui:finance_payment_entry' %}?type=ap_payment&amp;ap_entry={{ ap.id }}">Partial payment instead</a>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}

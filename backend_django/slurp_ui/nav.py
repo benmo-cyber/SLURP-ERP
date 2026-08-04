@@ -55,28 +55,29 @@ SALES_NAV = [
     },
     {
         "label": "Planning",
-        "items": [{"id": "calendar", "label": "Ops Calendar", "url_name": "slurp_ui:sales_calendar"}],
+        "items": [
+            {"id": "calendar", "label": "Ops Calendar", "url_name": "slurp_ui:sales_calendar"},
+            {"id": "kpis", "label": "Shipping KPIs", "url_name": "slurp_ui:sales_kpis"},
+        ],
     },
 ]
 
 FINANCE_NAV = [
     {
+        "label": "Home",
+        "items": [
+            {"id": "dashboard", "label": "Finance home", "url_name": "slurp_ui:finance"},
+        ],
+    },
+    {
         "label": "Invoicing",
         "items": [
-            {"id": "invoices", "label": "Invoices", "url_name": "slurp_ui:finance_invoices"},
-            {"id": "ar", "label": "Accounts Receivable", "url_name": "slurp_ui:finance_ar"},
+            {"id": "invoicing", "label": "Invoices & AR", "url_name": "slurp_ui:finance_invoices"},
         ],
     },
     {
         "label": "Payables",
         "items": [{"id": "ap", "label": "Accounts Payable", "url_name": "slurp_ui:finance_ap"}],
-    },
-    {
-        "label": "Home",
-        "items": [
-            {"id": "dashboard", "label": "Finance home", "url_name": "slurp_ui:finance"},
-            {"id": "kpis", "label": "Shipping KPIs", "url_name": "slurp_ui:finance_kpis"},
-        ],
     },
     {
         "label": "Accounting",
@@ -92,36 +93,15 @@ FINANCE_NAV = [
         ],
     },
     {
-        "label": "Pricing & cost",
+        "label": "Cost",
         "items": [
-            {"id": "pricing", "label": "Pricing", "url_name": "slurp_ui:finance_pricing"},
-            {
-                "id": "cost-master",
-                "label": "Cost Master",
-                "url_name": "slurp_ui:finance_cost_master",
-            },
-            {
-                "id": "margin-trends",
-                "label": "Margin trends",
-                "url_name": "slurp_ui:finance_margin_trends",
-            },
-            {
-                "id": "rm-lot-costs",
-                "label": "RM lot costs",
-                "url_name": "slurp_ui:finance_rm_lot_costs",
-            },
+            {"id": "costing", "label": "Costing", "url_name": "slurp_ui:finance_costing"},
         ],
     },
     {
         "label": "Reports",
         "items": [
             {"id": "reports", "label": "Financial Reports", "url_name": "slurp_ui:finance_reports"},
-            {"id": "pl-actual", "label": "P&L Actual", "url_name": "slurp_ui:finance_pl_actual"},
-            {
-                "id": "pl-proforma",
-                "label": "P&L Pro-Forma",
-                "url_name": "slurp_ui:finance_pl_proforma",
-            },
         ],
     },
 ]

@@ -1,0 +1,267 @@
+{% comment %}What-if pipeline: flat catalog (CM + R&D + manufactured) + formula ingredient vendor what-ifs{% endcomment %}
+<style>
+  .wi-totals .value { font-size: 1.35rem; }
+  .wi-status { font-size: 0.8rem; color: var(--hs-muted, #64748b); min-height: 1.2em; }
+  .wi-status.err { color: #b91c1c; }
+  .wi-wrap { overflow-x: auto; }
+  .wi-table { width: 100%; min-width: 1100px; font-size: 0.875rem; border-collapse: collapse; }
+  .wi-table th {
+    text-align: left; font-weight: 600; font-size: 0.75rem; text-transform: uppercase;
+    letter-spacing: 0.02em; color: var(--hs-muted, #64748b); padding: 0.5rem 0.4rem;
+    border-bottom: 1px solid var(--hs-border, #e2e8f0); white-space: nowrap;
+  }
+  .wi-table td { padding: 0.4rem; vertical-align: middle; border-bottom: 1px solid var(--hs-border, #e2e8f0); }
+  .wi-table input, .wi-table select {
+    width: 100%; min-width: 0; font: inherit; padding: 0.35rem 0.4rem;
+    border: 1px solid var(--hs-border, #e2e8f0); border-radius: 4px; background: #fff;
+  }
+  .wi-table input[type="number"] { text-align: right; }
+  .wi-table .wi-calc { font-variant-numeric: tabular-nums; font-weight: 600; white-space: nowrap; }
+  .wi-table .wi-calc.price { color: #0f766e; }
+  .wi-n { max-width: 4.75rem; }
+  .wi-m { max-width: 7rem; }
+  .wi-product { min-width: 16rem; max-width: 22rem; }
+  .wi-customer { min-width: 8rem; }
+  .wi-kind { font-size: 0.72rem; color: var(--hs-muted, #64748b); white-space: nowrap; }
+  .wi-details > td { background: #f8fafc; border-bottom: 2px solid var(--hs-border, #e2e8f0); }
+  .wi-details-grid {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(9rem, 1fr)); gap: 0.65rem 1rem;
+    padding: 0.35rem 0.25rem 0.5rem;
+  }
+  .wi-details-grid label { display: block; font-size: 0.72rem; color: var(--hs-muted, #64748b); margin-bottom: 0.2rem; }
+  .wi-cost-hint { display: block; font-size: 0.68rem; color: var(--hs-muted, #64748b); margin-top: 0.15rem; }
+  .wi-cost-hint.manual { color: #b45309; }
+  .wi-empty { padding: 1.25rem; color: var(--hs-muted, #64748b); }
+  .wi-formula { margin: 0 0 0.85rem; font-size: 0.85rem; color: var(--hs-muted, #64748b); }
+  .wi-formula code { font-size: 0.8rem; background: #f1f5f9; padding: 0.1rem 0.35rem; border-radius: 3px; }
+  .wi-ing { margin-top: 0.75rem; }
+  .wi-ing h4 { margin: 0 0 0.4rem; font-size: 0.85rem; }
+  .wi-ing-table { width: 100%; font-size: 0.8rem; border-collapse: collapse; }
+  .wi-ing-table th, .wi-ing-table td { padding: 0.3rem 0.35rem; border-bottom: 1px solid #e2e8f0; text-align: left; }
+  .wi-ing-table th { color: var(--hs-muted, #64748b); font-weight: 600; font-size: 0.72rem; text-transform: uppercase; }
+  .wi-ing-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: end; margin: 0.5rem 0; }
+  .wi-ing-actions .form-row { margin: 0; min-width: 10rem; }
+  .wi-ing-actions label { display: block; font-size: 0.72rem; color: var(--hs-muted, #64748b); margin-bottom: 0.2rem; }
+</style>
+
+<div class="hs-stat-row wi-totals" style="margin-bottom:0.75rem">
+  <div class="hs-stat"><div class="label">Revenue</div><div class="value" id="wi-tot-rev">—</div></div>
+  <div class="hs-stat"><div class="label">Gross profit</div><div class="value" id="wi-tot-gp">—</div></div>
+  <div class="hs-stat"><div class="label">GP %</div><div class="value" id="wi-tot-gpp">—</div></div>
+  <div class="hs-stat"><div class="label">Weighted rev</div><div class="value" id="wi-tot-wrev">—</div></div>
+</div>
+
+<p class="wi-formula">
+  Pick any Cost Master, R&amp;D, or commercialized formula → cost fills automatically.
+  For formulas, open <strong>Ingredients</strong> to what-if vendor / RM $/lb.
+  Margin: <code>Price = (Cost + Add) ÷ (1 − Margin)</code>.
+</p>
+
+<div class="hs-toolbar" style="margin-bottom:0.65rem;align-items:center;gap:0.75rem">
+  <button type="button" class="hs-btn hs-btn-primary" id="wi-add">+ Add row</button>
+  <span class="wi-status" id="wi-status" aria-live="polite"></span>
+</div>
+{% csrf_token %}
+
+<div class="hs-card">
+  <div class="hs-card-body tight wi-wrap">
+    <table class="wi-table" id="wi-table">
+      <thead>
+        <tr>
+          <th class="wi-customer">Customer</th>
+          <th class="wi-product">Product</th>
+          <th>Type</th>
+          <th class="wi-n">Cost $/lb</th>
+          <th class="wi-n">+ Add</th>
+          <th class="wi-n">Margin %</th>
+          <th>Price</th>
+          <th class="wi-m">Volume lb</th>
+          <th>Revenue</th>
+          <th>GP</th>
+          <th class="wi-n">Win %</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="wi-tbody">
+        {% for line in whatif_lines %}
+        <tr class="wi-row" data-id="{{ line.id }}"
+            data-catalog-key="{{ line.catalog_key }}"
+            data-source="{{ line.source_type }}"
+            data-rd-id="{{ line.rd_formula_id|default:'' }}"
+            data-overrides="{{ line.overrides_json|default:'{}'|escape }}">
+          <td class="wi-customer"><input class="wi-customer-name" value="{{ line.customer_name }}" /></td>
+          <td class="wi-product">
+            <select class="wi-product-select" data-current-key="{{ line.catalog_key }}" data-current-name="{{ line.product_name }}"></select>
+          </td>
+          <td><span class="wi-kind wi-kind-label">{{ line.get_source_type_display }}</span>
+              <input type="hidden" class="wi-source" value="{{ line.source_type }}" /></td>
+          <td class="wi-n">
+            <input class="wi-cost" type="number" step="0.0001"
+                   value="{% if line.base_cost_per_lb != None %}{{ line.base_cost_per_lb }}{% endif %}" />
+            <span class="wi-cost-hint {% if line.cost_is_manual %}manual{% endif %}">{% if line.cost_is_manual %}manual{% else %}auto{% endif %}</span>
+            <input type="hidden" class="wi-manual" value="{% if line.cost_is_manual %}1{% else %}0{% endif %}" />
+          </td>
+          <td class="wi-n"><input class="wi-add" type="number" step="0.0001" value="{{ line.additional_cost_per_lb }}" /></td>
+          <td class="wi-n">
+            <input class="wi-margin-pct" type="number" step="0.1" min="0" max="99"
+                   value="{% if line.margin != None %}{{ line.margin }}{% endif %}" data-as-pct="1" />
+          </td>
+          <td class="wi-calc price wi-price">—</td>
+          <td class="wi-m"><input class="wi-vol" type="number" step="1" value="{% if line.volume_lb != None %}{{ line.volume_lb }}{% endif %}" /></td>
+          <td class="wi-calc wi-rev">—</td>
+          <td class="wi-calc wi-gp">—</td>
+          <td class="wi-n">
+            <input class="wi-win-pct" type="number" step="1" min="0" max="100"
+                   value="{{ line.close_probability }}" data-as-pct="1" />
+          </td>
+          <td style="white-space:nowrap">
+            <button type="button" class="hs-btn hs-btn-sm wi-ings" title="Formula ingredients">Ingredients</button>
+            <button type="button" class="hs-btn hs-btn-sm wi-more" title="More fields">···</button>
+            <button type="button" class="hs-btn hs-btn-sm wi-del" title="Delete">✕</button>
+          </td>
+        </tr>
+        <tr class="wi-details" data-for="{{ line.id }}" hidden>
+          <td colspan="12">
+            <div class="wi-details-grid">
+              <div>
+                <label>Agreement</label>
+                <select class="wi-agreement">
+                  {% for val, label in agreement_choices %}
+                  <option value="{{ val }}" {% if line.agreement == val %}selected{% endif %}>{{ label }}</option>
+                  {% endfor %}
+                </select>
+              </div>
+              <div><label>Incoterms</label><input class="wi-incoterms" value="{{ line.incoterms }}" /></div>
+              <div><label>1st ship</label><input class="wi-first-ship" value="{{ line.first_order_ship }}" /></div>
+              <div><label>Pattern</label><input class="wi-pattern" value="{{ line.order_pattern }}" /></div>
+              <div>
+                <label>% hit year</label>
+                <input class="wi-hit-pct" type="number" step="1" min="0" max="100"
+                       value="{% if line.volume_pct_target != None %}{{ line.volume_pct_target }}{% endif %}" data-as-pct="1" />
+              </div>
+              <div style="grid-column:1/-1"><label>Notes</label><input class="wi-notes" value="{{ line.notes }}" /></div>
+            </div>
+            <div class="wi-ing" hidden>
+              <h4>Formula ingredients <span class="wi-ing-title hs-muted"></span></h4>
+              <div class="wi-ing-actions">
+                <div class="form-row">
+                  <label>Cost scenario</label>
+                  <select class="wi-scenario"><option value="">— Base formula prices —</option></select>
+                </div>
+                <button type="button" class="hs-btn hs-btn-sm wi-apply-scenario">Apply</button>
+                <div class="form-row">
+                  <label>Save as scenario</label>
+                  <input class="wi-scenario-name" placeholder="e.g. Vendor B RM pack" />
+                </div>
+                <button type="button" class="hs-btn hs-btn-sm wi-save-scenario">Save scenario</button>
+                <button type="button" class="hs-btn hs-btn-sm wi-reset-overrides">Reset overrides</button>
+              </div>
+              <table class="wi-ing-table">
+                <thead>
+                  <tr>
+                    <th>Line</th>
+                    <th>%</th>
+                    <th>Base $/lb</th>
+                    <th>Vendor / source</th>
+                    <th>What-if $/lb</th>
+                    <th>Line cost</th>
+                  </tr>
+                </thead>
+                <tbody class="wi-ing-body"></tbody>
+                <tfoot>
+                  <tr>
+                    <td colspan="5" style="text-align:right;font-weight:600">Formula $/lb</td>
+                    <td class="wi-ing-total" style="font-weight:600">—</td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          </td>
+        </tr>
+        {% empty %}
+        <tr class="wi-empty-row"><td colspan="12"><div class="wi-empty">No rows yet. Add one and pick a product.</div></td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{{ whatif_catalog|json_script:"wi-catalog-data" }}
+
+<template id="wi-row-template">
+  <tr class="wi-row" data-id="" data-catalog-key="" data-source="distributed" data-rd-id="" data-overrides="{}">
+    <td class="wi-customer"><input class="wi-customer-name" value="" /></td>
+    <td class="wi-product"><select class="wi-product-select" data-current-key="" data-current-name=""></select></td>
+    <td><span class="wi-kind wi-kind-label">Distributed</span><input type="hidden" class="wi-source" value="distributed" /></td>
+    <td class="wi-n">
+      <input class="wi-cost" type="number" step="0.0001" value="" />
+      <span class="wi-cost-hint">auto</span>
+      <input type="hidden" class="wi-manual" value="0" />
+    </td>
+    <td class="wi-n"><input class="wi-add" type="number" step="0.0001" value="0" /></td>
+    <td class="wi-n"><input class="wi-margin-pct" type="number" step="0.1" min="0" max="99" value="30" /></td>
+    <td class="wi-calc price wi-price">—</td>
+    <td class="wi-m"><input class="wi-vol" type="number" step="1" value="" /></td>
+    <td class="wi-calc wi-rev">—</td>
+    <td class="wi-calc wi-gp">—</td>
+    <td class="wi-n"><input class="wi-win-pct" type="number" step="1" min="0" max="100" value="50" /></td>
+    <td style="white-space:nowrap">
+      <button type="button" class="hs-btn hs-btn-sm wi-ings" title="Formula ingredients">Ingredients</button>
+      <button type="button" class="hs-btn hs-btn-sm wi-more" title="More fields">···</button>
+      <button type="button" class="hs-btn hs-btn-sm wi-del" title="Delete">✕</button>
+    </td>
+  </tr>
+  <tr class="wi-details" data-for="" hidden>
+    <td colspan="12">
+      <div class="wi-details-grid">
+        <div>
+          <label>Agreement</label>
+          <select class="wi-agreement">
+            {% for val, label in agreement_choices %}
+            <option value="{{ val }}">{{ label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div><label>Incoterms</label><input class="wi-incoterms" value="" /></div>
+        <div><label>1st ship</label><input class="wi-first-ship" value="" /></div>
+        <div><label>Pattern</label><input class="wi-pattern" value="" /></div>
+        <div><label>% hit year</label><input class="wi-hit-pct" type="number" step="1" min="0" max="100" value="" /></div>
+        <div style="grid-column:1/-1"><label>Notes</label><input class="wi-notes" value="" /></div>
+      </div>
+      <div class="wi-ing" hidden>
+        <h4>Formula ingredients <span class="wi-ing-title hs-muted"></span></h4>
+        <div class="wi-ing-actions">
+          <div class="form-row">
+            <label>Cost scenario</label>
+            <select class="wi-scenario"><option value="">— Base formula prices —</option></select>
+          </div>
+          <button type="button" class="hs-btn hs-btn-sm wi-apply-scenario">Apply</button>
+          <div class="form-row">
+            <label>Save as scenario</label>
+            <input class="wi-scenario-name" placeholder="e.g. Vendor B RM pack" />
+          </div>
+          <button type="button" class="hs-btn hs-btn-sm wi-save-scenario">Save scenario</button>
+          <button type="button" class="hs-btn hs-btn-sm wi-reset-overrides">Reset overrides</button>
+        </div>
+        <table class="wi-ing-table">
+          <thead>
+            <tr>
+              <th>Line</th><th>%</th><th>Base $/lb</th><th>Vendor / source</th><th>What-if $/lb</th><th>Line cost</th>
+            </tr>
+          </thead>
+          <tbody class="wi-ing-body"></tbody>
+          <tfoot>
+            <tr>
+              <td colspan="5" style="text-align:right;font-weight:600">Formula $/lb</td>
+              <td class="wi-ing-total" style="font-weight:600">—</td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    </td>
+  </tr>
+</template>
+
+<script>
+{% include "slurp_ui/finance/_whatif_js.html" %}
+</script>

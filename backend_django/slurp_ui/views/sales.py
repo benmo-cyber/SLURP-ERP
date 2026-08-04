@@ -646,6 +646,22 @@ def sales_calendar(request: HttpRequest) -> HttpResponse:
 
 
 @login_required
+def sales_kpis(request: HttpRequest) -> HttpResponse:
+    from ..finance_helpers import get_kpis
+
+    try:
+        months_back = int(request.GET.get("months_back") or 12)
+    except ValueError:
+        months_back = 12
+    kpis = get_kpis(request.user, months_back)
+    return render(
+        request,
+        "slurp_ui/sales/kpis.html",
+        _sales_ctx(active_tab="kpis", kpis=kpis, months_back=months_back, port_status="full"),
+    )
+
+
+@login_required
 @require_http_methods(["GET", "POST"])
 def sales_customers(request: HttpRequest) -> HttpResponse:
     edit_id = request.GET.get("edit") or request.POST.get("edit_id")
@@ -779,6 +795,7 @@ def sales_customer_profile(request: HttpRequest, pk: int) -> HttpResponse:
     tabs = [
         ("glance", "At a glance"),
         ("orders", "Orders"),
+        ("payments", "Payments"),
         ("contacts", "Contacts"),
         ("pricing", "Pricing"),
         ("quotes", "Quotes"),
@@ -787,6 +804,9 @@ def sales_customer_profile(request: HttpRequest, pk: int) -> HttpResponse:
         ("ship-to", "Ship-to"),
         ("overview", "Account edit"),
     ]
+    from ..finance_helpers import customer_payment_timeliness
+
+    pay_hist = customer_payment_timeliness(customer)
     return render(
         request,
         "slurp_ui/sales/customer_profile.html",
@@ -813,6 +833,7 @@ def sales_customer_profile(request: HttpRequest, pk: int) -> HttpResponse:
             usage_year=timezone.localdate().year,
             contact_type_choices=CustomerContact.CONTACT_TYPE_CHOICES,
             quote_status_choices=CustomerQuote.STATUS_CHOICES,
+            payment_history=pay_hist,
             port_status="full",
         ),
     )

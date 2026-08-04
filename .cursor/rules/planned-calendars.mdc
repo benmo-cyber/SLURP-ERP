@@ -1,0 +1,17 @@
+---
+description: Planned Finance calendar and Sales calendar scope reminder
+alwaysApply: true
+---
+
+# Planned calendars
+
+## Sales calendar (ops planning — keep separate from Order Workqueue)
+- Purpose: future planned plant/ops activities — expected customer ship dates, incoming raw materials, production dates.
+- Do **not** merge it into the Order Workqueue unless the user explicitly asks again.
+- AR due / AP due do **not** belong on the Sales calendar.
+
+## Finance calendar (built — keep improving)
+- Route: `/finance/` (embedded on Finance home) and `/finance/calendar/` (full page via home “Full calendar”; not a separate left-nav item).
+- Scope: AR and AP due dates, overdue/today cash tasks, 7-day AR/AP cash outlook.
+- Same interaction model as Ops Calendar (month grid, day detail) but **no drag-reschedule** of dues (terms-driven).
+- Payment actions link to existing AR/AP payment entry; do not change the invoice create/issue pathway.

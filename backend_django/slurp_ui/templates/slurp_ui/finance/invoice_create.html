@@ -8,7 +8,7 @@
   <label>Sales order<select name="sales_order">{% for so in sales_orders %}<option value="{{ so.id }}">{{ so.so_number }}</option>{% endfor %}</select></label>
   <label>Customer<input name="customer_name" /></label>
   <label>Invoice date<input type="date" name="invoice_date" /></label>
-  <button class="btn btn-primary" type="submit">Create</button>
-  <a class="btn btn-secondary" href="{% url 'slurp_ui:finance_invoices' %}">Cancel</a>
+  <button class="hs-btn hs-btn-primary" type="submit">Create</button>
+  <a class="hs-btn" href="{% url 'slurp_ui:finance_invoices' %}">Cancel</a>
 </form>
 {% endblock %}

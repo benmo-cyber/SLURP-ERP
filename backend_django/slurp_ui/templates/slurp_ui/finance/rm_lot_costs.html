@@ -2,12 +2,15 @@
 {% block title %}RM Lot Costs — SLURP{% endblock %}
 {% block module_title %}Finance{% endblock %}
 {% block main %}
-<form method="get"><input name="q" value="{{ search }}" /><button type="submit" class="btn btn-secondary">Search</button></form>
-<table class="data-table" style="width:100%"><thead><tr><th>Material</th><th>Code</th><th>Vendor</th><th>Est $/lb</th><th></th></tr></thead>
+<div class="hs-bleed" style="padding:1.25rem 1.5rem 2rem">
+<div class="hs-card"><div class="hs-card-body">
+<form method="get"><input name="q" value="{{ search }}" /><button type="submit" class="hs-btn">Search</button></form>
+<table class="hs-table" style="width:100%"><thead><tr><th>Material</th><th>Code</th><th>Vendor</th><th>Est $/lb</th><th></th></tr></thead>
 <tbody>{% for r in rows %}<tr>
   <td>{{ r.vendor_material }}</td><td>{{ r.wwi_product_code }}</td><td>{{ r.vendor }}</td>
   <td>{{ r.landed_cost_per_lb|default:r.price_per_lb }}</td>
   <td><a href="?expand={{ r.id }}&q={{ search|urlencode }}">Lots</a></td>
 </tr>{% empty %}<tr><td colspan="5">No rows.</td></tr>{% endfor %}</tbody></table>
 {% if profile %}<pre style="margin-top:1rem;background:#f8fafc;padding:1rem;overflow:auto">{{ profile }}</pre>{% endif %}
+</div></div></div>
 {% endblock %}

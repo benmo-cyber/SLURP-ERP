@@ -11,27 +11,27 @@
       </p>
     </div>
     <div style="display:flex;gap:0.5rem;flex-wrap:wrap">
-      <a class="btn btn-secondary" href="{% url 'slurp_ui:finance_invoice_pdf' invoice.id %}">View PDF</a>
-      <a class="btn btn-secondary" href="{% url 'slurp_ui:finance_invoice_pdf' invoice.id %}?download=1">Download PDF</a>
+      <a class="hs-btn" href="{% url 'slurp_ui:finance_invoice_pdf' invoice.id %}">View PDF</a>
+      <a class="hs-btn" href="{% url 'slurp_ui:finance_invoice_pdf' invoice.id %}?download=1">Download PDF</a>
       {% if invoice.status == 'draft' %}
-      <a class="btn btn-primary" href="{% url 'slurp_ui:finance_invoice_issue' invoice.id %}">Issue</a>
+      <a class="hs-btn hs-btn-primary" href="{% url 'slurp_ui:finance_invoice_issue' invoice.id %}">Issue</a>
       {% endif %}
       {% if invoice.status == 'sent' or invoice.status == 'overdue' %}
       <form method="post" action="{% url 'slurp_ui:finance_invoice_mark_paid' invoice.id %}" style="display:inline">
         {% csrf_token %}
-        <button type="submit" class="btn btn-primary" onclick="return confirm('Mark invoice paid?');">Mark paid</button>
+        <button type="submit" class="hs-btn hs-btn-primary" onclick="return confirm('Mark invoice paid?');">Mark paid</button>
       </form>
       {% endif %}
       {% if invoice.status != 'cancelled' and invoice.status != 'paid' %}
       <form method="post" action="{% url 'slurp_ui:finance_invoice_cancel' invoice.id %}" style="display:inline">
         {% csrf_token %}
-        <button type="submit" class="btn btn-danger"
+        <button type="submit" class="hs-btn hs-btn-danger"
                 onclick="return confirm('Void {{ invoice.invoice_number }}? Required before reversing an issued-invoice shipment.');">
           Void
         </button>
       </form>
       {% endif %}
-      <a class="btn btn-secondary" href="{% url 'slurp_ui:finance_invoices' %}">Back to list</a>
+      <a class="hs-btn" href="{% url 'slurp_ui:finance_invoices' %}">Back to list</a>
     </div>
   </div>
 

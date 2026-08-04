@@ -2,6 +2,8 @@
 {% block title %}Create Journal Entry — SLURP{% endblock %}
 {% block module_title %}Finance{% endblock %}
 {% block main %}
+<div class="hs-bleed" style="padding:1.25rem 1.5rem 2rem">
+<div class="hs-card"><div class="hs-card-body">
 <h2>Create journal entry</h2>
 <form method="post">{% csrf_token %}
   <label>Date<input type="date" name="entry_date" required /></label>
@@ -16,7 +18,8 @@
     <input name="line_{{ i }}_description" placeholder="Memo" />
   </div>
   {% endfor %}
-  <button class="btn btn-primary" type="submit">Create</button>
-  <a class="btn btn-secondary" href="{% url 'slurp_ui:finance_journal' %}">Cancel</a>
+  <button class="hs-btn hs-btn-primary" type="submit">Create</button>
+  <a class="hs-btn" href="{% url 'slurp_ui:finance_journal' %}">Cancel</a>
 </form>
+</div></div></div>
 {% endblock %}

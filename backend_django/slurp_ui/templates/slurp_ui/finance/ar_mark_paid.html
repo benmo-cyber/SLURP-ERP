@@ -1,0 +1,43 @@
+{% extends "slurp_ui/base_module.html" %}
+{% block title %}Mark AR paid — SLURP{% endblock %}
+{% block module_title %}Mark as paid{% endblock %}
+{% block header_actions %}
+  <a class="hs-btn" href="{% url 'slurp_ui:finance_invoices' %}?tab=ar">Back to receivables</a>
+{% endblock %}
+{% block main %}
+<div class="hs-bleed" style="padding:1.25rem 1.5rem 2rem;max-width:40rem">
+  <div class="hs-card">
+    <div class="hs-card-header"><h3>{{ ar.customer_name }}</h3></div>
+    <div class="hs-card-body">
+      <p class="hs-section-note" style="margin-top:0">
+        Confirm funds cleared in the bank, then mark this receivable paid.
+        Timeliness is recorded against due date for the customer profile.
+      </p>
+      <div class="hs-props" style="margin-bottom:1rem">
+        <div class="hs-prop"><span class="k">Invoice</span><span class="v">{% if ar.invoice %}{{ ar.invoice.invoice_number }}{% else %}—{% endif %}</span></div>
+        <div class="hs-prop"><span class="k">Due</span><span class="v">{{ ar.due_date }}</span></div>
+        <div class="hs-prop"><span class="k">Balance</span><span class="v">${{ ar.balance|floatformat:2 }}</span></div>
+      </div>
+      <form method="post">
+        {% csrf_token %}
+        <div class="form-row">
+          <label for="payment_date">Date received (bank cleared) *</label>
+          <input id="payment_date" type="date" name="payment_date" value="{{ today|date:'Y-m-d' }}" required />
+        </div>
+        <div class="form-row">
+          <label for="reference_number">Bank / check reference</label>
+          <input id="reference_number" name="reference_number" placeholder="Optional" />
+        </div>
+        <div class="form-row">
+          <label for="notes">Notes</label>
+          <textarea id="notes" name="notes" rows="2" placeholder="Optional"></textarea>
+        </div>
+        <div class="hs-form-actions" style="margin-bottom:0">
+          <button type="submit" class="hs-btn hs-btn-primary">Mark as paid</button>
+          <a class="hs-btn" href="{% url 'slurp_ui:finance_payment_entry' %}?type=ar_payment&amp;ar_entry={{ ar.id }}">Partial payment instead</a>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}

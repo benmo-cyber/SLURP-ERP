@@ -2,9 +2,12 @@
 {% block title %}{{ title }} — SLURP{% endblock %}
 {% block module_title %}Finance{% endblock %}
 {% block header_actions %}
-  {% if create_url %}<a href="{{ create_url }}" class="btn btn-primary">{{ create_label|default:"Create" }}</a>{% endif %}
+  {% if create_url %}<a href="{{ create_url }}" class="hs-btn hs-btn-primary">{{ create_label|default:"Create" }}</a>{% endif %}
+</div></div></div>
 {% endblock %}
 {% block main %}
+<div class="hs-bleed" style="padding:1.25rem 1.5rem 2rem">
+<div class="hs-card"><div class="hs-card-body">
 <h2 style="margin-bottom:.75rem">{{ title }}</h2>
 {% if filters %}
 <form method="get" style="display:flex;gap:0.5rem;margin-bottom:1rem;flex-wrap:wrap">
@@ -22,11 +25,11 @@
     {% endif %}
   </label>
   {% endfor %}
-  <button type="submit" class="btn btn-secondary" style="align-self:flex-end">Filter</button>
+  <button type="submit" class="hs-btn" style="align-self:flex-end">Filter</button>
 </form>
 {% endif %}
 <div class="table-wrapper">
-  <table class="data-table" style="width:100%;border-collapse:collapse">
+  <table class="hs-table" style="width:100%;border-collapse:collapse">
     <thead>
       <tr>
         {% for col in columns %}<th style="text-align:left;padding:0.5rem;border-bottom:1px solid #e2e8f0">{{ col }}</th>{% endfor %}

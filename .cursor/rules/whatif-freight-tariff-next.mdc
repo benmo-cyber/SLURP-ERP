@@ -1,0 +1,33 @@
+---
+description: Next session starter — what-if freight/tariff adjusters without double-counting Cost Master landed cost
+alwaysApply: true
+---
+
+# First task next session: what-if freight & tariff adjusters
+
+Do this **before** other new Finance/what-if work.
+
+## Goal
+In the Costing **what-if** model, allow adjusting:
+- Freight in ($/lb and/or $/kg)
+- Tariff rate
+
+## Critical constraint — do not double-count
+Cost Master **landed** cost already includes estimated freight-in and tariff (see `CostMaster` landed calc: price × (1 + tariff) + freight, then $/lb).
+
+What-if must treat that landed figure as the baseline, then let the user model **deltas** or **replacement** assumptions without adding freight/tariff on top of a cost that already embeds them.
+
+Prefer one clear approach (document in UI help text):
+- Start from **ex-works / base price** when user edits freight & tariff, **or**
+- Start from **landed** and treat freight/tariff fields as **adjustments vs embedded estimates** (net add/remove), never raw re-add of the same Cost Master freight/tariff already inside landed.
+
+## Touch points (expected)
+- `backend_django/slurp_ui/pricing_whatif.py`
+- `backend_django/slurp_ui/templates/slurp_ui/finance/_whatif.html` (+ `_whatif_js.html`)
+- `PricingWhatIfLine` model/migration if persisting freight/tariff fields
+- Cost Master fields: `freight_per_kg`, `tariff`, `landed_cost_per_lb`, `price_per_lb` / `price_per_kg`
+
+## Done when
+User can scrub freight and tariff on a what-if row, see price/GP update live, and Cost Master landed components are not counted twice.
+
+After implementing, **delete or cancel this rule** so it does not stick forever.

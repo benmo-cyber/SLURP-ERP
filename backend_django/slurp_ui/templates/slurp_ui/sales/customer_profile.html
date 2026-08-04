@@ -110,6 +110,10 @@
           <div class="label">Open orders</div>
           <div class="value">{{ open_orders|length }}</div>
         </div>
+        <div class="hs-stat">
+          <div class="label">Pay on-time %</div>
+          <div class="value">{% if payment_history.on_time_pct != None %}{{ payment_history.on_time_pct }}{% else %}—{% endif %}</div>
+        </div>
       </div>
 
       <div class="hs-card">
@@ -286,6 +290,59 @@
               <td><a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:sales_order_detail' o.id %}">Open</a></td>
             </tr>
             {% empty %}<tr><td colspan="6"><div class="hs-empty">No shipped orders.</div></td></tr>{% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    {% elif tab == "payments" %}
+    <div class="hs-stat-row" style="margin-bottom:1rem">
+      <div class="hs-stat"><div class="label">Payments recorded</div><div class="value">{{ payment_history.paid_count }}</div></div>
+      <div class="hs-stat"><div class="label">On-time %</div><div class="value">{% if payment_history.on_time_pct != None %}{{ payment_history.on_time_pct }}{% else %}—{% endif %}</div></div>
+      <div class="hs-stat"><div class="label">Late</div><div class="value">{{ payment_history.late_count }}</div></div>
+      <div class="hs-stat"><div class="label">Avg days vs due</div><div class="value">{% if payment_history.avg_days_vs_due != None %}{{ payment_history.avg_days_vs_due }}{% else %}—{% endif %}</div></div>
+      <div class="hs-stat"><div class="label">Open AR</div><div class="value">{{ payment_history.open_ar_count }}</div></div>
+    </div>
+    <div class="hs-card">
+      <div class="hs-card-header">
+        <h3>Payment timeliness</h3>
+        <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:finance_invoices' %}?tab=ar">Open AR</a>
+      </div>
+      <div class="hs-card-body tight">
+        <p class="hs-section-note" style="margin:0.75rem 0.75rem 0">Days vs due is from bank-cleared date (Mark as paid) relative to invoice due date. Negative = early.</p>
+        <table class="hs-table">
+          <thead>
+            <tr>
+              <th>Invoice</th>
+              <th>Due</th>
+              <th>Paid</th>
+              <th>Days vs due</th>
+              <th>Amount</th>
+              <th>Reference</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in payment_history.rows %}
+            <tr>
+              <td>
+                {% if row.invoice_id %}
+                <a class="hs-entity-name" href="{% url 'slurp_ui:finance_invoice_detail' row.invoice_id %}">{{ row.invoice_number }}</a>
+                {% else %}{{ row.invoice_number|default:"—" }}{% endif %}
+              </td>
+              <td>{{ row.due_date|default:"—" }}</td>
+              <td>{{ row.payment_date }}</td>
+              <td>
+                {% if row.days_vs_due != None %}
+                  {% if row.days_vs_due <= 0 %}<span class="hs-badge ok">{% if row.days_vs_due < 0 %}{{ row.days_vs_due }} early{% else %}On time{% endif %}</span>
+                  {% else %}<span class="hs-badge danger">+{{ row.days_vs_due }} late</span>{% endif %}
+                {% else %}—{% endif %}
+              </td>
+              <td>${{ row.amount|floatformat:2 }}</td>
+              <td>{{ row.reference|default:"—" }}</td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="6"><div class="hs-empty">No payments recorded yet. Use Accounts Receivable → Mark as paid after bank verification.</div></td></tr>
+            {% endfor %}
           </tbody>
         </table>
       </div>

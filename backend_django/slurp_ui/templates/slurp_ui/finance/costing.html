@@ -1,0 +1,160 @@
+{% extends "slurp_ui/base_module.html" %}
+{% block title %}Costing — SLURP{% endblock %}
+{% block module_title %}Costing{% endblock %}
+{% block header_actions %}
+  {% if tab == 'rd' %}
+  <a class="hs-btn hs-btn-primary" href="{% url 'slurp_ui:finance_rd_formula_create' %}">New R&amp;D formula</a>
+  {% elif tab == 'whatif' %}
+  <a class="hs-btn" href="{% url 'slurp_ui:finance_costing' %}?tab=master">Cost Master</a>
+  {% endif %}
+{% endblock %}
+{% block main %}
+<div class="hs-bleed" style="padding:1.25rem 1.5rem 2rem">
+  <div class="hs-pills" style="margin-bottom:1rem">
+    <a class="hs-pill {% if tab == 'whatif' %}active{% endif %}" href="{% url 'slurp_ui:finance_costing' %}?tab=whatif">What-if pricing</a>
+    <a class="hs-pill {% if tab == 'master' %}active{% endif %}" href="{% url 'slurp_ui:finance_costing' %}?tab=master{% if search %}&amp;q={{ search|urlencode }}{% endif %}">Cost Master</a>
+    <a class="hs-pill {% if tab == 'rd' %}active{% endif %}" href="{% url 'slurp_ui:finance_costing' %}?tab=rd{% if rd_status %}&amp;status={{ rd_status|urlencode }}{% endif %}{% if rd_q %}&amp;q={{ rd_q|urlencode }}{% endif %}">R&amp;D costing</a>
+    <a class="hs-pill {% if tab == 'lots' %}active{% endif %}" href="{% url 'slurp_ui:finance_costing' %}?tab=lots{% if search %}&amp;q={{ search|urlencode }}{% endif %}">RM lot costs</a>
+  </div>
+
+  {% if tab == 'whatif' %}
+  {% include "slurp_ui/finance/_whatif.html" %}
+
+  {% elif tab == 'rd' %}
+  <p class="hs-section-note" style="margin:0 0 1rem">Same R&amp;D formula records as Quality. Early $/lb estimates before commercialization.</p>
+  <div class="hs-stat-row">
+    <div class="hs-stat"><div class="label">Active</div><div class="value">{{ counts.active }}</div></div>
+    <div class="hs-stat"><div class="label">Commercialized</div><div class="value">{{ counts.commercialized }}</div></div>
+    <div class="hs-stat"><div class="label">Scrapped</div><div class="value">{{ counts.scrapped }}</div></div>
+    <div class="hs-stat"><div class="label">All</div><div class="value">{{ counts.all }}</div></div>
+  </div>
+  <div class="hs-toolbar">
+    <form method="get" style="display:flex;gap:0.5rem;flex:1;min-width:220px">
+      <input type="hidden" name="tab" value="rd" />
+      <input type="search" name="q" value="{{ rd_q }}" placeholder="Search code, name, commercial SKU…" class="hs-search" />
+      {% if rd_status %}<input type="hidden" name="status" value="{{ rd_status }}" />{% endif %}
+      <button class="hs-btn hs-btn-primary" type="submit">Search</button>
+    </form>
+    <div class="hs-pills">
+      <a class="hs-pill {% if rd_status == 'active' %}active{% endif %}" href="?tab=rd&amp;{% if rd_q %}q={{ rd_q|urlencode }}&amp;{% endif %}status=active">Active</a>
+      <a class="hs-pill {% if rd_status == 'commercialized' %}active{% endif %}" href="?tab=rd&amp;{% if rd_q %}q={{ rd_q|urlencode }}&amp;{% endif %}status=commercialized">Commercialized</a>
+      <a class="hs-pill {% if rd_status == 'scrapped' %}active{% endif %}" href="?tab=rd&amp;{% if rd_q %}q={{ rd_q|urlencode }}&amp;{% endif %}status=scrapped">Scrapped</a>
+      <a class="hs-pill {% if rd_status == 'all' %}active{% endif %}" href="?tab=rd&amp;{% if rd_q %}q={{ rd_q|urlencode }}&amp;{% endif %}status=all">All</a>
+    </div>
+  </div>
+  <div class="hs-card">
+    <div class="hs-card-header">
+      <h3>R&amp;D formulas</h3>
+      <span class="hs-muted" style="font-size:0.8rem">Codes are permanent (e.g. L-R001, HL-R001)</span>
+    </div>
+    <div class="hs-card-body tight">
+      <table class="hs-table">
+        <thead>
+          <tr>
+            <th>R&amp;D code</th>
+            <th>Name</th>
+            <th>Status</th>
+            <th>Commercial SKU</th>
+            <th>Total $/lb</th>
+            <th>Updated</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for f in formulas %}
+          <tr onclick="window.location='{% url 'slurp_ui:finance_rd_formula_detail' f.id %}'">
+            <td><a class="hs-entity-name" href="{% url 'slurp_ui:finance_rd_formula_detail' f.id %}">{{ f.rd_code }}</a></td>
+            <td>{{ f.name }}</td>
+            <td>
+              {% if f.status == 'approved' %}<span class="hs-badge ok">Approved</span>
+              {% elif f.status == 'commercialized' %}<span class="hs-badge info">Commercialized</span>
+              {% elif f.status == 'scrapped' %}<span class="hs-badge">Scrapped</span>
+              {% else %}<span class="hs-badge warn">Draft</span>{% endif %}
+            </td>
+            <td>{% if f.commercial_sku %}{{ f.commercial_sku }}{% else %}<span class="hs-muted">—</span>{% endif %}</td>
+            <td>${{ f.total_cost_per_lb|floatformat:2 }}</td>
+            <td>{{ f.updated_at|date:"M j, Y" }}</td>
+          </tr>
+          {% empty %}
+          <tr><td colspan="6"><div class="hs-empty">No R&amp;D formulas in this view.</div></td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  {% elif tab == 'lots' %}
+  <div class="hs-toolbar">
+    <form method="get" style="display:flex;gap:0.5rem;flex:1">
+      <input type="hidden" name="tab" value="lots" />
+      <input class="hs-search" name="q" value="{{ search }}" placeholder="Search materials, WWI codes, vendors…" />
+      <button class="hs-btn hs-btn-primary" type="submit">Search</button>
+    </form>
+  </div>
+  <div class="hs-card">
+    <div class="hs-card-header"><h3>RM lot costs</h3></div>
+    <div class="hs-card-body tight">
+      <table class="hs-table">
+        <thead><tr><th>Material</th><th>Code</th><th>Vendor</th><th>Est $/lb</th><th></th></tr></thead>
+        <tbody>
+          {% for r in rows %}
+          <tr>
+            <td>{{ r.vendor_material }}</td>
+            <td>{{ r.wwi_product_code }}</td>
+            <td>{{ r.vendor }}</td>
+            <td>{{ r.landed_cost_per_lb|default:r.price_per_lb }}</td>
+            <td><a class="hs-btn hs-btn-sm" href="?tab=lots&amp;expand={{ r.id }}&amp;q={{ search|urlencode }}">Lots</a></td>
+          </tr>
+          {% empty %}
+          <tr><td colspan="5"><div class="hs-empty">No rows.</div></td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% if profile %}
+      <pre style="margin:1rem;background:#f8fafc;padding:1rem;overflow:auto">{{ profile }}</pre>
+      {% endif %}
+    </div>
+  </div>
+
+  {% else %}
+  <div class="hs-toolbar">
+    <form method="get" style="display:flex;gap:0.5rem;flex:1">
+      <input type="hidden" name="tab" value="master" />
+      <input class="hs-search" name="q" value="{{ search }}" placeholder="Search materials, WWI codes, vendors…" />
+      <button class="hs-btn hs-btn-primary" type="submit">Search</button>
+    </form>
+  </div>
+  <div class="hs-card">
+    <div class="hs-card-header">
+      <h3>Cost master</h3>
+      <span class="hs-muted" style="font-size:0.8rem">Estimated vs actual landed $/lb</span>
+    </div>
+    <div class="hs-card-body tight">
+      <table class="hs-table">
+        <thead>
+          <tr>
+            <th>Material</th>
+            <th>WWI code</th>
+            <th>Vendor</th>
+            <th>$/lb</th>
+            <th>Actual vs est</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in rows %}
+          <tr>
+            <td><span class="hs-entity-name">{{ r.vendor_material }}</span></td>
+            <td>{{ r.wwi_product_code|default:"—" }}</td>
+            <td>{{ r.vendor|default:"—" }}</td>
+            <td>{{ r.landed_cost_per_lb|default:r.price_per_lb|default:"—" }}</td>
+            <td>{{ r.actual_comparison }}</td>
+          </tr>
+          {% empty %}
+          <tr><td colspan="5"><div class="hs-empty">No cost master rows.</div></td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

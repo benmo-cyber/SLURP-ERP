@@ -1,11 +1,14 @@
 {% extends "slurp_ui/base_module.html" %}
-{% block title %}R&amp;D Formulas — SLURP{% endblock %}
-{% block module_title %}R&amp;D Formulas{% endblock %}
+{% block title %}R&amp;D Costing — SLURP{% endblock %}
+{% block module_title %}R&amp;D Costing{% endblock %}
 {% block header_actions %}
-  <a class="hs-btn hs-btn-primary" href="{% url 'slurp_ui:quality_rd_formula_create' %}">New R&amp;D formula</a>
+  <a class="hs-btn" href="{% url 'slurp_ui:finance_cost_master' %}">Cost Master</a>
+  <a class="hs-btn hs-btn-primary" href="{% url 'slurp_ui:finance_rd_formula_create' %}">New R&amp;D formula</a>
 {% endblock %}
 {% block main %}
 <div class="hs-bleed" style="padding:1.25rem 1.5rem 2rem">
+  <p class="hs-section-note" style="margin:0 0 1rem">Same R&amp;D formula records as Quality. Use this view for early $/lb estimates before commercialization.</p>
+
   <div class="hs-stat-row">
     <div class="hs-stat"><div class="label">Active</div><div class="value">{{ counts.active }}</div></div>
     <div class="hs-stat"><div class="label">Commercialized</div><div class="value">{{ counts.commercialized }}</div></div>
@@ -46,8 +49,8 @@
         </thead>
         <tbody>
           {% for f in formulas %}
-          <tr onclick="window.location='{% url 'slurp_ui:quality_rd_formula_detail' f.id %}'">
-            <td><a class="hs-entity-name" href="{% url 'slurp_ui:quality_rd_formula_detail' f.id %}">{{ f.rd_code }}</a></td>
+          <tr onclick="window.location='{% url 'slurp_ui:finance_rd_formula_detail' f.id %}'">
+            <td><a class="hs-entity-name" href="{% url 'slurp_ui:finance_rd_formula_detail' f.id %}">{{ f.rd_code }}</a></td>
             <td>{{ f.name }}</td>
             <td>
               {% if f.status == 'approved' %}<span class="hs-badge ok">Approved</span>

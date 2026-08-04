@@ -1,0 +1,27 @@
+---
+description: Finance operating model — manual completion now, bank-ready execution later
+alwaysApply: true
+---
+
+# Finance operating model (Slurp 2)
+
+## Today (manual completion)
+- Users complete Finance tasks **after** real-world confirmation (bank cleared, check sent, QuickBooks reconciled).
+- Primary pattern: **Mark as paid** on AR/AP (date received/paid, optional reference) — not “record a speculative payment.”
+- Completing a task **must** update operational records (AR/AP balances, invoice status) **and** post the matching journal / GL effects when accounts exist.
+- Cash calendar / today’s tasks are operational surfaces into Mark as paid — not a separate accounting truth.
+- Do **not** redesign or break the invoice create → issue → PDF pathway while evolving Finance.
+
+## Later (bank-ready execution)
+- Same UI actions should grow an **execution layer** (issue payment, transfer funds, ACH) without renaming or replacing Mark as paid for confirmation cases.
+- Design payment / transfer services so a future bank connector can swap in for “manual marked complete,” not so the UI must be rebuilt.
+- Prefer a single Payment (or similar) record with channel/status over parallel “manual vs bank” tables.
+
+## Module placement
+- **Home:** Finance home (embedded cash calendar, today’s mark-paid tasks, drafts). Full cash calendar via home; not a separate left-nav item.
+- **Invoicing:** one workspace (`/finance/invoices/`) — Invoice register + Receivables tabs. Legacy `/finance/ar/` redirects. Create/issue/PDF unchanged.
+- **Payables:** AP with Mark as paid.
+- **Accounting:** GL, Journal, Fiscal periods, Bank recon (books layer).
+- **Cost:** Costing workspace (`/finance/costing/`) — **What-if pricing** (Customer Pricing pipeline), Cost Master, R&D, RM lots. Customer **list** selling prices still live on Sales profiles; Finance what-if is the decision tool (margin/volume/cost).
+- **Reports:** Financial Reports only in nav (P&L Actual / Pro-Forma / margin trends remain URL-reachable stubs if needed).
+- Shipping KPIs → **Sales**. Customer payment timeliness → Sales customer **Payments**. Vendor payment timeliness → Quality vendor **Payments**.

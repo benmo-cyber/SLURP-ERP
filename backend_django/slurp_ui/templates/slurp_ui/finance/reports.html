@@ -1,83 +1,101 @@
 ﻿{% extends "slurp_ui/base_module.html" %}
 {% block title %}Financial Reports — SLURP{% endblock %}
-{% block module_title %}Finance{% endblock %}
+{% block module_title %}Financial reports{% endblock %}
 {% block main %}
-<form method="get" style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:1rem;align-items:end">
-  <label>Report
-    <select name="report">
-      <option value="trial-balance" {% if report_type == "trial-balance" %}selected{% endif %}>Trial balance</option>
-      <option value="balance-sheet" {% if report_type == "balance-sheet" %}selected{% endif %}>Balance sheet</option>
-      <option value="income-statement" {% if report_type == "income-statement" %}selected{% endif %}>Income statement</option>
-      <option value="cash-flow" {% if report_type == "cash-flow" %}selected{% endif %}>Cash flow</option>
-    </select>
-  </label>
-  <label>Fiscal period
-    <select name="fiscal_period_id">
-      <option value="">— Custom dates —</option>
-      {% for fp in fiscal_periods %}
-      <option value="{{ fp.id }}" {% if fiscal_period_id == fp.id|stringformat:"s" %}selected{% endif %}>{{ fp.period_name }}</option>
-      {% endfor %}
-    </select>
-  </label>
-  <label>As of <input type="date" name="as_of_date" value="{{ as_of_date }}" /></label>
-  <label>Start <input type="date" name="start_date" value="{{ start_date }}" /></label>
-  <label>End <input type="date" name="end_date" value="{{ end_date }}" /></label>
-  <button class="btn btn-primary" type="submit">Run</button>
-</form>
+<div class="hs-bleed" style="padding:1.25rem 1.5rem 2rem">
+  <div class="hs-card" style="margin-bottom:1rem">
+    <div class="hs-card-header"><h3>Run report</h3></div>
+    <div class="hs-card-body">
+      <form method="get" class="hs-toolbar" style="align-items:flex-end;flex-wrap:wrap">
+        <div class="form-row" style="margin:0">
+          <label>Report</label>
+          <select name="report">
+            <option value="trial-balance" {% if report_type == "trial-balance" %}selected{% endif %}>Trial balance</option>
+            <option value="balance-sheet" {% if report_type == "balance-sheet" %}selected{% endif %}>Balance sheet</option>
+            <option value="income-statement" {% if report_type == "income-statement" %}selected{% endif %}>Income statement</option>
+            <option value="cash-flow" {% if report_type == "cash-flow" %}selected{% endif %}>Cash flow</option>
+          </select>
+        </div>
+        <div class="form-row" style="margin:0">
+          <label>Fiscal period</label>
+          <select name="fiscal_period_id">
+            <option value="">— Custom dates —</option>
+            {% for fp in fiscal_periods %}
+            <option value="{{ fp.id }}" {% if fiscal_period_id == fp.id|stringformat:"s" %}selected{% endif %}>{{ fp.period_name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="form-row" style="margin:0"><label>As of</label><input type="date" name="as_of_date" value="{{ as_of_date }}" /></div>
+        <div class="form-row" style="margin:0"><label>Start</label><input type="date" name="start_date" value="{{ start_date }}" /></div>
+        <div class="form-row" style="margin:0"><label>End</label><input type="date" name="end_date" value="{{ end_date }}" /></div>
+        <button class="hs-btn hs-btn-primary" type="submit">Run</button>
+      </form>
+    </div>
+  </div>
 
-{% if report_data %}
-  {% if report_type == "trial-balance" %}
-  <h3>Trial balance</h3>
-  <table class="data-table" style="width:100%">
-    <thead><tr><th>Account</th><th>Type</th><th>Debit</th><th>Credit</th></tr></thead>
-    <tbody>
-      {% for row in report_data.accounts %}
-      <tr>
-        <td>{{ row.account_number }} — {{ row.account_name }}</td>
-        <td>{{ row.account_type }}</td>
-        <td>{{ row.debit_balance|floatformat:2 }}</td>
-        <td>{{ row.credit_balance|floatformat:2 }}</td>
-      </tr>
-      {% empty %}<tr><td colspan="4">No accounts with activity.</td></tr>{% endfor %}
-    </tbody>
-    <tfoot><tr><th colspan="2">Totals</th><th>{{ report_data.total_debits|floatformat:2 }}</th><th>{{ report_data.total_credits|floatformat:2 }}</th></tr></tfoot>
-  </table>
-  <p>{% if report_data.is_balanced %}Balanced{% else %}Out of balance{% endif %}</p>
+  {% if report_data %}
+  <div class="hs-card">
+    <div class="hs-card-header">
+      <h3>
+        {% if report_type == "trial-balance" %}Trial balance
+        {% elif report_type == "balance-sheet" %}Balance sheet
+        {% elif report_type == "income-statement" %}Income statement
+        {% elif report_type == "cash-flow" %}Cash flow
+        {% else %}Report{% endif %}
+      </h3>
+    </div>
+    <div class="hs-card-body">
+      {% if report_type == "trial-balance" %}
+      <table class="hs-table">
+        <thead><tr><th>Account</th><th>Type</th><th>Debit</th><th>Credit</th></tr></thead>
+        <tbody>
+          {% for row in report_data.accounts %}
+          <tr>
+            <td>{{ row.account_number }} — {{ row.account_name }}</td>
+            <td>{{ row.account_type }}</td>
+            <td>{{ row.debit_balance|floatformat:2 }}</td>
+            <td>{{ row.credit_balance|floatformat:2 }}</td>
+          </tr>
+          {% empty %}<tr><td colspan="4"><div class="hs-empty">No accounts with activity.</div></td></tr>{% endfor %}
+        </tbody>
+        <tfoot><tr><th colspan="2">Totals</th><th>{{ report_data.total_debits|floatformat:2 }}</th><th>{{ report_data.total_credits|floatformat:2 }}</th></tr></tfoot>
+      </table>
+      <p class="hs-section-note" style="margin-top:0.75rem">{% if report_data.is_balanced %}<span class="hs-badge ok">Balanced</span>{% else %}<span class="hs-badge danger">Out of balance</span>{% endif %}</p>
 
-  {% elif report_type == "balance-sheet" %}
-  <h3>Balance sheet</h3>
-  <h4>Assets</h4>
-  <table class="data-table" style="width:100%;margin-bottom:1rem"><thead><tr><th>Account</th><th>Balance</th></tr></thead>
-  <tbody>{% for row in report_data.assets %}<tr><td>{{ row.account_number }} — {{ row.account_name }}</td><td>{{ row.balance|floatformat:2 }}</td></tr>{% empty %}<tr><td colspan="2">—</td></tr>{% endfor %}</tbody>
-  <tfoot><tr><th>Total assets</th><th>{{ report_data.total_assets|floatformat:2 }}</th></tr></tfoot></table>
-  <h4>Liabilities</h4>
-  <table class="data-table" style="width:100%;margin-bottom:1rem"><thead><tr><th>Account</th><th>Balance</th></tr></thead>
-  <tbody>{% for row in report_data.liabilities %}<tr><td>{{ row.account_number }} — {{ row.account_name }}</td><td>{{ row.balance|floatformat:2 }}</td></tr>{% empty %}<tr><td colspan="2">—</td></tr>{% endfor %}</tbody>
-  <tfoot><tr><th>Total liabilities</th><th>{{ report_data.total_liabilities|floatformat:2 }}</th></tr></tfoot></table>
-  <h4>Equity</h4>
-  <table class="data-table" style="width:100%"><thead><tr><th>Account</th><th>Balance</th></tr></thead>
-  <tbody>{% for row in report_data.equity %}<tr><td>{{ row.account_number }} — {{ row.account_name }}</td><td>{{ row.balance|floatformat:2 }}</td></tr>{% empty %}<tr><td colspan="2">—</td></tr>{% endfor %}</tbody>
-  <tfoot><tr><th>Total equity</th><th>{{ report_data.total_equity|floatformat:2 }}</th></tr></tfoot></table>
+      {% elif report_type == "balance-sheet" %}
+      <h4 class="hs-muted" style="margin:0 0 0.5rem;text-transform:uppercase;font-size:0.72rem;letter-spacing:0.04em">Assets</h4>
+      <table class="hs-table" style="margin-bottom:1rem"><thead><tr><th>Account</th><th>Balance</th></tr></thead>
+      <tbody>{% for row in report_data.assets %}<tr><td>{{ row.account_number }} — {{ row.account_name }}</td><td>{{ row.balance|floatformat:2 }}</td></tr>{% empty %}<tr><td colspan="2">—</td></tr>{% endfor %}</tbody>
+      <tfoot><tr><th>Total assets</th><th>{{ report_data.total_assets|floatformat:2 }}</th></tr></tfoot></table>
+      <h4 class="hs-muted" style="margin:0 0 0.5rem;text-transform:uppercase;font-size:0.72rem;letter-spacing:0.04em">Liabilities</h4>
+      <table class="hs-table" style="margin-bottom:1rem"><thead><tr><th>Account</th><th>Balance</th></tr></thead>
+      <tbody>{% for row in report_data.liabilities %}<tr><td>{{ row.account_number }} — {{ row.account_name }}</td><td>{{ row.balance|floatformat:2 }}</td></tr>{% empty %}<tr><td colspan="2">—</td></tr>{% endfor %}</tbody>
+      <tfoot><tr><th>Total liabilities</th><th>{{ report_data.total_liabilities|floatformat:2 }}</th></tr></tfoot></table>
+      <h4 class="hs-muted" style="margin:0 0 0.5rem;text-transform:uppercase;font-size:0.72rem;letter-spacing:0.04em">Equity</h4>
+      <table class="hs-table"><thead><tr><th>Account</th><th>Balance</th></tr></thead>
+      <tbody>{% for row in report_data.equity %}<tr><td>{{ row.account_number }} — {{ row.account_name }}</td><td>{{ row.balance|floatformat:2 }}</td></tr>{% empty %}<tr><td colspan="2">—</td></tr>{% endfor %}</tbody>
+      <tfoot><tr><th>Total equity</th><th>{{ report_data.total_equity|floatformat:2 }}</th></tr></tfoot></table>
 
-  {% elif report_type == "income-statement" %}
-  <h3>Income statement</h3>
-  <table class="data-table" style="width:100%;margin-bottom:1rem"><thead><tr><th>Revenue account</th><th>Amount</th></tr></thead>
-  <tbody>{% for row in report_data.revenues %}<tr><td>{{ row.account_number }} — {{ row.account_name }}</td><td>{{ row.amount|floatformat:2 }}</td></tr>{% empty %}<tr><td colspan="2">—</td></tr>{% endfor %}</tbody></table>
-  <table class="data-table" style="width:100%"><thead><tr><th>Expense account</th><th>Amount</th></tr></thead>
-  <tbody>{% for row in report_data.expenses %}<tr><td>{{ row.account_number }} — {{ row.account_name }}</td><td>{{ row.amount|floatformat:2 }}</td></tr>{% empty %}<tr><td colspan="2">—</td></tr>{% endfor %}</tbody></table>
-  <p><strong>Net income:</strong> {{ report_data.net_income|floatformat:2 }}</p>
+      {% elif report_type == "income-statement" %}
+      <table class="hs-table" style="margin-bottom:1rem"><thead><tr><th>Revenue account</th><th>Amount</th></tr></thead>
+      <tbody>{% for row in report_data.revenues %}<tr><td>{{ row.account_number }} — {{ row.account_name }}</td><td>{{ row.amount|floatformat:2 }}</td></tr>{% empty %}<tr><td colspan="2">—</td></tr>{% endfor %}</tbody></table>
+      <table class="hs-table"><thead><tr><th>Expense account</th><th>Amount</th></tr></thead>
+      <tbody>{% for row in report_data.expenses %}<tr><td>{{ row.account_number }} — {{ row.account_name }}</td><td>{{ row.amount|floatformat:2 }}</td></tr>{% empty %}<tr><td colspan="2">—</td></tr>{% endfor %}</tbody></table>
+      <p style="margin-top:1rem"><strong>Net income:</strong> {{ report_data.net_income|floatformat:2 }}</p>
 
-  {% elif report_type == "cash-flow" %}
-  <h3>Cash flow</h3>
-  <table class="data-table" style="width:100%"><thead><tr><th>Section</th><th>Amount</th></tr></thead>
-  <tbody>
-    <tr><td>Operating</td><td>{{ report_data.operating_activities|floatformat:2 }}</td></tr>
-    <tr><td>Investing</td><td>{{ report_data.investing_activities|floatformat:2 }}</td></tr>
-    <tr><td>Financing</td><td>{{ report_data.financing_activities|floatformat:2 }}</td></tr>
-    <tr><th>Net change</th><th>{{ report_data.net_change_in_cash|floatformat:2 }}</th></tr>
-  </tbody></table>
+      {% elif report_type == "cash-flow" %}
+      <table class="hs-table"><thead><tr><th>Section</th><th>Amount</th></tr></thead>
+      <tbody>
+        <tr><td>Operating</td><td>{{ report_data.operating_activities|floatformat:2 }}</td></tr>
+        <tr><td>Investing</td><td>{{ report_data.investing_activities|floatformat:2 }}</td></tr>
+        <tr><td>Financing</td><td>{{ report_data.financing_activities|floatformat:2 }}</td></tr>
+        <tr><th>Net change</th><th>{{ report_data.net_change_in_cash|floatformat:2 }}</th></tr>
+      </tbody></table>
+      {% endif %}
+    </div>
+  </div>
+  {% else %}
+  <div class="hs-empty">No report data for this selection.</div>
   {% endif %}
-{% else %}
-<p>No report data for this selection.</p>
-{% endif %}
+</div>
 {% endblock %}

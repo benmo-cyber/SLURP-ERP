@@ -44,6 +44,7 @@
       <div class="hs-prop"><span class="k">Phone</span><span class="v">{% if primary_contact and primary_contact.phone %}{{ primary_contact.phone }}{% else %}{{ vendor.phone|default:"—" }}{% endif %}</span></div>
       <div class="hs-prop"><span class="k">Documents</span><span class="v">{{ docs_complete }}/{{ docs_total }}{% if docs_missing %} · {{ docs_missing }} missing{% endif %}</span></div>
       <div class="hs-prop"><span class="k">Payment terms</span><span class="v">{{ vendor.payment_terms|default:"—" }}</span></div>
+      <div class="hs-prop"><span class="k">Pay on-time %</span><span class="v">{% if payment_history.on_time_pct != None %}{{ payment_history.on_time_pct }}{% else %}—{% endif %}</span></div>
       <div class="hs-prop"><span class="k">Approved</span><span class="v">{% if vendor.approved_date %}{{ vendor.approved_date|date:"M j, Y" }}{% if vendor.approved_by %} · {{ vendor.approved_by }}{% endif %}{% else %}—{% endif %}</span></div>
     </div>
 
@@ -245,6 +246,59 @@
         </div>
       </div>
     </div>
+
+  {% elif tab == 'payments' %}
+  <div class="hs-col" style="grid-column:1 / -1;max-width:960px">
+    <div class="hs-stat-row" style="margin-bottom:1rem">
+      <div class="hs-stat"><div class="label">Payments recorded</div><div class="value">{{ payment_history.paid_count }}</div></div>
+      <div class="hs-stat"><div class="label">On-time %</div><div class="value">{% if payment_history.on_time_pct != None %}{{ payment_history.on_time_pct }}{% else %}—{% endif %}</div></div>
+      <div class="hs-stat"><div class="label">Late</div><div class="value">{{ payment_history.late_count }}</div></div>
+      <div class="hs-stat"><div class="label">Avg days vs due</div><div class="value">{% if payment_history.avg_days_vs_due != None %}{{ payment_history.avg_days_vs_due }}{% else %}—{% endif %}</div></div>
+      <div class="hs-stat"><div class="label">Open AP</div><div class="value">{{ payment_history.open_ap_count }}</div></div>
+    </div>
+    <div class="hs-card">
+      <div class="hs-card-header">
+        <h3>Payment timeliness</h3>
+        <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:finance_ap' %}?vendor={{ vendor.name|urlencode }}">Open AP</a>
+      </div>
+      <div class="hs-card-body tight">
+        <p class="hs-section-note" style="margin:0.75rem 0.75rem 0">From AP Mark as paid — days vs vendor invoice due date. Negative = paid early.</p>
+        <table class="hs-table">
+          <thead>
+            <tr>
+              <th>Invoice</th>
+              <th>Due</th>
+              <th>Paid</th>
+              <th>Days vs due</th>
+              <th>Amount</th>
+              <th>Method</th>
+              <th>Reference</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in payment_history.rows %}
+            <tr>
+              <td>{{ row.invoice_number|default:"—" }}</td>
+              <td>{{ row.due_date|default:"—" }}</td>
+              <td>{{ row.payment_date }}</td>
+              <td>
+                {% if row.days_vs_due != None %}
+                  {% if row.days_vs_due <= 0 %}<span class="hs-badge ok">{% if row.days_vs_due < 0 %}{{ row.days_vs_due }} early{% else %}On time{% endif %}</span>
+                  {% else %}<span class="hs-badge danger">+{{ row.days_vs_due }} late</span>{% endif %}
+                {% else %}—{% endif %}
+              </td>
+              <td>${{ row.amount|floatformat:2 }}</td>
+              <td>{{ row.method|default:"—" }}</td>
+              <td>{{ row.reference|default:"—" }}</td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="7"><div class="hs-empty">No AP payments recorded yet. Use Finance → Accounts payable → Mark as paid.</div></td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
 
   {% elif tab == 'contacts' %}
   <div class="hs-col" style="grid-column:1 / -1">

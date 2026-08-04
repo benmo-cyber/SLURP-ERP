@@ -2,7 +2,8 @@
 {% block title %}{% if rd %}{{ rd.rd_code }} — {{ rd.name }}{% else %}New R&amp;D Formula{% endif %} — SLURP{% endblock %}
 {% block module_title %}{% if rd %}{{ rd.rd_code }}{% else %}New R&amp;D Formula{% endif %}{% endblock %}
 {% block header_actions %}
-  <a href="{% url 'slurp_ui:quality_rd_formulas' %}" class="hs-btn">All R&amp;D formulas</a>
+  <a href="{% url 'slurp_ui:finance_costing' %}?tab=rd" class="hs-btn">All R&amp;D costing</a>
+  <a href="{% url 'slurp_ui:finance_costing' %}?tab=master" class="hs-btn">Cost Master</a>
 {% endblock %}
 {% block main %}
 <div class="hs-bleed" style="padding:1.25rem 1.5rem 2rem">
@@ -20,6 +21,7 @@
             {% elif rd.status == 'scrapped' %}<span class="hs-badge">Scrapped</span>
             {% else %}<span class="hs-badge warn">Draft</span>{% endif %}
             {% if rd.commercial_sku %}<span>→ {{ rd.commercial_sku }}</span>{% endif %}
+            <span class="hs-muted">Est. ${{ total_cost|floatformat:2 }}/lb</span>
           </div>
         </div>
       </div>
@@ -152,7 +154,7 @@
   <div class="hs-card" style="margin-top:1rem;max-width:520px">
     <div class="hs-card-header"><h3>Mark commercialized</h3></div>
     <div class="hs-card-body">
-      <p class="hs-section-note" style="margin-top:0">Keeps this R&amp;D record and code forever. Enter the commercial SKU the user assigned.</p>
+      <p class="hs-section-note" style="margin-top:0">Keeps this R&amp;D record and code forever. Enter the commercial SKU assigned at commercialization.</p>
       <form method="post">
         {% csrf_token %}
         <input type="hidden" name="action" value="commercialize" />

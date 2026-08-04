@@ -1,0 +1,146 @@
+{% extends "slurp_ui/base_module.html" %}
+{% block title %}Invoicing — SLURP{% endblock %}
+{% block module_title %}Invoicing{% endblock %}
+{% block header_actions %}
+  {% if tab == 'ar' %}
+  <a class="hs-btn" href="{% url 'slurp_ui:finance_payment_entry' %}?type=ar_payment">Partial payment</a>
+  {% else %}
+  <a class="hs-btn hs-btn-primary" href="{% url 'slurp_ui:finance_invoice_create' %}">Create invoice</a>
+  {% endif %}
+{% endblock %}
+{% block main %}
+<div class="hs-bleed" style="padding:1.25rem 1.5rem 2rem">
+  <div class="hs-pills" style="margin-bottom:1rem">
+    <a class="hs-pill {% if tab == 'register' %}active{% endif %}" href="{% url 'slurp_ui:finance_invoices' %}?tab=register{% if status_filter %}&amp;status={{ status_filter|urlencode }}{% endif %}">Invoice register</a>
+    <a class="hs-pill {% if tab == 'ar' %}active{% endif %}" href="{% url 'slurp_ui:finance_invoices' %}?tab=ar{% if ar_status_filter %}&amp;ar_status={{ ar_status_filter|urlencode }}{% endif %}">Receivables</a>
+  </div>
+
+  {% if tab == 'ar' %}
+  <div class="hs-toolbar">
+    <form method="get" style="display:flex;gap:0.5rem;align-items:center">
+      <input type="hidden" name="tab" value="ar" />
+      <select name="ar_status" onchange="this.form.submit()" class="hs-search" style="max-width:12rem">
+        <option value="">All statuses</option>
+        <option value="open" {% if ar_status_filter == "open" %}selected{% endif %}>Open</option>
+        <option value="partial" {% if ar_status_filter == "partial" %}selected{% endif %}>Partial</option>
+        <option value="paid" {% if ar_status_filter == "paid" %}selected{% endif %}>Paid</option>
+        <option value="overdue" {% if ar_status_filter == "overdue" %}selected{% endif %}>Overdue</option>
+      </select>
+    </form>
+  </div>
+
+  <div class="hs-card">
+    <div class="hs-card-header">
+      <h3>Accounts receivable</h3>
+      <span class="hs-muted" style="font-size:0.8rem">Mark paid after bank verification</span>
+    </div>
+    <div class="hs-card-body tight">
+      <table class="hs-table">
+        <thead>
+          <tr>
+            <th>Customer</th>
+            <th>Invoice</th>
+            <th>Due</th>
+            <th>Balance</th>
+            <th>Status</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in ar_entries %}
+          <tr>
+            <td>{{ r.customer_name }}</td>
+            <td>{% if r.invoice %}<a class="hs-entity-name" href="{% url 'slurp_ui:finance_invoice_detail' r.invoice_id %}">{{ r.invoice.invoice_number }}</a>{% else %}—{% endif %}</td>
+            <td>{{ r.due_date }}</td>
+            <td>${{ r.balance|floatformat:2 }}</td>
+            <td>
+              {% if r.status == 'paid' %}<span class="hs-badge ok">Paid</span>
+              {% elif r.status == 'overdue' %}<span class="hs-badge danger">Overdue</span>
+              {% elif r.status == 'partial' %}<span class="hs-badge warn">Partial</span>
+              {% else %}<span class="hs-badge info">{{ r.status|title }}</span>{% endif %}
+            </td>
+            <td>
+              {% if r.status != "paid" and r.status != "cancelled" %}
+              <a class="hs-btn hs-btn-sm hs-btn-primary" href="{% url 'slurp_ui:finance_ar_mark_paid' r.id %}">Mark as paid</a>
+              {% endif %}
+            </td>
+          </tr>
+          {% empty %}
+          <tr><td colspan="6"><div class="hs-empty">No AR entries.</div></td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  {% else %}
+  <div class="hs-toolbar">
+    <form method="get" style="display:flex;gap:0.5rem;align-items:end">
+      <input type="hidden" name="tab" value="register" />
+      <div class="form-row" style="margin:0">
+        <label for="status">Status</label>
+        <select id="status" name="status" onchange="this.form.submit()">
+          <option value="">All</option>
+          <option value="draft" {% if status_filter == 'draft' %}selected{% endif %}>Draft</option>
+          <option value="sent" {% if status_filter == 'sent' %}selected{% endif %}>Issued</option>
+          <option value="paid" {% if status_filter == 'paid' %}selected{% endif %}>Paid</option>
+          <option value="overdue" {% if status_filter == 'overdue' %}selected{% endif %}>Overdue</option>
+          <option value="cancelled" {% if status_filter == 'cancelled' %}selected{% endif %}>Cancelled</option>
+        </select>
+      </div>
+    </form>
+  </div>
+
+  <div class="hs-card">
+    <div class="hs-card-header">
+      <h3>Invoice register</h3>
+    </div>
+    <div class="hs-card-body tight">
+      <table class="hs-table">
+        <thead>
+          <tr>
+            <th>Invoice #</th>
+            <th>Customer / vendor</th>
+            <th>SO</th>
+            <th>Status</th>
+            <th>Date</th>
+            <th>Due</th>
+            <th>Total</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for inv in invoices %}
+          <tr>
+            <td><a class="hs-entity-name" href="{% url 'slurp_ui:finance_invoice_detail' inv.id %}">{{ inv.invoice_number }}</a></td>
+            <td>{{ inv.customer_vendor_name }}</td>
+            <td>{{ inv.sales_order.so_number|default:"—" }}</td>
+            <td>
+              {% if inv.status == 'draft' %}<span class="hs-badge warn">Draft</span>
+              {% elif inv.status == 'sent' %}<span class="hs-badge info">Issued</span>
+              {% elif inv.status == 'paid' %}<span class="hs-badge ok">Paid</span>
+              {% elif inv.status == 'cancelled' %}<span class="hs-badge danger">Cancelled</span>
+              {% else %}<span class="hs-badge">{{ inv.status_label }}</span>{% endif %}
+            </td>
+            <td>{{ inv.invoice_date }}</td>
+            <td>{{ inv.due_date }}</td>
+            <td>${{ inv.grand_total|floatformat:2 }}</td>
+            <td>
+              <div class="hs-queue-actions">
+                <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:finance_invoice_pdf' inv.id %}">PDF</a>
+                {% if inv.status == 'draft' %}
+                <a class="hs-btn hs-btn-sm hs-btn-primary" href="{% url 'slurp_ui:finance_invoice_issue' inv.id %}">Issue</a>
+                {% endif %}
+              </div>
+            </td>
+          </tr>
+          {% empty %}
+          <tr><td colspan="8"><div class="hs-empty">No invoices.</div></td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

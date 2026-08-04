@@ -23,9 +23,9 @@
     <p>No linked sales order — issue will proceed without carrier/tracking check.</p>
     {% endif %}
     <div class="form-actions">
-      <button type="submit" class="btn btn-primary"
+      <button type="submit" class="hs-btn hs-btn-primary"
               onclick="return confirm('Issue {{ invoice.invoice_number }}?');">Issue invoice</button>
-      <a class="btn btn-secondary" href="{% url 'slurp_ui:finance_invoice_detail' invoice.id %}">Cancel</a>
+      <a class="hs-btn" href="{% url 'slurp_ui:finance_invoice_detail' invoice.id %}">Cancel</a>
     </div>
   </form>
 </div>

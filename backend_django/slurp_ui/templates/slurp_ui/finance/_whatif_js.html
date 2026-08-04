@@ -1,0 +1,544 @@
+(function () {
+  var URLS = {
+    lookup: "{% url 'slurp_ui:finance_whatif_lookup_cost' %}",
+    save: "{% url 'slurp_ui:finance_whatif_line_save' %}",
+    deleteBase: "{% url 'slurp_ui:finance_whatif_line_delete' pk=0 %}".replace("/0/delete/", "/"),
+    formulaBase: "{% url 'slurp_ui:finance_whatif_formula' pk=0 %}".replace("/0/", "/"),
+    scenario: "{% url 'slurp_ui:finance_whatif_scenario_save' %}"
+  };
+  var csrfEl = document.querySelector("[name=csrfmiddlewaretoken]");
+  var csrf = csrfEl ? csrfEl.value : "";
+  var statusEl = document.getElementById("wi-status");
+  var tbody = document.getElementById("wi-tbody");
+  var timers = new WeakMap();
+  var CATALOG = { flat: [], distributed: [], rd: [], manufactured: [] };
+  try {
+    var catEl = document.getElementById("wi-catalog-data");
+    if (catEl) CATALOG = JSON.parse(catEl.textContent) || CATALOG;
+  } catch (e) {}
+
+  var KIND_LABEL = { distributed: "Distributed", rd: "R&D", manufactured: "Manufactured" };
+
+  function setStatus(msg, isErr) {
+    if (!statusEl) return;
+    statusEl.textContent = msg || "";
+    statusEl.className = "wi-status" + (isErr ? " err" : "");
+  }
+
+  function num(el) {
+    if (!el || el.value === "" || el.value == null) return null;
+    var v = parseFloat(el.value);
+    return isNaN(v) ? null : v;
+  }
+
+  function fmtMoney(n, digits) {
+    if (n === null || n === undefined || isNaN(n)) return "—";
+    return "$" + n.toLocaleString(undefined, {
+      maximumFractionDigits: digits,
+      minimumFractionDigits: digits
+    });
+  }
+
+  function getOverrides(row) {
+    try {
+      return JSON.parse(row.getAttribute("data-overrides") || "{}") || {};
+    } catch (e) {
+      return {};
+    }
+  }
+
+  function setOverrides(row, ov) {
+    row.setAttribute("data-overrides", JSON.stringify(ov || {}));
+  }
+
+  function detailsFor(row) {
+    var id = row.getAttribute("data-id");
+    if (!id) {
+      var next = row.nextElementSibling;
+      return next && next.classList.contains("wi-details") ? next : null;
+    }
+    return tbody.querySelector('.wi-details[data-for="' + id + '"]');
+  }
+
+  function fillProductSelect(row) {
+    var sel = row.querySelector(".wi-product-select");
+    if (!sel) return;
+    var currentKey = sel.dataset.currentKey || row.getAttribute("data-catalog-key") || "";
+    var currentName = sel.dataset.currentName || "";
+    var flat = CATALOG.flat || [];
+    var groups = {};
+    flat.forEach(function (item) {
+      var g = item.group || item.kind || "Other";
+      if (!groups[g]) groups[g] = [];
+      groups[g].push(item);
+    });
+    sel.innerHTML = "";
+    var opt0 = document.createElement("option");
+    opt0.value = "";
+    opt0.textContent = flat.length ? "— Select product —" : "— No products —";
+    sel.appendChild(opt0);
+    Object.keys(groups).forEach(function (gName) {
+      var og = document.createElement("optgroup");
+      og.label = gName;
+      groups[gName].forEach(function (item) {
+        var o = document.createElement("option");
+        o.value = item.key;
+        o.textContent = item.label;
+        o.dataset.kind = item.kind;
+        o.dataset.name = item.value || item.label;
+        if (item.key === currentKey) o.selected = true;
+        og.appendChild(o);
+      });
+      sel.appendChild(og);
+    });
+    if (currentKey && !sel.value) {
+      var orphan = document.createElement("option");
+      orphan.value = currentKey || ("name:" + currentName);
+      orphan.textContent = currentName || currentKey;
+      orphan.selected = true;
+      sel.appendChild(orphan);
+    }
+  }
+
+  function hydratePctInputs(scope) {
+    if (!scope) return;
+    scope.querySelectorAll("[data-as-pct='1']").forEach(function (el) {
+      if (el.value === "") return;
+      var v = parseFloat(el.value);
+      if (!isNaN(v) && v <= 1) {
+        el.value = (el.classList.contains("wi-margin-pct")
+          ? (v * 100).toFixed(v * 100 % 1 ? 1 : 0)
+          : String(Math.round(v * 100)));
+      }
+      delete el.dataset.asPct;
+    });
+  }
+
+  function marginFraction(row) {
+    var pct = num(row.querySelector(".wi-margin-pct"));
+    return pct === null ? null : pct / 100;
+  }
+
+  function winFraction(row) {
+    var pct = num(row.querySelector(".wi-win-pct"));
+    return pct === null ? 0 : pct / 100;
+  }
+
+  function recalcRow(row) {
+    var cost = num(row.querySelector(".wi-cost")) || 0;
+    var add = num(row.querySelector(".wi-add")) || 0;
+    var margin = marginFraction(row);
+    var vol = num(row.querySelector(".wi-vol"));
+    var unit = cost + add;
+    var price = (margin !== null && margin < 1) ? unit / (1 - margin) : null;
+    if ((row.querySelector(".wi-cost").value === "") && !add) price = null;
+    var rev = (price !== null && vol !== null) ? price * vol : null;
+    var gp = (rev !== null && margin !== null) ? rev * margin : null;
+    row.querySelector(".wi-price").textContent = price !== null ? fmtMoney(price, 2) : "—";
+    row.querySelector(".wi-rev").textContent = rev !== null ? fmtMoney(rev, 0) : "—";
+    row.querySelector(".wi-gp").textContent = gp !== null ? fmtMoney(gp, 0) : "—";
+    return { rev: rev || 0, gp: gp || 0, wrev: (rev || 0) * winFraction(row) };
+  }
+
+  function recalcAll() {
+    var totRev = 0, totGp = 0, totW = 0;
+    tbody.querySelectorAll(".wi-row").forEach(function (row) {
+      var m = recalcRow(row);
+      totRev += m.rev; totGp += m.gp; totW += m.wrev;
+    });
+    document.getElementById("wi-tot-rev").textContent = fmtMoney(totRev, 0);
+    document.getElementById("wi-tot-gp").textContent = fmtMoney(totGp, 0);
+    document.getElementById("wi-tot-gpp").textContent = totRev ? ((100 * totGp / totRev).toFixed(1) + "%") : "—";
+    document.getElementById("wi-tot-wrev").textContent = fmtMoney(totW, 0);
+  }
+
+  function payloadFromRow(row, extras) {
+    var d = detailsFor(row) || row;
+    var hitPct = num(d.querySelector(".wi-hit-pct"));
+    var sel = row.querySelector(".wi-product-select");
+    var opt = sel && sel.selectedOptions[0];
+    var body = {
+      id: row.getAttribute("data-id") || null,
+      customer_name: (row.querySelector(".wi-customer-name").value || "").trim(),
+      catalog_key: sel ? sel.value : (row.getAttribute("data-catalog-key") || ""),
+      product_name: opt && opt.dataset.name ? opt.dataset.name : (sel ? sel.options[sel.selectedIndex].text : ""),
+      source_type: row.querySelector(".wi-source").value || "distributed",
+      base_cost_per_lb: num(row.querySelector(".wi-cost")),
+      cost_is_manual: row.querySelector(".wi-manual").value === "1",
+      additional_cost_per_lb: num(row.querySelector(".wi-add")) || 0,
+      margin_pct: num(row.querySelector(".wi-margin-pct")),
+      volume_lb: num(row.querySelector(".wi-vol")),
+      win_pct: num(row.querySelector(".wi-win-pct")),
+      volume_pct_target: hitPct === null ? null : hitPct / 100,
+      ingredient_overrides: getOverrides(row),
+      agreement: (d.querySelector(".wi-agreement") || {}).value || "",
+      incoterms: (d.querySelector(".wi-incoterms") || {}).value || "",
+      first_order_ship: (d.querySelector(".wi-first-ship") || {}).value || "",
+      order_pattern: (d.querySelector(".wi-pattern") || {}).value || "",
+      notes: (d.querySelector(".wi-notes") || {}).value || ""
+    };
+    if (extras) Object.assign(body, extras);
+    return body;
+  }
+
+  function postJson(url, body) {
+    return fetch(url, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json", "X-CSRFToken": csrf },
+      body: JSON.stringify(body || {})
+    }).then(function (r) {
+      return r.json().then(function (data) {
+        if (!r.ok || data.ok === false) throw new Error((data && data.error) || ("HTTP " + r.status));
+        return data;
+      });
+    });
+  }
+
+  function applyLine(row, line, formula) {
+    if (!line) return;
+    row.setAttribute("data-id", String(line.id));
+    var det = detailsFor(row);
+    if (det) det.setAttribute("data-for", String(line.id));
+    row.setAttribute("data-catalog-key", line.catalog_key || "");
+    row.setAttribute("data-source", line.source_type || "distributed");
+    row.setAttribute("data-rd-id", line.rd_formula_id || "");
+    setOverrides(row, line.ingredient_overrides || {});
+    row.querySelector(".wi-source").value = line.source_type || "distributed";
+    row.querySelector(".wi-kind-label").textContent = KIND_LABEL[line.source_type] || line.source_type;
+    var sel = row.querySelector(".wi-product-select");
+    sel.dataset.currentKey = line.catalog_key || "";
+    sel.dataset.currentName = line.product_name || "";
+    fillProductSelect(row);
+    if (line.base_cost_per_lb != null && row.querySelector(".wi-manual").value !== "1") {
+      row.querySelector(".wi-cost").value = line.base_cost_per_lb;
+    }
+    var hint = row.querySelector(".wi-cost-hint");
+    if (hint) {
+      hint.textContent = line.cost_is_manual ? "manual" : "auto";
+      hint.classList.toggle("manual", !!line.cost_is_manual);
+    }
+    row.querySelector(".wi-manual").value = line.cost_is_manual ? "1" : "0";
+    if (formula) renderIngredients(row, formula);
+    recalcAll();
+  }
+
+  function saveRow(row, extras) {
+    setStatus("Saving...");
+    return postJson(URLS.save, payloadFromRow(row, extras)).then(function (data) {
+      applyLine(row, data.line, data.formula);
+      setStatus("Saved");
+      return data;
+    }).catch(function (err) {
+      setStatus(err.message || "Save failed", true);
+    });
+  }
+
+  function scheduleSave(row) {
+    var prev = timers.get(row);
+    if (prev) clearTimeout(prev);
+    timers.set(row, setTimeout(function () { saveRow(row); }, 400));
+  }
+
+  function lookupProduct(row) {
+    var sel = row.querySelector(".wi-product-select");
+    if (!sel || !sel.value) return Promise.resolve();
+    setStatus("Looking up cost...");
+    setOverrides(row, {});
+    return postJson(URLS.lookup, {
+      catalog_key: sel.value,
+      product_name: sel.selectedOptions[0] && sel.selectedOptions[0].dataset.name,
+      ingredient_overrides: {}
+    }).then(function (data) {
+      row.querySelector(".wi-source").value = data.source_type || "distributed";
+      row.querySelector(".wi-kind-label").textContent = KIND_LABEL[data.source_type] || data.source_type;
+      row.setAttribute("data-catalog-key", data.catalog_key || sel.value);
+      row.setAttribute("data-rd-id", data.rd_formula_id || "");
+      row.setAttribute("data-source", data.source_type || "");
+      if (data.cost != null) {
+        row.querySelector(".wi-cost").value = data.cost;
+        row.querySelector(".wi-manual").value = "0";
+        var hint = row.querySelector(".wi-cost-hint");
+        if (hint) {
+          hint.textContent = data.matched ? ("auto · " + data.matched) : "auto";
+          hint.classList.remove("manual");
+        }
+      }
+      if (data.formula) renderIngredients(row, data.formula);
+      else {
+        var det = detailsFor(row);
+        var box = det && det.querySelector(".wi-ing");
+        if (box) box.hidden = true;
+      }
+      recalcAll();
+      return saveRow(row, {
+        refresh_cost: true,
+        catalog_key: data.catalog_key || sel.value,
+        source_type: data.source_type,
+        product_name: data.product_name,
+        cost_is_manual: false,
+        ingredient_overrides: {}
+      });
+    }).catch(function (err) {
+      setStatus(err.message || "Cost lookup failed", true);
+    });
+  }
+
+  function renderIngredients(row, formula) {
+    var det = detailsFor(row);
+    if (!det) return;
+    var box = det.querySelector(".wi-ing");
+    var body = det.querySelector(".wi-ing-body");
+    var title = det.querySelector(".wi-ing-title");
+    var total = det.querySelector(".wi-ing-total");
+    var scen = det.querySelector(".wi-scenario");
+    if (!box || !body) return;
+    box.hidden = false;
+    if (title) title.textContent = formula.rd_code ? ("— " + formula.rd_code + " " + formula.name) : "";
+    if (total) total.textContent = fmtMoney(formula.effective_total_cost_per_lb, 4);
+    if (scen) {
+      var cur = scen.value;
+      scen.innerHTML = '<option value="">— Base formula prices —</option>';
+      (formula.scenarios || []).forEach(function (s) {
+        var o = document.createElement("option");
+        o.value = String(s.id);
+        o.textContent = s.name;
+        if (String(s.id) === cur) o.selected = true;
+        scen.appendChild(o);
+      });
+    }
+    var ov = getOverrides(row);
+    var linesMap = (ov.lines) || {};
+    body.innerHTML = "";
+    (formula.lines || []).forEach(function (ln) {
+      var tr = document.createElement("tr");
+      tr.dataset.lineId = String(ln.line_id);
+      var pct = ln.composition_pct != null ? ln.composition_pct + "%" : (ln.line_type === "labor" ? "labor" : "—");
+      var base = ln.line_type === "labor"
+        ? (ln.labor_flat_amount != null ? fmtMoney(ln.labor_flat_amount, 2) : "—")
+        : (ln.base_price_per_lb != null ? fmtMoney(ln.base_price_per_lb, 4) : "—");
+      var vendorSel = '<select class="wi-vend"><option value="">Formula default</option>';
+      (ln.vendor_options || []).forEach(function (v) {
+        vendorSel += '<option value="' + v.key + '" data-price="' + v.price_per_lb + '" data-vendor="' +
+          (v.vendor_label || "").replace(/"/g, "&quot;") + '">' + v.label + "</option>";
+      });
+      vendorSel += '<option value="__manual__">Manual $/lb</option></select>';
+      var priceVal = "";
+      var lineOv = linesMap[String(ln.line_id)] || ln.override || {};
+      if (lineOv.price_per_lb != null) priceVal = lineOv.price_per_lb;
+      else if (ln.effective_price_per_lb != null && ln.line_type !== "labor") priceVal = ln.effective_price_per_lb;
+      if (ln.line_type === "labor" && lineOv.labor_flat_amount != null) priceVal = lineOv.labor_flat_amount;
+
+      tr.innerHTML =
+        "<td>" + (ln.description || ln.line_type) + (ln.item_sku ? " <span class='hs-muted'>(" + ln.item_sku + ")</span>" : "") + "</td>" +
+        "<td>" + pct + "</td>" +
+        "<td>" + base + "</td>" +
+        "<td>" + (ln.line_type === "labor" ? "—" : vendorSel) + "</td>" +
+        "<td><input class='wi-ing-price' type='number' step='0.0001' value='" + (priceVal !== "" && priceVal != null ? priceVal : "") + "' " +
+          (ln.line_type === "labor" ? "placeholder='labor $'" : "") + " /></td>" +
+        "<td class='wi-ing-line-cost'>" + fmtMoney(ln.effective_cost, 4) + "</td>";
+      body.appendChild(tr);
+
+      var vend = tr.querySelector(".wi-vend");
+      if (vend && lineOv.cost_source) {
+        for (var i = 0; i < vend.options.length; i++) {
+          if (vend.options[i].value === lineOv.cost_source) { vend.selectedIndex = i; break; }
+        }
+      }
+      if (vend) {
+        vend.addEventListener("change", function () {
+          var priceIn = tr.querySelector(".wi-ing-price");
+          if (this.value && this.value !== "__manual__") {
+            var p = parseFloat(this.selectedOptions[0].dataset.price);
+            if (!isNaN(p)) priceIn.value = p;
+          }
+          collectOverridesAndSave(row);
+        });
+      }
+      tr.querySelector(".wi-ing-price").addEventListener("change", function () {
+        collectOverridesAndSave(row);
+      });
+    });
+  }
+
+  function collectOverridesAndSave(row) {
+    var det = detailsFor(row);
+    var body = det && det.querySelector(".wi-ing-body");
+    var lines = {};
+    if (body) {
+      body.querySelectorAll("tr").forEach(function (tr) {
+        var id = tr.dataset.lineId;
+        var priceIn = tr.querySelector(".wi-ing-price");
+        var vend = tr.querySelector(".wi-vend");
+        var entry = {};
+        var p = num(priceIn);
+        if (p !== null) {
+          // labor rows use labor_flat_amount semantics when composition unknown — store both-friendly
+          entry.price_per_lb = p;
+          entry.labor_flat_amount = p;
+        }
+        if (vend && vend.value && vend.value !== "__manual__") {
+          entry.cost_source = vend.value;
+          entry.vendor_label = vend.selectedOptions[0].dataset.vendor || "";
+        } else if (vend && vend.value === "__manual__") {
+          entry.cost_source = "manual";
+          entry.vendor_label = "Manual";
+        }
+        if (Object.keys(entry).length) lines[id] = entry;
+      });
+    }
+    var ov = { lines: lines };
+    setOverrides(row, ov);
+    row.querySelector(".wi-manual").value = "0";
+    saveRow(row, { ingredient_overrides: ov, refresh_cost: true, cost_is_manual: false }).then(function (data) {
+      if (data && data.formula) {
+        if (data.line && data.line.base_cost_per_lb != null) {
+          row.querySelector(".wi-cost").value = data.line.base_cost_per_lb;
+        }
+        renderIngredients(row, data.formula);
+        recalcAll();
+      }
+    });
+  }
+
+  function loadFormulaPanel(row) {
+    var rdId = row.getAttribute("data-rd-id");
+    if (!rdId) {
+      setStatus("Select an R&D or manufactured formula product first", true);
+      return;
+    }
+    var det = detailsFor(row);
+    if (det) det.hidden = false;
+    var ov = getOverrides(row);
+    var url = URLS.formulaBase + rdId + "/?overrides=" + encodeURIComponent(JSON.stringify(ov));
+    setStatus("Loading ingredients...");
+    fetch(url, { credentials: "same-origin" })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (!data.ok) throw new Error(data.error || "Failed");
+        renderIngredients(row, data.formula);
+        setStatus("");
+      })
+      .catch(function (err) { setStatus(err.message || "Failed to load formula", true); });
+  }
+
+  function bindRow(row) {
+    hydratePctInputs(row);
+    hydratePctInputs(detailsFor(row));
+    fillProductSelect(row);
+    recalcRow(row);
+
+    row.addEventListener("input", function (e) {
+      var t = e.target;
+      if (t.classList.contains("wi-cost")) {
+        row.querySelector(".wi-manual").value = "1";
+        var hint = row.querySelector(".wi-cost-hint");
+        if (hint) { hint.textContent = "manual"; hint.classList.add("manual"); }
+      }
+      recalcAll();
+      if (t.classList.contains("wi-product-select")) return;
+      scheduleSave(row);
+    });
+
+    row.querySelector(".wi-product-select").addEventListener("change", function () {
+      lookupProduct(row);
+    });
+
+    row.querySelector(".wi-ings").addEventListener("click", function () {
+      loadFormulaPanel(row);
+    });
+
+    row.querySelector(".wi-more").addEventListener("click", function () {
+      var d = detailsFor(row);
+      if (d) d.hidden = !d.hidden;
+    });
+
+    row.querySelector(".wi-del").addEventListener("click", function () {
+      if (!confirm("Remove this row?")) return;
+      var id = row.getAttribute("data-id");
+      var det = detailsFor(row);
+      function removeDom() {
+        if (det) det.remove();
+        row.remove();
+        if (!tbody.querySelector(".wi-row")) {
+          tbody.innerHTML = '<tr class="wi-empty-row"><td colspan="12"><div class="wi-empty">No rows yet. Add one and pick a product.</div></td></tr>';
+        }
+        recalcAll();
+        setStatus("Removed");
+      }
+      if (!id) { removeDom(); return; }
+      postJson(URLS.deleteBase + id + "/delete/", {}).then(removeDom).catch(function (err) {
+        setStatus(err.message || "Delete failed", true);
+      });
+    });
+
+    var det = detailsFor(row);
+    if (det) {
+      det.addEventListener("input", function (e) {
+        if (e.target.closest(".wi-ing")) return;
+        scheduleSave(row);
+      });
+      var applyBtn = det.querySelector(".wi-apply-scenario");
+      if (applyBtn) {
+        applyBtn.addEventListener("click", function () {
+          var sid = det.querySelector(".wi-scenario").value;
+          if (!sid) {
+            setOverrides(row, {});
+            saveRow(row, { ingredient_overrides: {}, refresh_cost: true, cost_scenario_id: null });
+            return;
+          }
+          saveRow(row, { cost_scenario_id: parseInt(sid, 10), apply_scenario: true, refresh_cost: true }).then(function (data) {
+            if (data && data.formula) renderIngredients(row, data.formula);
+          });
+        });
+      }
+      var saveScen = det.querySelector(".wi-save-scenario");
+      if (saveScen) {
+        saveScen.addEventListener("click", function () {
+          var name = (det.querySelector(".wi-scenario-name").value || "").trim();
+          var rdId = row.getAttribute("data-rd-id");
+          if (!name || !rdId) {
+            setStatus("Enter a scenario name on a formula product", true);
+            return;
+          }
+          postJson(URLS.scenario, {
+            name: name,
+            rd_formula_id: parseInt(rdId, 10),
+            overrides: getOverrides(row)
+          }).then(function () {
+            setStatus("Scenario saved");
+            loadFormulaPanel(row);
+          }).catch(function (err) {
+            setStatus(err.message || "Scenario save failed", true);
+          });
+        });
+      }
+      var resetBtn = det.querySelector(".wi-reset-overrides");
+      if (resetBtn) {
+        resetBtn.addEventListener("click", function () {
+          setOverrides(row, {});
+          saveRow(row, { ingredient_overrides: {}, refresh_cost: true, cost_scenario_id: null }).then(function (data) {
+            if (data && data.formula) renderIngredients(row, data.formula);
+          });
+        });
+      }
+    }
+  }
+
+  tbody.querySelectorAll(".wi-row").forEach(bindRow);
+  recalcAll();
+
+  document.getElementById("wi-add").addEventListener("click", function () {
+    var empty = tbody.querySelector(".wi-empty-row");
+    if (empty) empty.remove();
+    var tpl = document.getElementById("wi-row-template");
+    tbody.appendChild(tpl.content.cloneNode(true));
+    var rows = tbody.querySelectorAll(".wi-row");
+    var row = rows[rows.length - 1];
+    bindRow(row);
+    saveRow(row).then(function () {
+      row.querySelector(".wi-product-select").focus();
+    });
+    recalcAll();
+  });
+})();

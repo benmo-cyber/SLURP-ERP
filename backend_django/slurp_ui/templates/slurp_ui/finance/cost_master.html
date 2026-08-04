@@ -1,11 +1,46 @@
 ﻿{% extends "slurp_ui/base_module.html" %}
 {% block title %}Cost Master — SLURP{% endblock %}
-{% block module_title %}Finance{% endblock %}
+{% block module_title %}Cost master{% endblock %}
 {% block main %}
-<form method="get" style="margin-bottom:1rem"><input name="q" value="{{ search }}" placeholder="Search…" /><button class="btn btn-secondary" type="submit">Search</button></form>
-<table class="data-table" style="width:100%"><thead><tr><th>Material</th><th>WWI code</th><th>Vendor</th><th>$/lb</th><th>Actual vs est</th></tr></thead>
-<tbody>{% for r in rows %}<tr>
-  <td>{{ r.vendor_material }}</td><td>{{ r.wwi_product_code|default:"—" }}</td><td>{{ r.vendor|default:"—" }}</td>
-  <td>{{ r.landed_cost_per_lb|default:r.price_per_lb|default:"—" }}</td><td>{{ r.actual_comparison }}</td>
-</tr>{% empty %}<tr><td colspan="5">No cost master rows.</td></tr>{% endfor %}</tbody></table>
+<div class="hs-bleed" style="padding:1.25rem 1.5rem 2rem">
+  <div class="hs-toolbar">
+    <form method="get" style="display:flex;gap:0.5rem;flex:1">
+      <input class="hs-search" name="q" value="{{ search }}" placeholder="Search materials, WWI codes, vendors…" />
+      <button class="hs-btn hs-btn-primary" type="submit">Search</button>
+    </form>
+  </div>
+
+  <div class="hs-card">
+    <div class="hs-card-header">
+      <h3>Cost master</h3>
+      <span class="hs-muted" style="font-size:0.8rem">Estimated vs actual landed $/lb</span>
+    </div>
+    <div class="hs-card-body tight">
+      <table class="hs-table">
+        <thead>
+          <tr>
+            <th>Material</th>
+            <th>WWI code</th>
+            <th>Vendor</th>
+            <th>$/lb</th>
+            <th>Actual vs est</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in rows %}
+          <tr>
+            <td><span class="hs-entity-name">{{ r.vendor_material }}</span></td>
+            <td>{{ r.wwi_product_code|default:"—" }}</td>
+            <td>{{ r.vendor|default:"—" }}</td>
+            <td>{{ r.landed_cost_per_lb|default:r.price_per_lb|default:"—" }}</td>
+            <td>{{ r.actual_comparison }}</td>
+          </tr>
+          {% empty %}
+          <tr><td colspan="5"><div class="hs-empty">No cost master rows.</div></td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
 {% endblock %}

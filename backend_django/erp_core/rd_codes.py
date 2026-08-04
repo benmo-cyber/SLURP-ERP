@@ -1,4 +1,7 @@
-"""Allocate permanent R&D formula codes: {family_letter}-R### (per letter, never reused)."""
+"""Allocate permanent R&D formula codes: {family}-R### (per family code, never reused).
+
+Family codes are 1–4 letters typed freehand (e.g. L, HL → L-R001, HL-R001).
+"""
 from __future__ import annotations
 
 import re
@@ -7,14 +10,17 @@ from django.db import transaction
 
 from erp_core.models import RDFormula, RDFormulaCodeSequence
 
-_RD_CODE_RE = re.compile(r"^([A-Z])-R(\d+)$")
+_RD_CODE_RE = re.compile(r"^([A-Z]{1,4})-R(\d+)$")
 
 
 def normalize_family_letter(raw: str | None) -> str:
-    letter = (raw or "").strip().upper()
-    if len(letter) != 1 or not letter.isalpha():
-        raise ValueError("Family letter must be a single A–Z letter (matches commercial SKU family).")
-    return letter
+    """Normalize family code (legacy name: family_letter). Accepts 1–4 A–Z letters."""
+    code = (raw or "").strip().upper()
+    if not 1 <= len(code) <= 4 or not code.isalpha():
+        raise ValueError(
+            "Family code must be 1–4 letters A–Z (e.g. L, HL)."
+        )
+    return code
 
 
 def format_rd_code(family_letter: str, sequence_number: int) -> str:
@@ -24,8 +30,8 @@ def format_rd_code(family_letter: str, sequence_number: int) -> str:
 @transaction.atomic
 def allocate_rd_code(family_letter: str) -> tuple[str, str]:
     """
-    Reserve the next R&D code for this family letter.
-    Returns (family_letter, rd_code). Safe under concurrent creates.
+    Reserve the next R&D code for this family code.
+    Returns (family_code, rd_code). Safe under concurrent creates.
     """
     letter = normalize_family_letter(family_letter)
     seq, _ = RDFormulaCodeSequence.objects.select_for_update().get_or_create(
