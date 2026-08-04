@@ -1,34 +1,40 @@
-{% extends "slurp_ui/base_module.html" %}
-{% block title %}Finished Goods — SLURP{% endblock %}
-{% block module_title %}Quality{% endblock %}
-{% block header_actions %}
-<a class="btn btn-primary" href="{% url 'slurp_ui:quality_create_finished_good' %}">Create FG</a>
-<a class="btn btn-secondary" href="{% url 'slurp_ui:quality_unlink_finished_good' %}">Unlink FG</a>
-{% endblock %}
-{% block main %}
-<table class="data-table">
-  <thead>
-    <tr>
-      <th>SKU</th>
-      <th>Name</th>
-      <th>Type</th>
-      <th>Category</th>
-      <th>Formula</th>
-    </tr>
-  </thead>
-  <tbody>
-    {% for row in rows %}
-    <tr>
-      <td><a href="{% url 'slurp_ui:quality_finished_good_detail' row.item.id %}">{{ row.item.sku }}</a></td>
-      <td>{{ row.item.name }}</td>
-      <td>{{ row.item.get_item_type_display }}</td>
-      <td>{{ row.item.product_category|default:"—" }}</td>
-      <td>{% if row.has_formula %}Yes{% elif row.item.item_type == 'finished_good' %}—{% else %}n/a{% endif %}</td>
-    </tr>
-    {% empty %}
-    <tr><td colspan="5">No finished goods / distributed items.</td></tr>
-    {% endfor %}
-  </tbody>
-</table>
-{% endblock %}
-
+{% extends "slurp_ui/base_module.html" %}
+{% block title %}Finished Goods — SLURP{% endblock %}
+{% block module_title %}Finished Goods{% endblock %}
+{% block header_actions %}
+  <a class="hs-btn" href="{% url 'slurp_ui:quality_unlink_finished_good' %}">Unlink FG</a>
+  <a class="hs-btn hs-btn-primary" href="{% url 'slurp_ui:quality_create_finished_good' %}">Create FG</a>
+{% endblock %}
+{% block main %}
+<div class="hs-bleed" style="padding:1.25rem 1.5rem 2rem">
+  <div class="hs-card">
+    <div class="hs-card-header"><h3>Finished goods &amp; distributed items</h3></div>
+    <div class="hs-card-body tight">
+      <table class="hs-table">
+        <thead>
+          <tr>
+            <th>SKU</th>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Category</th>
+            <th>Formula</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in rows %}
+          <tr>
+            <td><a class="hs-entity-name" href="{% url 'slurp_ui:quality_finished_good_detail' row.item.id %}">{{ row.item.sku }}</a></td>
+            <td>{{ row.item.name }}</td>
+            <td>{{ row.item.get_item_type_display }}</td>
+            <td>{{ row.item.product_category|default:"—" }}</td>
+            <td>{% if row.has_formula %}Yes{% elif row.item.item_type == 'finished_good' %}—{% else %}n/a{% endif %}</td>
+          </tr>
+          {% empty %}
+          <tr><td colspan="5"><div class="hs-empty">No finished goods / distributed items.</div></td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}

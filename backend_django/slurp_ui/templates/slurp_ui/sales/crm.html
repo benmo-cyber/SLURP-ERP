@@ -1,77 +1,111 @@
 {% extends "slurp_ui/base_module.html" %}
-{% block title %}CRM — SLURP{% endblock %}
-{% block module_title %}Customer Relationship Management{% endblock %}
+{% block title %}Customers — SLURP{% endblock %}
+{% block module_title %}Customers{% endblock %}
 {% block header_actions %}
-  <a href="{% url 'slurp_ui:sales_customers' %}" class="btn btn-primary">+ Add Customer</a>
+  <a href="{% url 'slurp_ui:sales_customers' %}" class="hs-btn hs-btn-primary">+ Add customer</a>
+  <a href="{% url 'slurp_ui:sales_create_order' %}" class="hs-btn">Create sales order</a>
 {% endblock %}
 {% block main %}
-<div class="crm-toolbar" style="margin-bottom:1rem;display:flex;flex-wrap:wrap;gap:0.75rem;align-items:center">
-  <form method="get" style="display:flex;gap:0.5rem;flex:1;min-width:200px">
-    <input type="search" name="q" value="{{ q }}" placeholder="Search customers…" class="crm-search" style="flex:1;padding:0.5rem" />
-    {% if active_filter %}<input type="hidden" name="active" value="{{ active_filter }}" />{% endif %}
-    <button class="btn btn-primary" type="submit">Search</button>
-  </form>
-  <div class="crm-filter-pills">
-    <a href="?{% if q %}q={{ q|urlencode }}&{% endif %}active=" class="btn btn-secondary {% if not active_filter %}active{% endif %}">All</a>
-    <a href="?{% if q %}q={{ q|urlencode }}&{% endif %}active=true" class="btn btn-secondary {% if active_filter == 'true' %}active{% endif %}">Active</a>
-    <a href="?{% if q %}q={{ q|urlencode }}&{% endif %}active=false" class="btn btn-secondary {% if active_filter == 'false' %}active{% endif %}">Inactive</a>
+<div class="hs-bleed" style="padding:1.25rem 1.5rem 2rem">
+  <div class="hs-stat-row">
+    <div class="hs-stat">
+      <div class="label">Active customers</div>
+      <div class="value">{{ active_customers }}</div>
+    </div>
+    <div class="hs-stat">
+      <div class="label">Open orders</div>
+      <div class="value">{{ open_order_total }}</div>
+    </div>
+    <div class="hs-stat">
+      <div class="label">Ready to ship</div>
+      <div class="value">{{ ready_count }}</div>
+    </div>
+    <div class="hs-stat">
+      <div class="label">Showing</div>
+      <div class="value">{{ customers|length }}</div>
+    </div>
   </div>
-</div>
 
-<div style="display:grid;grid-template-columns:2fr 1fr;gap:1rem;margin-bottom:1rem">
-  <div class="crm-table-wrap">
-    <table class="data-table crm-table">
-      <thead>
-        <tr>
-          <th>Customer</th><th>Email</th><th>Phone</th><th>Location</th>
-          <th>Locations</th><th>Contacts</th><th>Calls</th><th>Status</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for c in customers %}
-        <tr class="crm-row {% if not c.is_active %}inactive{% endif %}">
-          <td>
-            <a href="{% url 'slurp_ui:sales_customer_profile' c.pk %}"><strong>{{ c.name }}</strong></a><br />
-            <span class="crm-customer-id">{{ c.customer_id }}</span>
-          </td>
-          <td>{{ c.email|default:"—" }}</td>
-          <td>{{ c.phone|default:"—" }}</td>
-          <td>{% if c.city or c.state %}{{ c.city }}{% if c.city and c.state %}, {% endif %}{{ c.state }}{% else %}—{% endif %}</td>
-          <td>{{ c.ship_to_locations_count|default:0 }}</td>
-          <td>{{ c.contacts_count|default:0 }}</td>
-          <td>{{ c.sales_calls_count|default:0 }}</td>
-          <td>{% if c.is_active %}Active{% else %}Inactive{% endif %}</td>
-        </tr>
-        {% empty %}
-        <tr><td colspan="8">No customers found.</td></tr>
-        {% endfor %}
-      </tbody>
-    </table>
+  <div class="hs-toolbar">
+    <form method="get" style="display:flex;gap:0.5rem;flex:1;min-width:220px">
+      <input type="search" name="q" value="{{ q }}" placeholder="Search customers, IDs, email, city…" class="hs-search" />
+      {% if active_filter %}<input type="hidden" name="active" value="{{ active_filter }}" />{% endif %}
+      <button class="hs-btn hs-btn-primary" type="submit">Search</button>
+    </form>
+    <div class="hs-pills">
+      <a href="?{% if q %}q={{ q|urlencode }}&{% endif %}active=true" class="hs-pill {% if active_filter == 'true' %}active{% endif %}">Active</a>
+      <a href="?{% if q %}q={{ q|urlencode }}&{% endif %}active=all" class="hs-pill {% if active_filter == 'all' %}active{% endif %}">All</a>
+      <a href="?{% if q %}q={{ q|urlencode }}&{% endif %}active=false" class="hs-pill {% if active_filter == 'false' %}active{% endif %}">Inactive</a>
+    </div>
   </div>
-  <aside>
-    <h3 style="margin-top:0">Recent sales activity</h3>
-    {% if recent_calls %}
-    <ul style="list-style:none;padding:0;margin:0">
-      {% for call in recent_calls %}
-      <li style="padding:0.5rem 0;border-bottom:1px solid #e2e8f0">
-        <a href="{% url 'slurp_ui:sales_customer_profile' call.customer_id %}?tab=sales-calls">{{ call.customer.name }}</a><br />
-        <small>{{ call.call_date|date:"M j, Y g:i A" }} · {{ call.get_call_type_display }}</small>
-      </li>
-      {% endfor %}
-    </ul>
-    {% else %}
-    <p style="color:#64748b">No recent sales calls logged.</p>
-    {% endif %}
-    <h3>Top ship-to counts</h3>
-    {% if ship_to_summary %}
-    <ul style="list-style:none;padding:0">
-      {% for row in ship_to_summary %}
-      <li style="padding:0.25rem 0"><a href="{% url 'slurp_ui:sales_customer_profile' row.customer_id %}?tab=ship-to">{{ row.customer__name }}</a> — {{ row.loc_count }}</li>
-      {% endfor %}
-    </ul>
-    {% else %}
-    <p style="color:#64748b">No active ship-to locations.</p>
-    {% endif %}
-  </aside>
+
+  <div class="hs-index-layout">
+    <div class="hs-card">
+      <div class="hs-card-header">
+        <h3>Customer directory</h3>
+        <span class="hs-muted" style="font-size:0.8rem">Ops + AP account records</span>
+      </div>
+      <div class="hs-card-body tight">
+        <table class="hs-table">
+          <thead>
+            <tr>
+              <th>Customer</th>
+              <th>Location</th>
+              <th>Contacts</th>
+              <th>Ship-tos</th>
+              <th>Open SOs</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for c in customers %}
+            <tr onclick="window.location='{% url 'slurp_ui:sales_customer_profile' c.pk %}'">
+              <td>
+                <div class="hs-entity">
+                  <span class="hs-avatar">{{ c.initials }}</span>
+                  <div>
+                    <a class="hs-entity-name" href="{% url 'slurp_ui:sales_customer_profile' c.pk %}">{{ c.name }}</a>
+                    <span class="hs-entity-sub">{{ c.customer_id }}{% if c.payment_terms %} · {{ c.payment_terms }}{% endif %}</span>
+                  </div>
+                </div>
+              </td>
+              <td>{% if c.city or c.state %}{{ c.city }}{% if c.city and c.state %}, {% endif %}{{ c.state }}{% else %}<span class="hs-muted">—</span>{% endif %}</td>
+              <td>{{ c.contacts_count|default:0 }}</td>
+              <td>{{ c.ship_to_locations_count|default:0 }}</td>
+              <td>{% if c.open_orders_count %}<span class="hs-badge info">{{ c.open_orders_count }}</span>{% else %}<span class="hs-muted">0</span>{% endif %}</td>
+              <td>{% if c.is_active %}<span class="hs-badge ok">Active</span>{% else %}<span class="hs-badge">Inactive</span>{% endif %}</td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="6"><div class="hs-empty">No customers match this filter.</div></td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="hs-side-stack">
+      <div class="hs-card">
+        <div class="hs-card-header"><h3>Needs attention</h3></div>
+        <div class="hs-card-body tight">
+          {% for o in needs_attention %}
+          <a class="hs-list-link" href="{% url 'slurp_ui:sales_order_detail' o.id %}">
+            <div class="hs-list-title">{{ o.so_number }}</div>
+            <div class="hs-list-sub">{{ o.customer_name }} · {{ o.status }}</div>
+          </a>
+          {% empty %}
+          <div class="hs-empty">No open fulfillment work.</div>
+          {% endfor %}
+        </div>
+      </div>
+      <div class="hs-card">
+        <div class="hs-card-header"><h3>Quick links</h3></div>
+        <div class="hs-card-body" style="display:flex;flex-direction:column;gap:0.5rem">
+          <a class="hs-btn" href="{% url 'slurp_ui:sales_orders' %}?queue=open">Open order workqueue</a>
+          <a class="hs-btn" href="{% url 'slurp_ui:sales_orders' %}?queue=ship">Ready / allocate to ship</a>
+          <a class="hs-btn" href="{% url 'slurp_ui:sales_checkout' %}">Check out</a>
+        </div>
+      </div>
+    </div>
+  </div>
 </div>
 {% endblock %}

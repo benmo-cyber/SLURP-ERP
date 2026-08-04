@@ -143,6 +143,16 @@ urlpatterns = [
         views.sales_customer_pricing,
         name="sales_customer_pricing_edit",
     ),
+    path(
+        "sales/customers/<int:customer_pk>/quotes/new/",
+        views.sales_customer_quote,
+        name="sales_customer_quote_new",
+    ),
+    path(
+        "sales/customers/<int:customer_pk>/quotes/<int:pk>/edit/",
+        views.sales_customer_quote,
+        name="sales_customer_quote_edit",
+    ),
     path("sales/checkout/", views.sales_checkout, name="sales_checkout"),
     path(
         "sales/combined-checkout/",

@@ -1,31 +1,70 @@
-{% extends "slurp_ui/base_module.html" %}
-{% block title %}R&amp;D Formulas — SLURP{% endblock %}
-{% block module_title %}Quality{% endblock %}
-{% block header_actions %}
-<a class="btn btn-primary" href="{% url 'slurp_ui:quality_rd_formula_create' %}">New R&amp;D formula</a>
-{% endblock %}
-{% block main %}
-<table class="data-table">
-  <thead>
-    <tr>
-      <th>Name</th>
-      <th>Status</th>
-      <th>Total $/lb</th>
-      <th>Updated</th>
-    </tr>
-  </thead>
-  <tbody>
-    {% for f in formulas %}
-    <tr>
-      <td><a href="{% url 'slurp_ui:quality_rd_formula_detail' f.id %}">{{ f.name }}</a></td>
-      <td>{{ f.get_status_display }}</td>
-      <td>${{ f.total_cost_per_lb|floatformat:2 }}</td>
-      <td>{{ f.updated_at|date:"M j, Y" }}</td>
-    </tr>
-    {% empty %}
-    <tr><td colspan="4">No R&amp;D formulas yet.</td></tr>
-    {% endfor %}
-  </tbody>
-</table>
-{% endblock %}
-
+{% extends "slurp_ui/base_module.html" %}
+{% block title %}R&amp;D Formulas — SLURP{% endblock %}
+{% block module_title %}R&amp;D Formulas{% endblock %}
+{% block header_actions %}
+  <a class="hs-btn hs-btn-primary" href="{% url 'slurp_ui:quality_rd_formula_create' %}">New R&amp;D formula</a>
+{% endblock %}
+{% block main %}
+<div class="hs-bleed" style="padding:1.25rem 1.5rem 2rem">
+  <div class="hs-stat-row">
+    <div class="hs-stat"><div class="label">Active</div><div class="value">{{ counts.active }}</div></div>
+    <div class="hs-stat"><div class="label">Commercialized</div><div class="value">{{ counts.commercialized }}</div></div>
+    <div class="hs-stat"><div class="label">Scrapped</div><div class="value">{{ counts.scrapped }}</div></div>
+    <div class="hs-stat"><div class="label">All</div><div class="value">{{ counts.all }}</div></div>
+  </div>
+
+  <div class="hs-toolbar">
+    <form method="get" style="display:flex;gap:0.5rem;flex:1;min-width:220px">
+      <input type="search" name="q" value="{{ q }}" placeholder="Search code, name, commercial SKU…" class="hs-search" />
+      {% if status %}<input type="hidden" name="status" value="{{ status }}" />{% endif %}
+      <button class="hs-btn hs-btn-primary" type="submit">Search</button>
+    </form>
+    <div class="hs-pills">
+      <a class="hs-pill {% if status == 'active' %}active{% endif %}" href="?{% if q %}q={{ q|urlencode }}&{% endif %}status=active">Active</a>
+      <a class="hs-pill {% if status == 'commercialized' %}active{% endif %}" href="?{% if q %}q={{ q|urlencode }}&{% endif %}status=commercialized">Commercialized</a>
+      <a class="hs-pill {% if status == 'scrapped' %}active{% endif %}" href="?{% if q %}q={{ q|urlencode }}&{% endif %}status=scrapped">Scrapped</a>
+      <a class="hs-pill {% if status == 'all' %}active{% endif %}" href="?{% if q %}q={{ q|urlencode }}&{% endif %}status=all">All</a>
+    </div>
+  </div>
+
+  <div class="hs-card">
+    <div class="hs-card-header">
+      <h3>R&amp;D formulas</h3>
+      <span class="hs-muted" style="font-size:0.8rem">Codes are permanent (e.g. L-R001)</span>
+    </div>
+    <div class="hs-card-body tight">
+      <table class="hs-table">
+        <thead>
+          <tr>
+            <th>R&amp;D code</th>
+            <th>Name</th>
+            <th>Status</th>
+            <th>Commercial SKU</th>
+            <th>Total $/lb</th>
+            <th>Updated</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for f in formulas %}
+          <tr onclick="window.location='{% url 'slurp_ui:quality_rd_formula_detail' f.id %}'">
+            <td><a class="hs-entity-name" href="{% url 'slurp_ui:quality_rd_formula_detail' f.id %}">{{ f.rd_code }}</a></td>
+            <td>{{ f.name }}</td>
+            <td>
+              {% if f.status == 'approved' %}<span class="hs-badge ok">Approved</span>
+              {% elif f.status == 'commercialized' %}<span class="hs-badge info">Commercialized</span>
+              {% elif f.status == 'scrapped' %}<span class="hs-badge">Scrapped</span>
+              {% else %}<span class="hs-badge warn">Draft</span>{% endif %}
+            </td>
+            <td>{% if f.commercial_sku %}{{ f.commercial_sku }}{% else %}<span class="hs-muted">—</span>{% endif %}</td>
+            <td>${{ f.total_cost_per_lb|floatformat:2 }}</td>
+            <td>{{ f.updated_at|date:"M j, Y" }}</td>
+          </tr>
+          {% empty %}
+          <tr><td colspan="6"><div class="hs-empty">No R&amp;D formulas in this view.</div></td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}

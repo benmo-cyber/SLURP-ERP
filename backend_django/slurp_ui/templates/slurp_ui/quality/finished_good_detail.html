@@ -1,133 +1,168 @@
-{% extends "slurp_ui/base.html" %}
+{% extends "slurp_ui/base_module.html" %}
 {% block title %}{{ item.sku }} — SLURP{% endblock %}
-{% block content %}
-<div class="modal-page" style="max-width:960px">
-  <div style="display:flex;justify-content:space-between;gap:1rem;flex-wrap:wrap">
-    <div>
-      <h2>{{ item.sku }} — {{ item.name }}</h2>
-      <p style="color:#64748b;margin:0.25rem 0 0">{{ item.get_item_type_display }} · {{ item.unit_of_measure }}</p>
-    </div>
-    <div style="display:flex;gap:0.5rem;flex-wrap:wrap">
-      <a class="btn btn-secondary" href="{% url 'slurp_ui:quality_finished_goods' %}">Back</a>
-      <a class="btn btn-secondary" href="{% url 'slurp_ui:quality_item_coa_test_lines' item.id %}">COA test lines</a>
+{% block module_title %}Finished Good{% endblock %}
+{% block header_actions %}
+  <a href="{% url 'slurp_ui:quality_finished_goods' %}" class="hs-btn">All finished goods</a>
+  <a href="{% url 'slurp_ui:quality_item_coa_test_lines' item.id %}" class="hs-btn">COA test lines</a>
+{% endblock %}
+{% block main %}
+<div class="hs-bleed" style="padding:1.25rem 1.5rem 2rem">
+  <div class="hs-card" style="margin-bottom:1rem">
+    <div class="hs-card-header" style="align-items:flex-start">
+      <div>
+        <h3 class="hs-entity-name" style="font-size:1.2rem">{{ item.sku }} — {{ item.name }}</h3>
+        <div class="hs-record-meta" style="margin-top:0.35rem">
+          <span class="hs-badge info">{{ item.get_item_type_display }}</span>
+          <span class="hs-muted">{{ item.unit_of_measure }}</span>
+        </div>
+      </div>
     </div>
   </div>
 
   {% if not can_edit_formula %}
-  <p style="margin-top:1rem;color:#64748b">
-    Formula editor applies to finished goods only. Distributed items use repack lots, not production formulas.
-  </p>
+  <div class="hs-card">
+    <div class="hs-card-body">
+      <p class="hs-section-note" style="margin:0">
+        Formula editor applies to finished goods only. Distributed items use repack lots, not production formulas.
+      </p>
+    </div>
+  </div>
   {% else %}
 
-  <form method="post" id="formula-form" style="margin-top:1rem">
+  <form method="post" id="formula-form">
     {% csrf_token %}
-    <h3>Formula {% if formula %}v{{ formula.version }}{% else %}(new){% endif %}</h3>
-    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0.75rem">
-      <div class="form-row">
-        <label for="version">Version</label>
-        <input id="version" name="version" value="{{ formula.version|default:'1.0' }}" />
-      </div>
-      <div class="form-row">
-        <label for="shelf_life_months">Shelf life (months)</label>
-        <input id="shelf_life_months" name="shelf_life_months" type="number" min="0"
-               value="{{ formula.shelf_life_months|default_if_none:'' }}" />
-      </div>
-      <div class="form-row">
-        <label for="critical_control_point">CCP</label>
-        <select id="critical_control_point" name="critical_control_point">
-          <option value="">— None —</option>
-          {% for c in ccps %}
-          <option value="{{ c.id }}"
-            {% if formula and formula.critical_control_point_id == c.id %}selected{% endif %}>
-            {{ c.name }}
-          </option>
-          {% endfor %}
-        </select>
-      </div>
-    </div>
 
-    <h3 style="margin-top:1rem">QC</h3>
-    <div style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:0.5rem">
-      <div class="form-row">
-        <label>Parameter</label>
-        <input name="qc_parameter_name" value="{{ formula.qc_parameter_name|default:'' }}" />
+    <div class="hs-card" style="margin-bottom:1rem">
+      <div class="hs-card-header">
+        <h3>Formula {% if formula %}v{{ formula.version }}{% else %}(new){% endif %}</h3>
       </div>
-      <div class="form-row">
-        <label>Min</label>
-        <input name="qc_spec_min" type="number" step="any" value="{{ formula.qc_spec_min|default_if_none:'' }}" />
-      </div>
-      <div class="form-row">
-        <label>Max</label>
-        <input name="qc_spec_max" type="number" step="any" value="{{ formula.qc_spec_max|default_if_none:'' }}" />
-      </div>
-    </div>
-
-    <h3 style="margin-top:1rem">Ingredients (must total 100%)</h3>
-    <input type="hidden" name="line_count" id="line_count" value="{{ ingredients|length|default:1 }}" />
-    <div id="ing-lines">
-      {% if ingredients %}
-        {% for ing in ingredients %}
-        <div class="ing-line" style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:0.5rem;margin-bottom:0.5rem">
-          <div class="form-row" style="margin:0">
-            <label>Item</label>
-            <select name="ing_item_{{ forloop.counter0 }}">
-              <option value="">—</option>
-              {% for it in ingredient_items %}
-              <option value="{{ it.id }}" {% if it.id == ing.item_id %}selected{% endif %}>
-                {{ it.sku }} — {{ it.name }}
+      <div class="hs-card-body">
+        <div class="hs-form-grid-3">
+          <div class="form-row">
+            <label for="version">Version</label>
+            <input id="version" name="version" value="{{ formula.version|default:'1.0' }}" />
+          </div>
+          <div class="form-row">
+            <label for="shelf_life_months">Shelf life (months)</label>
+            <input id="shelf_life_months" name="shelf_life_months" type="number" min="0"
+                   value="{{ formula.shelf_life_months|default_if_none:'' }}" />
+          </div>
+          <div class="form-row">
+            <label for="critical_control_point">CCP</label>
+            <select id="critical_control_point" name="critical_control_point">
+              <option value="">— None —</option>
+              {% for c in ccps %}
+              <option value="{{ c.id }}"
+                {% if formula and formula.critical_control_point_id == c.id %}selected{% endif %}>
+                {{ c.name }}
               </option>
               {% endfor %}
             </select>
           </div>
-          <div class="form-row" style="margin:0">
-            <label>%</label>
-            <input name="ing_pct_{{ forloop.counter0 }}" type="number" step="any" value="{{ ing.percentage }}" />
+        </div>
+      </div>
+    </div>
+
+    <div class="hs-card" style="margin-bottom:1rem">
+      <div class="hs-card-header"><h3>QC</h3></div>
+      <div class="hs-card-body">
+        <div class="hs-form-grid-3">
+          <div class="form-row">
+            <label>Parameter</label>
+            <input name="qc_parameter_name" value="{{ formula.qc_parameter_name|default:'' }}" />
           </div>
-          <div class="form-row" style="margin:0">
-            <label>Notes</label>
-            <input name="ing_notes_{{ forloop.counter0 }}" value="{{ ing.notes|default:'' }}" />
+          <div class="form-row">
+            <label>Min</label>
+            <input name="qc_spec_min" type="number" step="any" value="{{ formula.qc_spec_min|default_if_none:'' }}" />
           </div>
+          <div class="form-row">
+            <label>Max</label>
+            <input name="qc_spec_max" type="number" step="any" value="{{ formula.qc_spec_max|default_if_none:'' }}" />
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="hs-card" style="margin-bottom:1rem">
+      <div class="hs-card-header">
+        <h3>Ingredients</h3>
+        <span class="hs-muted" style="font-size:0.8rem">Must total 100%</span>
+        <button type="button" class="hs-btn hs-btn-sm" id="add-ing">+ Add ingredient</button>
+      </div>
+      <div class="hs-card-body">
+        <input type="hidden" name="line_count" id="line_count" value="{{ ingredients|length|default:1 }}" />
+        <div id="ing-lines">
+          {% if ingredients %}
+            {% for ing in ingredients %}
+            <div class="ing-line hs-line-card">
+              <div class="hs-form-grid-3">
+                <div class="form-row" style="margin:0">
+                  <label>Item</label>
+                  <select name="ing_item_{{ forloop.counter0 }}">
+                    <option value="">—</option>
+                    {% for it in ingredient_items %}
+                    <option value="{{ it.id }}" {% if it.id == ing.item_id %}selected{% endif %}>
+                      {{ it.sku }} — {{ it.name }}
+                    </option>
+                    {% endfor %}
+                  </select>
+                </div>
+                <div class="form-row" style="margin:0">
+                  <label>%</label>
+                  <input name="ing_pct_{{ forloop.counter0 }}" type="number" step="any" value="{{ ing.percentage }}" />
+                </div>
+                <div class="form-row" style="margin:0">
+                  <label>Notes</label>
+                  <input name="ing_notes_{{ forloop.counter0 }}" value="{{ ing.notes|default:'' }}" />
+                </div>
+              </div>
+            </div>
+            {% endfor %}
+          {% else %}
+            <div class="ing-line hs-line-card">
+              <div class="hs-form-grid-3">
+                <div class="form-row" style="margin:0">
+                  <label>Item</label>
+                  <select name="ing_item_0">
+                    <option value="">—</option>
+                    {% for it in ingredient_items %}
+                    <option value="{{ it.id }}">{{ it.sku }} — {{ it.name }}</option>
+                    {% endfor %}
+                  </select>
+                </div>
+                <div class="form-row" style="margin:0">
+                  <label>%</label>
+                  <input name="ing_pct_0" type="number" step="any" value="100" />
+                </div>
+                <div class="form-row" style="margin:0">
+                  <label>Notes</label>
+                  <input name="ing_notes_0" />
+                </div>
+              </div>
+            </div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
+    <div class="hs-card" style="margin-bottom:1rem">
+      <div class="hs-card-header"><h3>Mixing steps</h3></div>
+      <div class="hs-card-body">
+        {% for i in "123456" %}
+        <div class="form-row">
+          <label>Step {{ forloop.counter }}</label>
+          <textarea name="mixing_step_{{ forloop.counter }}" rows="2">{% if formula %}{% if forloop.counter == 1 %}{{ formula.mixing_step_1|default:'' }}{% elif forloop.counter == 2 %}{{ formula.mixing_step_2|default:'' }}{% elif forloop.counter == 3 %}{{ formula.mixing_step_3|default:'' }}{% elif forloop.counter == 4 %}{{ formula.mixing_step_4|default:'' }}{% elif forloop.counter == 5 %}{{ formula.mixing_step_5|default:'' }}{% else %}{{ formula.mixing_step_6|default:'' }}{% endif %}{% endif %}</textarea>
         </div>
         {% endfor %}
-      {% else %}
-        <div class="ing-line" style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:0.5rem;margin-bottom:0.5rem">
-          <div class="form-row" style="margin:0">
-            <label>Item</label>
-            <select name="ing_item_0">
-              <option value="">—</option>
-              {% for it in ingredient_items %}
-              <option value="{{ it.id }}">{{ it.sku }} — {{ it.name }}</option>
-              {% endfor %}
-            </select>
-          </div>
-          <div class="form-row" style="margin:0">
-            <label>%</label>
-            <input name="ing_pct_0" type="number" step="any" value="100" />
-          </div>
-          <div class="form-row" style="margin:0">
-            <label>Notes</label>
-            <input name="ing_notes_0" />
-          </div>
+        <div class="form-row" style="margin-bottom:0">
+          <label for="notes">Notes</label>
+          <textarea id="notes" name="notes" rows="2">{{ formula.notes|default:'' }}</textarea>
         </div>
-      {% endif %}
-    </div>
-    <button type="button" class="btn btn-secondary" id="add-ing" style="margin-bottom:1rem">Add ingredient</button>
-
-    <h3>Mixing steps</h3>
-    {% for i in "123456" %}
-    <div class="form-row">
-      <label>Step {{ forloop.counter }}</label>
-      <textarea name="mixing_step_{{ forloop.counter }}" rows="2">{% if formula %}{% if forloop.counter == 1 %}{{ formula.mixing_step_1|default:'' }}{% elif forloop.counter == 2 %}{{ formula.mixing_step_2|default:'' }}{% elif forloop.counter == 3 %}{{ formula.mixing_step_3|default:'' }}{% elif forloop.counter == 4 %}{{ formula.mixing_step_4|default:'' }}{% elif forloop.counter == 5 %}{{ formula.mixing_step_5|default:'' }}{% else %}{{ formula.mixing_step_6|default:'' }}{% endif %}{% endif %}</textarea>
-    </div>
-    {% endfor %}
-
-    <div class="form-row">
-      <label for="notes">Notes</label>
-      <textarea id="notes" name="notes" rows="2">{{ formula.notes|default:'' }}</textarea>
+      </div>
     </div>
 
-    <div class="form-actions">
-      <button type="submit" class="btn btn-primary">Save formula</button>
+    <div class="hs-form-actions">
+      <button type="submit" class="hs-btn hs-btn-primary">Save formula</button>
     </div>
   </form>
 
@@ -143,16 +178,16 @@
       var n = parseInt(countInput.value || '0', 10) || 0;
       if (n >= 40) return;
       var div = document.createElement('div');
-      div.className = 'ing-line';
-      div.style.cssText = 'display:grid;grid-template-columns:2fr 1fr 1fr;gap:0.5rem;margin-bottom:0.5rem';
+      div.className = 'ing-line hs-line-card';
       div.innerHTML =
+        '<div class="hs-form-grid-3">' +
         '<div class="form-row" style="margin:0"><label>Item</label><select name="ing_item_' + n + '">' + optionHtml + '</select></div>' +
         '<div class="form-row" style="margin:0"><label>%</label><input name="ing_pct_' + n + '" type="number" step="any" /></div>' +
-        '<div class="form-row" style="margin:0"><label>Notes</label><input name="ing_notes_' + n + '" /></div>';
+        '<div class="form-row" style="margin:0"><label>Notes</label><input name="ing_notes_' + n + '" /></div>' +
+        '</div>';
       wrap.appendChild(div);
       countInput.value = String(n + 1);
     });
-    // Ensure line_count matches existing rows
     countInput.value = String(wrap.querySelectorAll('.ing-line').length);
   })();
   </script>

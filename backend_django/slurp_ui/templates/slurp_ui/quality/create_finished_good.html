@@ -1,94 +1,121 @@
-{% extends "slurp_ui/base_module.html" %}
-{% block title %}Create Finished Good — SLURP{% endblock %}
-{% block module_title %}Quality{% endblock %}
-{% block main %}
-<div style="max-width:960px">
-  <div style="display:flex;justify-content:space-between;margin-bottom:1rem">
-    <h2 style="margin:0">Create Finished Good</h2>
-    <a class="btn btn-secondary" href="{% url 'slurp_ui:quality_finished_goods' %}">Back</a>
-  </div>
-  <form method="post" id="fg-form">
-    {% csrf_token %}
-    <h3>Product</h3>
-    <div style="display:grid;grid-template-columns:1fr 2fr;gap:0.75rem">
-      <div class="form-row"><label>SKU *</label><input name="sku" required /></div>
-      <div class="form-row"><label>Name *</label><input name="name" required /></div>
-    </div>
-    <div class="form-row"><label>Description</label><textarea name="description" rows="2"></textarea></div>
-    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0.75rem">
-      <div class="form-row"><label>Pack size</label><input name="pack_size" type="number" step="any" value="1" /></div>
-      <div class="form-row">
-        <label>Pack UOM</label>
-        <select name="pack_size_unit">
-          <option value="lbs">lbs</option>
-          <option value="kg">kg</option>
-          <option value="ea">ea</option>
-        </select>
-      </div>
-      <div class="form-row"><label>Formula version</label><input name="formula_version" value="1.0" /></div>
-    </div>
-
-    <h3 style="margin-top:1rem">Formula</h3>
-    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0.75rem">
-      <div class="form-row"><label>Shelf life (months)</label><input name="shelf_life_months" type="number" min="1" /></div>
-      <div class="form-row">
-        <label>CCP</label>
-        <select name="critical_control_point">
-          <option value="">— None —</option>
-          {% for c in ccps %}<option value="{{ c.id }}">{{ c.name }}</option>{% endfor %}
-        </select>
-      </div>
-    </div>
-    <div style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:0.5rem;margin-top:0.5rem">
-      <div class="form-row"><label>QC parameter</label><input name="qc_parameter_name" /></div>
-      <div class="form-row"><label>Min</label><input name="qc_spec_min" type="number" step="any" /></div>
-      <div class="form-row"><label>Max</label><input name="qc_spec_max" type="number" step="any" /></div>
-    </div>
-
-    <h3 style="margin-top:1rem">Ingredients (must total 100%)</h3>
-    <input type="hidden" name="line_count" id="line_count" value="1" />
-    <div id="ing-lines">
-      <div class="ing-line" style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:0.5rem;margin-bottom:0.5rem">
-        <div class="form-row" style="margin:0">
-          <label>Item</label>
-          <select name="ing_item_0" required>
-            <option value="">—</option>
-            {% for it in ingredient_items %}
-            <option value="{{ it.id }}">{{ it.sku }} — {{ it.name }}</option>
-            {% endfor %}
-          </select>
-        </div>
-        <div class="form-row" style="margin:0"><label>%</label><input name="ing_pct_0" type="number" step="any" value="100" required /></div>
-        <div class="form-row" style="margin:0"><label>Notes</label><input name="ing_notes_0" /></div>
-      </div>
-    </div>
-    <button type="button" class="btn btn-secondary" id="add-ing" style="margin-bottom:1rem">Add ingredient</button>
-    <div class="form-row"><label>Formula notes</label><textarea name="formula_notes" rows="2"></textarea></div>
-    <div class="form-actions"><button type="submit" class="btn btn-primary">Create finished good</button></div>
-  </form>
-</div>
-<script>
-(function () {
-  var wrap = document.getElementById('ing-lines');
-  var countInput = document.getElementById('line_count');
-  var addBtn = document.getElementById('add-ing');
-  if (!wrap || !addBtn) return;
-  var opts = wrap.querySelector('select');
-  var optionHtml = opts ? opts.innerHTML : '';
-  addBtn.addEventListener('click', function () {
-    var n = parseInt(countInput.value || '0', 10) || 0;
-    if (n >= 40) return;
-    var div = document.createElement('div');
-    div.className = 'ing-line';
-    div.style.cssText = 'display:grid;grid-template-columns:2fr 1fr 1fr;gap:0.5rem;margin-bottom:0.5rem';
-    div.innerHTML =
-      '<div class="form-row" style="margin:0"><label>Item</label><select name="ing_item_' + n + '">' + optionHtml + '</select></div>' +
-      '<div class="form-row" style="margin:0"><label>%</label><input name="ing_pct_' + n + '" type="number" step="any" /></div>' +
-      '<div class="form-row" style="margin:0"><label>Notes</label><input name="ing_notes_' + n + '" /></div>';
-    wrap.appendChild(div);
-    countInput.value = String(n + 1);
-  });
-})();
-</script>
-{% endblock %}
-
+{% extends "slurp_ui/base_module.html" %}
+{% block title %}Create Finished Good — SLURP{% endblock %}
+{% block module_title %}Create Finished Good{% endblock %}
+{% block header_actions %}
+  <a href="{% url 'slurp_ui:quality_finished_goods' %}" class="hs-btn">All finished goods</a>
+{% endblock %}
+{% block main %}
+<div class="hs-bleed" style="padding:1.25rem 1.5rem 2rem">
+  <form method="post" id="fg-form">
+    {% csrf_token %}
+
+    <div class="hs-card" style="margin-bottom:1rem">
+      <div class="hs-card-header"><h3>Product</h3></div>
+      <div class="hs-card-body">
+        <div class="hs-form-grid">
+          <div class="form-row"><label>SKU *</label><input name="sku" required /></div>
+          <div class="form-row"><label>Name *</label><input name="name" required /></div>
+        </div>
+        <div class="form-row">
+          <label>Description</label>
+          <textarea name="description" rows="2"></textarea>
+        </div>
+        <div class="hs-form-grid-3">
+          <div class="form-row"><label>Pack size</label><input name="pack_size" type="number" step="any" value="1" /></div>
+          <div class="form-row">
+            <label>Pack UOM</label>
+            <select name="pack_size_unit">
+              <option value="lbs">lbs</option>
+              <option value="kg">kg</option>
+              <option value="ea">ea</option>
+            </select>
+          </div>
+          <div class="form-row"><label>Formula version</label><input name="formula_version" value="1.0" /></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="hs-card" style="margin-bottom:1rem">
+      <div class="hs-card-header"><h3>Formula</h3></div>
+      <div class="hs-card-body">
+        <div class="hs-form-grid">
+          <div class="form-row"><label>Shelf life (months)</label><input name="shelf_life_months" type="number" min="1" /></div>
+          <div class="form-row">
+            <label>CCP</label>
+            <select name="critical_control_point">
+              <option value="">— None —</option>
+              {% for c in ccps %}<option value="{{ c.id }}">{{ c.name }}</option>{% endfor %}
+            </select>
+          </div>
+        </div>
+        <div class="hs-form-grid-3">
+          <div class="form-row"><label>QC parameter</label><input name="qc_parameter_name" /></div>
+          <div class="form-row"><label>Min</label><input name="qc_spec_min" type="number" step="any" /></div>
+          <div class="form-row"><label>Max</label><input name="qc_spec_max" type="number" step="any" /></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="hs-card" style="margin-bottom:1rem">
+      <div class="hs-card-header">
+        <h3>Ingredients</h3>
+        <span class="hs-muted" style="font-size:0.8rem">Must total 100%</span>
+      </div>
+      <div class="hs-card-body">
+        <input type="hidden" name="line_count" id="line_count" value="1" />
+        <div id="ing-lines">
+          <div class="ing-line hs-line-card">
+            <div class="hs-form-grid-3">
+              <div class="form-row" style="margin:0">
+                <label>Item</label>
+                <select name="ing_item_0" required>
+                  <option value="">—</option>
+                  {% for it in ingredient_items %}
+                  <option value="{{ it.id }}">{{ it.sku }} — {{ it.name }}</option>
+                  {% endfor %}
+                </select>
+              </div>
+              <div class="form-row" style="margin:0"><label>%</label><input name="ing_pct_0" type="number" step="any" value="100" required /></div>
+              <div class="form-row" style="margin:0"><label>Notes</label><input name="ing_notes_0" /></div>
+            </div>
+          </div>
+        </div>
+        <button type="button" class="hs-btn hs-btn-sm" id="add-ing" style="margin-top:0.75rem">+ Add ingredient</button>
+        <div class="form-row" style="margin-top:0.75rem;margin-bottom:0">
+          <label>Formula notes</label>
+          <textarea name="formula_notes" rows="2"></textarea>
+        </div>
+      </div>
+    </div>
+
+    <div class="hs-form-actions">
+      <button type="submit" class="hs-btn hs-btn-primary">Create finished good</button>
+      <a class="hs-btn" href="{% url 'slurp_ui:quality_finished_goods' %}">Cancel</a>
+    </div>
+  </form>
+</div>
+<script>
+(function () {
+  var wrap = document.getElementById('ing-lines');
+  var countInput = document.getElementById('line_count');
+  var addBtn = document.getElementById('add-ing');
+  if (!wrap || !addBtn) return;
+  var opts = wrap.querySelector('select');
+  var optionHtml = opts ? opts.innerHTML : '';
+  addBtn.addEventListener('click', function () {
+    var n = parseInt(countInput.value || '0', 10) || 0;
+    if (n >= 40) return;
+    var div = document.createElement('div');
+    div.className = 'ing-line hs-line-card';
+    div.innerHTML =
+      '<div class="hs-form-grid-3">' +
+      '<div class="form-row" style="margin:0"><label>Item</label><select name="ing_item_' + n + '">' + optionHtml + '</select></div>' +
+      '<div class="form-row" style="margin:0"><label>%</label><input name="ing_pct_' + n + '" type="number" step="any" /></div>' +
+      '<div class="form-row" style="margin:0"><label>Notes</label><input name="ing_notes_' + n + '" /></div>' +
+      '</div>';
+    wrap.appendChild(div);
+    countInput.value = String(n + 1);
+  });
+})();
+</script>
+{% endblock %}

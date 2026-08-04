@@ -1,75 +1,86 @@
-{% extends "slurp_ui/base_module.html" %}
-{% block title %}COA Library — SLURP{% endblock %}
-{% block module_title %}Quality{% endblock %}
-{% block main %}
-<div class="coa-library">
-  <p style="color:#64748b;margin-top:0">
-    <strong>Master COAs</strong> are issued when a lot is fully released from hold.
-    <strong>Customer COAs</strong> are generated per sales order allocation.
-  </p>
-  <div style="display:flex;gap:0.5rem;margin:1rem 0">
-    <a href="?tab=customer&amp;sku={{ sku|urlencode }}&amp;so={{ so|urlencode }}" class="btn btn-secondary{% if tab == 'customer' %} btn-primary{% endif %}">Customer COAs</a>
-    <a href="?tab=master&amp;sku={{ sku|urlencode }}" class="btn btn-secondary{% if tab == 'master' %} btn-primary{% endif %}">Master (by lot)</a>
-  </div>
-  <form method="get" style="display:flex;flex-wrap:wrap;gap:0.75rem;align-items:end;margin-bottom:1rem">
-    <input type="hidden" name="tab" value="{{ tab }}" />
-    <div class="form-row" style="margin:0">
-      <label>Filter by SKU</label>
-      <input name="sku" value="{{ sku }}" placeholder="e.g. D1307" />
-    </div>
-    {% if tab == 'customer' %}
-    <div class="form-row" style="margin:0">
-      <label>Sales order #</label>
-      <input name="so" value="{{ so }}" placeholder="e.g. 3250001" />
-    </div>
-    {% endif %}
-    <button type="submit" class="btn btn-secondary">Refresh</button>
-  </form>
-
-  {% if tab == 'master' %}
-  <table class="data-table coa-library__table">
-    <thead><tr><th>Lot</th><th>SKU</th><th>Product</th><th>Issued</th><th>PDF</th></tr></thead>
-    <tbody>
-      {% for row in master_rows %}
-      <tr>
-        <td>{{ row.lot.lot_number|default:row.lot_id }}</td>
-        <td>{{ row.lot.item.sku }}</td>
-        <td>{{ row.lot.item.name }}</td>
-        <td>{{ row.issued_at|date:"M j, Y g:i A" }}</td>
-        <td>
-          {% if row.coa_pdf %}
-          <a href="{% url 'slurp_ui:quality_coa_pdf' row.id %}" target="_blank">Download</a>
-          {% else %}—{% endif %}
-        </td>
-      </tr>
-      {% empty %}
-      <tr><td colspan="5">No master COA certificates found.</td></tr>
-      {% endfor %}
-    </tbody>
-  </table>
-  {% else %}
-  <table class="data-table coa-library__table">
-    <thead><tr><th>Lot</th><th>SKU</th><th>SO #</th><th>Customer</th><th>Qty</th><th>PDF</th></tr></thead>
-    <tbody>
-      {% for row in customer_rows %}
-      <tr>
-        <td>{{ row.certificate.lot.lot_number|default:row.certificate.lot_id }}</td>
-        <td>{{ row.certificate.lot.item.sku }}</td>
-        <td>{{ row.sales_order_lot.sales_order_item.sales_order.so_number }}</td>
-        <td>{{ row.customer_name|default:"—" }}</td>
-        <td>{{ row.quantity_snapshot|floatformat:2 }}</td>
-        <td>
-          {% if row.coa_pdf %}
-          <a href="{% url 'slurp_ui:quality_coa_customer_pdf' row.id %}" target="_blank">Download</a>
-          {% else %}—{% endif %}
-        </td>
-      </tr>
-      {% empty %}
-      <tr><td colspan="6">No customer COA copies found.</td></tr>
-      {% endfor %}
-    </tbody>
-  </table>
-  {% endif %}
-</div>
-{% endblock %}
-
+{% extends "slurp_ui/base_module.html" %}
+{% block title %}COA Library — SLURP{% endblock %}
+{% block module_title %}COA Library{% endblock %}
+{% block main %}
+<div class="hs-bleed" style="padding:1.25rem 1.5rem 2rem">
+  <p class="hs-section-note">
+    <strong>Master COAs</strong> are issued when a lot is fully released from hold.
+    <strong>Customer COAs</strong> are generated per sales order allocation.
+  </p>
+
+  <div class="hs-pills" style="margin-bottom:1rem">
+    <a href="?tab=customer&amp;sku={{ sku|urlencode }}&amp;so={{ so|urlencode }}" class="hs-pill {% if tab == 'customer' %}active{% endif %}">Customer COAs</a>
+    <a href="?tab=master&amp;sku={{ sku|urlencode }}" class="hs-pill {% if tab == 'master' %}active{% endif %}">Master (by lot)</a>
+  </div>
+
+  <form method="get" class="hs-toolbar">
+    <input type="hidden" name="tab" value="{{ tab }}" />
+    <div class="form-row" style="margin:0;min-width:180px">
+      <label>Filter by SKU</label>
+      <input name="sku" value="{{ sku }}" placeholder="e.g. D1307" class="hs-search" style="min-width:160px" />
+    </div>
+    {% if tab == 'customer' %}
+    <div class="form-row" style="margin:0;min-width:180px">
+      <label>Sales order #</label>
+      <input name="so" value="{{ so }}" placeholder="e.g. 3250001" class="hs-search" style="min-width:160px" />
+    </div>
+    {% endif %}
+    <button type="submit" class="hs-btn">Refresh</button>
+  </form>
+
+  {% if tab == 'master' %}
+  <div class="hs-card">
+    <div class="hs-card-header"><h3>Master COAs</h3></div>
+    <div class="hs-card-body tight">
+      <table class="hs-table coa-library__table">
+        <thead><tr><th>Lot</th><th>SKU</th><th>Product</th><th>Issued</th><th>PDF</th></tr></thead>
+        <tbody>
+          {% for row in master_rows %}
+          <tr>
+            <td>{{ row.lot.lot_number|default:row.lot_id }}</td>
+            <td>{{ row.lot.item.sku }}</td>
+            <td>{{ row.lot.item.name }}</td>
+            <td>{{ row.issued_at|date:"M j, Y g:i A" }}</td>
+            <td>
+              {% if row.coa_pdf %}
+              <a href="{% url 'slurp_ui:quality_coa_pdf' row.id %}" target="_blank">Download</a>
+              {% else %}—{% endif %}
+            </td>
+          </tr>
+          {% empty %}
+          <tr><td colspan="5"><div class="hs-empty">No master COA certificates found.</div></td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% else %}
+  <div class="hs-card">
+    <div class="hs-card-header"><h3>Customer COAs</h3></div>
+    <div class="hs-card-body tight">
+      <table class="hs-table coa-library__table">
+        <thead><tr><th>Lot</th><th>SKU</th><th>SO #</th><th>Customer</th><th>Qty</th><th>PDF</th></tr></thead>
+        <tbody>
+          {% for row in customer_rows %}
+          <tr>
+            <td>{{ row.certificate.lot.lot_number|default:row.certificate.lot_id }}</td>
+            <td>{{ row.certificate.lot.item.sku }}</td>
+            <td>{{ row.sales_order_lot.sales_order_item.sales_order.so_number }}</td>
+            <td>{{ row.customer_name|default:"—" }}</td>
+            <td>{{ row.quantity_snapshot|floatformat:2 }}</td>
+            <td>
+              {% if row.coa_pdf %}
+              <a href="{% url 'slurp_ui:quality_coa_customer_pdf' row.id %}" target="_blank">Download</a>
+              {% else %}—{% endif %}
+            </td>
+          </tr>
+          {% empty %}
+          <tr><td colspan="6"><div class="hs-empty">No customer COA copies found.</div></td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

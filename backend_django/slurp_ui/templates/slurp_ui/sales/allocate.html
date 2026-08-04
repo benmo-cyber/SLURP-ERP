@@ -1,70 +1,94 @@
-{% extends "slurp_ui/base.html" %}
+{% extends "slurp_ui/base_module.html" %}
 {% block title %}Allocate {{ order.so_number }} — SLURP{% endblock %}
-{% block content %}
-<div class="modal-page" style="max-width:960px">
-  <h2>Allocate {{ order.so_number }}</h2>
-  <p style="color:#64748b;margin-bottom:1rem">
-    {{ order.customer_name }} · status <strong>{{ order.status }}</strong>
-    {% if order.drop_ship %} · drop ship{% endif %}
-  </p>
+{% block module_title %}Allocate{% endblock %}
+{% block header_actions %}
+  <a href="{% url 'slurp_ui:sales_order_detail' order.id %}" class="hs-btn">Order detail</a>
+  <a href="{% url 'slurp_ui:sales_orders' %}" class="hs-btn">Workqueue</a>
+{% endblock %}
+{% block main %}
+<div class="hs-bleed" style="padding:1.25rem 1.5rem 2rem">
+  <div class="hs-card" style="margin-bottom:1rem">
+    <div class="hs-card-header">
+      <h3>{{ order.so_number }}</h3>
+      <span class="hs-badge info">{{ order.status }}</span>
+    </div>
+    <div class="hs-card-body">
+      <div class="hs-props" style="border:none;padding:0">
+        <div class="hs-prop"><span class="k">Customer</span><span class="v">{{ order.customer_name }}</span></div>
+        {% if order.drop_ship %}<div class="hs-prop"><span class="k">Type</span><span class="v">Drop ship</span></div>{% endif %}
+        {% if order.customer_reference_number %}<div class="hs-prop"><span class="k">Customer PO</span><span class="v">{{ order.customer_reference_number }}</span></div>{% endif %}
+      </div>
+    </div>
+  </div>
 
   {% if order.drop_ship %}
-  <form method="post">
-    {% csrf_token %}
-    <p>Drop-ship orders get a virtual allocation (ordered qty) with no lots.</p>
-    <div class="form-actions">
-      <button type="submit" class="btn btn-primary">Confirm drop-ship allocation</button>
-      <a class="btn btn-secondary" href="{% url 'slurp_ui:sales_orders' %}">Cancel</a>
+  <div class="hs-card">
+    <div class="hs-card-header"><h3>Drop-ship allocation</h3></div>
+    <div class="hs-card-body">
+      <p class="hs-section-note">Drop-ship orders get a virtual allocation (ordered qty) with no lots.</p>
+      <form method="post">
+        {% csrf_token %}
+        <div class="hs-form-actions">
+          <button type="submit" class="hs-btn hs-btn-primary">Confirm drop-ship allocation</button>
+          <a class="hs-btn" href="{% url 'slurp_ui:sales_orders' %}">Cancel</a>
+        </div>
+      </form>
     </div>
-  </form>
+  </div>
   {% else %}
   <form method="post">
     {% csrf_token %}
-    <div class="form-row">
-      <label>
-        <input type="checkbox" name="allow_prerepack_allocation" />
-        Allow raw / pre-repack lots (gated FG &amp; distributed overrides)
-      </label>
+    <div class="hs-card" style="margin-bottom:1rem">
+      <div class="hs-card-body">
+        <label class="hs-check-inline">
+          <input type="checkbox" name="allow_prerepack_allocation" />
+          Allow raw / pre-repack lots (gated FG &amp; distributed overrides)
+        </label>
+      </div>
     </div>
 
     {% for row in line_lot_choices %}
-    <div style="border:1px solid #e5e7eb;border-radius:6px;padding:0.75rem;margin-bottom:0.75rem">
-      <strong>{{ row.line.item.sku }}</strong> — {{ row.line.item.name }}
-      <span style="color:#64748b">
-        · ordered {{ row.line.quantity_ordered|floatformat:2 }}
-        · already allocated {{ row.line.quantity_allocated|floatformat:2 }}
-        {{ row.line.item.unit_of_measure }}
-      </span>
-      {% for slot in "012" %}
-      <div style="display:grid;grid-template-columns:2fr 1fr;gap:0.5rem;margin-top:0.5rem">
-        <div class="form-row" style="margin:0">
-          <label>Lot {% if forloop.counter0 %}#{{ forloop.counter }}{% endif %}</label>
-          <select name="lot_{{ row.line.id }}_{{ forloop.counter0 }}">
-            <option value="">— {% if forloop.first %}Select lot{% else %}Optional{% endif %} —</option>
-            {% for lr in row.lots %}
-            <option value="{{ lr.lot.id }}">
-              {{ lr.lot.lot_number }} — avail {{ lr.available|floatformat:2 }} ({{ lr.lot.status }})
-            </option>
-            {% empty %}
-            <option value="" disabled>No available lots</option>
-            {% endfor %}
-          </select>
-        </div>
-        <div class="form-row" style="margin:0">
-          <label>Qty</label>
-          <input name="qty_{{ row.line.id }}_{{ forloop.counter0 }}" type="number" step="any" min="0"
-                 {% if forloop.first %}value="{{ row.line.quantity_ordered }}"{% endif %} />
-        </div>
+    <div class="hs-card" style="margin-bottom:1rem">
+      <div class="hs-card-header">
+        <h3>{{ row.line.item.sku }}</h3>
+        <span class="hs-muted" style="font-size:0.8rem">{{ row.line.item.name }}</span>
       </div>
-      {% endfor %}
+      <div class="hs-card-body">
+        <div class="hs-props" style="border:none;padding:0 0 0.75rem">
+          <div class="hs-prop"><span class="k">Ordered</span><span class="v">{{ row.line.quantity_ordered|floatformat:2 }} {{ row.line.item.unit_of_measure }}</span></div>
+          <div class="hs-prop"><span class="k">Already allocated</span><span class="v">{{ row.line.quantity_allocated|floatformat:2 }}</span></div>
+        </div>
+        {% for slot in "012" %}
+        <div class="hs-form-grid" style="margin-top:0.5rem">
+          <div class="form-row" style="margin:0">
+            <label>Lot {% if forloop.counter0 %}#{{ forloop.counter }}{% endif %}</label>
+            <select name="lot_{{ row.line.id }}_{{ forloop.counter0 }}">
+              <option value="">— {% if forloop.first %}Select lot{% else %}Optional{% endif %} —</option>
+              {% for lr in row.lots %}
+              <option value="{{ lr.lot.id }}">
+                {{ lr.lot.lot_number }} — avail {{ lr.available|floatformat:2 }} ({{ lr.lot.status }})
+              </option>
+              {% empty %}
+              <option value="" disabled>No available lots</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="form-row" style="margin:0">
+            <label>Qty</label>
+            <input name="qty_{{ row.line.id }}_{{ forloop.counter0 }}" type="number" step="any" min="0"
+                   {% if forloop.first %}value="{{ row.line.quantity_ordered }}"{% endif %} />
+          </div>
+        </div>
+        {% endfor %}
+      </div>
     </div>
     {% empty %}
-    <p>This order has no lines.</p>
+    <div class="hs-card"><div class="hs-empty">This order has no lines.</div></div>
     {% endfor %}
 
-    <div class="form-actions">
-      <button type="submit" class="btn btn-primary">Save allocations</button>
-      <a class="btn btn-secondary" href="{% url 'slurp_ui:sales_orders' %}">Cancel</a>
+    <div class="hs-form-actions">
+      <button type="submit" class="hs-btn hs-btn-primary">Save allocations</button>
+      <a class="hs-btn" href="{% url 'slurp_ui:sales_orders' %}">Cancel</a>
     </div>
   </form>
   {% endif %}

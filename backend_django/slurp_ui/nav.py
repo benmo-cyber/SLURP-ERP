@@ -34,20 +34,28 @@ INVENTORY_NAV = [
 ]
 
 SALES_NAV = [
-    {"label": "Overview", "items": [{"id": "crm", "label": "CRM", "url_name": "slurp_ui:sales"}]},
-    {
-        "label": "Orders",
-        "items": [{"id": "orders", "label": "Sales Orders", "url_name": "slurp_ui:sales_orders"}],
-    },
     {
         "label": "Customers",
         "items": [
-            {"id": "customers", "label": "Manage Customers", "url_name": "slurp_ui:sales_customers"},
+            {"id": "customers", "label": "All Customers", "url_name": "slurp_ui:sales"},
+            {"id": "customers-manage", "label": "Add / Edit Master", "url_name": "slurp_ui:sales_customers"},
+        ],
+    },
+    {
+        "label": "Fulfillment",
+        "items": [
+            {"id": "orders", "label": "Order Workqueue", "url_name": "slurp_ui:sales_orders"},
+            {"id": "checkout", "label": "Check Out", "url_name": "slurp_ui:sales_checkout"},
+            {
+                "id": "combined-checkout",
+                "label": "Combined Check Out",
+                "url_name": "slurp_ui:sales_combined_checkout",
+            },
         ],
     },
     {
         "label": "Planning",
-        "items": [{"id": "calendar", "label": "Calendar", "url_name": "slurp_ui:sales_calendar"}],
+        "items": [{"id": "calendar", "label": "Ops Calendar", "url_name": "slurp_ui:sales_calendar"}],
     },
 ]
 

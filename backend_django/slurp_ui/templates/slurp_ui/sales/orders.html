@@ -1,66 +1,105 @@
 {% extends "slurp_ui/base_module.html" %}
-{% block title %}Sales Orders — SLURP{% endblock %}
-{% block module_title %}Sales{% endblock %}
+{% block title %}Order Workqueue — SLURP{% endblock %}
+{% block module_title %}Order Workqueue{% endblock %}
 {% block header_actions %}
-  <a href="{% url 'slurp_ui:sales_customers' %}" class="btn btn-secondary">Manage Customers</a>
-  <a href="{% url 'slurp_ui:sales_combined_checkout' %}" class="btn btn-secondary">Combined Check Out</a>
-  <a href="{% url 'slurp_ui:sales_checkout' %}" class="btn btn-primary">Check Out</a>
-  <a href="{% url 'slurp_ui:sales_create_order' %}" class="btn btn-primary">Create Sales Order</a>
+  <a href="{% url 'slurp_ui:sales_combined_checkout' %}" class="hs-btn">Combined check out</a>
+  <a href="{% url 'slurp_ui:sales_checkout' %}" class="hs-btn">Check out</a>
+  <a href="{% url 'slurp_ui:sales_create_order' %}" class="hs-btn hs-btn-primary">+ Create sales order</a>
 {% endblock %}
 {% block main %}
-<table class="data-table">
-  <thead>
-    <tr>
-      <th>SO #</th>
-      <th>Customer</th>
-      <th>Status</th>
-      <th>Order date</th>
-      <th>Customer PO</th>
-      <th>Allocated</th>
-      <th>Actions</th>
-    </tr>
-  </thead>
-  <tbody>
-    {% for o in orders %}
-    <tr>
-      <td><a href="{% url 'slurp_ui:sales_order_detail' o.id %}">{{ o.so_number }}</a>{% if o.drop_ship %} · DS{% endif %}</td>
-      <td>{{ o.customer_name }}</td>
-      <td>{{ o.status }}</td>
-      <td>{{ o.order_date|date:"Y-m-d" }}</td>
-      <td>{{ o.customer_reference_number|default:"—" }}</td>
-      <td>{{ o.total_allocated|default_if_none:0|floatformat:2 }}</td>
-      <td style="white-space:nowrap">
-        {% if o.status == 'draft' %}
-        <form method="post" action="{% url 'slurp_ui:sales_issue_order' o.id %}" style="display:inline">
-          {% csrf_token %}
-          {% if god_mode %}
-          <input type="date" name="issue_date" value="{{ o.order_date|date:'Y-m-d' }}" style="max-width:9rem" />
-          {% endif %}
-          <button type="submit" class="btn btn-primary" style="padding:0.35rem 0.7rem;font-size:0.85rem"
-                  onclick="return confirm('Issue {{ o.so_number }}?');">Issue</button>
-        </form>
-        {% endif %}
-        {% if o.status != 'completed' and o.status != 'cancelled' and o.status != 'shipped' %}
-        <a class="btn btn-secondary" style="padding:0.35rem 0.7rem;font-size:0.85rem"
-           href="{% url 'slurp_ui:sales_allocate_order' o.id %}">Allocate</a>
-        {% endif %}
-        {% if o.status == 'issued' or o.status == 'ready_for_shipment' %}
-          {% if o.drop_ship or o.total_allocated %}
-          <a class="btn btn-primary" style="padding:0.35rem 0.7rem;font-size:0.85rem"
-             href="{% url 'slurp_ui:sales_checkout' %}?so={{ o.id }}">Check Out</a>
-          {% endif %}
-        {% endif %}
-        {% if o.status != 'draft' %}
-        <a class="btn btn-secondary" style="padding:0.35rem 0.7rem;font-size:0.85rem"
-           href="{% url 'slurp_ui:sales_pick_list_pdf' o.id %}" target="_blank">Pick list</a>
-        <a class="btn btn-secondary" style="padding:0.35rem 0.7rem;font-size:0.85rem"
-           href="{% url 'slurp_ui:sales_packing_list_pdf' o.id %}" target="_blank">Packing</a>
-        {% endif %}
-      </td>
-    </tr>
-    {% empty %}
-    <tr><td colspan="7">No sales orders.</td></tr>
-    {% endfor %}
-  </tbody>
-</table>
+<div class="hs-bleed" style="padding:1.25rem 1.5rem 2rem">
+  <div class="hs-toolbar">
+    <form method="get" style="display:flex;gap:0.5rem;flex:1;min-width:220px">
+      <input type="search" name="q" value="{{ q }}" placeholder="Search SO #, customer, PO…" class="hs-search" />
+      <input type="hidden" name="queue" value="{{ queue }}" />
+      <button class="hs-btn hs-btn-primary" type="submit">Search</button>
+    </form>
+    <div class="hs-pills">
+      <a href="?queue=open{% if q %}&q={{ q|urlencode }}{% endif %}" class="hs-pill {% if queue == 'open' %}active{% endif %}">Open <span class="count">{{ counts.open }}</span></a>
+      <a href="?queue=draft{% if q %}&q={{ q|urlencode }}{% endif %}" class="hs-pill {% if queue == 'draft' %}active{% endif %}">Draft <span class="count">{{ counts.draft }}</span></a>
+      <a href="?queue=allocate{% if q %}&q={{ q|urlencode }}{% endif %}" class="hs-pill {% if queue == 'allocate' %}active{% endif %}">Allocate <span class="count">{{ counts.allocate }}</span></a>
+      <a href="?queue=ship{% if q %}&q={{ q|urlencode }}{% endif %}" class="hs-pill {% if queue == 'ship' %}active{% endif %}">Ship <span class="count">{{ counts.ship }}</span></a>
+      <a href="?queue=done{% if q %}&q={{ q|urlencode }}{% endif %}" class="hs-pill {% if queue == 'done' %}active{% endif %}">Shipped <span class="count">{{ counts.done }}</span></a>
+      <a href="?queue=all{% if q %}&q={{ q|urlencode }}{% endif %}" class="hs-pill {% if queue == 'all' %}active{% endif %}">All <span class="count">{{ counts.all }}</span></a>
+    </div>
+  </div>
+
+  <div class="hs-card">
+    <div class="hs-card-header">
+      <h3>Fulfillment queue</h3>
+      <span class="hs-muted" style="font-size:0.8rem">Issue → allocate → check out</span>
+    </div>
+    <div class="hs-card-body tight">
+      <table class="hs-table">
+        <thead>
+          <tr>
+            <th>Order</th>
+            <th>Customer</th>
+            <th>Status</th>
+            <th>Order date</th>
+            <th>Customer PO</th>
+            <th>Allocated</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for o in orders %}
+          <tr>
+            <td>
+              <a class="hs-entity-name" href="{% url 'slurp_ui:sales_order_detail' o.id %}">{{ o.so_number }}</a>
+              {% if o.drop_ship %}<span class="hs-badge warn">Drop-ship</span>{% endif %}
+            </td>
+            <td>
+              {% if o.customer_id %}
+              <a href="{% url 'slurp_ui:sales_customer_profile' o.customer_id %}">{{ o.customer_name }}</a>
+              {% else %}
+              {{ o.customer_name }}
+              {% endif %}
+            </td>
+            <td>
+              {% if o.status == 'draft' %}<span class="hs-badge">Draft</span>
+              {% elif o.status == 'ready_for_shipment' %}<span class="hs-badge ok">Ready</span>
+              {% elif o.status == 'issued' or o.status == 'allocated' %}<span class="hs-badge info">{{ o.status }}</span>
+              {% elif o.status == 'completed' or o.status == 'shipped' %}<span class="hs-badge ok">{{ o.status }}</span>
+              {% elif o.status == 'cancelled' %}<span class="hs-badge danger">Cancelled</span>
+              {% else %}<span class="hs-badge">{{ o.status }}</span>{% endif %}
+            </td>
+            <td>{{ o.order_date|date:"Y-m-d" }}</td>
+            <td>{{ o.customer_reference_number|default:"—" }}</td>
+            <td>{{ o.total_allocated|default_if_none:0|floatformat:2 }}</td>
+            <td>
+              <div class="hs-queue-actions">
+                {% if o.status == 'draft' %}
+                <form method="post" action="{% url 'slurp_ui:sales_issue_order' o.id %}">
+                  {% csrf_token %}
+                  {% if god_mode %}
+                  <input type="date" name="issue_date" value="{{ o.order_date|date:'Y-m-d' }}" style="max-width:9rem" />
+                  {% endif %}
+                  <button type="submit" class="hs-btn hs-btn-primary hs-btn-sm"
+                          onclick="return confirm('Issue {{ o.so_number }}?');">Issue</button>
+                </form>
+                {% endif %}
+                {% if o.status != 'completed' and o.status != 'cancelled' and o.status != 'shipped' %}
+                <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:sales_allocate_order' o.id %}">Allocate</a>
+                {% endif %}
+                {% if o.status == 'issued' or o.status == 'ready_for_shipment' or o.status == 'allocated' %}
+                  {% if o.drop_ship or o.total_allocated %}
+                  <a class="hs-btn hs-btn-primary hs-btn-sm" href="{% url 'slurp_ui:sales_checkout' %}?so={{ o.id }}">Check out</a>
+                  {% endif %}
+                {% endif %}
+                {% if o.status != 'draft' %}
+                <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:sales_pick_list_pdf' o.id %}" target="_blank">Pick</a>
+                <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:sales_packing_list_pdf' o.id %}" target="_blank">Pack</a>
+                {% endif %}
+              </div>
+            </td>
+          </tr>
+          {% empty %}
+          <tr><td colspan="7"><div class="hs-empty">No orders in this queue.</div></td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
 {% endblock %}

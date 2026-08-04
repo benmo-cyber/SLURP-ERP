@@ -1,7 +1,13 @@
 {% extends "slurp_ui/base_module.html" %}
 {% block title %}{{ title }} — SLURP{% endblock %}
-{% block module_title %}Quality{% endblock %}
+{% block module_title %}{{ title }}{% endblock %}
 {% block main %}
-<h2 style="margin-bottom:.75rem">{{ title }}</h2>
-<p>This quality screen is not fully ported to Django templates yet.</p>
+<div class="hs-bleed" style="padding:1.25rem 1.5rem 2rem">
+  <div class="hs-card">
+    <div class="hs-card-header"><h3>{{ title }}</h3></div>
+    <div class="hs-card-body">
+      <div class="hs-empty">This quality screen is not fully ported to Django templates yet.</div>
+    </div>
+  </div>
+</div>
 {% endblock %}

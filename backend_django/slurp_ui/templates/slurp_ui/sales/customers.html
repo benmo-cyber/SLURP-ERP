@@ -1,63 +1,78 @@
 {% extends "slurp_ui/base_module.html" %}
-{% block title %}Manage Customers — SLURP{% endblock %}
-{% block module_title %}Manage Customers{% endblock %}
+{% block title %}Add / Edit Customer — SLURP{% endblock %}
+{% block module_title %}Add / Edit Customer{% endblock %}
 {% block header_actions %}
-  <a href="{% url 'slurp_ui:sales' %}" class="btn btn-secondary">CRM dashboard</a>
+  <a href="{% url 'slurp_ui:sales' %}" class="hs-btn">All customers</a>
 {% endblock %}
 {% block main %}
-<div style="display:grid;grid-template-columns:1fr 1.2fr;gap:1.5rem;align-items:start">
-  <section>
-    <h2>{% if editing %}Edit {{ editing.name }}{% else %}New customer{% endif %}</h2>
-    <form method="post">
-      {% csrf_token %}
-      {% if editing %}<input type="hidden" name="edit_id" value="{{ editing.pk }}" />{% endif %}
-      <input type="hidden" name="action" value="save" />
-      <div class="form-row"><label>Name *</label><input name="name" required value="{{ editing.name|default:'' }}" /></div>
-      <div class="form-row"><label>Contact name</label><input name="contact_name" value="{{ editing.contact_name|default:'' }}" /></div>
-      <div class="form-row"><label>Email</label><input type="email" name="email" value="{{ editing.email|default:'' }}" /></div>
-      <div class="form-row"><label>Phone</label><input name="phone" value="{{ editing.phone|default:'' }}" /></div>
-      <div class="form-row"><label>Payment terms</label><input name="payment_terms" value="{{ editing.payment_terms|default:'' }}" placeholder="Net 30" /></div>
-      <h3>Headquarters</h3>
-      <div class="form-row"><label>Address</label><textarea name="address" rows="2">{{ editing.address|default:'' }}</textarea></div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem">
-        <div class="form-row"><label>City</label><input name="city" value="{{ editing.city|default:'' }}" /></div>
-        <div class="form-row"><label>State</label><input name="state" value="{{ editing.state|default:'' }}" /></div>
-        <div class="form-row"><label>ZIP</label><input name="zip_code" value="{{ editing.zip_code|default:'' }}" /></div>
-        <div class="form-row"><label>Country</label><input name="country" value="{{ editing.country|default:'USA' }}" /></div>
+<div class="hs-bleed" style="padding:1.25rem 1.5rem 2rem">
+  <div class="hs-index-layout">
+    <div class="hs-card">
+      <div class="hs-card-header">
+        <h3>{% if editing %}Edit {{ editing.name }}{% else %}New customer{% endif %}</h3>
       </div>
-      <div class="form-row"><label><input type="checkbox" name="bill_to_same_as_hq" checked /> Bill-to same as HQ</label></div>
-      <div class="form-row"><label>Notes</label><textarea name="notes" rows="2">{{ editing.notes|default:'' }}</textarea></div>
-      <div class="form-row"><label><input type="checkbox" name="is_active" {% if not editing or editing.is_active %}checked{% endif %} /> Active</label></div>
-      <div class="form-actions">
-        <button type="submit" class="btn btn-primary">{% if editing %}Save{% else %}Create{% endif %}</button>
-        {% if editing %}<a class="btn btn-secondary" href="{% url 'slurp_ui:sales_customer_profile' editing.pk %}">View profile</a>{% endif %}
+      <div class="hs-card-body">
+        <form method="post">
+          {% csrf_token %}
+          {% if editing %}<input type="hidden" name="edit_id" value="{{ editing.pk }}" />{% endif %}
+          <input type="hidden" name="action" value="save" />
+          <div class="hs-form-grid">
+            <div class="form-row"><label>Name *</label><input name="name" required value="{{ editing.name|default:'' }}" /></div>
+            <div class="form-row"><label>Contact name</label><input name="contact_name" value="{{ editing.contact_name|default:'' }}" /></div>
+            <div class="form-row"><label>Email</label><input type="email" name="email" value="{{ editing.email|default:'' }}" /></div>
+            <div class="form-row"><label>Phone</label><input name="phone" value="{{ editing.phone|default:'' }}" /></div>
+            <div class="form-row"><label>Payment terms</label><input name="payment_terms" value="{{ editing.payment_terms|default:'' }}" placeholder="Net 30" /></div>
+            <div class="form-row"><label class="hs-check-inline"><input type="checkbox" name="is_active" {% if not editing or editing.is_active %}checked{% endif %} /> Active</label></div>
+          </div>
+          <h3 style="margin:1rem 0 0.5rem;font-size:0.95rem;color:var(--hs-heading)">Headquarters</h3>
+          <div class="form-row"><label>Address</label><textarea name="address" rows="2">{{ editing.address|default:'' }}</textarea></div>
+          <div class="hs-form-grid">
+            <div class="form-row"><label>City</label><input name="city" value="{{ editing.city|default:'' }}" /></div>
+            <div class="form-row"><label>State</label><input name="state" value="{{ editing.state|default:'' }}" /></div>
+            <div class="form-row"><label>ZIP</label><input name="zip_code" value="{{ editing.zip_code|default:'' }}" /></div>
+            <div class="form-row"><label>Country</label><input name="country" value="{{ editing.country|default:'USA' }}" /></div>
+          </div>
+          <div class="form-row"><label class="hs-check-inline"><input type="checkbox" name="bill_to_same_as_hq" checked /> Bill-to same as HQ</label></div>
+          <div class="form-row"><label>Notes</label><textarea name="notes" rows="2">{{ editing.notes|default:'' }}</textarea></div>
+          <div class="hs-form-actions">
+            <button type="submit" class="hs-btn hs-btn-primary">{% if editing %}Save{% else %}Create{% endif %}</button>
+            {% if editing %}<a class="hs-btn" href="{% url 'slurp_ui:sales_customer_profile' editing.pk %}">View profile</a>{% endif %}
+          </div>
+        </form>
       </div>
-    </form>
-  </section>
-  <section>
-    <h2>All customers</h2>
-    <table class="data-table">
-      <thead><tr><th>ID</th><th>Name</th><th>City</th><th>Active</th><th></th></tr></thead>
-      <tbody>
-        {% for c in customers %}
-        <tr>
-          <td>{{ c.customer_id }}</td>
-          <td><a href="{% url 'slurp_ui:sales_customer_profile' c.pk %}">{{ c.name }}</a></td>
-          <td>{{ c.city|default:"—" }}</td>
-          <td>{% if c.is_active %}Yes{% else %}No{% endif %}</td>
-          <td>
-            <a href="?edit={{ c.pk }}">Edit</a>
-            <form method="post" style="display:inline" onsubmit="return confirm('Delete {{ c.name }}?');">
-              {% csrf_token %}
-              <input type="hidden" name="action" value="delete" />
-              <input type="hidden" name="customer_id" value="{{ c.pk }}" />
-              <button type="submit" class="btn-link" style="color:#b91c1c">Delete</button>
-            </form>
-          </td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </section>
+    </div>
+
+    <div class="hs-card">
+      <div class="hs-card-header"><h3>All customers</h3></div>
+      <div class="hs-card-body tight">
+        <table class="hs-table">
+          <thead><tr><th>ID</th><th>Name</th><th>City</th><th>Active</th><th></th></tr></thead>
+          <tbody>
+            {% for c in customers %}
+            <tr>
+              <td>{{ c.customer_id }}</td>
+              <td><a class="hs-entity-name" href="{% url 'slurp_ui:sales_customer_profile' c.pk %}">{{ c.name }}</a></td>
+              <td>{{ c.city|default:"—" }}</td>
+              <td>{% if c.is_active %}<span class="hs-badge ok">Yes</span>{% else %}<span class="hs-badge">No</span>{% endif %}</td>
+              <td>
+                <div class="hs-queue-actions">
+                  <a class="hs-btn hs-btn-sm" href="?edit={{ c.pk }}">Edit</a>
+                  <form method="post" onsubmit="return confirm('Delete {{ c.name }}?');">
+                    {% csrf_token %}
+                    <input type="hidden" name="action" value="delete" />
+                    <input type="hidden" name="customer_id" value="{{ c.pk }}" />
+                    <button type="submit" class="hs-btn hs-btn-sm hs-btn-danger">Delete</button>
+                  </form>
+                </div>
+              </td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="5"><div class="hs-empty">No customers.</div></td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
 </div>
 {% endblock %}

@@ -1,141 +1,490 @@
 {% extends "slurp_ui/base_module.html" %}
 {% block title %}{{ customer.name }} — SLURP{% endblock %}
-{% block module_title %}{{ customer.name }}{% endblock %}
+{% block module_title %}Customer{% endblock %}
 {% block header_actions %}
-  <a href="{% url 'slurp_ui:sales' %}" class="btn btn-secondary">CRM</a>
-  <a href="{% url 'slurp_ui:sales_create_order' %}?customer={{ customer.pk }}" class="btn btn-primary">Create SO</a>
+  <a href="{% url 'slurp_ui:sales' %}" class="hs-btn">All customers</a>
+  <a href="{% url 'slurp_ui:sales_create_order' %}?customer={{ customer.pk }}" class="hs-btn hs-btn-primary">Create sales order</a>
 {% endblock %}
 {% block main %}
-<p style="color:#64748b;margin-top:0">{{ customer.customer_id }}{% if customer.payment_terms %} · {{ customer.payment_terms }}{% endif %}</p>
-<nav style="display:flex;flex-wrap:wrap;gap:0.5rem;margin:1rem 0;border-bottom:1px solid #e2e8f0;padding-bottom:0.5rem">
-  {% for tid, tlabel in tabs %}
-  <a href="?tab={{ tid }}" class="btn btn-secondary {% if tab == tid %}active{% endif %}">{{ tlabel }}</a>
-  {% endfor %}
-</nav>
+<div class="hs-bleed hs-record">
+  <div class="hs-record-top">
+    <div class="hs-record-head">
+      <div class="hs-record-identity">
+        <span class="hs-avatar">{{ customer_initials }}</span>
+        <div>
+          <h1 class="hs-record-title">{{ customer.name }}</h1>
+          <div class="hs-record-meta">
+            <span>{{ customer.customer_id }}</span>
+            {% if customer.is_active %}<span class="hs-badge ok">Active</span>{% else %}<span class="hs-badge">Inactive</span>{% endif %}
+            {% if customer.payment_terms %}<span>{{ customer.payment_terms }}</span>{% endif %}
+            {% if customer.city or customer.state %}
+            <span>{% if customer.city %}{{ customer.city }}{% endif %}{% if customer.city and customer.state %}, {% endif %}{{ customer.state }}</span>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+      <div class="hs-record-actions">
+        <a class="hs-btn" href="?tab=overview">Edit account</a>
+        <a class="hs-btn" href="{% url 'slurp_ui:sales_customer_contact_new' customer.pk %}">+ Contact</a>
+        <a class="hs-btn hs-btn-primary" href="{% url 'slurp_ui:sales_create_order' %}?customer={{ customer.pk %}">+ Sales order</a>
+      </div>
+    </div>
 
-{% if tab == "overview" %}
-<form method="post">
-  {% csrf_token %}
-  <input type="hidden" name="action" value="save_profile" />
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem">
-    <div class="form-row"><label>Name</label><input name="name" value="{{ customer.name }}" required /></div>
-    <div class="form-row"><label>Contact</label><input name="contact_name" value="{{ customer.contact_name|default:'' }}" /></div>
-    <div class="form-row"><label>Email</label><input type="email" name="email" value="{{ customer.email|default:'' }}" /></div>
-    <div class="form-row"><label>Phone</label><input name="phone" value="{{ customer.phone|default:'' }}" /></div>
-    <div class="form-row"><label>Payment terms</label><input name="payment_terms" value="{{ customer.payment_terms|default:'' }}" /></div>
-    <div class="form-row"><label><input type="checkbox" name="is_active" {% if customer.is_active %}checked{% endif %} /> Active</label></div>
+    <div class="hs-props">
+      <div class="hs-prop"><span class="k">Phone</span><span class="v">{{ customer.phone|default:"—" }}</span></div>
+      <div class="hs-prop"><span class="k">Email</span><span class="v">{{ customer.email|default:"—" }}</span></div>
+      <div class="hs-prop"><span class="k">HQ</span><span class="v">{% if customer.address %}{{ customer.address }}{% else %}—{% endif %}</span></div>
+      <div class="hs-prop"><span class="k">Open SOs</span><span class="v">{{ open_orders|length }}</span></div>
+      <div class="hs-prop"><span class="k">Active prices</span><span class="v">{{ active_price_count }}</span></div>
+      <div class="hs-prop"><span class="k">YTD shipped (qty)</span><span class="v">{{ ytd_shipped_total|floatformat:1 }}</span></div>
+    </div>
+
+    <nav class="hs-record-tabs">
+      {% for tid, tlabel in tabs %}
+      <a href="?tab={{ tid }}" class="{% if tab == tid %}active{% endif %}">{{ tlabel }}</a>
+      {% endfor %}
+    </nav>
   </div>
-  <div class="form-row"><label>HQ address</label><textarea name="address" rows="2">{{ customer.address|default:'' }}</textarea></div>
-  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:0.5rem">
-    <div class="form-row"><label>City</label><input name="city" value="{{ customer.city|default:'' }}" /></div>
-    <div class="form-row"><label>State</label><input name="state" value="{{ customer.state|default:'' }}" /></div>
-    <div class="form-row"><label>ZIP</label><input name="zip_code" value="{{ customer.zip_code|default:'' }}" /></div>
-    <div class="form-row"><label>Country</label><input name="country" value="{{ customer.country|default:'USA' }}" /></div>
+
+  {% if tab == "glance" %}
+  <div class="hs-record-body">
+    <div class="hs-col">
+      <div class="hs-card">
+        <div class="hs-card-header">
+          <h3>Ops &amp; AP contacts</h3>
+          <a class="hs-btn hs-btn-sm" href="?tab=contacts">View all</a>
+        </div>
+        <div class="hs-card-body">
+          {% for c in glance_contacts %}
+          <div class="hs-contact-row">
+            <span class="hs-avatar sm blue">{{ c.first_name|slice:":1" }}{{ c.last_name|slice:":1" }}</span>
+            <div>
+              <div class="hs-list-title">{{ c.first_name }} {{ c.last_name }}{% if c.is_primary %} · Primary{% endif %}</div>
+              <div class="hs-list-sub">
+                {{ c.get_contact_type_display }}{% if c.title %} · {{ c.title }}{% endif %}<br />
+                {% if c.emails %}{{ c.emails|join:", " }}{% else %}No email{% endif %}
+                {% if c.phone %} · {{ c.phone }}{% endif %}
+              </div>
+              <div class="hs-contact-flags">
+                {% if c.is_ap_contact %}<span class="hs-badge warn">AP / invoices</span>{% endif %}
+                {% if c.is_purchasing_contact %}<span class="hs-badge info">Purchasing / SO</span>{% endif %}
+                {% if c.contact_type == 'shipping' %}<span class="hs-badge">Shipping</span>{% endif %}
+              </div>
+            </div>
+          </div>
+          {% empty %}
+          <div class="hs-empty">No contacts yet. Add AP and purchasing contacts so ops knows who to reach.</div>
+          {% endfor %}
+        </div>
+      </div>
+
+      <div class="hs-card">
+        <div class="hs-card-header">
+          <h3>Ship-to locations</h3>
+          <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:sales_customer_ship_to_new' customer.pk %}">Add</a>
+        </div>
+        <div class="hs-card-body tight">
+          {% for loc in ship_tos %}
+          <a class="hs-list-link" href="{% url 'slurp_ui:sales_customer_ship_to_edit' customer.pk loc.pk %}">
+            <div class="hs-list-title">{{ loc.location_name }}{% if loc.is_default %} <span class="hs-badge info">Default</span>{% endif %}</div>
+            <div class="hs-list-sub">{{ loc.address }}, {{ loc.city }} {{ loc.state }} {{ loc.zip_code }}</div>
+          </a>
+          {% empty %}
+          <div class="hs-empty">No ship-to locations.</div>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+
+    <div class="hs-col">
+      <div class="hs-kpi-strip">
+        <div class="hs-stat">
+          <div class="label">YTD shipped qty</div>
+          <div class="value">{{ ytd_shipped_total|floatformat:0 }}</div>
+        </div>
+        <div class="hs-stat">
+          <div class="label">In-house open qty</div>
+          <div class="value">{{ in_house_total|floatformat:0 }}</div>
+        </div>
+        <div class="hs-stat">
+          <div class="label">Open orders</div>
+          <div class="value">{{ open_orders|length }}</div>
+        </div>
+      </div>
+
+      <div class="hs-card">
+        <div class="hs-card-header">
+          <h3>In-house orders</h3>
+          <a class="hs-btn hs-btn-sm" href="?tab=orders">All orders</a>
+        </div>
+        <div class="hs-card-body tight">
+          {% for o in open_orders|slice:":12" %}
+          <a class="hs-list-link" href="{% url 'slurp_ui:sales_order_detail' o.id %}">
+            <div class="hs-list-title">{{ o.so_number }} <span class="hs-badge info">{{ o.status }}</span></div>
+            <div class="hs-list-sub">
+              {{ o.order_date|date:"M j, Y" }}
+              {% if o.customer_reference_number %} · PO {{ o.customer_reference_number }}{% endif %}
+              {% if o.expected_ship_date %} · ship {{ o.expected_ship_date|date:"M j" }}{% endif %}
+              · ordered {{ o.total_ordered|default_if_none:0|floatformat:1 }}
+              · alloc {{ o.total_allocated|default_if_none:0|floatformat:1 }}
+            </div>
+          </a>
+          {% empty %}
+          <div class="hs-empty">No open / in-house sales orders.</div>
+          {% endfor %}
+        </div>
+      </div>
+
+      <div class="hs-card">
+        <div class="hs-card-header">
+          <h3>Usage {{ usage_year }} — shipped + in house</h3>
+          <a class="hs-btn hs-btn-sm" href="?tab=usage">Full usage</a>
+        </div>
+        <div class="hs-card-body tight">
+          <table class="hs-table">
+            <thead><tr><th>SKU</th><th>YTD shipped</th><th>In house</th></tr></thead>
+            <tbody>
+              {% for row in usage_rows|slice:":10" %}
+              <tr>
+                <td>
+                  <div class="hs-list-title">{{ row.sku|default:"—" }}</div>
+                  <div class="hs-list-sub">{{ row.name|default:"" }}</div>
+                </td>
+                <td>{{ row.ytd_shipped|floatformat:2 }}</td>
+                <td>{% if row.in_house_open %}{{ row.in_house_open|floatformat:2 }}{% else %}<span class="hs-muted">—</span>{% endif %}</td>
+              </tr>
+              {% empty %}
+              <tr><td colspan="3"><div class="hs-empty">No shipped or open order volume yet.</div></td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="hs-card">
+        <div class="hs-card-header">
+          <h3>Forecast snapshot</h3>
+          <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:sales_customer_forecast_new' customer.pk %}">Add</a>
+        </div>
+        <div class="hs-card-body tight">
+          {% for f in forecasts|slice:":6" %}
+          <a class="hs-list-link" href="{% url 'slurp_ui:sales_customer_forecast_edit' customer.pk f.pk %}">
+            <div class="hs-list-title">{{ f.item.sku }} · {{ f.forecast_period }}</div>
+            <div class="hs-list-sub">{{ f.forecast_quantity }} {{ f.unit_of_measure }}</div>
+          </a>
+          {% empty %}
+          <div class="hs-empty">No forecasts on file.</div>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+
+    <div class="hs-col">
+      <div class="hs-card">
+        <div class="hs-card-header">
+          <h3>Customer pricing</h3>
+          <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:sales_customer_pricing_new' customer.pk %}">Add</a>
+        </div>
+        <div class="hs-card-body tight">
+          {% for p in pricing|slice:":8" %}
+          <a class="hs-list-link" href="{% url 'slurp_ui:sales_customer_pricing_edit' customer.pk p.pk %}">
+            <div class="hs-list-title">{{ p.item.sku }} · ${{ p.unit_price }}/{{ p.unit_of_measure }}</div>
+            <div class="hs-list-sub">
+              Eff {{ p.effective_date }}{% if p.incoterms %} · {{ p.incoterms }}{% endif %}
+              {% if not p.is_active %} · inactive{% endif %}
+            </div>
+          </a>
+          {% empty %}
+          <div class="hs-empty">No customer pricing set.</div>
+          {% endfor %}
+        </div>
+      </div>
+
+      <div class="hs-card">
+        <div class="hs-card-header">
+          <h3>Quotes {% if open_quote_count %}<span class="hs-badge info">{{ open_quote_count }} open</span>{% endif %}</h3>
+          <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:sales_customer_quote_new' customer.pk %}">Add</a>
+        </div>
+        <div class="hs-card-body tight">
+          {% for q in quotes|slice:":6" %}
+          <a class="hs-list-link" href="{% url 'slurp_ui:sales_customer_quote_edit' customer.pk q.pk %}">
+            <div class="hs-list-title">{{ q.quote_number }} <span class="hs-badge">{{ q.get_status_display }}</span></div>
+            <div class="hs-list-sub">{{ q.quote_date|date:"M j, Y" }} · ${{ q.line_total|floatformat:2 }}</div>
+          </a>
+          {% empty %}
+          <div class="hs-empty">No quotes yet. Create a priced offer before an SO.</div>
+          {% endfor %}
+        </div>
+      </div>
+
+      <div class="hs-card">
+        <div class="hs-card-header"><h3>Recently shipped</h3></div>
+        <div class="hs-card-body tight">
+          {% for o in recent_shipped|slice:":8" %}
+          <a class="hs-list-link" href="{% url 'slurp_ui:sales_order_detail' o.id %}">
+            <div class="hs-list-title">{{ o.so_number }}</div>
+            <div class="hs-list-sub">{% if o.actual_ship_date %}{{ o.actual_ship_date|date:"M j, Y" }}{% else %}{{ o.order_date|date:"M j, Y" }}{% endif %} · shipped {{ o.total_shipped|default_if_none:0|floatformat:1 }}</div>
+          </a>
+          {% empty %}
+          <div class="hs-empty">Nothing shipped yet.</div>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
   </div>
-  <div class="form-row"><label>Notes</label><textarea name="notes" rows="2">{{ customer.notes|default:'' }}</textarea></div>
-  <button type="submit" class="btn btn-primary">Save profile</button>
-</form>
 
-{% elif tab == "pricing" %}
-<p><a href="{% url 'slurp_ui:sales_customer_pricing_new' customer.pk %}" class="btn btn-primary">+ Add pricing</a></p>
-<table class="data-table">
-  <thead><tr><th>SKU</th><th>Price</th><th>UoM</th><th>Effective</th><th>Expiry</th><th>Active</th><th></th></tr></thead>
-  <tbody>
-    {% for p in pricing %}
-    <tr>
-      <td>{{ p.item.sku }}</td>
-      <td>${{ p.unit_price }}</td>
-      <td>{{ p.unit_of_measure }}</td>
-      <td>{{ p.effective_date }}</td>
-      <td>{{ p.expiry_date|default:"—" }}</td>
-      <td>{% if p.is_active %}Yes{% else %}No{% endif %}</td>
-      <td><a href="{% url 'slurp_ui:sales_customer_pricing_edit' customer.pk p.pk %}">Edit</a></td>
-    </tr>
-    {% empty %}<tr><td colspan="7">No pricing records.</td></tr>{% endfor %}
-  </tbody>
-</table>
+  {% else %}
+  <div style="padding:1.25rem 1.5rem 2rem">
+    {% if tab == "orders" %}
+    <div class="hs-card" style="margin-bottom:1rem">
+      <div class="hs-card-header">
+        <h3>In-house orders</h3>
+        <a href="{% url 'slurp_ui:sales_create_order' %}?customer={{ customer.pk }}" class="hs-btn hs-btn-primary hs-btn-sm">+ Create SO</a>
+      </div>
+      <div class="hs-card-body tight">
+        <table class="hs-table">
+          <thead><tr><th>SO #</th><th>Status</th><th>Order date</th><th>PO</th><th>Ordered</th><th>Allocated</th><th>Shipped</th><th></th></tr></thead>
+          <tbody>
+            {% for o in open_orders %}
+            <tr>
+              <td><a class="hs-entity-name" href="{% url 'slurp_ui:sales_order_detail' o.id %}">{{ o.so_number }}</a>{% if o.drop_ship %} <span class="hs-badge warn">DS</span>{% endif %}</td>
+              <td><span class="hs-badge info">{{ o.status }}</span></td>
+              <td>{{ o.order_date|date:"Y-m-d" }}</td>
+              <td>{{ o.customer_reference_number|default:"—" }}</td>
+              <td>{{ o.total_ordered|default_if_none:0|floatformat:2 }}</td>
+              <td>{{ o.total_allocated|default_if_none:0|floatformat:2 }}</td>
+              <td>{{ o.total_shipped|default_if_none:0|floatformat:2 }}</td>
+              <td>
+                <div class="hs-queue-actions">
+                  {% if o.status != 'completed' and o.status != 'cancelled' and o.status != 'shipped' %}
+                  <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:sales_allocate_order' o.id %}">Allocate</a>
+                  {% endif %}
+                  {% if o.status == 'issued' or o.status == 'ready_for_shipment' or o.status == 'allocated' %}
+                  <a class="hs-btn hs-btn-sm hs-btn-primary" href="{% url 'slurp_ui:sales_checkout' %}?so={{ o.id }}">Check out</a>
+                  {% endif %}
+                </div>
+              </td>
+            </tr>
+            {% empty %}<tr><td colspan="8"><div class="hs-empty">No in-house orders.</div></td></tr>{% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="hs-card">
+      <div class="hs-card-header"><h3>Shipped / completed</h3></div>
+      <div class="hs-card-body tight">
+        <table class="hs-table">
+          <thead><tr><th>SO #</th><th>Status</th><th>Ship date</th><th>PO</th><th>Shipped qty</th><th></th></tr></thead>
+          <tbody>
+            {% for o in recent_shipped %}
+            <tr>
+              <td><a class="hs-entity-name" href="{% url 'slurp_ui:sales_order_detail' o.id %}">{{ o.so_number }}</a></td>
+              <td><span class="hs-badge ok">{{ o.status }}</span></td>
+              <td>{% if o.actual_ship_date %}{{ o.actual_ship_date|date:"Y-m-d" }}{% else %}{{ o.order_date|date:"Y-m-d" }}{% endif %}</td>
+              <td>{{ o.customer_reference_number|default:"—" }}</td>
+              <td>{{ o.total_shipped|default_if_none:0|floatformat:2 }}</td>
+              <td><a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:sales_order_detail' o.id %}">Open</a></td>
+            </tr>
+            {% empty %}<tr><td colspan="6"><div class="hs-empty">No shipped orders.</div></td></tr>{% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
 
-{% elif tab == "ship-to" %}
-<p><a href="{% url 'slurp_ui:sales_customer_ship_to_new' customer.pk %}" class="btn btn-primary">+ Add ship-to</a></p>
-<table class="data-table">
-  <thead><tr><th>Name</th><th>Address</th><th>Default</th><th>Active</th><th></th></tr></thead>
-  <tbody>
-    {% for loc in ship_tos %}
-    <tr>
-      <td>{{ loc.location_name }}</td>
-      <td>{{ loc.address }}, {{ loc.city }} {{ loc.state }} {{ loc.zip_code }}</td>
-      <td>{% if loc.is_default %}Yes{% else %}—{% endif %}</td>
-      <td>{% if loc.is_active %}Yes{% else %}No{% endif %}</td>
-      <td><a href="{% url 'slurp_ui:sales_customer_ship_to_edit' customer.pk loc.pk %}">Edit</a></td>
-    </tr>
-    {% empty %}<tr><td colspan="5">No ship-to locations.</td></tr>{% endfor %}
-  </tbody>
-</table>
+    {% elif tab == "overview" %}
+    <div class="hs-card">
+      <div class="hs-card-header"><h3>Edit account</h3></div>
+      <div class="hs-card-body">
+        <form method="post">
+          {% csrf_token %}
+          <input type="hidden" name="action" value="save_profile" />
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem">
+            <div class="form-row"><label>Name</label><input name="name" value="{{ customer.name }}" required /></div>
+            <div class="form-row"><label>Contact</label><input name="contact_name" value="{{ customer.contact_name|default:'' }}" /></div>
+            <div class="form-row"><label>Email</label><input type="email" name="email" value="{{ customer.email|default:'' }}" /></div>
+            <div class="form-row"><label>Phone</label><input name="phone" value="{{ customer.phone|default:'' }}" /></div>
+            <div class="form-row"><label>Payment terms</label><input name="payment_terms" value="{{ customer.payment_terms|default:'' }}" /></div>
+            <div class="form-row"><label><input type="checkbox" name="is_active" {% if customer.is_active %}checked{% endif %} /> Active</label></div>
+          </div>
+          <div class="form-row"><label>HQ address</label><textarea name="address" rows="2">{{ customer.address|default:'' }}</textarea></div>
+          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:0.5rem">
+            <div class="form-row"><label>City</label><input name="city" value="{{ customer.city|default:'' }}" /></div>
+            <div class="form-row"><label>State</label><input name="state" value="{{ customer.state|default:'' }}" /></div>
+            <div class="form-row"><label>ZIP</label><input name="zip_code" value="{{ customer.zip_code|default:'' }}" /></div>
+            <div class="form-row"><label>Country</label><input name="country" value="{{ customer.country|default:'USA' }}" /></div>
+          </div>
+          <div class="form-row"><label>Notes</label><textarea name="notes" rows="2">{{ customer.notes|default:'' }}</textarea></div>
+          <button type="submit" class="hs-btn hs-btn-primary">Save profile</button>
+        </form>
+      </div>
+    </div>
 
-{% elif tab == "contacts" %}
-<p><a href="{% url 'slurp_ui:sales_customer_contact_new' customer.pk %}" class="btn btn-primary">+ Add contact</a></p>
-<table class="data-table">
-  <thead><tr><th>Name</th><th>Type</th><th>Email</th><th>Phone</th><th>Flags</th><th></th></tr></thead>
-  <tbody>
-    {% for c in contacts %}
-    <tr>
-      <td>{{ c.first_name }} {{ c.last_name }}{% if c.is_primary %} ★{% endif %}</td>
-      <td>{{ c.get_contact_type_display }}</td>
-      <td>{{ c.emails|join:", "|default:"—" }}</td>
-      <td>{{ c.phone|default:"—" }}</td>
-      <td>{% if c.is_ap_contact %}AP {% endif %}{% if c.is_purchasing_contact %}Purch{% endif %}</td>
-      <td><a href="{% url 'slurp_ui:sales_customer_contact_edit' customer.pk c.pk %}">Edit</a></td>
-    </tr>
-    {% empty %}<tr><td colspan="6">No contacts.</td></tr>{% endfor %}
-  </tbody>
-</table>
+    {% elif tab == "pricing" %}
+    <div class="hs-card">
+      <div class="hs-card-header">
+        <h3>Pricing</h3>
+        <a href="{% url 'slurp_ui:sales_customer_pricing_new' customer.pk %}" class="hs-btn hs-btn-primary hs-btn-sm">+ Add pricing</a>
+      </div>
+      <div class="hs-card-body tight">
+        <table class="hs-table">
+          <thead><tr><th>SKU</th><th>Price</th><th>UoM</th><th>Effective</th><th>Expiry</th><th>Active</th><th></th></tr></thead>
+          <tbody>
+            {% for p in pricing %}
+            <tr>
+              <td>{{ p.item.sku }}</td>
+              <td>${{ p.unit_price }}</td>
+              <td>{{ p.unit_of_measure }}</td>
+              <td>{{ p.effective_date }}</td>
+              <td>{{ p.expiry_date|default:"—" }}</td>
+              <td>{% if p.is_active %}<span class="hs-badge ok">Yes</span>{% else %}No{% endif %}</td>
+              <td><a href="{% url 'slurp_ui:sales_customer_pricing_edit' customer.pk p.pk %}">Edit</a></td>
+            </tr>
+            {% empty %}<tr><td colspan="7"><div class="hs-empty">No pricing records.</div></td></tr>{% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
 
-{% elif tab == "sales-calls" %}
-<p><a href="{% url 'slurp_ui:sales_customer_call_new' customer.pk %}" class="btn btn-primary">+ Log call</a></p>
-<table class="data-table">
-  <thead><tr><th>Date</th><th>Type</th><th>Subject</th><th>Contact</th><th></th></tr></thead>
-  <tbody>
-    {% for call in sales_calls %}
-    <tr>
-      <td>{{ call.call_date|date:"M j, Y g:i A" }}</td>
-      <td>{{ call.get_call_type_display }}</td>
-      <td>{{ call.subject|default:"—" }}</td>
-      <td>{% if call.contact %}{{ call.contact.first_name }} {{ call.contact.last_name }}{% else %}—{% endif %}</td>
-      <td><a href="{% url 'slurp_ui:sales_customer_call_edit' customer.pk call.pk %}">Edit</a></td>
-    </tr>
-    {% empty %}<tr><td colspan="5">No sales calls.</td></tr>{% endfor %}
-  </tbody>
-</table>
+    {% elif tab == "ship-to" %}
+    <div class="hs-card">
+      <div class="hs-card-header">
+        <h3>Ship-to</h3>
+        <a href="{% url 'slurp_ui:sales_customer_ship_to_new' customer.pk %}" class="hs-btn hs-btn-primary hs-btn-sm">+ Add ship-to</a>
+      </div>
+      <div class="hs-card-body tight">
+        <table class="hs-table">
+          <thead><tr><th>Name</th><th>Address</th><th>Default</th><th>Active</th><th></th></tr></thead>
+          <tbody>
+            {% for loc in ship_tos %}
+            <tr>
+              <td>{{ loc.location_name }}</td>
+              <td>{{ loc.address }}, {{ loc.city }} {{ loc.state }} {{ loc.zip_code }}</td>
+              <td>{% if loc.is_default %}Yes{% else %}—{% endif %}</td>
+              <td>{% if loc.is_active %}Yes{% else %}No{% endif %}</td>
+              <td><a href="{% url 'slurp_ui:sales_customer_ship_to_edit' customer.pk loc.pk %}">Edit</a></td>
+            </tr>
+            {% empty %}<tr><td colspan="5"><div class="hs-empty">No ship-to locations.</div></td></tr>{% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
 
-{% elif tab == "forecast" %}
-<p><a href="{% url 'slurp_ui:sales_customer_forecast_new' customer.pk %}" class="btn btn-primary">+ Add forecast</a></p>
-<table class="data-table">
-  <thead><tr><th>Period</th><th>SKU</th><th>Qty</th><th>UoM</th><th></th></tr></thead>
-  <tbody>
-    {% for f in forecasts %}
-    <tr>
-      <td>{{ f.forecast_period }}</td>
-      <td>{{ f.item.sku }}</td>
-      <td>{{ f.forecast_quantity }}</td>
-      <td>{{ f.unit_of_measure }}</td>
-      <td><a href="{% url 'slurp_ui:sales_customer_forecast_edit' customer.pk f.pk %}">Edit</a></td>
-    </tr>
-    {% empty %}<tr><td colspan="5">No forecasts.</td></tr>{% endfor %}
-  </tbody>
-</table>
+    {% elif tab == "contacts" %}
+    <div class="hs-card">
+      <div class="hs-card-header">
+        <h3>Contacts</h3>
+        <a href="{% url 'slurp_ui:sales_customer_contact_new' customer.pk %}" class="hs-btn hs-btn-primary hs-btn-sm">+ Add contact</a>
+      </div>
+      <div class="hs-card-body">
+        <p class="hs-section-note">Mark AP contacts for invoices and purchasing contacts for SO confirmations. Shipping/ops contacts help plant staff know who to call.</p>
+        <table class="hs-table">
+          <thead><tr><th>Name</th><th>Type</th><th>Email</th><th>Phone</th><th>Roles</th><th></th></tr></thead>
+          <tbody>
+            {% for c in contacts %}
+            <tr>
+              <td>{{ c.first_name }} {{ c.last_name }}{% if c.is_primary %} ★{% endif %}</td>
+              <td>{{ c.get_contact_type_display }}</td>
+              <td>{{ c.emails|join:", "|default:"—" }}</td>
+              <td>{{ c.phone|default:"—" }}</td>
+              <td>
+                {% if c.is_ap_contact %}<span class="hs-badge warn">AP</span> {% endif %}
+                {% if c.is_purchasing_contact %}<span class="hs-badge info">Purchasing</span>{% endif %}
+              </td>
+              <td><a href="{% url 'slurp_ui:sales_customer_contact_edit' customer.pk c.pk %}">Edit</a></td>
+            </tr>
+            {% empty %}<tr><td colspan="6"><div class="hs-empty">No contacts.</div></td></tr>{% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
 
-{% elif tab == "usage" %}
-<table class="data-table">
-  <thead><tr><th>SKU</th><th>Name</th><th>Shipped qty</th></tr></thead>
-  <tbody>
-    {% for row in usage_rows %}
-    <tr>
-      <td>{{ row.items__item__sku|default:"—" }}</td>
-      <td>{{ row.items__item__name|default:"—" }}</td>
-      <td>{{ row.total_qty|default:0 }}</td>
-    </tr>
-    {% empty %}<tr><td colspan="3">No shipped volume on file.</td></tr>{% endfor %}
-  </tbody>
-</table>
-{% endif %}
+    {% elif tab == "quotes" %}
+    <div class="hs-card">
+      <div class="hs-card-header">
+        <h3>Quotes</h3>
+        <a href="{% url 'slurp_ui:sales_customer_quote_new' customer.pk %}" class="hs-btn hs-btn-primary hs-btn-sm">+ New quote</a>
+      </div>
+      <div class="hs-card-body tight">
+        <table class="hs-table">
+          <thead><tr><th>Quote #</th><th>Date</th><th>Valid until</th><th>Status</th><th>Total</th><th>Ref</th><th></th></tr></thead>
+          <tbody>
+            {% for q in quotes %}
+            <tr>
+              <td><a class="hs-entity-name" href="{% url 'slurp_ui:sales_customer_quote_edit' customer.pk q.pk %}">{{ q.quote_number }}</a></td>
+              <td>{{ q.quote_date|date:"Y-m-d" }}</td>
+              <td>{{ q.valid_until|default:"—" }}</td>
+              <td>
+                {% if q.status == 'accepted' %}<span class="hs-badge ok">{{ q.get_status_display }}</span>
+                {% elif q.status == 'sent' %}<span class="hs-badge info">{{ q.get_status_display }}</span>
+                {% elif q.status == 'rejected' or q.status == 'expired' %}<span class="hs-badge danger">{{ q.get_status_display }}</span>
+                {% else %}<span class="hs-badge">{{ q.get_status_display }}</span>{% endif %}
+              </td>
+              <td>${{ q.line_total|floatformat:2 }}</td>
+              <td>{{ q.customer_reference|default:"—" }}</td>
+              <td><a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:sales_customer_quote_edit' customer.pk q.pk %}">Edit</a></td>
+            </tr>
+            {% empty %}<tr><td colspan="7"><div class="hs-empty">No quotes yet.</div></td></tr>{% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    {% elif tab == "forecast" %}
+    <div class="hs-card">
+      <div class="hs-card-header">
+        <h3>Forecast</h3>
+        <a href="{% url 'slurp_ui:sales_customer_forecast_new' customer.pk %}" class="hs-btn hs-btn-primary hs-btn-sm">+ Add forecast</a>
+      </div>
+      <div class="hs-card-body tight">
+        <table class="hs-table">
+          <thead><tr><th>Period</th><th>SKU</th><th>Qty</th><th>UoM</th><th></th></tr></thead>
+          <tbody>
+            {% for f in forecasts %}
+            <tr>
+              <td>{{ f.forecast_period }}</td>
+              <td>{{ f.item.sku }}</td>
+              <td>{{ f.forecast_quantity }}</td>
+              <td>{{ f.unit_of_measure }}</td>
+              <td><a href="{% url 'slurp_ui:sales_customer_forecast_edit' customer.pk f.pk %}">Edit</a></td>
+            </tr>
+            {% empty %}<tr><td colspan="5"><div class="hs-empty">No forecasts.</div></td></tr>{% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    {% elif tab == "usage" %}
+    <div class="hs-card">
+      <div class="hs-card-header"><h3>Usage {{ usage_year }}</h3></div>
+      <div class="hs-card-body">
+        <p class="hs-section-note">
+          YTD shipped = quantity shipped this calendar year (by ship date when set).
+          In-house open = ordered − shipped on draft/issued/allocated/ready orders.
+          Allocated = currently lot-allocated on those open orders.
+        </p>
+        <div class="hs-kpi-strip" style="margin-bottom:1rem">
+          <div class="hs-stat"><div class="label">YTD shipped qty</div><div class="value">{{ ytd_shipped_total|floatformat:0 }}</div></div>
+          <div class="hs-stat"><div class="label">In-house open qty</div><div class="value">{{ in_house_total|floatformat:0 }}</div></div>
+          <div class="hs-stat"><div class="label">SKUs with activity</div><div class="value">{{ usage_rows|length }}</div></div>
+        </div>
+        <table class="hs-table">
+          <thead><tr><th>SKU</th><th>Name</th><th>YTD shipped</th><th>In-house open</th><th>Allocated</th></tr></thead>
+          <tbody>
+            {% for row in usage_rows %}
+            <tr>
+              <td>{{ row.sku|default:"—" }}</td>
+              <td>{{ row.name|default:"—" }}</td>
+              <td>{{ row.ytd_shipped|floatformat:2 }}</td>
+              <td>{{ row.in_house_open|floatformat:2 }}</td>
+              <td>{{ row.in_house_allocated|floatformat:2 }}</td>
+            </tr>
+            {% empty %}<tr><td colspan="5"><div class="hs-empty">No volume on file.</div></td></tr>{% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    {% endif %}
+  </div>
+  {% endif %}
+</div>
 {% endblock %}

@@ -5,7 +5,7 @@ from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.db import models
 from django.db.models import Count, Sum
-from django.http import HttpRequest, HttpResponse
+from django.http import HttpRequest, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from urllib.parse import urlencode
@@ -21,12 +21,16 @@ from erp_core.models import (
     CustomerContact,
     CustomerForecast,
     CustomerPricing,
+    CustomerQuote,
+    CustomerQuoteItem,
     Item,
     Lot,
     ProductionBatch,
     PurchaseOrder,
+    QuoteNumberSequence,
     SalesCall,
     SalesOrder,
+    SalesOrderItem,
     ShipToLocation,
     Shipment,
 )
@@ -52,6 +56,7 @@ def _sales_ctx(**extra):
         "sidebar_nav": SALES_NAV,
         "page_css": [
             "Sales.css",
+            "SalesWorkspace.css",
             "CRMDashboard.css",
             "SalesOrdersList.css",
             "CreateSalesOrder.css",
@@ -69,17 +74,108 @@ def _sales_ctx(**extra):
     return ctx
 
 
+IN_HOUSE_SO_STATUSES = ("draft", "issued", "allocated", "ready_for_shipment")
+SHIPPED_SO_STATUSES = ("shipped", "completed", "received")
+
+
 def _customer_queryset(active_filter=None):
     qs = Customer.objects.annotate(
         ship_to_locations_count=Count("ship_to_locations", filter=models.Q(ship_to_locations__is_active=True)),
         contacts_count=Count("contacts", filter=models.Q(contacts__is_active=True)),
-        sales_calls_count=Count("sales_calls"),
+        open_orders_count=Count(
+            "sales_orders",
+            filter=models.Q(sales_orders__status__in=IN_HOUSE_SO_STATUSES),
+            distinct=True,
+        ),
     ).order_by("name")
     if active_filter == "true":
         qs = qs.filter(is_active=True)
     elif active_filter == "false":
         qs = qs.filter(is_active=False)
     return qs
+
+
+def _customer_usage_rows(customer, *, year=None):
+    """YTD shipped qty + open/in-house remaining qty by SKU."""
+    today = timezone.localdate()
+    year = year or today.year
+    ytd_start = date(year, 1, 1)
+    ytd_end = date(year, 12, 31)
+
+    # Shipped qty attributed to calendar year via ship date when present, else order date.
+    shipped_items = (
+        SalesOrderItem.objects.filter(sales_order__customer=customer)
+        .filter(quantity_shipped__gt=0)
+        .filter(
+            models.Q(sales_order__actual_ship_date__date__gte=ytd_start, sales_order__actual_ship_date__date__lte=ytd_end)
+            | models.Q(
+                sales_order__actual_ship_date__isnull=True,
+                sales_order__order_date__date__gte=ytd_start,
+                sales_order__order_date__date__lte=ytd_end,
+            )
+        )
+        .values("item_id", "item__sku", "item__name")
+        .annotate(ytd_shipped=Sum("quantity_shipped"))
+    )
+    in_house = (
+        SalesOrderItem.objects.filter(
+            sales_order__customer=customer,
+            sales_order__status__in=IN_HOUSE_SO_STATUSES,
+        )
+        .values("item_id", "item__sku", "item__name")
+        .annotate(
+            in_house_ordered=Sum("quantity_ordered"),
+            in_house_shipped=Sum("quantity_shipped"),
+            in_house_allocated=Sum("quantity_allocated"),
+        )
+    )
+    by_item = {}
+    for row in shipped_items:
+        by_item[row["item_id"]] = {
+            "sku": row["item__sku"],
+            "name": row["item__name"],
+            "ytd_shipped": float(row["ytd_shipped"] or 0),
+            "in_house_open": 0.0,
+            "in_house_allocated": 0.0,
+        }
+    for row in in_house:
+        open_qty = float(row["in_house_ordered"] or 0) - float(row["in_house_shipped"] or 0)
+        if open_qty < 0:
+            open_qty = 0.0
+        entry = by_item.setdefault(
+            row["item_id"],
+            {
+                "sku": row["item__sku"],
+                "name": row["item__name"],
+                "ytd_shipped": 0.0,
+                "in_house_open": 0.0,
+                "in_house_allocated": 0.0,
+            },
+        )
+        entry["in_house_open"] = open_qty
+        entry["in_house_allocated"] = float(row["in_house_allocated"] or 0)
+    return sorted(
+        by_item.values(),
+        key=lambda r: (-(r["ytd_shipped"] + r["in_house_open"]), r["sku"] or ""),
+    )[:100]
+
+
+def _generate_quote_number():
+    yy = timezone.localdate().strftime("%y")
+    seq, _ = QuoteNumberSequence.objects.get_or_create(year_prefix=yy, defaults={"sequence_number": 0})
+    QuoteNumberSequence.objects.filter(pk=seq.pk).update(sequence_number=models.F("sequence_number") + 1)
+    seq.refresh_from_db()
+    return f"Q-{yy}{seq.sequence_number:04d}"
+
+
+def _customer_initials(customer):
+    name = (customer.name or "?").strip()
+    parts = [p for p in name.split() if p]
+    if not parts:
+        return "?"
+    if len(parts) == 1:
+        return parts[0][:2].upper()
+    return (parts[0][0] + parts[-1][0]).upper()
 
 
 def _customer_from_post(post, *, customer=None):
@@ -162,6 +258,8 @@ def _fetch_calendar_events(start_date, end_date, event_types):
                     "id": f"shipment_{so.id}",
                     "type": "shipment",
                     "title": title,
+                    "short_label": so.so_number,
+                    "subtitle": so.customer_name or (so.customer.name if so.customer_id else ""),
                     "date": ship_date.isoformat(),
                     "sales_order_id": so.id,
                     "sales_order_number": so.so_number,
@@ -180,19 +278,31 @@ def _fetch_calendar_events(start_date, end_date, event_types):
         for lot in lots[:300]:
             if not lot.received_date:
                 continue
+            item = lot.item
+            sku = item.sku if item else ""
+            qty = float(lot.quantity or 0)
+            uom = (item.unit_of_measure if item else None) or "lbs"
+            short = f"{sku or lot.lot_number} · {qty:g} {uom}" if sku else f"Inbound · {lot.lot_number}"
             events.append(
                 {
                     "id": f"raw_material_{lot.id}",
                     "type": "raw_material",
-                    "title": f"Receipt: {lot.lot_number}",
+                    "title": f"Inbound: {sku or lot.lot_number}",
+                    "short_label": short,
+                    "subtitle": lot.lot_number,
                     "date": lot.received_date.date().isoformat(),
                     "lot_id": lot.id,
+                    "product_sku": sku,
+                    "product_name": item.name if item else "",
+                    "quantity": qty,
+                    "unit": uom,
+                    "quantity_label": f"{qty:g} {uom}",
                     "reschedulable": False,
                 }
             )
 
     if "production" in type_set:
-        batches = ProductionBatch.objects.filter(status__in=["scheduled", "in_progress", "closed"]).select_related(
+        batches = ProductionBatch.objects.filter(status__in=["draft", "scheduled", "in_progress", "closed"]).select_related(
             "finished_good_item"
         )
         if start_date:
@@ -204,18 +314,33 @@ def _fetch_calendar_events(start_date, end_date, event_types):
                 production_date__lte=timezone.make_aware(datetime.combine(end_date, datetime.max.time()))
             )
         for batch in batches:
-            fg = batch.finished_good_item.name if batch.finished_good_item else ""
-            title = f"{fg}: {batch.batch_number}" if fg else batch.batch_number
+            fg = batch.finished_good_item
+            sku = fg.sku if fg else ""
+            name = fg.name if fg else ""
+            uom = "lbs" if batch.batch_type == "production" else ((fg.unit_of_measure if fg else None) or "lbs")
+            qty = float(batch.quantity_produced or 0)
+            qty_label = f"{qty:g} {uom}"
+            product_label = sku or name or "FG"
+            # Compact chip: product + qty (batch # in tooltip / detail)
+            short_label = f"{product_label} · {qty_label}"
+            title = f"{product_label}: {qty_label} ({batch.batch_number})"
             events.append(
                 {
                     "id": f"production_{batch.id}",
                     "type": "production",
                     "title": title,
+                    "short_label": short_label,
+                    "subtitle": name if sku and name and name != sku else batch.batch_number,
                     "date": batch.production_date.date().isoformat(),
                     "batch_id": batch.id,
                     "batch_number": batch.batch_number,
+                    "product_sku": sku,
+                    "product_name": name,
+                    "quantity": qty,
+                    "unit": uom,
+                    "quantity_label": qty_label,
                     "status": batch.status,
-                    "reschedulable": batch.status in ("scheduled", "in_progress"),
+                    "reschedulable": batch.status in ("draft", "scheduled", "in_progress"),
                 }
             )
 
@@ -281,8 +406,8 @@ def _calendar_month_grid(month_anchor: date, events: list) -> dict:
                     "date": day,
                     "in_month": day.month == month,
                     "is_today": day == today,
-                    "events": day_events[:3],
-                    "more_count": max(0, len(day_events) - 3),
+                    "events": day_events[:4],
+                    "more_count": max(0, len(day_events) - 4),
                     "total_count": len(day_events),
                 }
             )
@@ -302,36 +427,41 @@ def _calendar_month_grid(month_anchor: date, events: list) -> dict:
 @login_required
 def sales_crm(request: HttpRequest) -> HttpResponse:
     q = (request.GET.get("q") or "").strip()
-    active_filter = request.GET.get("active")
-    customers = _customer_queryset(active_filter)
+    active_filter = request.GET.get("active") or "true"
+    filter_arg = None if active_filter == "all" else active_filter
+    customers = _customer_queryset(filter_arg)
     if q:
         customers = customers.filter(
             models.Q(name__icontains=q)
             | models.Q(customer_id__icontains=q)
             | models.Q(email__icontains=q)
             | models.Q(city__icontains=q)
+            | models.Q(phone__icontains=q)
         )
-    customers = customers[:200]
-    recent_calls = (
-        SalesCall.objects.select_related("customer", "contact")
-        .order_by("-call_date")[:15]
-    )
-    ship_to_summary = (
-        ShipToLocation.objects.filter(is_active=True)
-        .values("customer__name", "customer_id")
-        .annotate(loc_count=Count("id"))
-        .order_by("-loc_count")[:10]
+    customers = list(customers[:200])
+    for c in customers:
+        c.initials = _customer_initials(c)
+
+    open_order_total = SalesOrder.objects.filter(status__in=IN_HOUSE_SO_STATUSES).count()
+    ready_count = SalesOrder.objects.filter(status="ready_for_shipment").count()
+    active_customers = Customer.objects.filter(is_active=True).count()
+    needs_attention = (
+        SalesOrder.objects.filter(status__in=("issued", "allocated", "ready_for_shipment"))
+        .select_related("customer")
+        .order_by("-updated_at")[:8]
     )
     return render(
         request,
         "slurp_ui/sales/crm.html",
         _sales_ctx(
-            active_tab="crm",
+            active_tab="customers",
             customers=customers,
             q=q,
             active_filter=active_filter,
-            recent_calls=recent_calls,
-            ship_to_summary=ship_to_summary,
+            open_order_total=open_order_total,
+            ready_count=ready_count,
+            active_customers=active_customers,
+            needs_attention=needs_attention,
             port_status="full",
         ),
     )
@@ -339,22 +469,81 @@ def sales_crm(request: HttpRequest) -> HttpResponse:
 
 @login_required
 def sales_orders(request: HttpRequest) -> HttpResponse:
-    orders = (
+    queue = (request.GET.get("queue") or "open").strip()
+    q = (request.GET.get("q") or "").strip()
+    qs = (
         SalesOrder.objects.select_related("customer")
         .prefetch_related("items")
         .annotate(total_allocated=Sum("items__quantity_allocated"))
-        .order_by("-created_at")[:200]
     )
+    queue_map = {
+        "open": list(IN_HOUSE_SO_STATUSES),
+        "draft": ["draft"],
+        "issue": ["draft"],
+        "allocate": ["issued", "allocated"],
+        "ship": ["issued", "ready_for_shipment", "allocated"],
+        "done": ["shipped", "completed", "received"],
+        "all": None,
+    }
+    statuses = queue_map.get(queue, queue_map["open"])
+    if statuses is not None:
+        qs = qs.filter(status__in=statuses)
+    if queue == "ship":
+        # Prefer shippable: issued/ready (and allocated) with some allocation or drop-ship
+        qs = qs.filter(status__in=("issued", "ready_for_shipment", "allocated"))
+    if q:
+        qs = qs.filter(
+            models.Q(so_number__icontains=q)
+            | models.Q(customer_name__icontains=q)
+            | models.Q(customer_reference_number__icontains=q)
+            | models.Q(customer__name__icontains=q)
+        )
+    orders = list(qs.order_by("-created_at")[:200])
+
+    counts = {
+        "open": SalesOrder.objects.filter(status__in=IN_HOUSE_SO_STATUSES).count(),
+        "draft": SalesOrder.objects.filter(status="draft").count(),
+        "allocate": SalesOrder.objects.filter(status__in=("issued", "allocated")).count(),
+        "ship": SalesOrder.objects.filter(status__in=("issued", "ready_for_shipment", "allocated")).count(),
+        "done": SalesOrder.objects.filter(status__in=SHIPPED_SO_STATUSES).count(),
+        "all": SalesOrder.objects.count(),
+    }
     return render(
         request,
         "slurp_ui/sales/orders.html",
         _sales_ctx(
             active_tab="orders",
             orders=orders,
+            queue=queue,
+            q=q,
+            counts=counts,
             port_status="full",
             god_mode=bool(request.session.get("god_mode")) and request.user.is_staff,
         ),
     )
+
+
+def _reschedule_ops_event(event_id: str, new_date: date) -> tuple[bool, str]:
+    """Move a shipment/production planned date. Returns (ok, message)."""
+    if event_id.startswith("shipment_"):
+        so_id = event_id.split("_", 1)[1]
+        so = get_object_or_404(SalesOrder, pk=so_id)
+        if so.status in ("shipped", "completed", "cancelled"):
+            return False, f"{so.so_number} cannot be rescheduled ({so.status})."
+        old = so.expected_ship_date.date().isoformat() if so.expected_ship_date else "—"
+        so.expected_ship_date = timezone.make_aware(datetime.combine(new_date, datetime.min.time()))
+        so.save(update_fields=["expected_ship_date"])
+        return True, f"Moved {so.so_number} ship date {old} -> {new_date.isoformat()}."
+    if event_id.startswith("production_"):
+        batch_id = event_id.split("_", 1)[1]
+        batch = get_object_or_404(ProductionBatch, pk=batch_id)
+        if batch.status not in ("draft", "scheduled", "in_progress"):
+            return False, f"Batch {batch.batch_number} cannot be rescheduled ({batch.status})."
+        old = batch.production_date.date().isoformat() if batch.production_date else "—"
+        batch.production_date = timezone.make_aware(datetime.combine(new_date, datetime.min.time()))
+        batch.save(update_fields=["production_date", "updated_at"])
+        return True, f"Moved batch {batch.batch_number} {old} -> {new_date.isoformat()}."
+    return False, "This event type cannot be rescheduled from the ops calendar."
 
 
 @login_required
@@ -382,39 +571,37 @@ def sales_calendar(request: HttpRequest) -> HttpResponse:
         "shipments",
         "raw_materials",
         "production",
-        "receivables",
-        "payables",
+    ]
+    # Ops calendar only — finance due dates belong on a future Finance calendar.
+    allowed_types = {"shipments", "raw_materials", "production"}
+    selected_types = [t for t in selected_types if t in allowed_types] or [
+        "shipments",
+        "raw_materials",
+        "production",
     ]
     if request.method == "POST" and request.POST.get("action") == "reschedule":
         event_id = (request.POST.get("event_id") or "").strip()
         new_date_raw = (request.POST.get("new_date") or "").strip()
         new_date = parse_date(new_date_raw)
+        wants_json = (
+            request.headers.get("X-Requested-With") == "XMLHttpRequest"
+            or "application/json" in (request.headers.get("Accept") or "")
+        )
         if not event_id or not new_date:
+            if wants_json:
+                return JsonResponse({"ok": False, "message": "Event and new date are required."}, status=400)
             messages.error(request, "Event and new date are required.")
-        elif event_id.startswith("shipment_"):
-            so_id = event_id.split("_", 1)[1]
-            so = get_object_or_404(SalesOrder, pk=so_id)
-            if so.status in ("shipped", "completed", "cancelled"):
-                messages.error(request, f"{so.so_number} cannot be rescheduled ({so.status}).")
-            else:
-                so.expected_ship_date = timezone.make_aware(
-                    datetime.combine(new_date, datetime.min.time())
-                )
-                so.save(update_fields=["expected_ship_date"])
-                messages.success(request, f"Rescheduled {so.so_number} to {new_date.isoformat()}.")
-        elif event_id.startswith("production_"):
-            batch_id = event_id.split("_", 1)[1]
-            batch = get_object_or_404(ProductionBatch, pk=batch_id)
-            if batch.status not in ("scheduled", "in_progress"):
-                messages.error(request, f"Batch {batch.batch_number} cannot be rescheduled ({batch.status}).")
-            else:
-                batch.production_date = timezone.make_aware(
-                    datetime.combine(new_date, datetime.min.time())
-                )
-                batch.save(update_fields=["production_date"])
-                messages.success(request, f"Rescheduled batch {batch.batch_number} to {new_date.isoformat()}.")
         else:
-            messages.error(request, "This event type cannot be rescheduled from the calendar.")
+            ok, msg = _reschedule_ops_event(event_id, new_date)
+            if wants_json:
+                return JsonResponse(
+                    {"ok": ok, "message": msg, "date": new_date.isoformat() if ok else None},
+                    status=200 if ok else 400,
+                )
+            if ok:
+                messages.success(request, msg)
+            else:
+                messages.error(request, msg)
         qs = urlencode({"month": month_anchor.strftime("%Y-%m")})
         for t in selected_types:
             qs += "&" + urlencode({"types": t})
@@ -433,11 +620,9 @@ def sales_calendar(request: HttpRequest) -> HttpResponse:
         selected_event = next((e for e in month_events if e["id"] == sel_id), None)
 
     type_options = [
-        ("shipments", "Shipments"),
-        ("raw_materials", "Raw materials"),
+        ("shipments", "Expected ships"),
+        ("raw_materials", "Incoming materials"),
         ("production", "Production"),
-        ("receivables", "Receivables (AR)"),
-        ("payables", "Payables (AP)"),
     ]
     return render(
         request,
@@ -455,7 +640,7 @@ def sales_calendar(request: HttpRequest) -> HttpResponse:
             selected_types=selected_types,
             type_options=type_options,
             selected_event=selected_event,
-            port_status="partial",
+            port_status="full",
         ),
     )
 
@@ -499,7 +684,7 @@ def sales_customers(request: HttpRequest) -> HttpResponse:
         request,
         "slurp_ui/sales/customers.html",
         _sales_ctx(
-            active_tab="customers",
+            active_tab="customers-manage",
             customers=customers,
             editing=editing,
             port_status="full",
@@ -511,7 +696,7 @@ def sales_customers(request: HttpRequest) -> HttpResponse:
 @require_http_methods(["GET", "POST"])
 def sales_customer_profile(request: HttpRequest, pk: int) -> HttpResponse:
     customer = get_object_or_404(Customer, pk=pk)
-    tab = request.GET.get("tab") or "overview"
+    tab = request.GET.get("tab") or "glance"
     if request.method == "POST" and request.POST.get("action") == "save_profile":
         data, errors = _customer_from_post(request.POST, customer=customer)
         if errors:
@@ -524,45 +709,110 @@ def sales_customer_profile(request: HttpRequest, pk: int) -> HttpResponse:
             messages.success(request, "Profile updated.")
             return redirect(f"{reverse('slurp_ui:sales_customer_profile', kwargs={'pk': pk})}?tab={tab}")
 
-    pricing = CustomerPricing.objects.filter(customer=customer).select_related("item").order_by("-effective_date")[:100]
+    pricing = (
+        CustomerPricing.objects.filter(customer=customer)
+        .select_related("item")
+        .order_by("-is_active", "-effective_date")[:100]
+    )
     ship_tos = ShipToLocation.objects.filter(customer=customer).order_by("-is_default", "location_name")
-    contacts = CustomerContact.objects.filter(customer=customer).order_by("-is_primary", "last_name")
-    sales_calls = SalesCall.objects.filter(customer=customer).select_related("contact").order_by("-call_date")[:100]
-    forecasts = CustomerForecast.objects.filter(customer=customer).select_related("item").order_by("-forecast_period")[:100]
-    usage_rows = []
-    if tab == "usage":
-        usage_rows = (
-            SalesOrder.objects.filter(customer=customer, status__in=["shipped", "completed"])
-            .values("items__item__sku", "items__item__name")
-            .annotate(total_qty=Sum("items__quantity_shipped"))
-            .order_by("-total_qty")[:50]
+    contacts = list(
+        CustomerContact.objects.filter(customer=customer).order_by(
+            "-is_primary", "-is_ap_contact", "-is_purchasing_contact", "last_name"
         )
+    )
+    forecasts = (
+        CustomerForecast.objects.filter(customer=customer).select_related("item").order_by("-forecast_period")[:100]
+    )
+    quotes = list(
+        CustomerQuote.objects.filter(customer=customer)
+        .prefetch_related("lines__item")
+        .order_by("-quote_date", "-id")[:100]
+    )
+    usage_rows = _customer_usage_rows(customer)
+
+    open_orders = list(
+        SalesOrder.objects.filter(customer=customer, status__in=IN_HOUSE_SO_STATUSES)
+        .annotate(
+            total_allocated=Sum("items__quantity_allocated"),
+            total_ordered=Sum("items__quantity_ordered"),
+            total_shipped=Sum("items__quantity_shipped"),
+        )
+        .order_by("-order_date")[:50]
+    )
+    recent_shipped = list(
+        SalesOrder.objects.filter(customer=customer, status__in=SHIPPED_SO_STATUSES)
+        .annotate(
+            total_allocated=Sum("items__quantity_allocated"),
+            total_ordered=Sum("items__quantity_ordered"),
+            total_shipped=Sum("items__quantity_shipped"),
+        )
+        .order_by("-actual_ship_date", "-order_date")[:50]
+    )
+    all_customer_orders = list(
+        SalesOrder.objects.filter(customer=customer)
+        .annotate(
+            total_allocated=Sum("items__quantity_allocated"),
+            total_ordered=Sum("items__quantity_ordered"),
+            total_shipped=Sum("items__quantity_shipped"),
+        )
+        .order_by("-order_date")[:100]
+    )
+
+    ops_contacts = [
+        c
+        for c in contacts
+        if c.is_active
+        and (
+            c.contact_type in ("shipping", "billing", "sales")
+            or c.is_ap_contact
+            or c.is_purchasing_contact
+            or c.is_primary
+        )
+    ]
+    glance_contacts = ops_contacts or [c for c in contacts if c.is_active][:8]
+
+    ytd_shipped_total = sum(r["ytd_shipped"] for r in usage_rows)
+    in_house_total = sum(r["in_house_open"] for r in usage_rows)
+    active_price_count = sum(1 for p in pricing if p.is_active)
+    open_quote_count = sum(1 for q in quotes if q.status in ("draft", "sent", "accepted"))
 
     tabs = [
-        ("overview", "Overview"),
-        ("pricing", "Pricing"),
-        ("ship-to", "Ship-to"),
+        ("glance", "At a glance"),
+        ("orders", "Orders"),
         ("contacts", "Contacts"),
-        ("sales-calls", "Sales calls"),
+        ("pricing", "Pricing"),
+        ("quotes", "Quotes"),
         ("forecast", "Forecast"),
         ("usage", "Usage"),
+        ("ship-to", "Ship-to"),
+        ("overview", "Account edit"),
     ]
     return render(
         request,
         "slurp_ui/sales/customer_profile.html",
         _sales_ctx(
-            active_tab="crm",
+            active_tab="customers",
             customer=customer,
+            customer_initials=_customer_initials(customer),
             tab=tab,
             tabs=tabs,
             pricing=pricing,
             ship_tos=ship_tos,
             contacts=contacts,
-            sales_calls=sales_calls,
             forecasts=forecasts,
+            quotes=quotes,
             usage_rows=usage_rows,
+            open_orders=open_orders,
+            recent_shipped=recent_shipped,
+            all_customer_orders=all_customer_orders,
+            glance_contacts=glance_contacts,
+            ytd_shipped_total=ytd_shipped_total,
+            in_house_total=in_house_total,
+            active_price_count=active_price_count,
+            open_quote_count=open_quote_count,
+            usage_year=timezone.localdate().year,
             contact_type_choices=CustomerContact.CONTACT_TYPE_CHOICES,
-            call_type_choices=SalesCall.CALL_TYPE_CHOICES,
+            quote_status_choices=CustomerQuote.STATUS_CHOICES,
             port_status="full",
         ),
     )
@@ -610,7 +860,7 @@ def sales_customer_ship_to(request: HttpRequest, customer_pk: int, pk: int = Non
     return render(
         request,
         "slurp_ui/sales/ship_to_form.html",
-        _sales_ctx(active_tab="crm", customer=customer, location=location, port_status="full"),
+        _sales_ctx(active_tab="customers", customer=customer, location=location, port_status="full"),
     )
 
 
@@ -656,7 +906,7 @@ def sales_customer_contact(request: HttpRequest, customer_pk: int, pk: int = Non
         request,
         "slurp_ui/sales/contact_form.html",
         _sales_ctx(
-            active_tab="crm",
+            active_tab="customers",
             customer=customer,
             contact=contact,
             emails_text=emails_text,
@@ -715,7 +965,7 @@ def sales_customer_call(request: HttpRequest, customer_pk: int, pk: int = None) 
         request,
         "slurp_ui/sales/sales_call_form.html",
         _sales_ctx(
-            active_tab="crm",
+            active_tab="customers",
             customer=customer,
             call=call,
             contacts=contacts,
@@ -767,7 +1017,7 @@ def sales_customer_forecast(request: HttpRequest, customer_pk: int, pk: int = No
         request,
         "slurp_ui/sales/forecast_form.html",
         _sales_ctx(
-            active_tab="crm",
+            active_tab="customers",
             customer=customer,
             forecast=forecast,
             items=items,
@@ -823,11 +1073,141 @@ def sales_customer_pricing(request: HttpRequest, customer_pk: int, pk: int = Non
         request,
         "slurp_ui/sales/pricing_form.html",
         _sales_ctx(
-            active_tab="crm",
+            active_tab="customers",
             customer=customer,
             pricing=pricing,
             items=items,
             incoterms=incoterms,
+            uom_choices=Item.UNIT_CHOICES,
+            today=timezone.localdate().isoformat(),
+            port_status="full",
+        ),
+    )
+
+
+def _parse_quote_lines(post):
+    lines = []
+    try:
+        line_count = int(post.get("line_count") or 1)
+    except ValueError:
+        line_count = 1
+    for i in range(max(1, min(line_count, 20))):
+        item_id = post.get(f"item_id_{i}")
+        if not item_id:
+            continue
+        try:
+            qty = float(post.get(f"qty_{i}") or 0)
+        except ValueError:
+            qty = 0
+        try:
+            price = float(post.get(f"price_{i}") or 0)
+        except ValueError:
+            price = 0
+        if qty <= 0:
+            continue
+        lines.append(
+            {
+                "item_id": int(item_id),
+                "quantity": qty,
+                "unit_price": price,
+                "unit_of_measure": post.get(f"uom_{i}") or "lbs",
+                "notes": (post.get(f"notes_{i}") or "").strip() or None,
+                "sort_order": i,
+            }
+        )
+    return lines
+
+
+@login_required
+@require_http_methods(["GET", "POST"])
+def sales_customer_quote(request: HttpRequest, customer_pk: int, pk: int = None) -> HttpResponse:
+    customer = get_object_or_404(Customer, pk=customer_pk)
+    quote = (
+        get_object_or_404(
+            CustomerQuote.objects.prefetch_related("lines__item"),
+            pk=pk,
+            customer=customer,
+        )
+        if pk
+        else None
+    )
+    items = Item.objects.filter(item_type__in=["finished_good", "distributed_item"]).order_by("sku")[:500]
+    ship_tos = ShipToLocation.objects.filter(customer=customer, is_active=True).order_by("-is_default", "location_name")
+    contacts = CustomerContact.objects.filter(customer=customer, is_active=True).order_by("-is_primary", "last_name")
+
+    if request.method == "POST":
+        action = request.POST.get("action") or "save"
+        if action == "delete" and quote:
+            if quote.status == "converted":
+                messages.error(request, "Converted quotes cannot be deleted.")
+            else:
+                quote.delete()
+                messages.success(request, "Quote deleted.")
+            return redirect(f"{reverse('slurp_ui:sales_customer_profile', kwargs={'pk': customer_pk})}?tab=quotes")
+
+        if action.startswith("status:") and quote:
+            new_status = action.split(":", 1)[1]
+            valid = {c[0] for c in CustomerQuote.STATUS_CHOICES}
+            if new_status in valid and quote.status != "converted":
+                quote.status = new_status
+                quote.save(update_fields=["status", "updated_at"])
+                messages.success(request, f"Quote marked {quote.get_status_display()}.")
+            return redirect("slurp_ui:sales_customer_quote_edit", customer_pk=customer_pk, pk=quote.pk)
+
+        lines = _parse_quote_lines(request.POST)
+        quote_date = parse_date((request.POST.get("quote_date") or "").strip()) or timezone.localdate()
+        valid_until = parse_date((request.POST.get("valid_until") or "").strip() or "")
+        status = request.POST.get("status") or (quote.status if quote else "draft")
+        if status not in {c[0] for c in CustomerQuote.STATUS_CHOICES}:
+            status = "draft"
+        ship_to_id = request.POST.get("ship_to_location") or None
+        contact_id = request.POST.get("contact") or None
+        if not lines:
+            messages.error(request, "Add at least one quote line with quantity.")
+        else:
+            fields = {
+                "ship_to_location_id": int(ship_to_id) if ship_to_id else None,
+                "contact_id": int(contact_id) if contact_id else None,
+                "status": status if not quote or quote.status != "converted" else quote.status,
+                "quote_date": quote_date,
+                "valid_until": valid_until,
+                "customer_reference": (request.POST.get("customer_reference") or "").strip() or None,
+                "notes": (request.POST.get("notes") or "").strip() or None,
+            }
+            if quote:
+                for k, v in fields.items():
+                    setattr(quote, k, v)
+                quote.save()
+                quote.lines.all().delete()
+                for line in lines:
+                    CustomerQuoteItem.objects.create(quote=quote, **line)
+                messages.success(request, f"Updated {quote.quote_number}.")
+            else:
+                quote = CustomerQuote.objects.create(
+                    customer=customer,
+                    quote_number=_generate_quote_number(),
+                    created_by=request.user.get_username(),
+                    **fields,
+                )
+                for line in lines:
+                    CustomerQuoteItem.objects.create(quote=quote, **line)
+                messages.success(request, f"Created {quote.quote_number}.")
+            return redirect(f"{reverse('slurp_ui:sales_customer_profile', kwargs={'pk': customer_pk})}?tab=quotes")
+
+    existing_lines = list(quote.lines.select_related("item").all()) if quote else []
+    # Seed one empty row for create / always allow adding more in template
+    return render(
+        request,
+        "slurp_ui/sales/quote_form.html",
+        _sales_ctx(
+            active_tab="customers",
+            customer=customer,
+            quote=quote,
+            existing_lines=existing_lines,
+            items=items,
+            ship_tos=ship_tos,
+            contacts=contacts,
+            status_choices=CustomerQuote.STATUS_CHOICES,
             uom_choices=Item.UNIT_CHOICES,
             today=timezone.localdate().isoformat(),
             port_status="full",
@@ -1109,7 +1489,7 @@ def sales_checkout(request: HttpRequest) -> HttpResponse:
         request,
         "slurp_ui/sales/checkout.html",
         _sales_ctx(
-            active_tab="orders",
+            active_tab="checkout",
             orders=eligible,
             selected=selected,
             today=today,
@@ -1201,7 +1581,7 @@ def sales_combined_checkout(request: HttpRequest) -> HttpResponse:
         request,
         "slurp_ui/sales/combined_checkout.html",
         _sales_ctx(
-            active_tab="orders",
+            active_tab="combined-checkout",
             orders=eligible,
             today=today,
             port_status="full",

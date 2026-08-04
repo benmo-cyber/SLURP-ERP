@@ -1,4 +1,9 @@
 /* Quality page – sidebar layout (matches Finance/Sales style) */
+@import url('SalesWorkspace.css');
+
+.quality-main > .hs-bleed {
+  margin: 0;
+}
 
 .quality-page {
   min-height: 100vh;
@@ -12,6 +17,11 @@
   background: var(--quality-header-bg, #fff);
   padding: 1rem 1.5rem;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
 }
 
 .quality-header h1 {
@@ -20,6 +30,13 @@
   font-weight: 600;
   color: var(--quality-header-color, #1a1d21);
   letter-spacing: -0.02em;
+}
+
+.quality-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  flex-wrap: wrap;
 }
 
 .quality-layout {
@@ -151,5 +168,105 @@
   .quality-main > * {
     margin: 1rem;
   }
+}
+
+/* Vendor record — quieter, read-first */
+.quality-main .hs-card .form-row label {
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 600;
+  font-size: 0.82rem;
+}
+
+.qv-check-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.qv-check-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 0.55rem 0;
+  border-bottom: 1px solid var(--hs-border-soft, #eef1f4);
+}
+
+.qv-check-row:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.qv-check-row .hs-badge {
+  flex-shrink: 0;
+  min-width: 4.5rem;
+  text-align: center;
+}
+
+.qv-check-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.qv-notes {
+  margin: 0;
+  white-space: pre-wrap;
+  color: var(--hs-text, #334155);
+  line-height: 1.45;
+}
+
+.qv-dl {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.qv-dl > div {
+  display: grid;
+  grid-template-columns: 7rem 1fr;
+  gap: 0.75rem;
+  align-items: baseline;
+}
+
+.qv-dl dt {
+  margin: 0;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--hs-muted, #64748b);
+}
+
+.qv-dl dd {
+  margin: 0;
+  color: var(--hs-text, #1e293b);
+}
+
+.qv-section-title {
+  margin: 1rem 0 0.5rem;
+  font-size: 0.92rem;
+  font-weight: 650;
+  color: var(--hs-heading, #0f172a);
+}
+
+.qv-section-title:first-child {
+  margin-top: 0;
+}
+
+.qv-pre {
+  margin: 0 0 0.75rem;
+  padding: 0.75rem;
+  background: #f8fafc;
+  border-radius: 6px;
+  overflow: auto;
+  font-size: 0.82rem;
+  line-height: 1.4;
+}
+
+.qv-inline-form {
+  margin-top: 0.85rem;
+  padding: 0.85rem;
+  border: 1px solid var(--hs-border, #e2e8f0);
+  border-radius: 6px;
+  max-width: 520px;
 }
 

@@ -1,0 +1,148 @@
+{% extends "slurp_ui/base.html" %}
+{% block title %}{% if quote %}Edit{% else %}New{% endif %} Quote — SLURP{% endblock %}
+{% block content %}
+<div class="modal-page" style="max-width:880px">
+  <h2>{% if quote %}Edit {{ quote.quote_number }}{% else %}New quote{% endif %} — {{ customer.name }}</h2>
+  <form method="post" id="quote-form">
+    {% csrf_token %}
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0.75rem">
+      <div class="form-row"><label>Quote date *</label>
+        <input type="date" name="quote_date" required value="{% if quote %}{{ quote.quote_date|date:'Y-m-d' }}{% else %}{{ today }}{% endif %}" />
+      </div>
+      <div class="form-row"><label>Valid until</label>
+        <input type="date" name="valid_until" value="{% if quote and quote.valid_until %}{{ quote.valid_until|date:'Y-m-d' }}{% endif %}" />
+      </div>
+      <div class="form-row"><label>Status</label>
+        <select name="status" {% if quote and quote.status == 'converted' %}disabled{% endif %}>
+          {% for val, label in status_choices %}
+          <option value="{{ val }}" {% if quote and quote.status == val or not quote and val == 'draft' %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+        {% if quote and quote.status == 'converted' %}<input type="hidden" name="status" value="converted" />{% endif %}
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem">
+      <div class="form-row"><label>Ship-to</label>
+        <select name="ship_to_location">
+          <option value="">—</option>
+          {% for loc in ship_tos %}
+          <option value="{{ loc.pk }}" {% if quote and quote.ship_to_location_id == loc.pk %}selected{% endif %}>{{ loc.location_name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="form-row"><label>Contact</label>
+        <select name="contact">
+          <option value="">—</option>
+          {% for c in contacts %}
+          <option value="{{ c.pk }}" {% if quote and quote.contact_id == c.pk %}selected{% endif %}>{{ c.first_name }} {{ c.last_name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+    </div>
+    <div class="form-row"><label>Customer reference</label>
+      <input name="customer_reference" value="{% if quote %}{{ quote.customer_reference|default:'' }}{% endif %}" />
+    </div>
+    <div class="form-row"><label>Notes</label>
+      <textarea name="notes" rows="2">{% if quote %}{{ quote.notes|default:'' }}{% endif %}</textarea>
+    </div>
+
+    <h3 style="margin:1.25rem 0 0.5rem">Lines</h3>
+    <input type="hidden" name="line_count" id="line_count" value="{{ existing_lines|length|default:1 }}" />
+    <div id="quote-lines">
+      {% if existing_lines %}
+        {% for line in existing_lines %}
+        <div class="quote-line" style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr;gap:0.5rem;margin-bottom:0.5rem;align-items:end">
+          <div class="form-row" style="margin:0"><label>Item</label>
+            <select name="item_id_{{ forloop.counter0 }}">
+              <option value="">Select…</option>
+              {% for item in items %}
+              <option value="{{ item.pk }}" {% if line.item_id == item.pk %}selected{% endif %}>{{ item.sku }} — {{ item.name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="form-row" style="margin:0"><label>Qty</label><input type="number" step="any" name="qty_{{ forloop.counter0 }}" value="{{ line.quantity }}" /></div>
+          <div class="form-row" style="margin:0"><label>Unit price</label><input type="number" step="any" name="price_{{ forloop.counter0 }}" value="{{ line.unit_price }}" /></div>
+          <div class="form-row" style="margin:0"><label>UoM</label>
+            <select name="uom_{{ forloop.counter0 }}">
+              {% for val, label in uom_choices %}
+              <option value="{{ val }}" {% if line.unit_of_measure == val %}selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+        </div>
+        {% endfor %}
+      {% else %}
+        <div class="quote-line" style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr;gap:0.5rem;margin-bottom:0.5rem;align-items:end">
+          <div class="form-row" style="margin:0"><label>Item</label>
+            <select name="item_id_0">
+              <option value="">Select…</option>
+              {% for item in items %}
+              <option value="{{ item.pk }}">{{ item.sku }} — {{ item.name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="form-row" style="margin:0"><label>Qty</label><input type="number" step="any" name="qty_0" value="" /></div>
+          <div class="form-row" style="margin:0"><label>Unit price</label><input type="number" step="any" name="price_0" value="" /></div>
+          <div class="form-row" style="margin:0"><label>UoM</label>
+            <select name="uom_0">
+              {% for val, label in uom_choices %}
+              <option value="{{ val }}" {% if val == 'lbs' %}selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+        </div>
+      {% endif %}
+    </div>
+    <p><button type="button" class="btn btn-secondary" id="add-line">+ Add line</button></p>
+
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary" {% if quote and quote.status == 'converted' %}disabled{% endif %}>Save quote</button>
+      <a class="btn btn-secondary" href="{% url 'slurp_ui:sales_customer_profile' customer.pk %}?tab=quotes">Cancel</a>
+      {% if quote and quote.status != 'converted' %}
+      <button type="submit" name="action" value="status:sent" class="btn btn-secondary">Mark sent</button>
+      <button type="submit" name="action" value="status:accepted" class="btn btn-secondary">Mark accepted</button>
+      <button type="submit" name="action" value="delete" class="btn btn-secondary" style="color:#b91c1c" onclick="return confirm('Delete quote?');">Delete</button>
+      {% endif %}
+    </div>
+  </form>
+</div>
+<template id="quote-line-template">
+  <div class="quote-line" style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr;gap:0.5rem;margin-bottom:0.5rem;align-items:end">
+    <div class="form-row" style="margin:0"><label>Item</label>
+      <select data-name="item_id">
+        <option value="">Select…</option>
+        {% for item in items %}
+        <option value="{{ item.pk }}">{{ item.sku }} — {{ item.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="form-row" style="margin:0"><label>Qty</label><input type="number" step="any" data-name="qty" value="" /></div>
+    <div class="form-row" style="margin:0"><label>Unit price</label><input type="number" step="any" data-name="price" value="" /></div>
+    <div class="form-row" style="margin:0"><label>UoM</label>
+      <select data-name="uom">
+        {% for val, label in uom_choices %}
+        <option value="{{ val }}" {% if val == 'lbs' %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+  </div>
+</template>
+<script>
+(function () {
+  var lines = document.getElementById('quote-lines');
+  var countInput = document.getElementById('line_count');
+  var tpl = document.getElementById('quote-line-template');
+  document.getElementById('add-line').addEventListener('click', function () {
+    var idx = lines.querySelectorAll('.quote-line').length;
+    if (idx >= 20) return;
+    var node = tpl.content.cloneNode(true);
+    node.querySelectorAll('[data-name]').forEach(function (el) {
+      el.setAttribute('name', el.getAttribute('data-name') + '_' + idx);
+      el.removeAttribute('data-name');
+    });
+    lines.appendChild(node);
+    countInput.value = String(idx + 1);
+  });
+})();
+</script>
+{% endblock %}

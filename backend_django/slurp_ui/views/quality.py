@@ -2,6 +2,8 @@ from datetime import datetime
 
 
 
+from datetime import date, timedelta
+
 from django.contrib import messages
 
 from django.contrib.auth.decorators import login_required
@@ -62,6 +64,7 @@ from erp_core.models import (
 
 from erp_core.vendor_address_display import build_display_address
 
+from erp_core.rd_codes import allocate_rd_code, normalize_family_letter
 from erp_core.vendor_rename import cascade_vendor_name_change
 
 
@@ -147,6 +150,8 @@ def _quality_ctx(active_tab: str, **extra):
         "active_tab": active_tab,
 
         "page_css": [
+
+            "SalesWorkspace.css",
 
             "Quality.css",
 
@@ -385,48 +390,74 @@ def _rd_lines_from_formula(rd: RDFormula) -> list[dict]:
 
 
 @login_required
-
 def quality_vendors(request: HttpRequest) -> HttpResponse:
-
-    status = (request.GET.get("status") or "all").lower()
+    status = (request.GET.get("status") or "all").strip().lower()
+    q = (request.GET.get("q") or "").strip()
 
     vendors = Vendor.objects.all().order_by("name")
-
     if status == "approved":
-
         vendors = vendors.filter(approval_status="approved")
-
     elif status == "pending":
-
         vendors = vendors.filter(approval_status="pending")
+    elif status == "rejected":
+        vendors = vendors.filter(approval_status="rejected")
 
-    vendors = vendors[:300]
+    if q:
+        vendors = vendors.filter(
+            Q(name__icontains=q)
+            | Q(vendor_id__icontains=q)
+            | Q(email__icontains=q)
+            | Q(city__icontains=q)
+            | Q(contact_name__icontains=q)
+        )
 
+    vendors = list(vendors[:300])
     rows = []
-
     for v in vendors:
-
         try:
-
             addr = build_display_address(v) or ""
-
         except Exception:
-
             addr = v.address or ""
+        name = (v.name or "?").strip()
+        parts = [p for p in name.split() if p]
+        if not parts:
+            initials = "?"
+        elif len(parts) == 1:
+            initials = parts[0][:2].upper()
+        else:
+            initials = (parts[0][0] + parts[-1][0]).upper()
+        rows.append(
+            {
+                "vendor": v,
+                "display_address": addr,
+                "initials": initials,
+                "location": ", ".join([x for x in [v.city, v.state] if x]) or "—",
+            }
+        )
 
-        rows.append({"vendor": v, "display_address": addr})
-
-    return render(
-
-        request,
-
-        "slurp_ui/quality/vendors.html",
-
-        _quality_ctx("vendors", rows=rows, status=status, port_status="full"),
-
+    counts = {
+        "all": Vendor.objects.count(),
+        "approved": Vendor.objects.filter(approval_status="approved").count(),
+        "pending": Vendor.objects.filter(approval_status="pending").count(),
+        "rejected": Vendor.objects.filter(approval_status="rejected").count(),
+    }
+    needs_attention = list(
+        Vendor.objects.filter(approval_status="pending").order_by("-updated_at", "name")[:8]
     )
 
-
+    return render(
+        request,
+        "slurp_ui/quality/vendors.html",
+        _quality_ctx(
+            "vendors",
+            rows=rows,
+            status=status,
+            q=q,
+            counts=counts,
+            needs_attention=needs_attention,
+            port_status="full",
+        ),
+    )
 
 
 
@@ -926,6 +957,50 @@ def quality_vendor_detail(request: HttpRequest, pk: int) -> HttpResponse:
 
 
 
+
+    edit_mode = (request.GET.get("edit") or "").strip() in ("1", "true", "yes") or tab == "edit"
+    if tab == "edit":
+        tab = "overview"
+        edit_mode = True
+
+    vendor_tab_labels = [
+        ("overview", "At a glance"),
+        ("contacts", "Contacts"),
+        ("documents", "Documents"),
+        ("survey", "Survey"),
+        ("items", "Items"),
+        ("exceptions", "Exceptions"),
+        ("history", "History"),
+    ]
+
+    today = date.today()
+    soon = today + timedelta(days=30)
+    for row in checklist:
+        doc = row.get("doc")
+        if not doc:
+            row["status"] = "missing"
+        elif doc.expiration_date and doc.expiration_date < today:
+            row["status"] = "expired"
+        elif doc.expiration_date and doc.expiration_date <= soon:
+            row["status"] = "expiring"
+        else:
+            row["status"] = "valid"
+
+    docs_total = len(checklist)
+    docs_complete = sum(1 for row in checklist if row.get("doc"))
+    docs_missing = sum(1 for row in checklist if row.get("status") == "missing")
+    docs_expiring = sum(1 for row in checklist if row.get("status") in ("expiring", "expired"))
+    primary_contact = vendor.contacts.first()
+    open_exceptions = sum(1 for e in vendor.exceptions.all() if e.status == "pending")
+    vname = (vendor.name or "?").strip()
+    vparts = [p for p in vname.split() if p]
+    if not vparts:
+        vendor_initials = "?"
+    elif len(vparts) == 1:
+        vendor_initials = vparts[0][:2].upper()
+    else:
+        vendor_initials = (vparts[0][0] + vparts[-1][0]).upper()
+
     edit_contact_id = request.GET.get("edit_contact")
 
     edit_contact = None
@@ -979,11 +1054,17 @@ def quality_vendor_detail(request: HttpRequest, pk: int) -> HttpResponse:
             contacts=list(vendor.contacts.all()),
 
             edit_contact=edit_contact,
-
+            edit_mode=edit_mode,
+            vendor_tab_labels=vendor_tab_labels,
+            docs_complete=docs_complete,
+            docs_total=docs_total,
+            docs_missing=docs_missing,
+            docs_expiring=docs_expiring,
+            primary_contact=primary_contact,
+            open_exceptions=open_exceptions,
+            vendor_initials=vendor_initials,
             port_status="full",
-
         ),
-
     )
 
 
@@ -1941,205 +2022,187 @@ def quality_item_coa_test_lines(request: HttpRequest, pk: int) -> HttpResponse:
 
 
 @login_required
-
 def quality_rd_formulas(request: HttpRequest) -> HttpResponse:
+    status = (request.GET.get("status") or "active").strip().lower()
+    q = (request.GET.get("q") or "").strip()
 
-    formulas = list(RDFormula.objects.prefetch_related("lines").order_by("-updated_at")[:200])
+    formulas = RDFormula.objects.prefetch_related("lines").order_by("-updated_at")
+    if status == "active":
+        formulas = formulas.filter(status__in=["draft", "approved"])
+    elif status == "scrapped":
+        formulas = formulas.filter(status="scrapped")
+    elif status == "commercialized":
+        formulas = formulas.filter(status="commercialized")
+    # status == all -> no filter
 
+    if q:
+        formulas = formulas.filter(
+            Q(name__icontains=q)
+            | Q(rd_code__icontains=q)
+            | Q(commercial_sku__icontains=q)
+            | Q(family_letter__iexact=q[:1] if q else "")
+        )
+
+    formulas = list(formulas[:300])
+    counts = {
+        "active": RDFormula.objects.filter(status__in=["draft", "approved"]).count(),
+        "scrapped": RDFormula.objects.filter(status="scrapped").count(),
+        "commercialized": RDFormula.objects.filter(status="commercialized").count(),
+        "all": RDFormula.objects.count(),
+    }
     return render(
-
         request,
-
         "slurp_ui/quality/rd_formulas.html",
-
-        _quality_ctx("rd-formulas", formulas=formulas, port_status="full"),
-
+        _quality_ctx(
+            "rd-formulas",
+            formulas=formulas,
+            status=status,
+            q=q,
+            counts=counts,
+            port_status="full",
+        ),
     )
 
 
-
-
-
 @login_required
-
 @require_http_methods(["GET", "POST"])
-
 def quality_rd_formula_detail(request: HttpRequest, pk: int | None = None) -> HttpResponse:
-
     rd = None
-
     if pk is not None:
-
         rd = get_object_or_404(RDFormula.objects.prefetch_related("lines__item"), pk=pk)
 
-
-
     catalog_items = Item.objects.filter(
-
         item_type__in=["raw_material", "distributed_item"]
-
     ).order_by("sku")[:500]
 
-
+    family_letters = [chr(c) for c in range(ord("A"), ord("Z") + 1)]
 
     if request.method == "POST":
-
         action = (request.POST.get("action") or "save").strip()
 
-        if action == "delete" and rd:
-
-            name = rd.name
-
-            rd.delete()
-
-            messages.success(request, f"Deleted R&D formula {name}.")
-
+        if action == "scrap" and rd:
+            rd.status = "scrapped"
+            rd.save(update_fields=["status", "updated_at"])
+            messages.success(request, f"Archived {rd.rd_code} as scrapped. Code will never be reused.")
             return redirect("slurp_ui:quality_rd_formulas")
 
+        if action == "unscrap" and rd and rd.status == "scrapped":
+            rd.status = "draft"
+            rd.save(update_fields=["status", "updated_at"])
+            messages.success(request, f"Restored {rd.rd_code} to draft.")
+            return redirect("slurp_ui:quality_rd_formula_detail", pk=rd.pk)
 
+        if action == "commercialize" and rd:
+            sku = (request.POST.get("commercial_sku") or "").strip().upper()
+            if not sku:
+                messages.error(request, "Enter the commercial SKU (e.g. L1303).")
+                return redirect(f"{request.path}?tab=overview")
+            rd.commercial_sku = sku
+            rd.status = "commercialized"
+            rd.save(update_fields=["commercial_sku", "status", "updated_at"])
+            messages.success(
+                request,
+                f"{rd.rd_code} marked commercialized as {sku}. R&D code kept for history.",
+            )
+            return redirect("slurp_ui:quality_rd_formula_detail", pk=rd.pk)
+
+        if action == "delete" and rd:
+            messages.error(
+                request,
+                "Hard delete is disabled so R&D codes stay unique. Use Archive (scrap) instead.",
+            )
+            return redirect("slurp_ui:quality_rd_formula_detail", pk=rd.pk)
 
         name = (request.POST.get("name") or "").strip()
-
         if not name:
-
             messages.error(request, "Product name is required.")
-
         else:
-
             lines_payload = []
-
             for idx, (lt, seq) in enumerate(_RD_LINE_ORDER):
-
                 desc = (request.POST.get(f"desc_{idx}") or "").strip()
-
                 item_id = (request.POST.get(f"item_{idx}") or "").strip()
-
                 comp_raw = (request.POST.get(f"comp_{idx}") or "").strip()
-
                 price_raw = (request.POST.get(f"price_{idx}") or "").strip()
-
                 labor_raw = (request.POST.get(f"labor_{idx}") or "").strip()
-
                 notes = (request.POST.get(f"notes_{idx}") or "").strip() or None
-
                 if not desc and not item_id and not comp_raw and not price_raw and not labor_raw:
-
                     continue
-
                 lines_payload.append(
-
                     {
-
                         "line_type": lt,
-
                         "sequence": seq,
-
                         "item_id": int(item_id) if item_id else None,
-
                         "description": desc,
-
                         "composition_pct": float(comp_raw) if comp_raw else None,
-
                         "price_per_lb": float(price_raw) if price_raw else None,
-
                         "labor_flat_amount": float(labor_raw) if labor_raw else None,
-
                         "notes": notes,
-
                     }
-
                 )
-
             try:
-
                 with transaction.atomic():
-
                     if rd is None:
-
+                        letter, code = allocate_rd_code(request.POST.get("family_letter"))
                         rd = RDFormula.objects.create(
-
                             name=name,
-
+                            family_letter=letter,
+                            rd_code=code,
                             status=request.POST.get("status") or "draft",
-
                             notes=(request.POST.get("notes") or "").strip() or None,
-
                         )
-
                     else:
-
+                        # Family letter and rd_code are immutable once assigned.
+                        new_status = (request.POST.get("status") or rd.status).strip()
+                        if rd.status == "commercialized" and new_status != "commercialized":
+                            # Allow notes/name edits but keep commercialized unless explicit un-commercialize later.
+                            new_status = "commercialized"
+                        if rd.status == "scrapped" and new_status not in ("scrapped", "draft", "approved"):
+                            new_status = rd.status
                         rd.name = name
-
-                        rd.status = request.POST.get("status") or rd.status
-
+                        rd.status = new_status
                         rd.notes = (request.POST.get("notes") or "").strip() or None
-
                         rd.save()
-
                         RDFormulaLine.objects.filter(rd_formula=rd).delete()
-
                     for row in lines_payload:
-
                         RDFormulaLine.objects.create(rd_formula=rd, **row)
-
-                messages.success(request, f"Saved R&D formula {rd.name}.")
-
+                messages.success(request, f"Saved {rd.rd_code} — {rd.name}.")
                 return redirect("slurp_ui:quality_rd_formula_detail", pk=rd.pk)
-
             except Exception as e:
-
                 messages.error(request, str(e))
 
-
-
     if rd:
-
         line_rows = _rd_lines_from_formula(rd)
-
         total_cost = sum((r["line"].formula_cost or 0) for r in line_rows if r.get("line"))
-
     else:
-
-        line_rows = [{"line_type": lt, "sequence": seq, "row_id": f"R{seq}" if lt == "ingredient" else ("Labor" if lt == "labor" else f"P{seq}"), "line": None} for lt, seq in _RD_LINE_ORDER]
-
+        line_rows = [
+            {
+                "line_type": lt,
+                "sequence": seq,
+                "row_id": f"R{seq}" if lt == "ingredient" else ("Labor" if lt == "labor" else f"P{seq}"),
+                "line": None,
+            }
+            for lt, seq in _RD_LINE_ORDER
+        ]
         total_cost = 0
 
-
-
     return render(
-
         request,
-
         "slurp_ui/quality/rd_formula_detail.html",
-
         _quality_ctx(
-
             "rd-formulas",
-
             rd=rd,
-
             line_rows=line_rows,
-
             catalog_items=catalog_items,
-
-            status_choices=RDFormula.STATUS_CHOICES,
-
+            status_choices=[c for c in RDFormula.STATUS_CHOICES if c[0] != "commercialized"],
+            family_letters=family_letters,
             total_cost=total_cost,
-
             port_status="full",
-
         ),
-
     )
 
 
-
-
-
 @login_required
-
 @require_http_methods(["GET", "POST"])
-
 def quality_ccps(request: HttpRequest) -> HttpResponse:
 
     if request.method == "POST":
@@ -2243,9 +2306,7 @@ def quality_ccps(request: HttpRequest) -> HttpResponse:
 
 
 @login_required
-
 @require_http_methods(["GET", "POST"])
-
 def quality_rd_formula_create(request: HttpRequest) -> HttpResponse:
-
     return quality_rd_formula_detail(request, pk=None)
+

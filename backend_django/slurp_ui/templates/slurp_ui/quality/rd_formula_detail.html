@@ -1,71 +1,170 @@
-{% extends "slurp_ui/base_module.html" %}
-{% block title %}{% if rd %}{{ rd.name }}{% else %}New R&amp;D Formula{% endif %} — SLURP{% endblock %}
-{% block module_title %}Quality{% endblock %}
-{% block main %}
-<div style="max-width:1100px">
-  <div style="display:flex;justify-content:space-between;margin-bottom:1rem">
-    <h2 style="margin:0">{% if rd %}Edit{% else %}New{% endif %} R&amp;D formula</h2>
-    <a class="btn btn-secondary" href="{% url 'slurp_ui:quality_rd_formulas' %}">Back to list</a>
-  </div>
-  <form method="post">
-    {% csrf_token %}
-    <div style="display:grid;grid-template-columns:2fr 1fr;gap:0.75rem">
-      <div class="form-row"><label>Name *</label><input name="name" value="{{ rd.name|default:'' }}" required /></div>
-      <div class="form-row">
-        <label>Status</label>
-        <select name="status">
-          {% for val, label in status_choices %}
-          <option value="{{ val }}" {% if rd and rd.status == val %}selected{% elif not rd and val == 'draft' %}selected{% endif %}>{{ label }}</option>
-          {% endfor %}
-        </select>
-      </div>
-    </div>
-    <div class="form-row"><label>Notes</label><textarea name="notes" rows="2">{{ rd.notes|default:'' }}</textarea></div>
-
-    <h3 style="margin-top:1rem">BOM lines</h3>
-    <table class="data-table">
-      <thead>
-        <tr>
-          <th>Row</th>
-          <th>Type</th>
-          <th>Item</th>
-          <th>Description</th>
-          <th>Comp %</th>
-          <th>$/lb</th>
-          <th>Labor $</th>
-          <th>Cost</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for row in line_rows %}
-        <tr>
-          <td>{{ row.row_id }}</td>
-          <td>{{ row.line_type }}</td>
-          <td>
-            <select name="item_{{ forloop.counter0 }}">
-              <option value="">—</option>
-              {% for it in catalog_items %}
-              <option value="{{ it.id }}" {% if row.line and row.line.item_id == it.id %}selected{% endif %}>{{ it.sku }}</option>
-              {% endfor %}
-            </select>
-          </td>
-          <td><input name="desc_{{ forloop.counter0 }}" value="{% if row.line %}{{ row.line.description|default:'' }}{% endif %}" style="width:100%" /></td>
-          <td><input name="comp_{{ forloop.counter0 }}" type="number" step="any" value="{% if row.line and row.line.composition_pct != None %}{{ row.line.composition_pct }}{% endif %}" style="width:5rem" /></td>
-          <td><input name="price_{{ forloop.counter0 }}" type="number" step="any" value="{% if row.line and row.line.price_per_lb != None %}{{ row.line.price_per_lb }}{% endif %}" style="width:5rem" /></td>
-          <td><input name="labor_{{ forloop.counter0 }}" type="number" step="any" value="{% if row.line and row.line.labor_flat_amount != None %}{{ row.line.labor_flat_amount }}{% endif %}" style="width:5rem" /></td>
-          <td>{% if row.line and row.line.formula_cost != None %}${{ row.line.formula_cost|floatformat:2 }}{% else %}—{% endif %}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-    <p style="margin-top:0.75rem"><strong>Total estimated cost:</strong> ${{ total_cost|floatformat:2 }}/lb</p>
-    <div class="form-actions">
-      <button type="submit" class="btn btn-primary">Save formula</button>
-      {% if rd %}
-      <button type="submit" name="action" value="delete" class="btn btn-danger" onclick="return confirm('Delete this R&amp;D formula?');">Delete</button>
-      {% endif %}
-    </div>
-  </form>
-</div>
-{% endblock %}
-
+{% extends "slurp_ui/base_module.html" %}
+{% block title %}{% if rd %}{{ rd.rd_code }} — {{ rd.name }}{% else %}New R&amp;D Formula{% endif %} — SLURP{% endblock %}
+{% block module_title %}{% if rd %}{{ rd.rd_code }}{% else %}New R&amp;D Formula{% endif %}{% endblock %}
+{% block header_actions %}
+  <a href="{% url 'slurp_ui:quality_rd_formulas' %}" class="hs-btn">All R&amp;D formulas</a>
+{% endblock %}
+{% block main %}
+<div class="hs-bleed" style="padding:1.25rem 1.5rem 2rem">
+  {% if rd %}
+  <div class="hs-record-top" style="margin-bottom:1rem;border:1px solid var(--hs-border,#e2e8f0);border-radius:8px;background:#fff">
+    <div class="hs-record-head" style="padding:1rem 1.25rem 0.5rem">
+      <div class="hs-record-identity">
+        <span class="hs-avatar">{{ rd.family_letter }}</span>
+        <div>
+          <h1 class="hs-record-title" style="margin:0">{{ rd.rd_code }}</h1>
+          <div class="hs-record-meta">
+            <span>{{ rd.name }}</span>
+            {% if rd.status == 'approved' %}<span class="hs-badge ok">Approved</span>
+            {% elif rd.status == 'commercialized' %}<span class="hs-badge info">Commercialized</span>
+            {% elif rd.status == 'scrapped' %}<span class="hs-badge">Scrapped</span>
+            {% else %}<span class="hs-badge warn">Draft</span>{% endif %}
+            {% if rd.commercial_sku %}<span>→ {{ rd.commercial_sku }}</span>{% endif %}
+          </div>
+        </div>
+      </div>
+      <div class="hs-record-actions">
+        {% if rd.status != 'scrapped' and rd.status != 'commercialized' %}
+        <form method="post" onsubmit="return confirm('Archive {{ rd.rd_code }} as scrapped? Code will never be reused.');">
+          {% csrf_token %}
+          <input type="hidden" name="action" value="scrap" />
+          <button type="submit" class="hs-btn">Archive (scrap)</button>
+        </form>
+        {% elif rd.status == 'scrapped' %}
+        <form method="post">
+          {% csrf_token %}
+          <input type="hidden" name="action" value="unscrap" />
+          <button type="submit" class="hs-btn">Restore to draft</button>
+        </form>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  <form method="post">
+    {% csrf_token %}
+    <input type="hidden" name="action" value="save" />
+
+    <div class="hs-card" style="margin-bottom:1rem">
+      <div class="hs-card-header"><h3>{% if rd %}Formula details{% else %}New formula{% endif %}</h3></div>
+      <div class="hs-card-body">
+        <div class="hs-form-grid">
+          {% if rd %}
+          <div class="form-row">
+            <label>R&amp;D code</label>
+            <input value="{{ rd.rd_code }}" readonly disabled />
+          </div>
+          <div class="form-row">
+            <label>Family letter</label>
+            <input value="{{ rd.family_letter }}" readonly disabled />
+          </div>
+          {% else %}
+          <div class="form-row">
+            <label>Family letter *</label>
+            <select name="family_letter" required>
+              <option value="">— Select —</option>
+              {% for L in family_letters %}
+              <option value="{{ L }}">{{ L }}</option>
+              {% endfor %}
+            </select>
+            <p class="hs-section-note" style="margin:0.35rem 0 0">Same letter as commercial SKU family (e.g. L for Natural Blue). Code auto-assigned as L-R001…</p>
+          </div>
+          {% endif %}
+          <div class="form-row"><label>Name *</label><input name="name" value="{{ rd.name|default:'' }}" required /></div>
+          <div class="form-row">
+            <label>Status</label>
+            {% if rd and rd.status == 'commercialized' %}
+            <input value="Commercialized" readonly disabled />
+            {% else %}
+            <select name="status" {% if rd and rd.status == 'scrapped' %}disabled{% endif %}>
+              {% for val, label in status_choices %}
+              <option value="{{ val }}" {% if rd and rd.status == val %}selected{% elif not rd and val == 'draft' %}selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
+            {% endif %}
+          </div>
+          {% if rd and rd.commercial_sku %}
+          <div class="form-row">
+            <label>Commercial SKU</label>
+            <input value="{{ rd.commercial_sku }}" readonly disabled />
+          </div>
+          {% endif %}
+        </div>
+        <div class="form-row" style="margin-bottom:0">
+          <label>Notes</label>
+          <textarea name="notes" rows="2">{{ rd.notes|default:'' }}</textarea>
+        </div>
+      </div>
+    </div>
+
+    <div class="hs-card" style="margin-bottom:1rem">
+      <div class="hs-card-header"><h3>BOM / cost lines</h3></div>
+      <div class="hs-card-body tight">
+        <table class="hs-table">
+          <thead>
+            <tr>
+              <th>Row</th>
+              <th>Type</th>
+              <th>Item</th>
+              <th>Description</th>
+              <th>Comp %</th>
+              <th>$/lb</th>
+              <th>Labor $</th>
+              <th>Cost</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in line_rows %}
+            <tr>
+              <td>{{ row.row_id }}</td>
+              <td>{{ row.line_type }}</td>
+              <td>
+                <select name="item_{{ forloop.counter0 }}">
+                  <option value="">—</option>
+                  {% for it in catalog_items %}
+                  <option value="{{ it.id }}" {% if row.line and row.line.item_id == it.id %}selected{% endif %}>{{ it.sku }}</option>
+                  {% endfor %}
+                </select>
+              </td>
+              <td><input name="desc_{{ forloop.counter0 }}" value="{% if row.line %}{{ row.line.description|default:'' }}{% endif %}" style="width:100%" /></td>
+              <td><input name="comp_{{ forloop.counter0 }}" type="number" step="any" value="{% if row.line and row.line.composition_pct != None %}{{ row.line.composition_pct }}{% endif %}" style="width:5rem" /></td>
+              <td><input name="price_{{ forloop.counter0 }}" type="number" step="any" value="{% if row.line and row.line.price_per_lb != None %}{{ row.line.price_per_lb }}{% endif %}" style="width:5rem" /></td>
+              <td><input name="labor_{{ forloop.counter0 }}" type="number" step="any" value="{% if row.line and row.line.labor_flat_amount != None %}{{ row.line.labor_flat_amount }}{% endif %}" style="width:5rem" /></td>
+              <td>{% if row.line and row.line.formula_cost != None %}${{ row.line.formula_cost|floatformat:2 }}{% else %}—{% endif %}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        <p class="hs-section-note" style="margin-top:0.75rem;margin-bottom:0">
+          <strong>Total estimated cost:</strong> ${{ total_cost|floatformat:2 }}/lb
+        </p>
+      </div>
+    </div>
+
+    <div class="hs-form-actions">
+      <button type="submit" class="hs-btn hs-btn-primary">Save formula</button>
+    </div>
+  </form>
+
+  {% if rd and rd.status != 'scrapped' and rd.status != 'commercialized' %}
+  <div class="hs-card" style="margin-top:1rem;max-width:520px">
+    <div class="hs-card-header"><h3>Mark commercialized</h3></div>
+    <div class="hs-card-body">
+      <p class="hs-section-note" style="margin-top:0">Keeps this R&amp;D record and code forever. Enter the commercial SKU the user assigned.</p>
+      <form method="post">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="commercialize" />
+        <div class="form-row">
+          <label>Commercial SKU *</label>
+          <input name="commercial_sku" placeholder="e.g. L1303" required />
+        </div>
+        <div class="hs-form-actions" style="margin-bottom:0">
+          <button type="submit" class="hs-btn hs-btn-primary" onclick="return confirm('Mark {{ rd.rd_code }} as commercialized?');">Save commercial SKU</button>
+        </div>
+      </form>
+    </div>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

@@ -1,73 +1,89 @@
-{% extends "slurp_ui/base.html" %}
-{% block title %}{{ batch.batch_number }} — SLURP{% endblock %}
-{% block content %}
-<div class="modal-page" style="max-width:960px">
-  <div style="display:flex;justify-content:space-between;gap:1rem;flex-wrap:wrap;align-items:start">
-    <div>
-      <h2>{{ batch.batch_number }}</h2>
-      <p style="color:#64748b;margin:0.25rem 0 0">
-        {{ batch.batch_type|title }} · {{ batch.finished_good_item.sku }} — {{ batch.finished_good_item.name }}
-        · <strong>{{ batch.status }}</strong>
-      </p>
-    </div>
-    <div style="display:flex;gap:0.5rem;flex-wrap:wrap">
-      <a class="btn btn-secondary" href="{% url 'slurp_ui:production_batch_pdf' batch.id %}" target="_blank">PDF</a>
-      {% if can_adjust %}
-      <a class="btn btn-secondary" href="{% url 'slurp_ui:production_adjust_batch' batch.id %}">Adjust</a>
-      {% endif %}
-      {% if batch.status != 'closed' %}
-      <a class="btn btn-primary" href="{% url 'slurp_ui:production_close_batch' batch.id %}">Close</a>
-      {% endif %}
-      <form method="post" action="{% url 'slurp_ui:production_reverse_batch' batch.id %}">{% csrf_token %}
-        <button class="btn btn-danger" type="submit"
-                onclick="return confirm('Reverse batch {{ batch.batch_number }}?');">Reverse</button>
-      </form>
-      <a class="btn btn-secondary" href="{% url 'slurp_ui:production' %}">Back</a>
-    </div>
-  </div>
-
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin:1rem 0">
-    <div>
-      <strong>Quantity ticket:</strong> {{ batch.quantity_produced|floatformat:2 }}
-      {% if batch.batch_type == 'production' %} lbs{% else %} {{ batch.finished_good_item.unit_of_measure }}{% endif %}
-    </div>
-    <div><strong>Production date:</strong> {{ batch.production_date|date:"Y-m-d" }}</div>
-    {% if batch.status == 'closed' %}
-    <div><strong>Actual output:</strong> {{ batch.quantity_actual|floatformat:2 }}</div>
-    {% endif %}
-    {% if formula %}
-    <div><strong>Formula:</strong> v{{ formula.version }}</div>
-    {% endif %}
-  </div>
-
-  <h3 style="margin:1rem 0 0.5rem">Inputs</h3>
-  <table class="data-table">
-    <thead><tr><th>Lot</th><th>Item</th><th>Qty used</th></tr></thead>
-    <tbody>
-      {% for inp in batch.inputs.all %}
-      <tr>
-        <td>{{ inp.lot.lot_number }}</td>
-        <td>{{ inp.lot.item.sku }}</td>
-        <td>{{ inp.quantity_used|floatformat:2 }} {{ inp.lot.item.unit_of_measure }}</td>
-      </tr>
-      {% empty %}
-      <tr><td colspan="3">No inputs.</td></tr>
-      {% endfor %}
-    </tbody>
-  </table>
-
-  {% if batch.outputs.all %}
-  <h3 style="margin:1rem 0 0.5rem">Outputs</h3>
-  <ul>
-    {% for out in batch.outputs.all %}
-    <li>{{ out.lot.lot_number }} — {{ out.quantity_produced|floatformat:2 }}</li>
-    {% endfor %}
-  </ul>
-  {% endif %}
-
-  {% if batch.notes %}
-  <h3 style="margin:1rem 0 0.5rem">Notes</h3>
-  <pre style="white-space:pre-wrap;background:#f8fafc;padding:0.75rem;border-radius:6px">{{ batch.notes }}</pre>
-  {% endif %}
-</div>
-{% endblock %}
+{% extends "slurp_ui/base.html" %}
+{% block title %}{{ batch.batch_number }} — SLURP{% endblock %}
+{% block content %}
+<div class="modal-page" style="max-width:960px">
+  <div style="display:flex;justify-content:space-between;gap:1rem;flex-wrap:wrap;align-items:start">
+    <div>
+      <h2>{{ batch.batch_number }}</h2>
+      <p style="color:#64748b;margin:0.25rem 0 0">
+        {{ batch.batch_type|title }} · {{ batch.finished_good_item.sku }} — {{ batch.finished_good_item.name }}
+        · <strong>{{ batch.status }}</strong>
+      </p>
+    </div>
+    <div style="display:flex;gap:0.5rem;flex-wrap:wrap">
+      <a class="btn btn-secondary" href="{% url 'slurp_ui:production_batch_pdf' batch.id %}" target="_blank">PDF</a>
+      {% if can_adjust %}
+      <a class="btn btn-secondary" href="{% url 'slurp_ui:production_adjust_batch' batch.id %}">Adjust</a>
+      {% endif %}
+      {% if batch.status != 'closed' %}
+      <a class="btn btn-primary" href="{% url 'slurp_ui:production_close_batch' batch.id %}">Close</a>
+      {% endif %}
+      <form method="post" action="{% url 'slurp_ui:production_reverse_batch' batch.id %}">{% csrf_token %}
+        <button class="btn btn-danger" type="submit"
+                onclick="return confirm('Reverse batch {{ batch.batch_number }}?');">Reverse</button>
+      </form>
+      <a class="btn btn-secondary" href="{% url 'slurp_ui:production' %}">Back</a>
+    </div>
+  </div>
+
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin:1rem 0">
+    <div>
+      <strong>Quantity ticket:</strong> {{ batch.quantity_produced|floatformat:2 }}
+      {% if batch.batch_type == 'production' %} lbs{% else %} {{ batch.finished_good_item.unit_of_measure }}{% endif %}
+    </div>
+    <div>
+      <strong>Production date:</strong>
+      {% if can_edit_date %}
+      <form method="post" style="display:inline-flex;gap:0.5rem;align-items:center;flex-wrap:wrap;margin-left:0.35rem">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="set_production_date" />
+        <input type="date" name="production_date" value="{{ batch.production_date|date:'Y-m-d' }}" required />
+        <button type="submit" class="btn btn-secondary" style="padding:0.35rem 0.7rem;font-size:0.85rem">Update date</button>
+      </form>
+      <div style="color:#64748b;font-size:0.8rem;margin-top:0.35rem">
+        Also drag this batch on Sales → Ops Calendar. PDF uses the current date when printed.
+      </div>
+      {% else %}
+      {{ batch.production_date|date:"Y-m-d" }}
+      <span style="color:#64748b;font-size:0.85rem">(locked — {{ batch.status }})</span>
+      {% endif %}
+    </div>
+    {% if batch.status == 'closed' %}
+    <div><strong>Actual output:</strong> {{ batch.quantity_actual|floatformat:2 }}</div>
+    {% endif %}
+    {% if formula %}
+    <div><strong>Formula:</strong> v{{ formula.version }}</div>
+    {% endif %}
+  </div>
+
+  <h3 style="margin:1rem 0 0.5rem">Inputs</h3>
+  <table class="data-table">
+    <thead><tr><th>Lot</th><th>Item</th><th>Qty used</th></tr></thead>
+    <tbody>
+      {% for inp in batch.inputs.all %}
+      <tr>
+        <td>{{ inp.lot.lot_number }}</td>
+        <td>{{ inp.lot.item.sku }}</td>
+        <td>{{ inp.quantity_used|floatformat:2 }} {{ inp.lot.item.unit_of_measure }}</td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="3">No inputs.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  {% if batch.outputs.all %}
+  <h3 style="margin:1rem 0 0.5rem">Outputs</h3>
+  <ul>
+    {% for out in batch.outputs.all %}
+    <li>{{ out.lot.lot_number }} — {{ out.quantity_produced|floatformat:2 }}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+
+  {% if batch.notes %}
+  <h3 style="margin:1rem 0 0.5rem">Notes</h3>
+  <pre style="white-space:pre-wrap;background:#f8fafc;padding:0.75rem;border-radius:6px">{{ batch.notes }}</pre>
+  {% endif %}
+</div>
+{% endblock %}

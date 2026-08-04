@@ -1,38 +1,118 @@
-{% extends "slurp_ui/base_module.html" %}
-{% block title %}Vendor Approval — SLURP{% endblock %}
-{% block module_title %}Quality{% endblock %}
-{% block header_actions %}
-<a class="btn btn-primary" href="{% url 'slurp_ui:quality_create_vendor' %}">Add vendor</a>
-{% endblock %}
-{% block main %}
-<div style="display:flex;gap:.5rem;margin-bottom:1rem">
-  <a class="btn btn-secondary" href="?status=all">All</a>
-  <a class="btn btn-secondary" href="?status=approved">Approved</a>
-  <a class="btn btn-secondary" href="?status=pending">Pending</a>
-</div>
-<table class="data-table">
-  <thead>
-    <tr>
-      <th>Vendor</th>
-      <th>Status</th>
-      <th>Address</th>
-      <th>Risk</th>
-      <th>Email</th>
-    </tr>
-  </thead>
-  <tbody>
-    {% for row in rows %}
-    <tr>
-      <td><a href="{% url 'slurp_ui:quality_vendor_detail' row.vendor.id %}">{{ row.vendor.name }}</a></td>
-      <td>{{ row.vendor.approval_status }}</td>
-      <td>{{ row.display_address|default:"—" }}</td>
-      <td>{{ row.vendor.risk_profile }}</td>
-      <td>{{ row.vendor.email|default:"—" }}</td>
-    </tr>
-    {% empty %}
-    <tr><td colspan="5">No vendors.</td></tr>
-    {% endfor %}
-  </tbody>
-</table>
-{% endblock %}
-
+{% extends "slurp_ui/base_module.html" %}
+{% block title %}Vendor Approval — SLURP{% endblock %}
+{% block module_title %}Vendors{% endblock %}
+{% block header_actions %}
+  <a class="hs-btn hs-btn-primary" href="{% url 'slurp_ui:quality_create_vendor' %}">+ Add vendor</a>
+{% endblock %}
+{% block main %}
+<div class="hs-bleed" style="padding:1.25rem 1.5rem 2rem">
+  <div class="hs-stat-row">
+    <div class="hs-stat">
+      <div class="label">All vendors</div>
+      <div class="value">{{ counts.all }}</div>
+    </div>
+    <div class="hs-stat">
+      <div class="label">Approved</div>
+      <div class="value">{{ counts.approved }}</div>
+    </div>
+    <div class="hs-stat">
+      <div class="label">Pending</div>
+      <div class="value">{{ counts.pending }}</div>
+    </div>
+    <div class="hs-stat">
+      <div class="label">Rejected</div>
+      <div class="value">{{ counts.rejected }}</div>
+    </div>
+  </div>
+
+  <div class="hs-toolbar">
+    <form method="get" style="display:flex;gap:0.5rem;flex:1;min-width:220px">
+      <input type="search" name="q" value="{{ q }}" placeholder="Search vendors, IDs, email, city…" class="hs-search" />
+      {% if status and status != 'all' %}<input type="hidden" name="status" value="{{ status }}" />{% endif %}
+      <button class="hs-btn hs-btn-primary" type="submit">Search</button>
+    </form>
+    <div class="hs-pills">
+      <a class="hs-pill {% if status == 'all' %}active{% endif %}" href="?{% if q %}q={{ q|urlencode }}&{% endif %}status=all">All</a>
+      <a class="hs-pill {% if status == 'approved' %}active{% endif %}" href="?{% if q %}q={{ q|urlencode }}&{% endif %}status=approved">Approved</a>
+      <a class="hs-pill {% if status == 'pending' %}active{% endif %}" href="?{% if q %}q={{ q|urlencode }}&{% endif %}status=pending">Pending</a>
+      <a class="hs-pill {% if status == 'rejected' %}active{% endif %}" href="?{% if q %}q={{ q|urlencode }}&{% endif %}status=rejected">Rejected</a>
+    </div>
+  </div>
+
+  <div class="hs-index-layout">
+    <div class="hs-card">
+      <div class="hs-card-header">
+        <h3>Vendor directory</h3>
+        <span class="hs-muted" style="font-size:0.8rem">Approval status + risk</span>
+      </div>
+      <div class="hs-card-body tight">
+        <table class="hs-table">
+          <thead>
+            <tr>
+              <th>Vendor</th>
+              <th>Location</th>
+              <th>Risk</th>
+              <th>Email</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in rows %}
+            <tr onclick="window.location='{% url 'slurp_ui:quality_vendor_detail' row.vendor.id %}'">
+              <td>
+                <div class="hs-entity">
+                  <span class="hs-avatar">{{ row.initials }}</span>
+                  <div>
+                    <a class="hs-entity-name" href="{% url 'slurp_ui:quality_vendor_detail' row.vendor.id %}">{{ row.vendor.name }}</a>
+                    <span class="hs-entity-sub">{% if row.vendor.vendor_id %}{{ row.vendor.vendor_id }}{% else %}No vendor ID{% endif %}</span>
+                  </div>
+                </div>
+              </td>
+              <td>{{ row.location }}</td>
+              <td>{{ row.vendor.get_risk_profile_display|default:row.vendor.risk_profile }}</td>
+              <td>{% if row.vendor.email %}{{ row.vendor.email }}{% else %}<span class="hs-muted">—</span>{% endif %}</td>
+              <td>
+                {% if row.vendor.approval_status == 'approved' %}
+                <span class="hs-badge ok">Approved</span>
+                {% elif row.vendor.approval_status == 'pending' %}
+                <span class="hs-badge warn">Pending</span>
+                {% elif row.vendor.approval_status == 'rejected' %}
+                <span class="hs-badge danger">Rejected</span>
+                {% else %}
+                <span class="hs-badge">{{ row.vendor.approval_status }}</span>
+                {% endif %}
+              </td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="5"><div class="hs-empty">No vendors match this filter.</div></td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="hs-side-stack">
+      <div class="hs-card">
+        <div class="hs-card-header"><h3>Needs attention</h3></div>
+        <div class="hs-card-body tight">
+          {% for v in needs_attention %}
+          <a class="hs-list-link" href="{% url 'slurp_ui:quality_vendor_detail' v.id %}">
+            <div class="hs-list-title">{{ v.name }}</div>
+            <div class="hs-list-sub">Pending approval{% if v.risk_profile %} · Risk {{ v.get_risk_profile_display|default:v.risk_profile }}{% endif %}</div>
+          </a>
+          {% empty %}
+          <div class="hs-empty">No pending vendors.</div>
+          {% endfor %}
+        </div>
+      </div>
+      <div class="hs-card">
+        <div class="hs-card-header"><h3>Quick links</h3></div>
+        <div class="hs-card-body" style="display:flex;flex-direction:column;gap:0.5rem">
+          <a class="hs-btn" href="{% url 'slurp_ui:quality_create_vendor' %}">Add vendor</a>
+          <a class="hs-btn" href="?status=pending">Open pending queue</a>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

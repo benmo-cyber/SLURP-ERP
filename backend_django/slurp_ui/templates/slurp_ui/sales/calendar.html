@@ -1,125 +1,293 @@
 {% extends "slurp_ui/base_module.html" %}
-{% block title %}Calendar — SLURP{% endblock %}
-{% block module_title %}Sales Calendar{% endblock %}
+{% block title %}Ops Calendar — SLURP{% endblock %}
+{% block module_title %}Ops Calendar{% endblock %}
+{% block header_actions %}
+  <a href="{% url 'slurp_ui:sales_orders' %}" class="hs-btn">Order workqueue</a>
+{% endblock %}
 {% block main %}
-<div class="calendar-page">
-  <div class="calendar-header">
-    <h2>{{ calendar_grid.month_label }}</h2>
-    <div class="calendar-controls">
-      <div class="date-navigation">
-        <a class="btn btn-secondary" href="?month={{ calendar_grid.prev_month|date:'Y-m' }}{% for t in selected_types %}&types={{ t }}{% endfor %}">‹</a>
-        <span class="current-date">{{ calendar_grid.month_label }}</span>
-        <a class="btn btn-secondary" href="?month={{ calendar_grid.next_month|date:'Y-m' }}{% for t in selected_types %}&types={{ t }}{% endfor %}">›</a>
-        <a class="btn btn-secondary" href="?month={{ month_anchor|date:'Y-m' }}{% for t in selected_types %}&types={{ t }}{% endfor %}">Today</a>
+<div class="hs-bleed" style="padding:1.25rem 1.5rem 2rem">
+  <div id="hs-cal-toast" class="hs-cal-toast" hidden></div>
+
+  <div class="hs-card" style="margin-bottom:1rem">
+    <div class="hs-card-header">
+      <h3>{{ calendar_grid.month_label }}</h3>
+      <div class="hs-queue-actions">
+        <a class="hs-btn hs-btn-sm" href="?month={{ calendar_grid.prev_month|date:'Y-m' }}{% for t in selected_types %}&types={{ t }}{% endfor %}">‹</a>
+        <a class="hs-btn hs-btn-sm" href="?month={{ calendar_grid.next_month|date:'Y-m' }}{% for t in selected_types %}&types={{ t }}{% endfor %}">›</a>
+        <a class="hs-btn hs-btn-sm" href="?month={{ month_anchor|date:'Y-m' }}{% for t in selected_types %}&types={{ t }}{% endfor %}">Today</a>
       </div>
     </div>
-  </div>
-
-  <form method="get" class="calendar-filters" style="margin-bottom:1rem;display:flex;flex-wrap:wrap;gap:0.75rem;align-items:flex-end">
-    <input type="hidden" name="month" value="{{ month_param }}" />
-    <fieldset style="border:none;padding:0;margin:0">
-      <legend style="font-size:0.85rem">Event types</legend>
-      {% for val, label in type_options %}
-      <label style="margin-right:0.75rem"><input type="checkbox" name="types" value="{{ val }}" {% if val in selected_types %}checked{% endif %} /> {{ label }}</label>
-      {% endfor %}
-    </fieldset>
-    <button type="submit" class="btn btn-primary">Apply filters</button>
-    {% if selected_day %}
-    <a href="?month={{ month_param }}{% for t in selected_types %}&types={{ t }}{% endfor %}" class="btn btn-secondary">Clear day filter</a>
-    {% endif %}
-  </form>
-
-  <div class="calendar-month">
-    <div class="calendar-weekdays">
-      <div class="weekday-header">Sun</div>
-      <div class="weekday-header">Mon</div>
-      <div class="weekday-header">Tue</div>
-      <div class="weekday-header">Wed</div>
-      <div class="weekday-header">Thu</div>
-      <div class="weekday-header">Fri</div>
-      <div class="weekday-header">Sat</div>
-    </div>
-    {% for week in calendar_grid.weeks %}
-    <div class="calendar-week">
-      {% for cell in week %}
-      <div class="calendar-day {% if not cell.in_month %}other-month{% endif %} {% if cell.is_today %}today{% endif %} {% if cell.total_count %}has-events{% endif %} {% if selected_day == cell.date %}selected{% endif %}">
-        <a href="?month={{ month_param }}&day={{ cell.date|date:'Y-m-d' }}{% for t in selected_types %}&types={{ t }}{% endfor %}" class="day-number">{{ cell.date.day }}</a>
-        <div class="day-events">
-          {% for e in cell.events %}
-          <a href="?month={{ month_param }}&event={{ e.id }}{% for t in selected_types %}&types={{ t }}{% endfor %}"
-             class="calendar-event event-{{ e.type }}"
-             title="{{ e.title }}">{{ e.title|truncatechars:28 }}</a>
+    <div class="hs-card-body">
+      <p class="hs-section-note">
+        Production chips show <strong>product · qty</strong>. Click a <strong>day</strong> for details.
+        Click a <strong>production</strong> line again to open the batch ticket PDF.
+        <strong>Drag</strong> ships/production onto another day to reschedule.
+      </p>
+      <form method="get" class="hs-toolbar" style="margin:0">
+        <input type="hidden" name="month" value="{{ month_param }}" />
+        <div class="hs-pills">
+          {% for val, label in type_options %}
+          <label class="hs-pill {% if val in selected_types %}active{% endif %}" style="cursor:pointer">
+            <input type="checkbox" name="types" value="{{ val }}" {% if val in selected_types %}checked{% endif %}
+                   style="margin:0" onchange="this.form.submit()" />
+            {{ label }}
+          </label>
           {% endfor %}
-          {% if cell.more_count %}
-          <div class="more-events">+{{ cell.more_count }} more</div>
-          {% endif %}
         </div>
-      </div>
-      {% endfor %}
+        {% if selected_day %}
+        <a href="?month={{ month_param }}{% for t in selected_types %}&types={{ t }}{% endfor %}" class="hs-btn hs-btn-sm">Clear day</a>
+        {% endif %}
+      </form>
     </div>
-    {% endfor %}
   </div>
 
-  <div style="display:grid;grid-template-columns:1fr 320px;gap:1rem;margin-top:1.5rem">
-    <div>
-      <h3>{% if selected_day %}Events on {{ selected_day|date:"M j, Y" }}{% else %}All events this month{% endif %}</h3>
-      <table class="data-table">
-        <thead>
-          <tr><th>Date</th><th>Type</th><th>Title</th><th></th></tr>
-        </thead>
-        <tbody>
-          {% for e in events %}
-          <tr>
-            <td>{{ e.date }}</td>
-            <td>{{ e.type }}</td>
-            <td>{{ e.title }}</td>
-            <td>
-              {% if e.reschedulable %}
-              <a href="?month={{ month_param }}&event={{ e.id }}{% for t in selected_types %}&types={{ t }}{% endfor %}">Reschedule</a>
+  <div class="hs-card" style="margin-bottom:1rem">
+    <div class="hs-card-body tight">
+      <div class="hs-cal-month" id="hs-cal-month"
+           data-month="{{ month_param }}"
+           data-types="{% for t in selected_types %}{{ t }}{% if not forloop.last %},{% endif %}{% endfor %}"
+           data-selected-day="{% if selected_day %}{{ selected_day|date:'Y-m-d' }}{% endif %}"
+           data-selected-event="{% if selected_event %}{{ selected_event.id }}{% endif %}">
+        <div class="hs-cal-weekdays">
+          <div>Sun</div><div>Mon</div><div>Tue</div><div>Wed</div><div>Thu</div><div>Fri</div><div>Sat</div>
+        </div>
+        {% for week in calendar_grid.weeks %}
+        <div class="hs-cal-week">
+          {% for cell in week %}
+          <a class="hs-cal-day {% if not cell.in_month %}other{% endif %} {% if cell.is_today %}today{% endif %} {% if selected_day == cell.date %}selected{% endif %}"
+             href="?month={{ month_param }}&day={{ cell.date|date:'Y-m-d' }}{% for t in selected_types %}&types={{ t }}{% endfor %}"
+             data-date="{{ cell.date|date:'Y-m-d' }}">
+            <span class="hs-cal-daynum">{{ cell.date.day }}</span>
+            {% for e in cell.events %}
+            <span class="hs-cal-event type-{{ e.type }} {% if e.reschedulable %}is-draggable{% endif %} {% if selected_event and selected_event.id == e.id %}is-selected{% endif %}"
+                  {% if e.reschedulable %}draggable="true"{% endif %}
+                  data-event-id="{{ e.id }}"
+                  data-event-date="{{ e.date }}"
+                  data-event-type="{{ e.type }}"
+                  {% if e.batch_id %}data-batch-id="{{ e.batch_id }}" data-pdf-url="{% url 'slurp_ui:production_batch_pdf' e.batch_id %}"{% endif %}
+                  title="{% if e.type == 'production' %}{{ e.product_name|default:e.product_sku }} · {{ e.quantity_label }} · {{ e.batch_number }} — click for detail / PDF{% else %}{{ e.title }}{% endif %}">
+              <span class="hs-cal-event-main">{% if e.short_label %}{{ e.short_label|truncatechars:28 }}{% else %}{{ e.title|truncatechars:28 }}{% endif %}</span>
+              {% if e.subtitle %}
+              <span class="hs-cal-event-sub">{{ e.subtitle|truncatechars:24 }}</span>
               {% endif %}
+            </span>
+            {% endfor %}
+            {% if cell.more_count %}<span class="hs-cal-more">+{{ cell.more_count }} more</span>{% endif %}
+          </a>
+          {% endfor %}
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+
+  <div class="hs-card" id="hs-cal-day-detail">
+      <div class="hs-card-header">
+        <h3>{% if selected_day %}{{ selected_day|date:"D, M j, Y" }}{% else %}Pick a day{% endif %}</h3>
+        <span class="hs-muted" style="font-size:0.8rem">
+          {% if selected_day %}{{ events|length }} activit{{ events|length|pluralize:"y,ies" }}{% else %}Click a day on the calendar{% endif %}
+        </span>
+      </div>
+      <div class="hs-card-body tight">
+        {% if selected_day %}
+          {% for e in events %}
+          <div class="hs-cal-detail-row {% if selected_event and selected_event.id == e.id %}is-focused{% endif %}"
+               data-event-id="{{ e.id }}"
+               data-event-type="{{ e.type }}"
+               {% if e.batch_id %}data-batch-id="{{ e.batch_id }}" data-pdf-url="{% url 'slurp_ui:production_batch_pdf' e.batch_id %}"{% endif %}>
+            <div class="hs-cal-detail-main">
+              {% if e.type == 'shipment' %}<span class="hs-badge info">Ship</span>
+              {% elif e.type == 'raw_material' %}<span class="hs-badge ok">Inbound</span>
+              {% elif e.type == 'production' %}<span class="hs-badge warn">Production</span>
+              {% else %}<span class="hs-badge">{{ e.type }}</span>{% endif %}
+
+              {% if e.type == 'production' %}
+              <div class="hs-list-title">{{ e.product_sku|default:"—" }}{% if e.product_name %} — {{ e.product_name }}{% endif %}</div>
+              <div class="hs-list-sub">
+                Qty {{ e.quantity_label }} · {{ e.batch_number }} · {{ e.status }}
+                {% if selected_event and selected_event.id == e.id %}<strong> · click again for PDF</strong>{% else %} · click again for PDF{% endif %}
+              </div>
+              {% elif e.type == 'shipment' %}
+              <div class="hs-list-title">{{ e.sales_order_number }}</div>
+              <div class="hs-list-sub">{{ e.customer_name|default:"—" }} · {{ e.status }}</div>
+              {% else %}
+              <div class="hs-list-title">{{ e.title }}</div>
+              <div class="hs-list-sub">{{ e.subtitle|default:"" }}{% if e.quantity_label %} · {{ e.quantity_label }}{% endif %}</div>
+              {% endif %}
+            </div>
+            <div class="hs-queue-actions">
               {% if e.sales_order_id %}
-              · <a href="{% url 'slurp_ui:sales_order_detail' e.sales_order_id %}">SO</a>
+              <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:sales_order_detail' e.sales_order_id %}">SO</a>
               {% endif %}
               {% if e.batch_id %}
-              · <a href="{% url 'slurp_ui:production_batch_detail' e.batch_id %}">Batch</a>
+              <a class="hs-btn hs-btn-sm hs-btn-primary" href="{% url 'slurp_ui:production_batch_pdf' e.batch_id %}" target="_blank" rel="noopener">PDF ticket</a>
               {% endif %}
-            </td>
-          </tr>
+            </div>
+          </div>
           {% empty %}
-          <tr><td colspan="4">No events in this range.</td></tr>
+          <div class="hs-empty">Nothing planned on this day.</div>
           {% endfor %}
-        </tbody>
-      </table>
+        {% else %}
+          <div class="hs-empty">Select a day to see products, quantities, and open batch tickets.</div>
+        {% endif %}
+      </div>
     </div>
-
-    <aside>
-      {% if selected_event and selected_event.reschedulable %}
-      <h3>Reschedule</h3>
-      <p><strong>{{ selected_event.title }}</strong><br />Current: {{ selected_event.date }}</p>
-      <form method="post">
-        {% csrf_token %}
-        <input type="hidden" name="action" value="reschedule" />
-        <input type="hidden" name="event_id" value="{{ selected_event.id }}" />
-        <input type="hidden" name="month" value="{{ month_param }}" />
-        {% for t in selected_types %}<input type="hidden" name="types" value="{{ t }}" />{% endfor %}
-        <div class="form-row"><label>New date</label><input type="date" name="new_date" required value="{{ selected_event.date }}" /></div>
-        <button type="submit" class="btn btn-primary">Save new date</button>
-      </form>
-      <p style="font-size:0.85rem;color:#64748b;margin-top:0.75rem">Shipments update expected ship date; production batches update production date. Drag-and-drop not ported — click Reschedule instead.</p>
-      {% else %}
-      <p style="color:#64748b">Select a reschedulable shipment or production event to change its date.</p>
-      {% endif %}
-    </aside>
-  </div>
 </div>
-<style>
-  .calendar-event { display:block; font-size:0.7rem; padding:2px 4px; margin-bottom:2px; border-radius:3px; color:#fff; text-decoration:none; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .calendar-event.event-shipment { background:#3498db; }
-  .calendar-event.event-raw_material { background:#27ae60; }
-  .calendar-event.event-production { background:#f39c12; }
-  .calendar-event.event-receivable { background:#9b59b6; }
-  .calendar-event.event-payable { background:#e74c3c; }
-  .calendar-day.selected { outline:2px solid #007bff; }
-  .day-number { display:block; font-weight:600; margin-bottom:4px; text-decoration:none; color:inherit; }
-</style>
+
+<form id="hs-cal-reschedule-form" method="post" hidden>
+  {% csrf_token %}
+  <input type="hidden" name="action" value="reschedule" />
+  <input type="hidden" name="event_id" id="hs-cal-event-id" />
+  <input type="hidden" name="new_date" id="hs-cal-new-date" />
+  <input type="hidden" name="month" value="{{ month_param }}" />
+  {% for t in selected_types %}<input type="hidden" name="types" value="{{ t }}" />{% endfor %}
+</form>
+
+<script>
+(function () {
+  var month = document.getElementById('hs-cal-month');
+  var toast = document.getElementById('hs-cal-toast');
+  var form = document.getElementById('hs-cal-reschedule-form');
+  var detail = document.getElementById('hs-cal-day-detail');
+  if (!month || !form) return;
+  var csrf = form.querySelector('[name=csrfmiddlewaretoken]').value;
+  var dragging = null;
+  var types = (month.getAttribute('data-types') || '').split(',').filter(Boolean);
+  var monthParam = month.getAttribute('data-month') || '';
+
+  function showToast(msg, ok) {
+    if (!toast) return;
+    toast.hidden = false;
+    toast.textContent = msg;
+    toast.className = 'hs-cal-toast ' + (ok ? 'ok' : 'err');
+    clearTimeout(showToast._t);
+    showToast._t = setTimeout(function () { toast.hidden = true; }, 3200);
+  }
+
+  function dayUrl(dateStr, eventId) {
+    var q = ['month=' + encodeURIComponent(monthParam), 'day=' + encodeURIComponent(dateStr)];
+    types.forEach(function (t) { q.push('types=' + encodeURIComponent(t)); });
+    if (eventId) q.push('event=' + encodeURIComponent(eventId));
+    return '?' + q.join('&');
+  }
+
+  function openPdf(url) {
+    if (!url) return;
+    window.open(url, '_blank', 'noopener');
+  }
+
+  // Day cell: background click selects day. Event click: focus or PDF on second click.
+  month.addEventListener('click', function (e) {
+    var evChip = e.target.closest('.hs-cal-event');
+    var day = e.target.closest('.hs-cal-day');
+    if (!day) return;
+
+    if (evChip) {
+      e.preventDefault();
+      e.stopPropagation();
+      var eventId = evChip.getAttribute('data-event-id');
+      var pdfUrl = evChip.getAttribute('data-pdf-url');
+      var dateStr = day.getAttribute('data-date');
+      var selectedEvent = month.getAttribute('data-selected-event') || '';
+      var selectedDay = month.getAttribute('data-selected-day') || '';
+
+      // Second click on same focused production event -> PDF
+      if (pdfUrl && selectedEvent === eventId && selectedDay === dateStr) {
+        openPdf(pdfUrl);
+        return;
+      }
+      window.location.href = dayUrl(dateStr, eventId);
+      return;
+    }
+
+    // Clicking the day (not a chip) while already on that day keeps the day selected (href handles navigation)
+  });
+
+  // Detail list: second click on focused production opens PDF; first click focuses via URL
+  if (detail) {
+    detail.addEventListener('click', function (e) {
+      if (e.target.closest('a, button, form')) return;
+      var row = e.target.closest('.hs-cal-detail-row');
+      if (!row) return;
+      var eventId = row.getAttribute('data-event-id');
+      var pdfUrl = row.getAttribute('data-pdf-url');
+      var selectedEvent = month.getAttribute('data-selected-event') || '';
+      var dayStr = month.getAttribute('data-selected-day') || '';
+      if (!dayStr) return;
+
+      if (pdfUrl && selectedEvent === eventId) {
+        e.preventDefault();
+        openPdf(pdfUrl);
+        return;
+      }
+      window.location.href = dayUrl(dayStr, eventId);
+    });
+  }
+
+  month.addEventListener('dragstart', function (e) {
+    var el = e.target.closest('.is-draggable');
+    if (!el) return;
+    e.stopPropagation();
+    dragging = el;
+    e.dataTransfer.setData('text/plain', el.getAttribute('data-event-id'));
+    e.dataTransfer.effectAllowed = 'move';
+    el.classList.add('dragging');
+  });
+  month.addEventListener('dragend', function () {
+    if (dragging) dragging.classList.remove('dragging');
+    dragging = null;
+    month.querySelectorAll('.hs-cal-day.drop-target').forEach(function (d) {
+      d.classList.remove('drop-target');
+    });
+  });
+  month.addEventListener('dragover', function (e) {
+    var day = e.target.closest('.hs-cal-day');
+    if (!day || !dragging) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    month.querySelectorAll('.hs-cal-day.drop-target').forEach(function (d) {
+      if (d !== day) d.classList.remove('drop-target');
+    });
+    day.classList.add('drop-target');
+  });
+  month.addEventListener('dragleave', function (e) {
+    var day = e.target.closest('.hs-cal-day');
+    if (day && !day.contains(e.relatedTarget)) day.classList.remove('drop-target');
+  });
+  month.addEventListener('drop', function (e) {
+    var day = e.target.closest('.hs-cal-day');
+    if (!day || !dragging) return;
+    e.preventDefault();
+    day.classList.remove('drop-target');
+    var eventId = dragging.getAttribute('data-event-id');
+    var fromDate = dragging.getAttribute('data-event-date');
+    var toDate = day.getAttribute('data-date');
+    if (!eventId || !toDate || toDate === fromDate) return;
+
+    var body = new URLSearchParams();
+    body.set('action', 'reschedule');
+    body.set('event_id', eventId);
+    body.set('new_date', toDate);
+    body.set('month', monthParam);
+    types.forEach(function (t) { body.append('types', t); });
+
+    fetch(window.location.pathname + '?month=' + encodeURIComponent(monthParam), {
+      method: 'POST',
+      headers: {
+        'X-CSRFToken': csrf,
+        'X-Requested-With': 'XMLHttpRequest',
+        'Accept': 'application/json',
+        'Content-Type': 'application/x-www-form-urlencoded'
+      },
+      body: body.toString(),
+      credentials: 'same-origin'
+    }).then(function (r) { return r.json().then(function (j) { return { ok: r.ok && j.ok, j: j }; }); })
+      .then(function (res) {
+        showToast(res.j.message || (res.ok ? 'Updated' : 'Failed'), res.ok);
+        if (res.ok) setTimeout(function () { window.location.reload(); }, 400);
+      })
+      .catch(function () { showToast('Network error rescheduling.', false); });
+  });
+})();
+</script>
 {% endblock %}

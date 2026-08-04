@@ -918,14 +918,46 @@ class FormulaItem(models.Model):
         return f"{self.formula.finished_good.name} - {self.item.name} ({self.percentage}%)"
 
 
+class RDFormulaCodeSequence(models.Model):
+    """Per family-letter counter for R&D codes (format: L-R001). Never reused."""
+    family_letter = models.CharField(max_length=1, unique=True)
+    sequence_number = models.IntegerField(default=0)
+    last_updated = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['family_letter']
+        verbose_name = 'R&D formula code sequence'
+        verbose_name_plural = 'R&D formula code sequences'
+
+    def __str__(self):
+        return f"{self.family_letter}-R{self.sequence_number:03d}"
+
+
 class RDFormula(models.Model):
     """R&D formula: pre-commercialization BOM for cost estimation; can be promoted to Finished Good."""
     STATUS_CHOICES = [
         ('draft', 'Draft'),
         ('approved', 'Approved'),
         ('scrapped', 'Scrapped'),
+        ('commercialized', 'Commercialized'),
     ]
-    name = models.CharField(max_length=255, help_text='Product name (e.g. Natural Red D1307)')
+    name = models.CharField(max_length=255, help_text='Product name (e.g. Natural Red trial)')
+    family_letter = models.CharField(
+        max_length=1,
+        help_text='Commercial family letter only (e.g. L for Natural Blue). Assigned at create; used in R&D code.',
+    )
+    rd_code = models.CharField(
+        max_length=20,
+        unique=True,
+        db_index=True,
+        help_text='Permanent R&D code (e.g. L-R001). Never reused, even if scrapped.',
+    )
+    commercial_sku = models.CharField(
+        max_length=100,
+        blank=True,
+        null=True,
+        help_text='Commercial SKU after graduation (e.g. L1303). R&D code stays for history.',
+    )
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='draft')
     notes = models.TextField(blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -937,7 +969,7 @@ class RDFormula(models.Model):
         verbose_name_plural = 'R&D Formulas'
 
     def __str__(self):
-        return self.name
+        return f"{self.rd_code} — {self.name}"
 
     @property
     def total_cost_per_lb(self):
@@ -945,6 +977,10 @@ class RDFormula(models.Model):
             (line.formula_cost or 0) for line in self.lines.all()
         )
         return round(total, 2)
+
+    @property
+    def is_archived(self):
+        return self.status == 'scrapped'
 
 
 class RDFormulaLine(models.Model):
@@ -1690,6 +1726,78 @@ class CustomerPricing(models.Model):
     
     def __str__(self):
         return f"{self.customer.name} - {self.item.sku} - ${self.unit_price}/{self.unit_of_measure}"
+
+
+class QuoteNumberSequence(models.Model):
+    """Sequence for customer quotes (format: Q-yy####)."""
+    year_prefix = models.CharField(max_length=2, unique=True)
+    sequence_number = models.IntegerField(default=0)
+    last_updated = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-year_prefix', '-sequence_number']
+
+
+class CustomerQuote(models.Model):
+    """Priced customer quote before a sales order."""
+    STATUS_CHOICES = [
+        ('draft', 'Draft'),
+        ('sent', 'Sent'),
+        ('accepted', 'Accepted'),
+        ('rejected', 'Rejected'),
+        ('expired', 'Expired'),
+        ('converted', 'Converted'),
+    ]
+
+    quote_number = models.CharField(max_length=40, unique=True, db_index=True)
+    customer = models.ForeignKey(Customer, on_delete=models.CASCADE, related_name='quotes')
+    ship_to_location = models.ForeignKey(
+        ShipToLocation, on_delete=models.SET_NULL, blank=True, null=True, related_name='quotes'
+    )
+    contact = models.ForeignKey(
+        CustomerContact, on_delete=models.SET_NULL, blank=True, null=True, related_name='quotes'
+    )
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='draft')
+    quote_date = models.DateField(default=timezone.localdate)
+    valid_until = models.DateField(blank=True, null=True)
+    customer_reference = models.CharField(max_length=255, blank=True, null=True)
+    notes = models.TextField(blank=True, null=True)
+    created_by = models.CharField(max_length=255, blank=True, null=True)
+    converted_sales_order = models.ForeignKey(
+        'SalesOrder', on_delete=models.SET_NULL, blank=True, null=True, related_name='source_quotes'
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-quote_date', '-id']
+
+    def __str__(self):
+        return f"{self.quote_number} — {self.customer.name}"
+
+    @property
+    def line_total(self):
+        return sum((line.extended_price or 0) for line in self.lines.all())
+
+
+class CustomerQuoteItem(models.Model):
+    quote = models.ForeignKey(CustomerQuote, on_delete=models.CASCADE, related_name='lines')
+    item = models.ForeignKey(Item, on_delete=models.CASCADE, related_name='customer_quote_items')
+    quantity = models.FloatField()
+    unit_price = models.FloatField()
+    unit_of_measure = models.CharField(max_length=10, choices=Item.UNIT_CHOICES, default='lbs')
+    notes = models.TextField(blank=True, null=True)
+    sort_order = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ['sort_order', 'id']
+
+    @property
+    def extended_price(self):
+        return float(self.quantity or 0) * float(self.unit_price or 0)
+
+    def __str__(self):
+        return f"{self.quote.quote_number} — {self.item.sku}"
 
 
 class VendorPricing(models.Model):
