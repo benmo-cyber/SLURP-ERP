@@ -132,13 +132,13 @@
               <td><input name="comp_{{ forloop.counter0 }}" type="number" step="any" value="{% if row.line and row.line.composition_pct != None %}{{ row.line.composition_pct }}{% endif %}" style="width:5rem" /></td>
               <td><input name="price_{{ forloop.counter0 }}" type="number" step="any" value="{% if row.line and row.line.price_per_lb != None %}{{ row.line.price_per_lb }}{% endif %}" style="width:5rem" /></td>
               <td><input name="labor_{{ forloop.counter0 }}" type="number" step="any" value="{% if row.line and row.line.labor_flat_amount != None %}{{ row.line.labor_flat_amount }}{% endif %}" style="width:5rem" /></td>
-              <td>{% if row.line and row.line.formula_cost != None %}${{ row.line.formula_cost|floatformat:2 }}{% else %}—{% endif %}</td>
+              <td>{% if row.line and row.line.formula_cost != None %}{{ row.line.formula_cost|money:2 }}{% else %}—{% endif %}</td>
             </tr>
             {% endfor %}
           </tbody>
         </table>
         <p class="hs-section-note" style="margin-top:0.75rem;margin-bottom:0">
-          <strong>Total estimated cost:</strong> ${{ total_cost|floatformat:2 }}/lb
+          <strong>Total estimated cost:</strong> {{ total_cost|money:2 }}/lb
         </p>
       </div>
     </div>

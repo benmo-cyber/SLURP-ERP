@@ -11,30 +11,51 @@
     <div class="hs-col">
       <div class="hs-card">
         <div class="hs-card-header">
-          <h3>Select orders</h3>
+          <h3>Select orders &amp; ship qtys</h3>
           <span class="hs-muted" style="font-size:0.8rem">Same customer + ship-to</span>
         </div>
         <div class="hs-card-body">
           <p class="hs-section-note">
-            Choose at least two eligible orders. Freight applies to the first order only;
-            one combined packing list opens after checkout.
+            Choose at least two eligible orders. Set ship qty per line (defaults to full allocation).
+            Freight applies to the first order only; one combined packing list opens after checkout.
           </p>
           <div class="hs-order-pick-list">
             {% for o in orders %}
-            <label class="hs-check-row">
-              <input type="checkbox" name="order_ids" value="{{ o.id }}" form="combined-checkout-form" />
-              <span>
-                <span class="hs-list-title">{{ o.so_number }}
-                  {% if o.drop_ship %}<span class="hs-badge warn">DS</span>
-                  {% else %}<span class="hs-badge info">{{ o.status }}</span>{% endif %}
+            <div class="hs-check-row" style="display:block;align-items:stretch;padding:0.75rem 0;border-bottom:1px solid #e8eaed">
+              <label style="display:flex;gap:0.65rem;align-items:flex-start;cursor:pointer">
+                <input type="checkbox" name="order_ids" value="{{ o.id }}" form="combined-checkout-form" />
+                <span>
+                  <span class="hs-list-title">{{ o.so_number }}
+                    {% if o.drop_ship %}<span class="hs-badge warn">DS</span>
+                    {% else %}<span class="hs-badge info">{{ o.status }}</span>{% endif %}
+                  </span>
+                  <span class="hs-list-sub">
+                    {{ o.customer_name }}
+                    {% if o.ship_to_location %} · {{ o.ship_to_location.location_name }}{% endif %}
+                  </span>
                 </span>
-                <span class="hs-list-sub">
-                  {{ o.customer_name }}
-                  {% if o.ship_to_location %} · {{ o.ship_to_location.location_name }}{% endif %}
-                  {% if not o.drop_ship %} · alloc {{ o.total_allocated|floatformat:2 }}{% endif %}
-                </span>
-              </span>
-            </label>
+              </label>
+              {% if not o.drop_ship %}
+              <table class="hs-table" style="margin-top:0.5rem;font-size:0.85rem">
+                <thead><tr><th>SKU</th><th>Alloc</th><th>Ship qty</th></tr></thead>
+                <tbody>
+                  {% for line in o.items.all %}
+                  <tr>
+                    <td>{{ line.item.sku }}</td>
+                    <td>{{ line.quantity_allocated|floatformat:2 }} {{ line.item.unit_of_measure }}</td>
+                    <td>
+                      <input form="combined-checkout-form" name="ship_qty_{{ line.id }}" type="number" step="any" min="0"
+                             max="{{ line.quantity_allocated }}"
+                             value="{{ line.quantity_allocated }}"
+                             style="width:6rem" />
+                      <span class="hs-muted">{{ line.item.unit_of_measure }}</span>
+                    </td>
+                  </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+              {% endif %}
+            </div>
             {% empty %}
             <div class="hs-empty">No eligible orders.</div>
             {% endfor %}

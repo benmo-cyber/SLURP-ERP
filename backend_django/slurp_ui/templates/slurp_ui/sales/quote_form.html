@@ -99,9 +99,13 @@
       <button type="submit" class="btn btn-primary" {% if quote and quote.status == 'converted' %}disabled{% endif %}>Save quote</button>
       <a class="btn btn-secondary" href="{% url 'slurp_ui:sales_customer_profile' customer.pk %}?tab=quotes">Cancel</a>
       {% if quote and quote.status != 'converted' %}
+      <button type="submit" name="action" value="convert" class="btn btn-primary"
+              onclick="return confirm('Convert this quote to a draft sales order?');">Convert to SO</button>
       <button type="submit" name="action" value="status:sent" class="btn btn-secondary">Mark sent</button>
       <button type="submit" name="action" value="status:accepted" class="btn btn-secondary">Mark accepted</button>
       <button type="submit" name="action" value="delete" class="btn btn-secondary" style="color:#b91c1c" onclick="return confirm('Delete quote?');">Delete</button>
+      {% elif quote and quote.converted_sales_order_id %}
+      <a class="btn btn-secondary" href="{% url 'slurp_ui:sales_order_detail' quote.converted_sales_order_id %}">Open sales order</a>
       {% endif %}
     </div>
   </form>

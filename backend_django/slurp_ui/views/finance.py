@@ -1115,6 +1115,11 @@ def _whatif_line_payload(line: PricingWhatIfLine) -> dict:
         "ingredient_overrides": line.ingredient_overrides or {},
         "base_cost_per_lb": line.base_cost_per_lb,
         "cost_is_manual": bool(line.cost_is_manual),
+        "tariff_rate": float(line.tariff_rate or 0),
+        "tariff_pct": round(float(line.tariff_rate or 0) * 100, 4),
+        "freight_per_lb": float(line.freight_per_lb or 0),
+        "freight_per_kg": float(line.freight_per_kg or 0),
+        "landed_whatif_per_lb": line.landed_whatif_per_lb,
         "additional_cost_per_lb": float(line.additional_cost_per_lb or 0),
         "margin": line.margin,
         "margin_pct": round(float(line.margin) * 100, 4) if line.margin is not None else None,
@@ -1163,9 +1168,26 @@ def finance_whatif_lookup_cost(request: HttpRequest) -> HttpResponse:
 
         cost = compute_formula_cost(rd, overrides)
 
+    from ..pricing_whatif import cm_freight_per_lb
+
+    tariff_rate = 0.0
+    freight_lb = 0.0
+    if cm is not None:
+        tariff_rate = float(cm.tariff or 0)
+        freight_lb = cm_freight_per_lb(cm)
+    landed = None
+    if cost is not None:
+        landed = float(cost) * (1.0 + tariff_rate) + freight_lb
+
     payload = {
         "ok": True,
         "cost": float(cost) if cost is not None else None,
+        "base_cost_per_lb": float(cost) if cost is not None else None,
+        "tariff_rate": tariff_rate,
+        "tariff_pct": round(tariff_rate * 100, 4),
+        "freight_per_lb": freight_lb,
+        "freight_per_kg": freight_lb * 2.2,
+        "landed_whatif_per_lb": landed,
         "matched": label,
         "source_type": kind,
         "product_name": label or (data.get("product_name") or ""),
@@ -1337,7 +1359,31 @@ def finance_whatif_line_save(request: HttpRequest) -> HttpResponse:
     line.order_pattern = (data.get("order_pattern") or "").strip()
     line.notes = (data.get("notes") or "").strip()
 
+    # What-if trade stack (applied to ex-works / formula base — never on top of CM landed)
+    if "tariff_pct" in data and data.get("tariff_pct") not in (None, ""):
+        try:
+            line.tariff_rate = max(0.0, float(data["tariff_pct"]) / 100.0)
+        except (TypeError, ValueError):
+            pass
+    elif "tariff_rate" in data and data.get("tariff_rate") not in (None, ""):
+        try:
+            line.tariff_rate = max(0.0, float(data["tariff_rate"]))
+        except (TypeError, ValueError):
+            pass
+
+    if "freight_per_kg" in data and data.get("freight_per_kg") not in (None, "") and "freight_per_lb" not in data:
+        try:
+            line.freight_per_lb = max(0.0, float(data["freight_per_kg"]) / 2.2)
+        except (TypeError, ValueError):
+            pass
+    elif "freight_per_lb" in data and data.get("freight_per_lb") not in (None, ""):
+        try:
+            line.freight_per_lb = max(0.0, float(data["freight_per_lb"]))
+        except (TypeError, ValueError):
+            pass
+
     force_lookup = bool(data.get("refresh_cost") or data.get("apply_scenario"))
+    reset_trade = bool(data.get("reset_trade") or key_changed or product_changed)
     overrides_changed = "ingredient_overrides" in data
     manual_flag = data.get("cost_is_manual")
     is_manual = manual_flag is True or manual_flag == "1" or manual_flag == 1
@@ -1364,7 +1410,34 @@ def finance_whatif_line_save(request: HttpRequest) -> HttpResponse:
             line.base_cost_per_lb = cost_val
     elif force_lookup or key_changed or product_changed or overrides_changed or data.get("apply_scenario"):
         line.cost_is_manual = False
-        refresh_line_cost(line, force=True)
+        # Don't let refresh overwrite user tariff/freight just scrubbed unless product changed.
+        trade_from_client = ("tariff_pct" in data or "tariff_rate" in data or "freight_per_lb" in data or "freight_per_kg" in data)
+        refresh_line_cost(
+            line,
+            force=True,
+            reset_trade=reset_trade and not (trade_from_client and not key_changed and not product_changed),
+        )
+        if trade_from_client and not key_changed and not product_changed:
+            if "tariff_pct" in data and data.get("tariff_pct") not in (None, ""):
+                try:
+                    line.tariff_rate = max(0.0, float(data["tariff_pct"]) / 100.0)
+                except (TypeError, ValueError):
+                    pass
+            elif "tariff_rate" in data and data.get("tariff_rate") not in (None, ""):
+                try:
+                    line.tariff_rate = max(0.0, float(data["tariff_rate"]))
+                except (TypeError, ValueError):
+                    pass
+            if "freight_per_kg" in data and data.get("freight_per_kg") not in (None, "") and "freight_per_lb" not in data:
+                try:
+                    line.freight_per_lb = max(0.0, float(data["freight_per_kg"]) / 2.2)
+                except (TypeError, ValueError):
+                    pass
+            elif "freight_per_lb" in data and data.get("freight_per_lb") not in (None, ""):
+                try:
+                    line.freight_per_lb = max(0.0, float(data["freight_per_lb"]))
+                except (TypeError, ValueError):
+                    pass
     else:
         line.cost_is_manual = False
         if data.get("base_cost_per_lb") not in (None, ""):
@@ -1372,7 +1445,7 @@ def finance_whatif_line_save(request: HttpRequest) -> HttpResponse:
             if cost_val is not None:
                 line.base_cost_per_lb = cost_val
         elif line.base_cost_per_lb is None and (line.product_name or line.catalog_key):
-            refresh_line_cost(line, force=True)
+            refresh_line_cost(line, force=True, reset_trade=False)
 
     line.save()
     from ..pricing_whatif import formula_ingredient_payload

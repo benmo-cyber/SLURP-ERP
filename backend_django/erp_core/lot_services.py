@@ -200,6 +200,18 @@ def release_from_hold(user, lot: Lot, quantity: float, coa_payload: dict | None 
                 qc_val = float(raw_qc)
             except (TypeError, ValueError):
                 raise LotFlowError("qc_result_value must be a number")
+            qc_pass = evaluate_qc_numeric_pass(qc_val, formula.qc_spec_min, formula.qc_spec_max)
+            if qc_pass is False:
+                raise LotFlowError(
+                    f"QC result out of specification for {formula.qc_parameter_name}; "
+                    "cannot release from hold."
+                )
+        for line in lines_qs:
+            line_pass = evaluate_item_line_pass(line, by_id.get(line.id, ""))
+            if line_pass is False:
+                raise LotFlowError(
+                    f"COA line failed specification: {line.test_name}; cannot release from hold."
+                )
 
     with transaction.atomic():
         lot_locked = Lot.objects.select_for_update().get(pk=lot.pk)

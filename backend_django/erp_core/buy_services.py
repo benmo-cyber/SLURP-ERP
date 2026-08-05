@@ -37,6 +37,34 @@ class BuyFlowError(Exception):
         self.status_code = status_code
 
 
+def po_line_ordered_native(po_item: PurchaseOrderItem) -> float:
+    """Convert PO line quantity_ordered from order_uom into item.unit_of_measure."""
+    item = po_item.item
+    q = float(po_item.quantity_ordered or 0)
+    if not item:
+        return q
+    item_uom = (item.unit_of_measure or "lbs").strip().lower()
+    order_uom = (po_item.order_uom or item.unit_of_measure or "lbs").strip().lower()
+    if order_uom in ("lb", "lbs"):
+        order_uom = "lbs"
+    if item_uom in ("lb", "lbs"):
+        item_uom = "lbs"
+    if order_uom == item_uom:
+        return normalize_quantity_by_uom(q, item_uom)
+    try:
+        return convert_mass_uom(q, order_uom, item_uom)
+    except ValueError:
+        # ea vs mass / unsupported — fall back to raw qty (cannot invent conversion)
+        return normalize_quantity_by_uom(q, item_uom)
+
+
+def po_line_open_on_order_native(po_item: PurchaseOrderItem) -> float:
+    """Native qty still contributing to Item.on_order after prior receipts."""
+    ordered = po_line_ordered_native(po_item)
+    received = float(po_item.quantity_received or 0)
+    return max(0.0, ordered - received)
+
+
 def _as_bool(value: Any, default: bool = False) -> bool:
     if value is None:
         return default
@@ -211,7 +239,7 @@ def issue_purchase_order(purchase_order: PurchaseOrder, user, issue_date=None) -
         for po_item in purchase_order.items.select_related("item"):
             if po_item.item:
                 item = po_item.item
-                item.on_order = (item.on_order or 0) + po_item.quantity_ordered
+                item.on_order = (item.on_order or 0) + po_line_ordered_native(po_item)
                 item.save(update_fields=["on_order"])
 
     try:
@@ -313,7 +341,7 @@ def check_in_lot(user, data: dict) -> Lot:
         po_item = next((li for li in po.items.all() if li.item_id == item.id), None)
         if po_item is None:
             raise BuyFlowError(f"Item {item.sku} is not on PO {po.po_number}.")
-        remaining = float(po_item.quantity_ordered or 0) - float(po_item.quantity_received or 0)
+        remaining = po_line_ordered_native(po_item) - float(po_item.quantity_received or 0)
         if qty_native > remaining + 0.01:
             raise BuyFlowError(
                 f"Quantity {qty_native} {item_uom} exceeds remaining PO qty "
@@ -410,8 +438,8 @@ def check_in_lot(user, data: dict) -> Lot:
                     break
 
             all_received = all(
-                float(li.quantity_received or 0) >= float(li.quantity_ordered or 0) - 0.01
-                for li in po.items.all()
+                float(li.quantity_received or 0) >= po_line_ordered_native(li) - 0.01
+                for li in po.items.select_related("item").all()
             )
             if all_received and po.status == "issued":
                 po.status = "received"
@@ -419,10 +447,6 @@ def check_in_lot(user, data: dict) -> Lot:
                 log_purchase_order_action(
                     po, "completed", lot=lot, notes="All items fully received"
                 )
-                try:
-                    create_ap_entry_from_po(po)
-                except Exception as e:
-                    logger.warning("create_ap_entry_from_po after check-in: %s", e)
             else:
                 log_purchase_order_action(
                     po,
@@ -430,6 +454,13 @@ def check_in_lot(user, data: dict) -> Lot:
                     lot=lot,
                     notes=f"Partial check-in: {lot.quantity} received",
                 )
+            try:
+                create_ap_entry_from_po(
+                    po,
+                    source_tag="auto on receive" if all_received else "auto on partial receive",
+                )
+            except Exception as e:
+                logger.warning("create_ap_entry_from_po after check-in: %s", e)
 
     carrier_val = (payload.get("carrier") or "").strip()
     if not carrier_val and po and po.carrier:
@@ -491,7 +522,7 @@ def cancel_purchase_order(purchase_order: PurchaseOrder) -> PurchaseOrder:
         for po_item in purchase_order.items.select_related("item"):
             if po_item.item:
                 item = po_item.item
-                item.on_order = max(0, (item.on_order or 0) - po_item.quantity_ordered)
+                item.on_order = max(0, (item.on_order or 0) - po_line_open_on_order_native(po_item))
                 item.save(update_fields=["on_order"])
 
     purchase_order.status = "cancelled"
@@ -552,7 +583,7 @@ def revise_purchase_order(original_po: PurchaseOrder) -> PurchaseOrder:
         for po_item in original_po.items.select_related("item"):
             if po_item.item:
                 item = po_item.item
-                item.on_order = max(0, (item.on_order or 0) - po_item.quantity_ordered)
+                item.on_order = max(0, (item.on_order or 0) - po_line_open_on_order_native(po_item))
                 item.save(update_fields=["on_order"])
         original_po.status = "superseded"
         original_po.save(update_fields=["status"])

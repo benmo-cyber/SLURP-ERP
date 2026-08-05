@@ -15,23 +15,23 @@
   <div class="hs-stat-row" style="margin-bottom:1rem">
     <div class="hs-stat">
       <div class="label">Open AR</div>
-      <div class="value">${{ ar_open_total|floatformat:0 }}</div>
+      <div class="value">{{ ar_open_total|money:0 }}</div>
     </div>
     <div class="hs-stat">
       <div class="label">Open AP</div>
-      <div class="value">${{ ap_open_total|floatformat:0 }}</div>
+      <div class="value">{{ ap_open_total|money:0 }}</div>
     </div>
     <div class="hs-stat">
       <div class="label">AR due (7d)</div>
-      <div class="value">${{ ar_due_week|floatformat:0 }}</div>
+      <div class="value">{{ ar_due_week|money:0 }}</div>
     </div>
     <div class="hs-stat">
       <div class="label">AP due (7d)</div>
-      <div class="value">${{ ap_due_week|floatformat:0 }}</div>
+      <div class="value">{{ ap_due_week|money:0 }}</div>
     </div>
     <div class="hs-stat">
       <div class="label">Net 7d (AR−AP)</div>
-      <div class="value">{% if net_week >= 0 %}+{% endif %}${{ net_week|floatformat:0 }}</div>
+      <div class="value">{% if net_week >= 0 %}+{% endif %}{{ net_week|money:0 }}</div>
     </div>
     <div class="hs-stat">
       <div class="label">Overdue / today</div>
@@ -60,7 +60,7 @@
                   {% if t.urgency == 'overdue' %}<span class="hs-badge danger">Overdue</span>{% else %}<span class="hs-badge info">Today</span>{% endif %}
                   {{ t.label }}
                 </div>
-                <div class="hs-list-sub">{{ t.detail }} · ${{ t.amount|floatformat:2 }} · due {{ t.due|date:"M j" }}</div>
+                <div class="hs-list-sub">{{ t.detail }} · {{ t.amount|money:2 }} · due {{ t.due|date:"M j" }}</div>
               </div>
               <a class="hs-btn hs-btn-sm hs-btn-primary" href="{{ t.pay_url }}">Mark as paid</a>
             </div>
@@ -80,7 +80,7 @@
           {% for inv in draft_invoices %}
           <a class="hs-list-link" href="{% url 'slurp_ui:finance_invoice_detail' inv.id %}">
             <div class="hs-list-title">{{ inv.invoice_number }}</div>
-            <div class="hs-list-sub">{{ inv.customer_vendor_name }} · ${{ inv.grand_total|floatformat:2 }}</div>
+            <div class="hs-list-sub">{{ inv.customer_vendor_name }} · {{ inv.grand_total|money:2 }}</div>
           </a>
           {% empty %}
           <div class="hs-empty">No drafts waiting.</div>

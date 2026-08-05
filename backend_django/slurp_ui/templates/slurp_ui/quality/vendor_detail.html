@@ -287,7 +287,7 @@
                   {% else %}<span class="hs-badge danger">+{{ row.days_vs_due }} late</span>{% endif %}
                 {% else %}—{% endif %}
               </td>
-              <td>${{ row.amount|floatformat:2 }}</td>
+              <td>{{ row.amount|money:2 }}</td>
               <td>{{ row.method|default:"—" }}</td>
               <td>{{ row.reference|default:"—" }}</td>
             </tr>
@@ -511,7 +511,7 @@
             <td>{{ row.item.name }}</td>
             <td>{{ row.item.unit_of_measure }}</td>
             <td>{% if row.item.pack_size %}{{ row.item.pack_size }} {{ row.item.unit_of_measure }}{% else %}—{% endif %}</td>
-            <td>{% if row.item.price %}${{ row.item.price|floatformat:2 }}{% else %}—{% endif %}</td>
+            <td>{% if row.item.price %}{{ row.item.price|money:2 }}{% else %}—{% endif %}</td>
             <td>{{ row.ytd_usage|floatformat:2 }} {{ row.item.unit_of_measure }}</td>
           </tr>
           {% empty %}

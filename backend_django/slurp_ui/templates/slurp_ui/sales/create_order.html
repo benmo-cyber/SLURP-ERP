@@ -99,7 +99,7 @@
               </div>
               <div class="form-row" style="margin:0">
                 <label>Unit price</label>
-                <input name="price_0" type="number" step="0.01" min="0" />
+                <input name="price_0" type="number" step="0.01" min="0" data-auto="1" />
               </div>
             </div>
           </div>
@@ -114,13 +114,39 @@
   </form>
   {% endif %}
 </div>
+<script id="customer-pricing-data" type="application/json">{{ customer_pricing_json|default:"{}"|safe }}</script>
 <script>
 (function () {
   var wrap = document.getElementById('so-lines');
   var countInput = document.getElementById('line_count');
   var addBtn = document.getElementById('add-line');
   if (!wrap || !addBtn) return;
+  var pricing = {};
+  try {
+    var el = document.getElementById('customer-pricing-data');
+    if (el) pricing = JSON.parse(el.textContent || '{}') || {};
+  } catch (e) {}
   var itemOptions = wrap.querySelector('select').innerHTML;
+
+  function bindLine(lineEl) {
+    var sel = lineEl.querySelector('select[name^="item_id_"]');
+    var price = lineEl.querySelector('input[name^="price_"]');
+    if (!sel || !price) return;
+    price.addEventListener('input', function () {
+      price.dataset.auto = '0';
+    });
+    sel.addEventListener('change', function () {
+      if (price.dataset.auto === '0' && price.value !== '') return;
+      var p = pricing[sel.value];
+      if (p != null && p !== '') {
+        price.value = p;
+        price.dataset.auto = '1';
+      }
+    });
+  }
+
+  wrap.querySelectorAll('.so-line').forEach(bindLine);
+
   addBtn.addEventListener('click', function () {
     var n = parseInt(countInput.value || '1', 10);
     if (n >= 20) return;
@@ -131,10 +157,11 @@
       '<div class="hs-form-grid-3">' +
       '<div class="form-row" style="margin:0"><label>Item *</label><select name="item_id_' + n + '">' + itemOptions + '</select></div>' +
       '<div class="form-row" style="margin:0"><label>Qty *</label><input name="qty_' + n + '" type="number" step="any" min="0" /></div>' +
-      '<div class="form-row" style="margin:0"><label>Unit price</label><input name="price_' + n + '" type="number" step="0.01" min="0" /></div>' +
+      '<div class="form-row" style="margin:0"><label>Unit price</label><input name="price_' + n + '" type="number" step="0.01" min="0" data-auto="1" /></div>' +
       '</div>';
     wrap.appendChild(div);
     countInput.value = String(n + 1);
+    bindLine(div);
   });
 })();
 </script>

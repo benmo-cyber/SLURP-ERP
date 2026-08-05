@@ -26,10 +26,10 @@
       <td>{{ po.status }}</td>
       <td>{{ po.order_date|date:"Y-m-d" }}</td>
       <td>{{ po.required_date|default:"—" }}</td>
-      <td>${{ po.total|floatformat:2 }}</td>
+      <td>{{ po.total|money:2 }}</td>
       <td>
         {% for li in po.items.all %}
-          {{ li.item.sku }}: {{ li.quantity_received|floatformat:1 }}/{{ li.quantity_ordered|floatformat:1 }}{% if not forloop.last %}<br>{% endif %}
+          {{ li.item.sku }}: {{ li.quantity_received|floatformat:1 }} {{ li.item.unit_of_measure }} / {{ li.quantity_ordered|floatformat:1 }} {{ li.order_uom|default:li.item.unit_of_measure }}{% if not forloop.last %}<br>{% endif %}
         {% empty %}—{% endfor %}
       </td>
       <td style="white-space:nowrap">

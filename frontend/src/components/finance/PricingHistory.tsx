@@ -3,6 +3,7 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, Responsi
 import { getItems } from '../../api/inventory'
 import { getPricingHistory } from '../../api/costMaster'
 import { formatAppDate } from '../../utils/appDateFormat'
+import { formatCurrency } from '../../utils/formatNumber'
 import './PricingHistory.css'
 
 interface Item {
@@ -211,7 +212,7 @@ function PricingHistory() {
                   label={{ value: `Price (${unitDisplay})`, angle: -90, position: 'insideLeft' }}
                 />
                 <Tooltip 
-                  formatter={(value: number) => `$${value.toFixed(2)}`}
+                  formatter={(value: number) => formatCurrency(value)}
                 />
                 <Legend />
                 {items

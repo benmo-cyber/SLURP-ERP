@@ -13,7 +13,17 @@
   {% block extra_css %}{% endblock %}
   <style>
     /* SLURP 2.0 chrome tweaks — keep React class names */
-    a.nav-link { text-decoration: none; }
+    a.nav-link,
+    a.nav-link:hover,
+    a.nav-link:focus,
+    [class$="-sidebar"] a,
+    [class$="-sidebar"] a:hover,
+    [class$="-sidebar"] a:focus,
+    a[class$="-nav-item"],
+    a[class$="-nav-item"]:hover,
+    a[class$="-nav-item"]:focus {
+      text-decoration: none;
+    }
     .port-banner {
       background: #fff3cd;
       color: #664d03;

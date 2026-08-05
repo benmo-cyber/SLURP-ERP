@@ -10,8 +10,8 @@
   <div class="hs-stat-row" style="margin-bottom:1rem">
     <div class="hs-stat"><div class="label">Overdue items</div><div class="value">{{ overdue_count }}</div></div>
     <div class="hs-stat"><div class="label">Due today</div><div class="value">{{ due_today_count }}</div></div>
-    <div class="hs-stat"><div class="label">AR due (7d)</div><div class="value">${{ ar_due_week|floatformat:0 }}</div></div>
-    <div class="hs-stat"><div class="label">AP due (7d)</div><div class="value">${{ ap_due_week|floatformat:0 }}</div></div>
+    <div class="hs-stat"><div class="label">AR due (7d)</div><div class="value">{{ ar_due_week|money:0 }}</div></div>
+    <div class="hs-stat"><div class="label">AP due (7d)</div><div class="value">{{ ap_due_week|money:0 }}</div></div>
   </div>
   {% include "slurp_ui/finance/_cash_calendar.html" %}
 </div>

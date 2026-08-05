@@ -57,7 +57,7 @@
         <div class="hs-card-header"><h3>Lines to ship</h3></div>
         <div class="hs-card-body tight">
           <table class="hs-table">
-            <thead><tr><th>SKU</th><th>Ordered</th><th>Allocated</th><th>Lots</th></tr></thead>
+            <thead><tr><th>SKU</th><th>Ordered</th><th>Allocated</th><th>Ship qty</th><th>Lots</th></tr></thead>
             <tbody>
               {% for line in selected.items.all %}
               <tr>
@@ -66,19 +66,30 @@
                   <div class="hs-list-sub">{{ line.item.name }}</div>
                 </td>
                 <td>{{ line.quantity_ordered|floatformat:2 }} {{ line.item.unit_of_measure }}</td>
-                <td>{{ line.quantity_allocated|floatformat:2 }}</td>
+                <td>{{ line.quantity_allocated|floatformat:2 }} {{ line.item.unit_of_measure }}</td>
+                <td>
+                  <input form="checkout-form" name="ship_qty_{{ line.id }}" type="number" step="any" min="0"
+                         max="{{ line.quantity_allocated }}"
+                         value="{{ line.quantity_allocated }}"
+                         style="width:6.5rem"
+                         title="Qty to ship this checkout" />
+                  <span class="hs-muted">{{ line.item.unit_of_measure }}</span>
+                </td>
                 <td>
                   {% for al in line.allocated_lots.all %}
-                  <div class="hs-list-sub">{{ al.lot.lot_number }} · {{ al.quantity_allocated|floatformat:2 }}</div>
+                  <div class="hs-list-sub">{{ al.lot.lot_number }} · {{ al.quantity_allocated|floatformat:2 }} {{ line.item.unit_of_measure }}</div>
                   {% empty %}<span class="hs-muted">—</span>{% endfor %}
                 </td>
               </tr>
               {% empty %}
-              <tr><td colspan="4"><div class="hs-empty">No lines.</div></td></tr>
+              <tr><td colspan="5"><div class="hs-empty">No lines.</div></td></tr>
               {% endfor %}
             </tbody>
           </table>
-          <p class="hs-section-note" style="padding:0.75rem 1rem">Ships full remaining allocation and creates a draft invoice.</p>
+          <p class="hs-section-note" style="padding:0.75rem 1rem">
+            Enter ship qty per line (defaults to full allocation). Leave 0 to hold the line for a later shipment.
+            Creates a draft invoice for this checkout only.
+          </p>
         </div>
       </div>
     </div>
@@ -87,7 +98,7 @@
       <div class="hs-card">
         <div class="hs-card-header"><h3>Shipment details</h3></div>
         <div class="hs-card-body">
-          <form method="post">
+          <form id="checkout-form" method="post">
             {% csrf_token %}
             <input type="hidden" name="so_id" value="{{ selected.id }}" />
             <div class="hs-form-grid">

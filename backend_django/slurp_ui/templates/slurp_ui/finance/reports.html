@@ -53,43 +53,43 @@
           <tr>
             <td>{{ row.account_number }} — {{ row.account_name }}</td>
             <td>{{ row.account_type }}</td>
-            <td>{{ row.debit_balance|floatformat:2 }}</td>
-            <td>{{ row.credit_balance|floatformat:2 }}</td>
+            <td>{{ row.debit_balance|numcomma:2 }}</td>
+            <td>{{ row.credit_balance|numcomma:2 }}</td>
           </tr>
           {% empty %}<tr><td colspan="4"><div class="hs-empty">No accounts with activity.</div></td></tr>{% endfor %}
         </tbody>
-        <tfoot><tr><th colspan="2">Totals</th><th>{{ report_data.total_debits|floatformat:2 }}</th><th>{{ report_data.total_credits|floatformat:2 }}</th></tr></tfoot>
+        <tfoot><tr><th colspan="2">Totals</th><th>{{ report_data.total_debits|numcomma:2 }}</th><th>{{ report_data.total_credits|numcomma:2 }}</th></tr></tfoot>
       </table>
       <p class="hs-section-note" style="margin-top:0.75rem">{% if report_data.is_balanced %}<span class="hs-badge ok">Balanced</span>{% else %}<span class="hs-badge danger">Out of balance</span>{% endif %}</p>
 
       {% elif report_type == "balance-sheet" %}
       <h4 class="hs-muted" style="margin:0 0 0.5rem;text-transform:uppercase;font-size:0.72rem;letter-spacing:0.04em">Assets</h4>
       <table class="hs-table" style="margin-bottom:1rem"><thead><tr><th>Account</th><th>Balance</th></tr></thead>
-      <tbody>{% for row in report_data.assets %}<tr><td>{{ row.account_number }} — {{ row.account_name }}</td><td>{{ row.balance|floatformat:2 }}</td></tr>{% empty %}<tr><td colspan="2">—</td></tr>{% endfor %}</tbody>
-      <tfoot><tr><th>Total assets</th><th>{{ report_data.total_assets|floatformat:2 }}</th></tr></tfoot></table>
+      <tbody>{% for row in report_data.assets %}<tr><td>{{ row.account_number }} — {{ row.account_name }}</td><td>{{ row.balance|numcomma:2 }}</td></tr>{% empty %}<tr><td colspan="2">—</td></tr>{% endfor %}</tbody>
+      <tfoot><tr><th>Total assets</th><th>{{ report_data.total_assets|numcomma:2 }}</th></tr></tfoot></table>
       <h4 class="hs-muted" style="margin:0 0 0.5rem;text-transform:uppercase;font-size:0.72rem;letter-spacing:0.04em">Liabilities</h4>
       <table class="hs-table" style="margin-bottom:1rem"><thead><tr><th>Account</th><th>Balance</th></tr></thead>
-      <tbody>{% for row in report_data.liabilities %}<tr><td>{{ row.account_number }} — {{ row.account_name }}</td><td>{{ row.balance|floatformat:2 }}</td></tr>{% empty %}<tr><td colspan="2">—</td></tr>{% endfor %}</tbody>
-      <tfoot><tr><th>Total liabilities</th><th>{{ report_data.total_liabilities|floatformat:2 }}</th></tr></tfoot></table>
+      <tbody>{% for row in report_data.liabilities %}<tr><td>{{ row.account_number }} — {{ row.account_name }}</td><td>{{ row.balance|numcomma:2 }}</td></tr>{% empty %}<tr><td colspan="2">—</td></tr>{% endfor %}</tbody>
+      <tfoot><tr><th>Total liabilities</th><th>{{ report_data.total_liabilities|numcomma:2 }}</th></tr></tfoot></table>
       <h4 class="hs-muted" style="margin:0 0 0.5rem;text-transform:uppercase;font-size:0.72rem;letter-spacing:0.04em">Equity</h4>
       <table class="hs-table"><thead><tr><th>Account</th><th>Balance</th></tr></thead>
-      <tbody>{% for row in report_data.equity %}<tr><td>{{ row.account_number }} — {{ row.account_name }}</td><td>{{ row.balance|floatformat:2 }}</td></tr>{% empty %}<tr><td colspan="2">—</td></tr>{% endfor %}</tbody>
-      <tfoot><tr><th>Total equity</th><th>{{ report_data.total_equity|floatformat:2 }}</th></tr></tfoot></table>
+      <tbody>{% for row in report_data.equity %}<tr><td>{{ row.account_number }} — {{ row.account_name }}</td><td>{{ row.balance|numcomma:2 }}</td></tr>{% empty %}<tr><td colspan="2">—</td></tr>{% endfor %}</tbody>
+      <tfoot><tr><th>Total equity</th><th>{{ report_data.total_equity|numcomma:2 }}</th></tr></tfoot></table>
 
       {% elif report_type == "income-statement" %}
       <table class="hs-table" style="margin-bottom:1rem"><thead><tr><th>Revenue account</th><th>Amount</th></tr></thead>
-      <tbody>{% for row in report_data.revenues %}<tr><td>{{ row.account_number }} — {{ row.account_name }}</td><td>{{ row.amount|floatformat:2 }}</td></tr>{% empty %}<tr><td colspan="2">—</td></tr>{% endfor %}</tbody></table>
+      <tbody>{% for row in report_data.revenues %}<tr><td>{{ row.account_number }} — {{ row.account_name }}</td><td>{{ row.amount|numcomma:2 }}</td></tr>{% empty %}<tr><td colspan="2">—</td></tr>{% endfor %}</tbody></table>
       <table class="hs-table"><thead><tr><th>Expense account</th><th>Amount</th></tr></thead>
-      <tbody>{% for row in report_data.expenses %}<tr><td>{{ row.account_number }} — {{ row.account_name }}</td><td>{{ row.amount|floatformat:2 }}</td></tr>{% empty %}<tr><td colspan="2">—</td></tr>{% endfor %}</tbody></table>
-      <p style="margin-top:1rem"><strong>Net income:</strong> {{ report_data.net_income|floatformat:2 }}</p>
+      <tbody>{% for row in report_data.expenses %}<tr><td>{{ row.account_number }} — {{ row.account_name }}</td><td>{{ row.amount|numcomma:2 }}</td></tr>{% empty %}<tr><td colspan="2">—</td></tr>{% endfor %}</tbody></table>
+      <p style="margin-top:1rem"><strong>Net income:</strong> {{ report_data.net_income|numcomma:2 }}</p>
 
       {% elif report_type == "cash-flow" %}
       <table class="hs-table"><thead><tr><th>Section</th><th>Amount</th></tr></thead>
       <tbody>
-        <tr><td>Operating</td><td>{{ report_data.operating_activities|floatformat:2 }}</td></tr>
-        <tr><td>Investing</td><td>{{ report_data.investing_activities|floatformat:2 }}</td></tr>
-        <tr><td>Financing</td><td>{{ report_data.financing_activities|floatformat:2 }}</td></tr>
-        <tr><th>Net change</th><th>{{ report_data.net_change_in_cash|floatformat:2 }}</th></tr>
+        <tr><td>Operating</td><td>{{ report_data.operating_activities|numcomma:2 }}</td></tr>
+        <tr><td>Investing</td><td>{{ report_data.investing_activities|numcomma:2 }}</td></tr>
+        <tr><td>Financing</td><td>{{ report_data.financing_activities|numcomma:2 }}</td></tr>
+        <tr><th>Net change</th><th>{{ report_data.net_change_in_cash|numcomma:2 }}</th></tr>
       </tbody></table>
       {% endif %}
     </div>

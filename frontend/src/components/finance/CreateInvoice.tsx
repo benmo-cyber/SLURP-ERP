@@ -3,6 +3,7 @@ import { getItems, createInvoice } from '../../api/finance'
 import { getSalesOrder } from '../../api/salesOrders'
 import { getCustomerContacts } from '../../api/customers'
 import { useGodMode } from '../../context/GodModeContext'
+import { formatCurrency } from '../../utils/formatNumber'
 import './CreateInvoice.css'
 
 interface Item {
@@ -396,7 +397,7 @@ function CreateInvoice({ onClose, onSuccess, salesOrderId }: CreateInvoiceProps)
           <div className="totals-section">
             <div className="total-row">
               <span>Subtotal:</span>
-              <span>${subtotal.toFixed(2)}</span>
+              <span>{formatCurrency(subtotal)}</span>
             </div>
             <div className="total-row">
               <label>Tax Amount:</label>
@@ -433,7 +434,7 @@ function CreateInvoice({ onClose, onSuccess, salesOrderId }: CreateInvoiceProps)
             </div>
             <div className="total-row total-final">
               <span>Total:</span>
-              <span>${total.toFixed(2)}</span>
+              <span>{formatCurrency(total)}</span>
             </div>
           </div>
 

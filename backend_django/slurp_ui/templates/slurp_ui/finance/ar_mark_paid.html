@@ -16,7 +16,7 @@
       <div class="hs-props" style="margin-bottom:1rem">
         <div class="hs-prop"><span class="k">Invoice</span><span class="v">{% if ar.invoice %}{{ ar.invoice.invoice_number }}{% else %}—{% endif %}</span></div>
         <div class="hs-prop"><span class="k">Due</span><span class="v">{{ ar.due_date }}</span></div>
-        <div class="hs-prop"><span class="k">Balance</span><span class="v">${{ ar.balance|floatformat:2 }}</span></div>
+        <div class="hs-prop"><span class="k">Balance</span><span class="v">{{ ar.balance|money:2 }}</span></div>
       </div>
       <form method="post">
         {% csrf_token %}

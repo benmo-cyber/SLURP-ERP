@@ -43,8 +43,8 @@
               {% else %}<span class="hs-badge">{{ e.status }}</span>{% endif %}
             </td>
             <td>{{ e.description|truncatechars:60 }}</td>
-            <td>{{ e.total_debits|floatformat:2 }}</td>
-            <td>{{ e.total_credits|floatformat:2 }}</td>
+            <td>{{ e.total_debits|numcomma:2 }}</td>
+            <td>{{ e.total_credits|numcomma:2 }}</td>
             <td>
               {% if e.status == "draft" %}
               <form method="post" action="{% url 'slurp_ui:finance_journal_post' e.id %}">

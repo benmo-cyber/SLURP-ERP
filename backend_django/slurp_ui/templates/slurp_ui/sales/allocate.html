@@ -56,8 +56,15 @@
       <div class="hs-card-body">
         <div class="hs-props" style="border:none;padding:0 0 0.75rem">
           <div class="hs-prop"><span class="k">Ordered</span><span class="v">{{ row.line.quantity_ordered|floatformat:2 }} {{ row.line.item.unit_of_measure }}</span></div>
-          <div class="hs-prop"><span class="k">Already allocated</span><span class="v">{{ row.line.quantity_allocated|floatformat:2 }}</span></div>
+          <div class="hs-prop"><span class="k">Already allocated</span><span class="v">{{ row.line.quantity_allocated|floatformat:2 }} {{ row.line.item.unit_of_measure }}</span></div>
+          <div class="hs-prop"><span class="k">Type</span><span class="v">{{ row.line.item.item_type|default:"—" }}</span></div>
         </div>
+        {% if row.line.item.item_type == "distributed_item" %}
+        <label class="hs-check-inline" style="display:block;margin-bottom:0.65rem">
+          <input type="checkbox" name="create_from_rm_{{ row.line.id }}" />
+          Create new distributed lot from selected raw / vendor lots (depletes RM, allocates new DI lot)
+        </label>
+        {% endif %}
         {% for slot in "012" %}
         <div class="hs-form-grid" style="margin-top:0.5rem">
           <div class="form-row" style="margin:0">
@@ -66,7 +73,7 @@
               <option value="">— {% if forloop.first %}Select lot{% else %}Optional{% endif %} —</option>
               {% for lr in row.lots %}
               <option value="{{ lr.lot.id }}">
-                {{ lr.lot.lot_number }} — avail {{ lr.available|floatformat:2 }} ({{ lr.lot.status }})
+                {{ lr.lot.lot_number }} — avail {{ lr.available|floatformat:2 }} {{ row.line.item.unit_of_measure }} ({{ lr.lot.status }})
               </option>
               {% empty %}
               <option value="" disabled>No available lots</option>

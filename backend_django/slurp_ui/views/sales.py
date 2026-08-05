@@ -1,5 +1,7 @@
 from calendar import monthrange
 from datetime import date, datetime, timedelta
+import json
+from urllib.parse import urlencode
 
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
@@ -8,7 +10,6 @@ from django.db.models import Count, Sum
 from django.http import HttpRequest, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
-from urllib.parse import urlencode
 from django.utils import timezone
 from django.utils.dateparse import parse_date, parse_datetime
 from django.views.decorators.http import require_http_methods, require_POST
@@ -34,9 +35,11 @@ from erp_core.models import (
     ShipToLocation,
     Shipment,
 )
+from erp_core.return_services import create_customer_credit_memo
 from erp_core.sell_services import (
     SellFlowError,
     allocate_sales_order,
+    cancel_sales_order,
     combined_ship_sales_orders,
     create_sales_order,
     issue_sales_order,
@@ -1175,6 +1178,52 @@ def sales_customer_quote(request: HttpRequest, customer_pk: int, pk: int = None)
                 messages.success(request, f"Quote marked {quote.get_status_display()}.")
             return redirect("slurp_ui:sales_customer_quote_edit", customer_pk=customer_pk, pk=quote.pk)
 
+        if action == "convert" and quote:
+            if quote.status == "converted" and quote.converted_sales_order_id:
+                messages.info(request, f"Already converted to {quote.converted_sales_order.so_number}.")
+                return redirect("slurp_ui:sales_order_detail", pk=quote.converted_sales_order_id)
+            q_lines = list(quote.lines.select_related("item").all())
+            if not q_lines:
+                messages.error(request, "Quote has no lines to convert.")
+                return redirect("slurp_ui:sales_customer_quote_edit", customer_pk=customer_pk, pk=quote.pk)
+            so_items = []
+            for ql in q_lines:
+                if not ql.item_id:
+                    continue
+                so_items.append(
+                    {
+                        "item_id": ql.item_id,
+                        "quantity_ordered": float(ql.quantity or 0),
+                        "unit_price": float(ql.unit_price) if ql.unit_price is not None else None,
+                    }
+                )
+            if not so_items:
+                messages.error(request, "Quote lines have no items.")
+                return redirect("slurp_ui:sales_customer_quote_edit", customer_pk=customer_pk, pk=quote.pk)
+            payload = {
+                "customer_id": customer.id,
+                "customer_name": customer.name,
+                "customer_reference_number": (quote.customer_reference or "").strip(),
+                "status": "draft",
+                "notes": (quote.notes or "").strip(),
+                "items": so_items,
+            }
+            if quote.ship_to_location_id:
+                payload["ship_to_location"] = quote.ship_to_location_id
+            try:
+                so = create_sales_order(request.user, payload)
+                quote.status = "converted"
+                quote.converted_sales_order = so
+                quote.save(update_fields=["status", "converted_sales_order", "updated_at"])
+                messages.success(request, f"Converted {quote.quote_number} → {so.so_number}.")
+                return redirect("slurp_ui:sales_order_detail", pk=so.pk)
+            except SellFlowError as e:
+                messages.error(request, e.message)
+                return redirect("slurp_ui:sales_customer_quote_edit", customer_pk=customer_pk, pk=quote.pk)
+            except Exception as e:
+                messages.error(request, str(e))
+                return redirect("slurp_ui:sales_customer_quote_edit", customer_pk=customer_pk, pk=quote.pk)
+
         lines = _parse_quote_lines(request.POST)
         quote_date = parse_date((request.POST.get("quote_date") or "").strip()) or timezone.localdate()
         valid_until = parse_date((request.POST.get("valid_until") or "").strip() or "")
@@ -1257,6 +1306,24 @@ def sales_create_order(request: HttpRequest) -> HttpResponse:
             )
 
     if request.method == "POST" and selected_customer:
+        # Latest active customer price per item (native lookup for blank line prices)
+        pricing_by_item: dict[int, float] = {}
+        today_d = timezone.localdate()
+        for cp in (
+            CustomerPricing.objects.filter(customer=selected_customer, is_active=True)
+            .order_by("item_id", "-effective_date")
+            .only("item_id", "unit_price", "effective_date", "expiry_date")
+        ):
+            if cp.item_id in pricing_by_item:
+                continue
+            if cp.effective_date and cp.effective_date > today_d:
+                continue
+            if cp.expiry_date and cp.expiry_date < today_d:
+                continue
+            if cp.unit_price is None:
+                continue
+            pricing_by_item[cp.item_id] = float(cp.unit_price)
+
         try:
             line_count = int(request.POST.get("line_count") or 1)
         except ValueError:
@@ -1275,12 +1342,18 @@ def sales_create_order(request: HttpRequest) -> HttpResponse:
             if q <= 0:
                 continue
             try:
+                iid = int(item_id)
+            except ValueError:
+                continue
+            try:
                 p = float(price) if price not in (None, "") else None
             except ValueError:
                 p = None
+            if p is None and iid in pricing_by_item:
+                p = pricing_by_item[iid]
             lines.append(
                 {
-                    "item_id": int(item_id),
+                    "item_id": iid,
                     "quantity_ordered": q,
                     "unit_price": p,
                 }
@@ -1313,6 +1386,24 @@ def sales_create_order(request: HttpRequest) -> HttpResponse:
             except Exception as e:
                 messages.error(request, str(e))
 
+    pricing_json = {}
+    if selected_customer:
+        today_d = timezone.localdate()
+        for cp in (
+            CustomerPricing.objects.filter(customer=selected_customer, is_active=True)
+            .order_by("item_id", "-effective_date")
+            .only("item_id", "unit_price", "effective_date", "expiry_date")
+        ):
+            if str(cp.item_id) in pricing_json:
+                continue
+            if cp.effective_date and cp.effective_date > today_d:
+                continue
+            if cp.expiry_date and cp.expiry_date < today_d:
+                continue
+            if cp.unit_price is None:
+                continue
+            pricing_json[str(cp.item_id)] = float(cp.unit_price)
+
     today = timezone.localdate().isoformat()
     return render(
         request,
@@ -1324,6 +1415,7 @@ def sales_create_order(request: HttpRequest) -> HttpResponse:
             selected_customer=selected_customer,
             ship_tos=ship_tos,
             today=today,
+            customer_pricing_json=json.dumps(pricing_json),
             god_mode=bool(request.session.get("god_mode")) and request.user.is_staff,
             port_status="full",
         ),
@@ -1360,12 +1452,14 @@ def sales_allocate_order(request: HttpRequest, pk: int) -> HttpResponse:
 
     line_lot_choices = []
     for line in so.items.all():
-        lots = (
-            Lot.objects.filter(item_id=line.item_id, quantity_remaining__gt=0)
-            .exclude(status="rejected")
-            .select_related("item")
-            .order_by("-received_date")[:40]
-        )
+        item_type = getattr(line.item, "item_type", "") or ""
+        qs = Lot.objects.filter(quantity_remaining__gt=0).exclude(status="rejected")
+        # Same-SKU lots; for distributed, include raw_material lots sharing the SKU
+        if item_type == "distributed_item":
+            qs = qs.filter(item__sku=line.item.sku)
+        else:
+            qs = qs.filter(item_id=line.item_id)
+        lots = qs.select_related("item").order_by("-received_date")[:60]
         rows = []
         for lot in lots:
             avail = float(compute_lot_quantity_breakdown(lot)["quantity_available_for_use"])
@@ -1388,7 +1482,7 @@ def sales_allocate_order(request: HttpRequest, pk: int) -> HttpResponse:
             allow_prerepack = bool(request.POST.get("allow_prerepack_allocation"))
             items_payload = []
             for line in so.items.all():
-                allocations = []
+                picks = []
                 # Support up to 3 lots per line in simple UI
                 for slot in range(3):
                     lot_id = request.POST.get(f"lot_{line.id}_{slot}")
@@ -1401,13 +1495,17 @@ def sales_allocate_order(request: HttpRequest, pk: int) -> HttpResponse:
                         continue
                     if q <= 0:
                         continue
-                    allocations.append({"lot_id": int(lot_id), "quantity": q})
+                    picks.append({"lot_id": int(lot_id), "quantity": q})
+                is_distributed = getattr(line.item, "item_type", "") == "distributed_item"
+                create_from_rm = is_distributed and bool(
+                    request.POST.get(f"create_from_rm_{line.id}")
+                )
                 items_payload.append(
                     {
                         "item_id": line.item_id,
-                        "is_distributed": False,
-                        "allocations": allocations,
-                        "raw_materials": [],
+                        "is_distributed": is_distributed,
+                        "allocations": [] if create_from_rm else picks,
+                        "raw_materials": picks if create_from_rm else [],
                     }
                 )
             try:
@@ -1464,22 +1562,40 @@ def sales_checkout(request: HttpRequest) -> HttpResponse:
             weights.append((request.POST.get(f"weight_{i}") or "").strip())
 
         ship_items = []
-        for line in selected.items.all():
-            rem = float(line.quantity_allocated or 0)
-            if rem > 0:
-                ship_items.append({"item_id": line.id, "quantity": rem})
-
-        payload = {
-            "ship_date": (request.POST.get("ship_date") or timezone.localdate().isoformat()),
-            "invoice_date": (request.POST.get("invoice_date") or request.POST.get("ship_date") or timezone.localdate().isoformat()),
-            "carrier": (request.POST.get("carrier") or "").strip(),
-            "tracking_number": (request.POST.get("tracking_number") or "").strip(),
-            "pieces": pieces,
-            "piece_dimensions": dims,
-            "piece_weights": weights,
-            "items": ship_items,
-        }
         try:
+            for line in selected.items.select_related("item").all():
+                rem = float(line.quantity_allocated or 0)
+                if rem <= 0:
+                    continue
+                raw = (request.POST.get(f"ship_qty_{line.id}") or "").strip()
+                if raw == "":
+                    qty = rem
+                else:
+                    try:
+                        qty = float(raw)
+                    except ValueError:
+                        raise SellFlowError(f"Invalid ship qty for {line.item.sku}.")
+                if qty < 0:
+                    raise SellFlowError(f"Ship qty for {line.item.sku} cannot be negative.")
+                if qty > rem + 0.01:
+                    raise SellFlowError(
+                        f"Ship qty {qty} exceeds allocated {rem} {line.item.unit_of_measure} for {line.item.sku}."
+                    )
+                if qty > 0:
+                    ship_items.append({"item_id": line.id, "quantity": qty})
+            if not ship_items:
+                raise SellFlowError("Enter a ship qty greater than 0 on at least one line.")
+
+            payload = {
+                "ship_date": (request.POST.get("ship_date") or timezone.localdate().isoformat()),
+                "invoice_date": (request.POST.get("invoice_date") or request.POST.get("ship_date") or timezone.localdate().isoformat()),
+                "carrier": (request.POST.get("carrier") or "").strip(),
+                "tracking_number": (request.POST.get("tracking_number") or "").strip(),
+                "pieces": pieces,
+                "piece_dimensions": dims,
+                "piece_weights": weights,
+                "items": ship_items,
+            }
             result = ship_sales_order(selected, request.user, payload)
             inv = (result.get("invoice") or {}).get("invoice_number") or "—"
             messages.success(
@@ -1527,6 +1643,7 @@ def sales_combined_checkout(request: HttpRequest) -> HttpResponse:
         SalesOrder.objects.filter(status__in=["issued", "ready_for_shipment"])
         .annotate(total_allocated=Sum("items__quantity_allocated"))
         .select_related("customer", "ship_to_location")
+        .prefetch_related("items__item")
         .order_by("customer_id", "ship_to_location_id", "-created_at")[:150]
     )
     eligible = [
@@ -1554,34 +1671,57 @@ def sales_combined_checkout(request: HttpRequest) -> HttpResponse:
                 dims.append((request.POST.get(f"dim_{i}") or "").strip())
                 weights.append((request.POST.get(f"weight_{i}") or "").strip())
 
-            orders_payload = []
-            for oid in order_ids:
-                so = get_object_or_404(
-                    SalesOrder.objects.prefetch_related("items"),
-                    pk=oid,
-                )
-                ship_items = []
-                for line in so.items.all():
-                    rem = float(line.quantity_allocated or 0)
-                    if rem > 0:
-                        ship_items.append({"item_id": line.id, "quantity": rem})
-                orders_payload.append({"sales_order_id": oid, "items": ship_items})
-
-            payload = {
-                "orders": orders_payload,
-                "ship_date": (request.POST.get("ship_date") or timezone.localdate().isoformat()),
-                "invoice_date": (
-                    request.POST.get("invoice_date")
-                    or request.POST.get("ship_date")
-                    or timezone.localdate().isoformat()
-                ),
-                "carrier": (request.POST.get("carrier") or "").strip(),
-                "tracking_number": (request.POST.get("tracking_number") or "").strip(),
-                "pieces": pieces,
-                "piece_dimensions": dims,
-                "piece_weights": weights,
-            }
             try:
+                orders_payload = []
+                for oid in order_ids:
+                    so = get_object_or_404(
+                        SalesOrder.objects.prefetch_related("items__item"),
+                        pk=oid,
+                    )
+                    ship_items = []
+                    for line in so.items.all():
+                        rem = float(line.quantity_allocated or 0)
+                        if rem <= 0:
+                            continue
+                        raw = (request.POST.get(f"ship_qty_{line.id}") or "").strip()
+                        if raw == "":
+                            qty = rem
+                        else:
+                            try:
+                                qty = float(raw)
+                            except ValueError:
+                                raise SellFlowError(
+                                    f"Invalid ship qty for {line.item.sku} on {so.so_number}."
+                                )
+                        if qty < 0:
+                            raise SellFlowError(f"Ship qty for {line.item.sku} cannot be negative.")
+                        if qty > rem + 0.01:
+                            raise SellFlowError(
+                                f"Ship qty {qty} exceeds allocated {rem} {line.item.unit_of_measure} "
+                                f"for {line.item.sku} on {so.so_number}."
+                            )
+                        if qty > 0:
+                            ship_items.append({"item_id": line.id, "quantity": qty})
+                    if not ship_items and not so.drop_ship:
+                        raise SellFlowError(
+                            f"Enter a ship qty on at least one line of {so.so_number}."
+                        )
+                    orders_payload.append({"sales_order_id": oid, "items": ship_items})
+
+                payload = {
+                    "orders": orders_payload,
+                    "ship_date": (request.POST.get("ship_date") or timezone.localdate().isoformat()),
+                    "invoice_date": (
+                        request.POST.get("invoice_date")
+                        or request.POST.get("ship_date")
+                        or timezone.localdate().isoformat()
+                    ),
+                    "carrier": (request.POST.get("carrier") or "").strip(),
+                    "tracking_number": (request.POST.get("tracking_number") or "").strip(),
+                    "pieces": pieces,
+                    "piece_dimensions": dims,
+                    "piece_weights": weights,
+                }
                 result = combined_ship_sales_orders(request.user, payload)
                 ck = result.get("combined_shipment_key")
                 messages.success(
@@ -1608,6 +1748,7 @@ def sales_combined_checkout(request: HttpRequest) -> HttpResponse:
             port_status="full",
         ),
     )
+
 
 
 @login_required
@@ -1705,6 +1846,16 @@ def sales_order_detail(request: HttpRequest, pk: int) -> HttpResponse:
     )
     is_staff = bool(request.user.is_staff)
     can_revert = is_staff and so.status in ("issued", "allocated", "ready_for_shipment")
+    can_cancel = so.status in ("draft", "issued", "allocated", "ready_for_shipment")
+    can_return = any(float(i.quantity_shipped or 0) > 1e-6 for i in so.items.all())
+    returnable_invoices = list(
+        so.invoices.filter(invoice_type="customer")
+        .exclude(status="cancelled")
+        .order_by("-invoice_date", "-id")
+    )
+    credit_memos = list(
+        so.invoices.filter(invoice_type="credit").order_by("-invoice_date", "-id")
+    )
     return render(
         request,
         "slurp_ui/sales/order_detail.html",
@@ -1713,9 +1864,78 @@ def sales_order_detail(request: HttpRequest, pk: int) -> HttpResponse:
             order=so,
             is_staff=is_staff,
             can_revert=can_revert,
+            can_cancel=can_cancel,
+            can_return=can_return,
+            returnable_invoices=returnable_invoices,
+            credit_memos=credit_memos,
             port_status="full",
         ),
     )
+
+
+@login_required
+@require_POST
+def sales_create_return(request: HttpRequest, pk: int) -> HttpResponse:
+    so = get_object_or_404(SalesOrder.objects.prefetch_related("items__item"), pk=pk)
+    lines = []
+    for line in so.items.all():
+        raw = (request.POST.get(f"return_qty_{line.id}") or "").strip()
+        if not raw:
+            continue
+        try:
+            qty = float(raw)
+        except ValueError:
+            messages.error(request, f"Invalid return qty for {line.item.sku}.")
+            return redirect("slurp_ui:sales_order_detail", pk=so.id)
+        if qty <= 0:
+            continue
+        lines.append({"sales_order_item_id": line.id, "quantity": qty})
+    source_invoice = None
+    inv_id = (request.POST.get("source_invoice_id") or "").strip()
+    if inv_id:
+        source_invoice = get_object_or_404(
+            so.invoices.filter(invoice_type="customer").exclude(status="cancelled"),
+            pk=int(inv_id),
+        )
+    restock = bool(request.POST.get("restock"))
+    try:
+        result = create_customer_credit_memo(
+            so,
+            lines,
+            source_invoice=source_invoice,
+            restock=restock,
+            notes=(request.POST.get("notes") or "").strip(),
+            user=request.user,
+        )
+        credit = result["credit_invoice"]
+        msg = (
+            f"Credit memo {credit.invoice_number} for ${credit.grand_total:,.2f}. "
+            f"Applied ${result['applied_amount']:,.2f} to AR"
+        )
+        if result["unapplied_amount"] > 0.01:
+            msg += f"; ${result['unapplied_amount']:,.2f} unapplied credit on file"
+        if result["restock_lots"]:
+            msg += f"; restocked {len(result['restock_lots'])} lot(s)"
+        messages.success(request, msg + ".")
+    except SellFlowError as e:
+        messages.error(request, e.message)
+    except Exception as e:
+        messages.error(request, str(e))
+    return redirect("slurp_ui:sales_order_detail", pk=so.id)
+
+
+@login_required
+@require_POST
+def sales_cancel_order(request: HttpRequest, pk: int) -> HttpResponse:
+    so = get_object_or_404(SalesOrder, pk=pk)
+    try:
+        cancel_sales_order(so, request.user)
+        messages.success(request, f"Cancelled {so.so_number}.")
+    except SellFlowError as e:
+        messages.error(request, e.message)
+    except Exception as e:
+        messages.error(request, str(e))
+    return redirect("slurp_ui:sales_orders")
 
 
 @login_required

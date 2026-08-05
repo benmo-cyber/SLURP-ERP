@@ -928,9 +928,9 @@ def generate_sales_order_pdf(sales_order):
         items_data.append([
             item.item.sku if item.item else 'N/A',
             item.item.name if item.item else 'N/A',
-            f"{item.quantity_ordered:.2f}",
-            f"${item.unit_price:.2f}" if item.unit_price else '$0.00',
-            f"${(item.quantity_ordered * (item.unit_price or 0)):.2f}"
+            f"{item.quantity_ordered:,.2f}",
+            f"${item.unit_price:,.2f}" if item.unit_price else '$0.00',
+            f"${(item.quantity_ordered * (item.unit_price or 0)):,.2f}"
         ])
     
     items_table = Table(items_data, colWidths=[1*inch, 2*inch, 1.5*inch, 1*inch, 1*inch])

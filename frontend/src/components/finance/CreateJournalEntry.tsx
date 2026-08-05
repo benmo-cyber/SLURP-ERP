@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { getAccounts, createJournalEntry } from '../../api/finance'
 import { useGodMode } from '../../context/GodModeContext'
+import { formatCurrency } from '../../utils/formatNumber'
 import './CreateJournalEntry.css'
 
 interface Account {
@@ -94,7 +95,7 @@ function CreateJournalEntry({ onClose, onSuccess }: CreateJournalEntryProps) {
 
     const { totalDebits, totalCredits, difference } = calculateTotals()
     if (Math.abs(difference) > 0.01) {
-      alert(`Debits and credits must be equal. Current difference: $${difference.toFixed(2)}`)
+      alert(`Debits and credits must be equal. Current difference: ${formatCurrency(difference)}`)
       return
     }
 
@@ -249,11 +250,11 @@ function CreateJournalEntry({ onClose, onSuccess }: CreateJournalEntryProps) {
                 <tfoot>
                   <tr className="totals-row">
                     <td colSpan={2} className="totals-label">Totals:</td>
-                    <td className="debit-total">${totalDebits.toFixed(2)}</td>
-                    <td className="credit-total">${totalCredits.toFixed(2)}</td>
+                    <td className="debit-total">{formatCurrency(totalDebits)}</td>
+                    <td className="credit-total">{formatCurrency(totalCredits)}</td>
                     <td>
                       <span className={`difference ${Math.abs(difference) < 0.01 ? 'balanced' : 'unbalanced'}`}>
-                        {Math.abs(difference) < 0.01 ? '✓ Balanced' : `Difference: $${difference.toFixed(2)}`}
+                        {Math.abs(difference) < 0.01 ? '✓ Balanced' : `Difference: ${formatCurrency(difference)}`}
                       </span>
                     </td>
                   </tr>

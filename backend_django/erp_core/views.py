@@ -418,6 +418,46 @@ def vendor_payment_terms_label(vendor_name):
         return None
 
 
+def _sync_ap_journal_entry_amount(ap_entry, new_amount: float):
+    """Revise unpaid AP journal/GL line amounts to match current bill value."""
+    from .shipment_reversal import _reverse_journal_balances
+
+    new_amount = round(float(new_amount or 0), 2)
+    if new_amount <= 0:
+        return None
+    je = ap_entry.journal_entry
+    if not je:
+        try:
+            journal_entry = create_ap_journal_entry(ap_entry)
+            if journal_entry:
+                ap_entry.journal_entry = journal_entry
+                ap_entry.save(update_fields=['journal_entry'])
+            return journal_entry
+        except Exception:
+            return None
+    if abs(float(je.lines.first().amount if je.lines.exists() else 0) - new_amount) < 0.01:
+        return je
+    try:
+        if je.status == 'posted':
+            _reverse_journal_balances(je)
+        for line in je.lines.all():
+            line.amount = new_amount
+            line.save(update_fields=['amount'])
+        GeneralLedgerEntry.objects.filter(journal_entry=je).update(amount=new_amount)
+        if je.status == 'posted':
+            _update_account_balances(je)
+        elif je.lines.exists():
+            # Leave draft JE at new amounts; posting path may run later
+            pass
+        return je
+    except Exception as sync_err:
+        import logging
+        logging.getLogger(__name__).warning(
+            'Failed to sync AP JE amounts for AP %s: %s', ap_entry.id, sync_err
+        )
+        return je
+
+
 def create_ap_entry_from_po(
     purchase_order,
     invoice_number=None,
@@ -426,55 +466,47 @@ def create_ap_entry_from_po(
     source_tag='auto on receive',
 ):
     """
-    Create an Accounts Payable entry when a purchase order is received.
-    
-    Args:
-        purchase_order: PurchaseOrder instance
-        invoice_number: Vendor invoice number (optional)
-        invoice_date: Date of vendor invoice (defaults to today)
-        due_date: Payment due date (defaults to invoice_date + vendor payment_terms, or 30 days)
-        source_tag: Short note stored on the AP row (e.g. 'backfill issued PO')
+    Create or update material Accounts Payable for received PO value.
+
+    Amount = sum over lines of (line_extended * received_native / ordered_native).
+    Freight/duty remain separate AP rows.
+
+    - Unpaid material AP is upserted and its JE amounts are revised to match.
+    - Paid material AP is never rewritten; additional received value creates a
+      new material AP row (+ JE) for the delta.
     """
     from django.utils import timezone
-    
-    try:
-        # Only auto-create a material-style line if none yet (freight/duty are separate AP rows on the same PO)
-        from django.db.models import Q
+    from django.db.models import Q, Sum
+    from .buy_services import po_line_ordered_native
+
+    def _received_amount(po):
+        total = 0.0
+        for item in po.items.select_related("item").all():
+            ordered_native = po_line_ordered_native(item)
+            if ordered_native <= 0:
+                continue
+            received = float(item.quantity_received or 0)
+            if received <= 0:
+                continue
+            line_value = float(item.quantity_ordered or 0) * float(item.unit_price or 0)
+            frac = min(1.0, received / ordered_native)
+            total += line_value * frac
+        return round(total, 2)
+
+    def _material_qs(po):
         material_q = Q(cost_category='') | Q(cost_category='material')
-        existing_material = (
-            AccountsPayable.objects.filter(purchase_order=purchase_order)
-            .filter(material_q)
-            .order_by('id')
-            .first()
-        )
-        if existing_material:
-            return existing_material
-        
-        # Get vendor information
-        vendor_name = purchase_order.vendor_customer_name or 'Unknown Vendor'
-        vendor_id = purchase_order.vendor_customer_id
-        
-        # Calculate totals
-        total_amount = purchase_order.total or 0.0
-        if total_amount <= 0:
-            # Calculate from items if total is not set
-            total_amount = sum(
-                item.quantity_ordered * (item.unit_price or 0) 
-                for item in purchase_order.items.all()
-            )
-        
-        # Set dates
+        return AccountsPayable.objects.filter(purchase_order=po).filter(material_q)
+
+    def _new_material_ap(amount, *, vendor_name, vendor_id, note_tag):
+        nonlocal invoice_date, due_date
         if not invoice_date:
             invoice_date = timezone.now().date()
         if not due_date:
             due_date = ap_due_date_from_invoice_and_vendor(invoice_date, vendor_name)
-        
-        # Get or create AP account (typically account number 2000)
         ap_account = None
         try:
             ap_account = Account.objects.filter(account_type='liability', account_number__startswith='2000').first()
             if not ap_account:
-                # Create a default AP account if none exists
                 ap_account = Account.objects.create(
                     account_number='2000',
                     name='Accounts Payable',
@@ -483,8 +515,6 @@ def create_ap_entry_from_po(
                 )
         except Exception:
             pass
-        
-        # Create AP entry
         ap_entry = AccountsPayable.objects.create(
             vendor_name=vendor_name,
             vendor_id=vendor_id,
@@ -492,31 +522,79 @@ def create_ap_entry_from_po(
             invoice_number=invoice_number or purchase_order.po_number,
             invoice_date=invoice_date,
             due_date=due_date,
-            original_amount=total_amount,
+            original_amount=amount,
             amount_paid=0.0,
-            balance=total_amount,
+            balance=amount,
             status='open',
             account=ap_account,
             cost_category='material',
-            notes=f'Created from PO {purchase_order.po_number} ({source_tag})'
+            notes=f'Created from PO {purchase_order.po_number} ({note_tag}) — received value'
         )
-        
-        # Auto-create journal entry for AP
         try:
             journal_entry = create_ap_journal_entry(ap_entry)
             if journal_entry:
                 ap_entry.journal_entry = journal_entry
-                ap_entry.save()
+                ap_entry.save(update_fields=['journal_entry'])
         except Exception as je_error:
             import logging
-            logger = logging.getLogger(__name__)
-            logger.warning(f'Failed to create journal entry for AP entry {ap_entry.id}: {str(je_error)}')
-        
+            logging.getLogger(__name__).warning(
+                'Failed to create journal entry for AP entry %s: %s', ap_entry.id, je_error
+            )
         return ap_entry
+
+    try:
+        material_rows = list(_material_qs(purchase_order).order_by('id'))
+        existing_material = material_rows[0] if material_rows else None
+
+        total_amount = _received_amount(purchase_order)
+        if total_amount <= 0:
+            return existing_material
+
+        vendor_name = purchase_order.vendor_customer_name or 'Unknown Vendor'
+        vendor_id = purchase_order.vendor_customer_id
+
+        booked = float(
+            _material_qs(purchase_order).aggregate(s=Sum('original_amount'))['s'] or 0
+        )
+
+        # Any paid material row(s): never rewrite — open a delta bill for extra received value
+        paid_rows = [r for r in material_rows if float(r.amount_paid or 0) > 0.01]
+        if paid_rows:
+            delta = round(total_amount - booked, 2)
+            if delta > 0.01:
+                return _new_material_ap(
+                    delta,
+                    vendor_name=vendor_name,
+                    vendor_id=vendor_id,
+                    note_tag=f'{source_tag}; delta after paid AP',
+                )
+            return paid_rows[0]
+
+        if existing_material:
+            paid = float(existing_material.amount_paid or 0)
+            if abs(float(existing_material.original_amount or 0) - total_amount) < 0.01:
+                return existing_material
+            existing_material.original_amount = total_amount
+            existing_material.balance = max(0.0, total_amount - paid)
+            existing_material.status = 'open' if existing_material.balance > 0.01 else 'paid'
+            note = (existing_material.notes or '').strip()
+            bump = f'Updated from PO {purchase_order.po_number} ({source_tag}) to received value ${total_amount:,.2f}'
+            existing_material.notes = f'{note}\n{bump}'.strip() if note else bump
+            existing_material.save()
+            _sync_ap_journal_entry_amount(existing_material, total_amount)
+            return existing_material
+
+        return _new_material_ap(
+            total_amount,
+            vendor_name=vendor_name,
+            vendor_id=vendor_id,
+            note_tag=source_tag,
+        )
     except Exception as e:
         import logging
-        logger = logging.getLogger(__name__)
-        logger.warning(f'Failed to create AP entry for PO {purchase_order.po_number}: {str(e)}')
+        logging.getLogger(__name__).warning(
+            'Failed to create AP entry for PO %s: %s', purchase_order.po_number, e
+        )
         return None
 
 
@@ -1039,6 +1117,10 @@ def create_ar_entry_from_invoice(invoice):
     from django.utils import timezone
     
     try:
+        if getattr(invoice, "invoice_type", "customer") == "credit":
+            # Credit memos apply to existing AR via return_services; do not open new receivable.
+            return None
+
         # Check if AR entry already exists for this invoice
         if AccountsReceivable.objects.filter(invoice=invoice).exists():
             return AccountsReceivable.objects.get(invoice=invoice)
@@ -2025,13 +2107,15 @@ def reconcile_purchase_order_status_from_lines(po_id):
         return
     if po.status in ('draft', 'cancelled', 'superseded'):
         return
+    from .buy_services import po_line_ordered_native
+
     tol = 0.01
-    lines = list(po.items.all())
+    lines = list(po.items.select_related("item").all())
     if not lines:
         return
     any_recv = any(float(li.quantity_received or 0) > tol for li in lines)
     all_full = all(
-        float(li.quantity_received or 0) >= float(li.quantity_ordered or 0) - tol
+        float(li.quantity_received or 0) >= po_line_ordered_native(li) - tol
         for li in lines
     )
     if not any_recv:
@@ -4042,12 +4126,13 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
         
         # If original PO was issued, reverse its inventory impact and mark as superseded
         if original_po.status == 'issued' and not original_po.drop_ship:
-            # Reverse on_order for each item
-            for po_item in original_po.items.all():
+            # Reverse on_order for each item (native UOM; only still-open qty)
+            from .buy_services import po_line_open_on_order_native
+            for po_item in original_po.items.select_related('item').all():
                 if po_item.item:
                     item = po_item.item
-                    item.on_order = max(0, (item.on_order or 0) - po_item.quantity_ordered)
-                    item.save()
+                    item.on_order = max(0, (item.on_order or 0) - po_line_open_on_order_native(po_item))
+                    item.save(update_fields=['on_order'])
             
             original_po.status = 'superseded'
             original_po.save()
@@ -4127,11 +4212,12 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
         
         # If PO was issued, reverse inventory impact (not for drop ship)
         if purchase_order.status == 'issued' and not purchase_order.drop_ship:
-            for po_item in purchase_order.items.all():
+            from .buy_services import po_line_open_on_order_native
+            for po_item in purchase_order.items.select_related('item').all():
                 if po_item.item:
                     item = po_item.item
-                    item.on_order = max(0, (item.on_order or 0) - po_item.quantity_ordered)
-                    item.save()
+                    item.on_order = max(0, (item.on_order or 0) - po_line_open_on_order_native(po_item))
+                    item.save(update_fields=['on_order'])
         
         purchase_order.status = 'cancelled'
         purchase_order.save()
@@ -4727,21 +4813,14 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
     
     @action(detail=True, methods=['post'])
     def cancel(self, request, pk=None):
-        """Cancel sales order and clean up allocations. Deletes distributed item lots permanently."""
-        from django.db import transaction
-        
-        sales_order = self.get_object()
-        
-        with transaction.atomic():
-            release_sales_order_allocations(sales_order)
+        """Cancel sales order and clean up allocations."""
+        from .sell_services import SellFlowError, cancel_sales_order
 
-            # Cancel any invoices
-            Invoice.objects.filter(sales_order=sales_order).update(status='cancelled')
-            
-            # Update sales order status
-            sales_order.status = 'cancelled'
-            sales_order.save()
-        
+        sales_order = self.get_object()
+        try:
+            cancel_sales_order(sales_order, request.user)
+        except SellFlowError as e:
+            return Response({'error': e.message}, status=e.status_code)
         serializer = self.get_serializer(sales_order)
         return Response(serializer.data, status=status.HTTP_200_OK)
     
@@ -8123,7 +8202,7 @@ class JournalEntryViewSet(viewsets.ModelViewSet):
         
         if abs(total_debits - total_credits) > 0.01:
             return Response(
-                {'error': f'Journal entry must be balanced. Debits: ${total_debits:.2f}, Credits: ${total_credits:.2f}'},
+                {'error': f'Journal entry must be balanced. Debits: ${total_debits:,.2f}, Credits: ${total_credits:,.2f}'},
                 status=status.HTTP_400_BAD_REQUEST
             )
         

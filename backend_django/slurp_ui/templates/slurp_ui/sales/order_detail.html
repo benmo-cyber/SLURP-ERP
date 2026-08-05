@@ -38,6 +38,14 @@
         <a class="hs-btn" href="{% url 'slurp_ui:sales_pick_list_pdf' order.id %}" target="_blank">Pick list</a>
         <a class="hs-btn" href="{% url 'slurp_ui:sales_packing_list_pdf' order.id %}" target="_blank">Packing list</a>
         {% endif %}
+        {% if can_cancel %}
+        <form method="post" action="{% url 'slurp_ui:sales_cancel_order' order.id %}">{% csrf_token %}
+          <button class="hs-btn hs-btn-danger" type="submit"
+                  onclick="return confirm('Cancel {{ order.so_number }}? Releases allocations.');">
+            Cancel order
+          </button>
+        </form>
+        {% endif %}
         {% if can_revert %}
         <form method="post" action="{% url 'slurp_ui:sales_revert_order' order.id %}">{% csrf_token %}
           <button class="hs-btn hs-btn-danger" type="submit"
@@ -55,8 +63,84 @@
         <div class="hs-prop"><span class="k">Expected ship</span><span class="v">{% if order.expected_ship_date %}{{ order.expected_ship_date|date:"Y-m-d" }}{% else %}—{% endif %}</span></div>
         <div class="hs-prop"><span class="k">Carrier</span><span class="v">{{ order.carrier|default:"—" }}</span></div>
       </div>
+      <p class="hs-section-note" style="margin-top:0.85rem">
+        <strong>Returns:</strong>
+        Wrong ship / unpaid — void invoice in Finance then Reverse shipment.
+        Unused full receipt — Inventory → Reverse check-in.
+        Customer return after ship — use Credit memo / return below (restocks inventory, applies open AR; unapplied credit stays on the memo until refund or next invoice).
+      </p>
     </div>
   </div>
+
+  {% if can_return %}
+  <div class="hs-card" style="margin-bottom:1rem">
+    <div class="hs-card-header"><h3>Credit memo / return</h3></div>
+    <div class="hs-card-body">
+      <form method="post" action="{% url 'slurp_ui:sales_create_return' order.id %}">
+        {% csrf_token %}
+        <table class="hs-table" style="margin-bottom:0.75rem">
+          <thead>
+            <tr><th>Item</th><th>Shipped</th><th>Return qty</th></tr>
+          </thead>
+          <tbody>
+            {% for line in order.items.all %}
+            {% if line.quantity_shipped %}
+            <tr>
+              <td>
+                <div class="hs-list-title">{{ line.item.sku }}</div>
+                <div class="hs-list-sub">{{ line.item.name }} @ {% if line.unit_price != None %}{{ line.unit_price|money:2 }}{% else %}—{% endif %}</div>
+              </td>
+              <td>{{ line.quantity_shipped|floatformat:2 }} {{ line.item.unit_of_measure }}</td>
+              <td>
+                <input name="return_qty_{{ line.id }}" type="number" step="any" min="0"
+                       max="{{ line.quantity_shipped }}" placeholder="0"
+                       style="max-width:8rem" />
+              </td>
+            </tr>
+            {% endif %}
+            {% endfor %}
+          </tbody>
+        </table>
+        <div class="hs-form-grid">
+          <div class="form-row" style="margin:0">
+            <label>Apply to invoice</label>
+            <select name="source_invoice_id">
+              <option value="">— Optional —</option>
+              {% for inv in returnable_invoices %}
+              <option value="{{ inv.id }}">{{ inv.invoice_number }} ({{ inv.status }}) — {{ inv.grand_total|money:2 }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="form-row" style="margin:0">
+            <label>Notes</label>
+            <input name="notes" type="text" placeholder="Reason / RMA reference" />
+          </div>
+        </div>
+        <label class="hs-check-inline" style="display:block;margin:0.75rem 0">
+          <input type="checkbox" name="restock" value="1" checked />
+          Restock returned qty as new accepted lot(s)
+        </label>
+        <div class="hs-form-actions">
+          <button type="submit" class="hs-btn hs-btn-primary"
+                  onclick="return confirm('Create credit memo and process return?');">
+            Create credit memo
+          </button>
+        </div>
+      </form>
+      {% if credit_memos %}
+      <div style="margin-top:1rem">
+        <div class="hs-section-note" style="margin-bottom:0.35rem">Prior credit memos</div>
+        {% for inv in credit_memos %}
+        <a class="hs-list-link" href="{% url 'slurp_ui:finance_invoice_detail' inv.id %}">
+          <div class="hs-list-title">{{ inv.invoice_number }} <span class="hs-badge warn">credit</span></div>
+          <div class="hs-list-sub">{{ inv.grand_total|money:2 }} · {{ inv.invoice_date|date:"Y-m-d" }}</div>
+        </a>
+        {% endfor %}
+      </div>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
 
   <div class="hs-card" style="margin-bottom:1rem">
     <div class="hs-card-header"><h3>Lines</h3></div>
@@ -72,10 +156,10 @@
               <div class="hs-list-title">{{ line.item.sku }}</div>
               <div class="hs-list-sub">{{ line.item.name }}</div>
             </td>
-            <td>{{ line.quantity_ordered|floatformat:2 }}</td>
-            <td>{{ line.quantity_allocated|floatformat:2 }}</td>
-            <td>{{ line.quantity_shipped|floatformat:2 }}</td>
-            <td>{% if line.unit_price != None %}${{ line.unit_price|floatformat:2 }}{% else %}—{% endif %}</td>
+            <td>{{ line.quantity_ordered|floatformat:2 }} {{ line.item.unit_of_measure }}</td>
+            <td>{{ line.quantity_allocated|floatformat:2 }} {{ line.item.unit_of_measure }}</td>
+            <td>{{ line.quantity_shipped|floatformat:2 }} {{ line.item.unit_of_measure }}</td>
+            <td>{% if line.unit_price != None %}{{ line.unit_price|money:2 }}{% else %}—{% endif %}</td>
           </tr>
           {% empty %}
           <tr><td colspan="5"><div class="hs-empty">No lines.</div></td></tr>
@@ -134,8 +218,12 @@
     <div class="hs-card-body tight">
       {% for inv in order.invoices.all %}
       <a class="hs-list-link" href="{% url 'slurp_ui:finance_invoice_detail' inv.id %}">
-        <div class="hs-list-title">{{ inv.invoice_number }} <span class="hs-badge">{{ inv.status }}</span></div>
-        <div class="hs-list-sub">${{ inv.grand_total|floatformat:2 }}</div>
+        <div class="hs-list-title">
+          {{ inv.invoice_number }}
+          {% if inv.invoice_type == 'credit' %}<span class="hs-badge warn">credit</span>{% endif %}
+          <span class="hs-badge">{{ inv.status }}</span>
+        </div>
+        <div class="hs-list-sub">{{ inv.grand_total|money:2 }}</div>
       </a>
       {% empty %}
       <div class="hs-empty">No invoices linked yet.</div>

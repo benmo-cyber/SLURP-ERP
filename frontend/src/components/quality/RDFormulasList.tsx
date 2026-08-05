@@ -3,6 +3,7 @@ import { getRDFormulas, getRDFormula, createRDFormula, updateRDFormula, deleteRD
 import { getItems } from '../../api/inventory'
 import { getCostMasterByProductCode } from '../../api/costMaster'
 import { formatAppDate } from '../../utils/appDateFormat'
+import { formatCurrency } from '../../utils/formatNumber'
 import './RDFormulasList.css'
 
 const LB_PER_KG = 2.2
@@ -275,7 +276,7 @@ function RDFormulasList() {
                 <tr key={rd.id}>
                   <td><strong>{rd.name}</strong></td>
                   <td><span className={`rd-status rd-status-${rd.status}`}>{rd.status}</span></td>
-                  <td>{rd.total_cost_per_lb != null ? `$${rd.total_cost_per_lb.toFixed(2)}` : '—'}</td>
+                  <td>{rd.total_cost_per_lb != null ? formatCurrency(rd.total_cost_per_lb) : '—'}</td>
                   <td>{rd.updated_at ? formatAppDate(rd.updated_at) : '—'}</td>
                   <td>
                     <button type="button" onClick={() => openEdit(rd.id)} className="rd-btn rd-btn-edit">Edit</button>
@@ -428,7 +429,7 @@ function RDFormulasList() {
                                 className="rd-bom-labor"
                               />
                             ) : (
-                              formulaCost != null ? `$${formulaCost.toFixed(2)}` : '—'
+                              formulaCost != null ? formatCurrency(formulaCost) : '—'
                             )}
                           </td>
                         </tr>
@@ -438,7 +439,7 @@ function RDFormulasList() {
                   <tfoot>
                     <tr>
                       <td colSpan={4} className="rd-bom-total-label">Cost/lb (total)</td>
-                      <td className="rd-bom-total-value">${totalCost.toFixed(2)}</td>
+                      <td className="rd-bom-total-value">{formatCurrency(totalCost)}</td>
                     </tr>
                   </tfoot>
                 </table>

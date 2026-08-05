@@ -197,6 +197,16 @@ urlpatterns = [
         name="sales_revert_order",
     ),
     path(
+        "sales/orders/<int:pk>/cancel/",
+        views.sales_cancel_order,
+        name="sales_cancel_order",
+    ),
+    path(
+        "sales/orders/<int:pk>/return/",
+        views.sales_create_return,
+        name="sales_create_return",
+    ),
+    path(
         "sales/shipments/<int:pk>/reverse/",
         views.sales_reverse_shipment,
         name="sales_reverse_shipment",

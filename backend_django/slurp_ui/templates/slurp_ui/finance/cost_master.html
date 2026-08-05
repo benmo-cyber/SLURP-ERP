@@ -32,7 +32,7 @@
             <td><span class="hs-entity-name">{{ r.vendor_material }}</span></td>
             <td>{{ r.wwi_product_code|default:"—" }}</td>
             <td>{{ r.vendor|default:"—" }}</td>
-            <td>{{ r.landed_cost_per_lb|default:r.price_per_lb|default:"—" }}</td>
+            <td>{% if r.landed_cost_per_lb != None %}{{ r.landed_cost_per_lb|money:4 }}{% elif r.price_per_lb != None %}{{ r.price_per_lb|money:4 }}{% else %}—{% endif %}</td>
             <td>{{ r.actual_comparison }}</td>
           </tr>
           {% empty %}

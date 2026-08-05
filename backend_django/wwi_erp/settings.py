@@ -58,6 +58,9 @@ TEMPLATES = [
                 'django.contrib.messages.context_processors.messages',
                 'slurp_ui.context_processors.slurp_ui',
             ],
+            'builtins': [
+                'slurp_ui.templatetags.slurp_format',
+            ],
         },
     },
 ]

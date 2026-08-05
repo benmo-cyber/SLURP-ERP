@@ -4,6 +4,7 @@ import { SERVICE_VENDOR_TYPE_OPTIONS, getServiceVendorTypeLabel } from '../../co
 import { formatVendorAddress, formatVendorAddressWithSurveyFallback } from '../../utils/formatVendorAddress'
 import { VendorAddressFields } from './VendorAddressFields'
 import { formatAppDate } from '../../utils/appDateFormat'
+import { formatCurrency } from '../../utils/formatNumber'
 import './VendorDetail.css'
 
 interface VendorContact {
@@ -973,7 +974,7 @@ function VendorDetail({ vendor: initialVendor, onClose }: VendorDetailProps) {
                       <td>{item.name}</td>
                       <td>{item.unit_of_measure}</td>
                       <td>{item.pack_size ? `${item.pack_size} ${item.unit_of_measure}` : 'N/A'}</td>
-                      <td>{item.price ? `$${item.price.toFixed(2)}/${item.unit_of_measure}` : 'N/A'}</td>
+                      <td>{item.price ? `${formatCurrency(item.price)}/${item.unit_of_measure}` : 'N/A'}</td>
                       <td>{item.ytd_usage.toFixed(2)} {item.unit_of_measure}</td>
                     </tr>
                   ))}

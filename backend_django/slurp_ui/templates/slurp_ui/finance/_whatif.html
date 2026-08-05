@@ -52,9 +52,10 @@
 </div>
 
 <p class="wi-formula">
-  Pick any Cost Master, R&amp;D, or commercialized formula → cost fills automatically.
-  For formulas, open <strong>Ingredients</strong> to what-if vendor / RM $/lb.
-  Margin: <code>Price = (Cost + Add) ÷ (1 − Margin)</code>.
+  Pick Cost Master / R&amp;D / manufactured → <strong>ExW $/lb</strong> fills (not Cost Master landed).
+  Scrub <strong>Tariff %</strong> and <strong>Freight</strong> to rebuild landed:
+  <code>Landed = ExW × (1 + Tariff) + Freight</code> — same shape as Cost Master, no double-count.
+  Then <code>Price = (Landed + Add) ÷ (1 − Margin)</code>.
 </p>
 
 <div class="hs-toolbar" style="margin-bottom:0.65rem;align-items:center;gap:0.75rem">
@@ -71,7 +72,11 @@
           <th class="wi-customer">Customer</th>
           <th class="wi-product">Product</th>
           <th>Type</th>
-          <th class="wi-n">Cost $/lb</th>
+          <th class="wi-n">ExW $/lb</th>
+          <th class="wi-n">Tariff %</th>
+          <th class="wi-n">Frt $/lb</th>
+          <th class="wi-n">Frt $/kg</th>
+          <th>Landed</th>
           <th class="wi-n">+ Add</th>
           <th class="wi-n">Margin %</th>
           <th>Price</th>
@@ -97,10 +102,23 @@
               <input type="hidden" class="wi-source" value="{{ line.source_type }}" /></td>
           <td class="wi-n">
             <input class="wi-cost" type="number" step="0.0001"
-                   value="{% if line.base_cost_per_lb != None %}{{ line.base_cost_per_lb }}{% endif %}" />
-            <span class="wi-cost-hint {% if line.cost_is_manual %}manual{% endif %}">{% if line.cost_is_manual %}manual{% else %}auto{% endif %}</span>
+                   value="{% if line.base_cost_per_lb != None %}{{ line.base_cost_per_lb }}{% endif %}" title="Ex-works / formula base $/lb" />
+            <span class="wi-cost-hint {% if line.cost_is_manual %}manual{% endif %}">{% if line.cost_is_manual %}manual{% else %}exw/auto{% endif %}</span>
             <input type="hidden" class="wi-manual" value="{% if line.cost_is_manual %}1{% else %}0{% endif %}" />
           </td>
+          <td class="wi-n">
+            <input class="wi-tariff-pct" type="number" step="0.1" min="0"
+                   value="{{ line.tariff_rate }}" data-as-pct="1" title="Tariff %" />
+          </td>
+          <td class="wi-n">
+            <input class="wi-freight-lb" type="number" step="0.0001" min="0"
+                   value="{{ line.freight_per_lb }}" title="Freight-in $/lb" />
+          </td>
+          <td class="wi-n">
+            <input class="wi-freight-kg" type="number" step="0.0001" min="0"
+                   value="{{ line.freight_per_kg }}" title="Freight-in $/kg" />
+          </td>
+          <td class="wi-calc wi-landed">—</td>
           <td class="wi-n"><input class="wi-add" type="number" step="0.0001" value="{{ line.additional_cost_per_lb }}" /></td>
           <td class="wi-n">
             <input class="wi-margin-pct" type="number" step="0.1" min="0" max="99"
@@ -179,7 +197,7 @@
           </td>
         </tr>
         {% empty %}
-        <tr class="wi-empty-row"><td colspan="12"><div class="wi-empty">No rows yet. Add one and pick a product.</div></td></tr>
+        <tr class="wi-empty-row"><td colspan="16"><div class="wi-empty">No rows yet. Add one and pick a product.</div></td></tr>
         {% endfor %}
       </tbody>
     </table>
@@ -194,10 +212,14 @@
     <td class="wi-product"><select class="wi-product-select" data-current-key="" data-current-name=""></select></td>
     <td><span class="wi-kind wi-kind-label">Distributed</span><input type="hidden" class="wi-source" value="distributed" /></td>
     <td class="wi-n">
-      <input class="wi-cost" type="number" step="0.0001" value="" />
-      <span class="wi-cost-hint">auto</span>
+      <input class="wi-cost" type="number" step="0.0001" value="" title="Ex-works / formula base $/lb" />
+      <span class="wi-cost-hint">exw/auto</span>
       <input type="hidden" class="wi-manual" value="0" />
     </td>
+    <td class="wi-n"><input class="wi-tariff-pct" type="number" step="0.1" min="0" value="0" /></td>
+    <td class="wi-n"><input class="wi-freight-lb" type="number" step="0.0001" min="0" value="0" /></td>
+    <td class="wi-n"><input class="wi-freight-kg" type="number" step="0.0001" min="0" value="0" /></td>
+    <td class="wi-calc wi-landed">—</td>
     <td class="wi-n"><input class="wi-add" type="number" step="0.0001" value="0" /></td>
     <td class="wi-n"><input class="wi-margin-pct" type="number" step="0.1" min="0" max="99" value="30" /></td>
     <td class="wi-calc price wi-price">—</td>

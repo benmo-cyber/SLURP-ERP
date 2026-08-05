@@ -192,7 +192,7 @@
         <div class="hs-card-body tight">
           {% for p in pricing|slice:":8" %}
           <a class="hs-list-link" href="{% url 'slurp_ui:sales_customer_pricing_edit' customer.pk p.pk %}">
-            <div class="hs-list-title">{{ p.item.sku }} · ${{ p.unit_price }}/{{ p.unit_of_measure }}</div>
+            <div class="hs-list-title">{{ p.item.sku }} · {{ p.unit_price|money }}/{{ p.unit_of_measure }}</div>
             <div class="hs-list-sub">
               Eff {{ p.effective_date }}{% if p.incoterms %} · {{ p.incoterms }}{% endif %}
               {% if not p.is_active %} · inactive{% endif %}
@@ -213,7 +213,7 @@
           {% for q in quotes|slice:":6" %}
           <a class="hs-list-link" href="{% url 'slurp_ui:sales_customer_quote_edit' customer.pk q.pk %}">
             <div class="hs-list-title">{{ q.quote_number }} <span class="hs-badge">{{ q.get_status_display }}</span></div>
-            <div class="hs-list-sub">{{ q.quote_date|date:"M j, Y" }} · ${{ q.line_total|floatformat:2 }}</div>
+            <div class="hs-list-sub">{{ q.quote_date|date:"M j, Y" }} · {{ q.line_total|money:2 }}</div>
           </a>
           {% empty %}
           <div class="hs-empty">No quotes yet. Create a priced offer before an SO.</div>
@@ -337,7 +337,7 @@
                   {% else %}<span class="hs-badge danger">+{{ row.days_vs_due }} late</span>{% endif %}
                 {% else %}—{% endif %}
               </td>
-              <td>${{ row.amount|floatformat:2 }}</td>
+              <td>{{ row.amount|money:2 }}</td>
               <td>{{ row.reference|default:"—" }}</td>
             </tr>
             {% empty %}
@@ -389,7 +389,7 @@
             {% for p in pricing %}
             <tr>
               <td>{{ p.item.sku }}</td>
-              <td>${{ p.unit_price }}</td>
+              <td>{{ p.unit_price|money }}</td>
               <td>{{ p.unit_of_measure }}</td>
               <td>{{ p.effective_date }}</td>
               <td>{{ p.expiry_date|default:"—" }}</td>
@@ -476,7 +476,7 @@
                 {% elif q.status == 'rejected' or q.status == 'expired' %}<span class="hs-badge danger">{{ q.get_status_display }}</span>
                 {% else %}<span class="hs-badge">{{ q.get_status_display }}</span>{% endif %}
               </td>
-              <td>${{ q.line_total|floatformat:2 }}</td>
+              <td>{{ q.line_total|money:2 }}</td>
               <td>{{ q.customer_reference|default:"—" }}</td>
               <td><a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:sales_customer_quote_edit' customer.pk q.pk %}">Edit</a></td>
             </tr>

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { createPayment, getAccountsPayable, getAccountsReceivable, getAccounts } from '../../api/finance'
 import { useGodMode } from '../../context/GodModeContext'
+import { formatCurrency } from '../../utils/formatNumber'
 import './PaymentEntry.css'
 
 interface PaymentEntryProps {
@@ -207,7 +208,7 @@ const PaymentEntry: React.FC<PaymentEntryProps> = ({ onClose, onSuccess, payment
                 <option value="">Select AP Entry...</option>
                 {apEntries.map(entry => (
                   <option key={entry.id} value={entry.id}>
-                    {entry.vendor_name} - {entry.invoice_number} (Balance: ${entry.balance.toFixed(2)})
+                    {entry.vendor_name} - {entry.invoice_number} (Balance: {formatCurrency(entry.balance)})
                   </option>
                 ))}
               </select>
@@ -223,7 +224,7 @@ const PaymentEntry: React.FC<PaymentEntryProps> = ({ onClose, onSuccess, payment
                 <option value="">Select AR Entry...</option>
                 {arEntries.map(entry => (
                   <option key={entry.id} value={entry.id}>
-                    {entry.customer_name} - {entry.invoice_number_display || 'N/A'} (Balance: ${entry.balance.toFixed(2)})
+                    {entry.customer_name} - {entry.invoice_number_display || 'N/A'} (Balance: {formatCurrency(entry.balance)})
                   </option>
                 ))}
               </select>
@@ -233,7 +234,7 @@ const PaymentEntry: React.FC<PaymentEntryProps> = ({ onClose, onSuccess, payment
                 <strong>Selected:</strong> {formData.payment_type === 'ap_payment' 
                   ? (selectedEntry as APEntry).vendor_name 
                   : (selectedEntry as AREntry).customer_name} - 
-                Balance: ${selectedEntry.balance.toFixed(2)}
+                Balance: {formatCurrency(selectedEntry.balance)}
               </div>
             )}
           </div>

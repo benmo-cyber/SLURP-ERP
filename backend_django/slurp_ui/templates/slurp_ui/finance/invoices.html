@@ -55,7 +55,7 @@
             </td>
             <td>{{ inv.invoice_date }}</td>
             <td>{{ inv.due_date }}</td>
-            <td>${{ inv.grand_total|floatformat:2 }}</td>
+            <td>{{ inv.grand_total|money:2 }}</td>
             <td>
               <div class="hs-queue-actions">
                 <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:finance_invoice_pdf' inv.id %}">PDF</a>

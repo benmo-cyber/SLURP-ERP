@@ -73,6 +73,12 @@
       <input id="vendor_lot_number" name="vendor_lot_number" />
     </div>
 
+    <div class="form-row">
+      <label for="freight_actual">Freight actual ($ for this receipt, optional)</label>
+      <input id="freight_actual" name="freight_actual" type="number" step="0.01" min="0"
+             placeholder="Stored on lot for landed-cost actuals" />
+    </div>
+
     <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0.5rem">
       <div class="form-row">
         <label for="received_date">Received date</label>

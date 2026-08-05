@@ -71,7 +71,7 @@
               {% else %}<span class="hs-badge warn">Draft</span>{% endif %}
             </td>
             <td>{% if f.commercial_sku %}{{ f.commercial_sku }}{% else %}<span class="hs-muted">—</span>{% endif %}</td>
-            <td>${{ f.total_cost_per_lb|floatformat:2 }}</td>
+            <td>{{ f.total_cost_per_lb|money:2 }}</td>
             <td>{{ f.updated_at|date:"M j, Y" }}</td>
           </tr>
           {% empty %}

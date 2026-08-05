@@ -209,7 +209,7 @@ def create_journal_entry(user, *, entry_date, description, reference_number, lin
     total_credits = sum(float(l["amount"]) for l in lines if l["debit_credit"] == "credit")
     if abs(total_debits - total_credits) > 0.01:
         raise FinanceFormError(
-            f"Journal entry must be balanced. Debits: ${total_debits:.2f}, Credits: ${total_credits:.2f}"
+            f"Journal entry must be balanced. Debits: ${total_debits:,.2f}, Credits: ${total_credits:,.2f}"
         )
 
     fiscal_period = FiscalPeriod.objects.filter(

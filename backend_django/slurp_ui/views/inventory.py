@@ -589,6 +589,7 @@ def inventory_check_in(request: HttpRequest) -> HttpResponse:
                 "initials": request.POST.get("initials") or "",
                 "notes": request.POST.get("notes") or "",
                 "lot_number": request.POST.get("lot_number") or "",
+                "freight_actual": request.POST.get("freight_actual") or None,
             }
             lot = check_in_lot(request.user, payload)
             messages.success(

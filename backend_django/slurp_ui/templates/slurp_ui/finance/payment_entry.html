@@ -17,10 +17,10 @@
     <select name="account"><option value="">—</option>{% for a in cash_accounts %}<option value="{{ a.id }}">{{ a.account_number }} — {{ a.name }}</option>{% endfor %}</select>
   </label>
   <label>AR entry
-    <select name="ar_entry"><option value="">—</option>{% for r in open_ar %}<option value="{{ r.id }}" {% if ar_entry_id == r.id|stringformat:"s" %}selected{% endif %}>{{ r.customer_name }} — {{ r.balance|floatformat:2 }}</option>{% endfor %}</select>
+    <select name="ar_entry"><option value="">—</option>{% for r in open_ar %}<option value="{{ r.id }}" {% if ar_entry_id == r.id|stringformat:"s" %}selected{% endif %}>{{ r.customer_name }} — {{ r.balance|money:2 }}</option>{% endfor %}</select>
   </label>
   <label>AP entry
-    <select name="ap_entry"><option value="">—</option>{% for r in open_ap %}<option value="{{ r.id }}" {% if ap_entry_id == r.id|stringformat:"s" %}selected{% endif %}>{{ r.vendor_name }} — {{ r.balance|floatformat:2 }}</option>{% endfor %}</select>
+    <select name="ap_entry"><option value="">—</option>{% for r in open_ap %}<option value="{{ r.id }}" {% if ap_entry_id == r.id|stringformat:"s" %}selected{% endif %}>{{ r.vendor_name }} — {{ r.balance|money:2 }}</option>{% endfor %}</select>
   </label>
   <label>Reference<input name="reference_number" /></label>
   <label>Notes<textarea name="notes"></textarea></label>

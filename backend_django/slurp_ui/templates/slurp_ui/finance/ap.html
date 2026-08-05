@@ -43,7 +43,7 @@
             <td>{{ r.vendor_name }}</td>
             <td>{{ r.invoice_number|default:"—" }}</td>
             <td>{{ r.due_date }}</td>
-            <td>${{ r.balance|floatformat:2 }}</td>
+            <td>{{ r.balance|money:2 }}</td>
             <td>
               {% if r.status == 'paid' %}<span class="hs-badge ok">Paid</span>
               {% elif r.status == 'overdue' %}<span class="hs-badge danger">Overdue</span>

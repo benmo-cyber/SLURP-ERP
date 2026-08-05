@@ -33,7 +33,7 @@
 
   function fmtMoney(n, digits) {
     if (n === null || n === undefined || isNaN(n)) return "—";
-    return "$" + n.toLocaleString(undefined, {
+    return "$" + n.toLocaleString("en-US", {
       maximumFractionDigits: digits,
       minimumFractionDigits: digits
     });
@@ -106,9 +106,10 @@
       if (el.value === "") return;
       var v = parseFloat(el.value);
       if (!isNaN(v) && v <= 1) {
-        el.value = (el.classList.contains("wi-margin-pct")
-          ? (v * 100).toFixed(v * 100 % 1 ? 1 : 0)
-          : String(Math.round(v * 100)));
+        var asPct = v * 100;
+        el.value = (el.classList.contains("wi-margin-pct") || el.classList.contains("wi-tariff-pct"))
+          ? asPct.toFixed(asPct % 1 ? 1 : 0)
+          : String(Math.round(asPct));
       }
       delete el.dataset.asPct;
     });
@@ -119,21 +120,49 @@
     return pct === null ? null : pct / 100;
   }
 
+  function tariffFraction(row) {
+    var pct = num(row.querySelector(".wi-tariff-pct"));
+    return pct === null ? 0 : Math.max(0, pct / 100);
+  }
+
   function winFraction(row) {
     var pct = num(row.querySelector(".wi-win-pct"));
     return pct === null ? 0 : pct / 100;
   }
 
+  function syncFreightFromLb(row) {
+    var lb = num(row.querySelector(".wi-freight-lb"));
+    var kgIn = row.querySelector(".wi-freight-kg");
+    if (!kgIn) return;
+    kgIn.value = lb === null ? "" : (lb * 2.2).toFixed(4).replace(/\.?0+$/, "");
+  }
+
+  function syncFreightFromKg(row) {
+    var kg = num(row.querySelector(".wi-freight-kg"));
+    var lbIn = row.querySelector(".wi-freight-lb");
+    if (!lbIn) return;
+    lbIn.value = kg === null ? "" : (kg / 2.2).toFixed(4).replace(/\.?0+$/, "");
+  }
+
   function recalcRow(row) {
-    var cost = num(row.querySelector(".wi-cost")) || 0;
+    var exw = num(row.querySelector(".wi-cost"));
+    var tariff = tariffFraction(row);
+    var freight = num(row.querySelector(".wi-freight-lb")) || 0;
     var add = num(row.querySelector(".wi-add")) || 0;
     var margin = marginFraction(row);
     var vol = num(row.querySelector(".wi-vol"));
-    var unit = cost + add;
+    var base = exw === null ? 0 : exw;
+    var landed = base * (1 + tariff) + freight;
+    var unit = landed + add;
     var price = (margin !== null && margin < 1) ? unit / (1 - margin) : null;
-    if ((row.querySelector(".wi-cost").value === "") && !add) price = null;
+    var blankBase = (row.querySelector(".wi-cost").value === "") && !freight && !add;
+    if (blankBase) price = null;
     var rev = (price !== null && vol !== null) ? price * vol : null;
     var gp = (rev !== null && margin !== null) ? rev * margin : null;
+    var landedEl = row.querySelector(".wi-landed");
+    if (landedEl) {
+      landedEl.textContent = (exw === null && !freight) ? "—" : fmtMoney(landed, 4);
+    }
     row.querySelector(".wi-price").textContent = price !== null ? fmtMoney(price, 2) : "—";
     row.querySelector(".wi-rev").textContent = rev !== null ? fmtMoney(rev, 0) : "—";
     row.querySelector(".wi-gp").textContent = gp !== null ? fmtMoney(gp, 0) : "—";
@@ -165,6 +194,8 @@
       source_type: row.querySelector(".wi-source").value || "distributed",
       base_cost_per_lb: num(row.querySelector(".wi-cost")),
       cost_is_manual: row.querySelector(".wi-manual").value === "1",
+      tariff_pct: num(row.querySelector(".wi-tariff-pct")),
+      freight_per_lb: num(row.querySelector(".wi-freight-lb")) || 0,
       additional_cost_per_lb: num(row.querySelector(".wi-add")) || 0,
       margin_pct: num(row.querySelector(".wi-margin-pct")),
       volume_lb: num(row.querySelector(".wi-vol")),
@@ -213,9 +244,19 @@
     if (line.base_cost_per_lb != null && row.querySelector(".wi-manual").value !== "1") {
       row.querySelector(".wi-cost").value = line.base_cost_per_lb;
     }
+    var tariffIn = row.querySelector(".wi-tariff-pct");
+    if (tariffIn && line.tariff_pct != null) tariffIn.value = line.tariff_pct;
+    else if (tariffIn && line.tariff_rate != null) tariffIn.value = (line.tariff_rate * 100).toFixed(1).replace(/\.0$/, "");
+    var frLb = row.querySelector(".wi-freight-lb");
+    if (frLb && line.freight_per_lb != null) frLb.value = line.freight_per_lb;
+    var frKg = row.querySelector(".wi-freight-kg");
+    if (frKg) {
+      if (line.freight_per_kg != null) frKg.value = line.freight_per_kg;
+      else syncFreightFromLb(row);
+    }
     var hint = row.querySelector(".wi-cost-hint");
     if (hint) {
-      hint.textContent = line.cost_is_manual ? "manual" : "auto";
+      hint.textContent = line.cost_is_manual ? "manual" : "exw/auto";
       hint.classList.toggle("manual", !!line.cost_is_manual);
     }
     row.querySelector(".wi-manual").value = line.cost_is_manual ? "1" : "0";
@@ -260,10 +301,17 @@
         row.querySelector(".wi-manual").value = "0";
         var hint = row.querySelector(".wi-cost-hint");
         if (hint) {
-          hint.textContent = data.matched ? ("auto · " + data.matched) : "auto";
+          hint.textContent = data.matched ? ("exw · " + data.matched) : "exw/auto";
           hint.classList.remove("manual");
         }
       }
+      var tariffIn = row.querySelector(".wi-tariff-pct");
+      if (tariffIn) {
+        tariffIn.value = data.tariff_pct != null ? data.tariff_pct : 0;
+      }
+      var frLb = row.querySelector(".wi-freight-lb");
+      if (frLb) frLb.value = data.freight_per_lb != null ? data.freight_per_lb : 0;
+      syncFreightFromLb(row);
       if (data.formula) renderIngredients(row, data.formula);
       else {
         var det = detailsFor(row);
@@ -273,10 +321,13 @@
       recalcAll();
       return saveRow(row, {
         refresh_cost: true,
+        reset_trade: true,
         catalog_key: data.catalog_key || sel.value,
         source_type: data.source_type,
         product_name: data.product_name,
         cost_is_manual: false,
+        tariff_pct: data.tariff_pct != null ? data.tariff_pct : 0,
+        freight_per_lb: data.freight_per_lb != null ? data.freight_per_lb : 0,
         ingredient_overrides: {}
       });
     }).catch(function (err) {
@@ -426,6 +477,7 @@
     hydratePctInputs(row);
     hydratePctInputs(detailsFor(row));
     fillProductSelect(row);
+    syncFreightFromLb(row);
     recalcRow(row);
 
     row.addEventListener("input", function (e) {
@@ -435,6 +487,8 @@
         var hint = row.querySelector(".wi-cost-hint");
         if (hint) { hint.textContent = "manual"; hint.classList.add("manual"); }
       }
+      if (t.classList.contains("wi-freight-lb")) syncFreightFromLb(row);
+      if (t.classList.contains("wi-freight-kg")) syncFreightFromKg(row);
       recalcAll();
       if (t.classList.contains("wi-product-select")) return;
       scheduleSave(row);
@@ -461,7 +515,7 @@
         if (det) det.remove();
         row.remove();
         if (!tbody.querySelector(".wi-row")) {
-          tbody.innerHTML = '<tr class="wi-empty-row"><td colspan="12"><div class="wi-empty">No rows yet. Add one and pick a product.</div></td></tr>';
+          tbody.innerHTML = '<tr class="wi-empty-row"><td colspan="16"><div class="wi-empty">No rows yet. Add one and pick a product.</div></td></tr>';
         }
         recalcAll();
         setStatus("Removed");

@@ -20,9 +20,9 @@
 <tbody>{% for row in recons %}<tr>
   <td>{{ row.recon.statement_date }}</td>
   <td>{{ row.recon.account.account_number }} — {{ row.recon.account.name }}</td>
-  <td>{{ row.recon.statement_balance|floatformat:2 }}</td>
-  <td>{% if row.gl_balance != None %}{{ row.gl_balance|floatformat:2 }}{% else %}—{% endif %}</td>
-  <td>{% if row.variance != None %}{{ row.variance|floatformat:2 }}{% else %}—{% endif %}</td>
+  <td>{{ row.recon.statement_balance|numcomma:2 }}</td>
+  <td>{% if row.gl_balance != None %}{{ row.gl_balance|numcomma:2 }}{% else %}—{% endif %}</td>
+  <td>{% if row.variance != None %}{{ row.variance|numcomma:2 }}{% else %}—{% endif %}</td>
 </tr>{% empty %}<tr><td colspan="5">No reconciliations.</td></tr>{% endfor %}</tbody></table>
 </div></div></div>
 {% endblock %}

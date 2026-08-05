@@ -1634,11 +1634,19 @@ class PricingWhatIfLine(models.Model):
     base_cost_per_lb = models.FloatField(
         blank=True,
         null=True,
-        help_text='Looked-up or manual base $/lb before additional cost',
+        help_text='Ex-works / formula base $/lb BEFORE what-if tariff and freight (not Cost Master landed).',
     )
     cost_is_manual = models.BooleanField(
         default=False,
         help_text='If true, base_cost_per_lb is user-entered and not auto-refreshed',
+    )
+    tariff_rate = models.FloatField(
+        default=0.0,
+        help_text='What-if tariff as decimal (0.381 = 38.1%). Applied to base_cost_per_lb; do not also use CM landed.',
+    )
+    freight_per_lb = models.FloatField(
+        default=0.0,
+        help_text='What-if freight-in $/lb. Coupled with freight_per_kg (×2.2). Not added on top of CM landed.',
     )
     additional_cost_per_lb = models.FloatField(default=0.0)
     margin = models.FloatField(
@@ -1669,17 +1677,30 @@ class PricingWhatIfLine(models.Model):
         return f"{self.customer_name or '?'} — {self.product_name or 'product'}"
 
     @property
-    def unit_cost(self):
+    def freight_per_kg(self):
+        return float(self.freight_per_lb or 0) * 2.2
+
+    @property
+    def landed_whatif_per_lb(self):
+        """Rebuild landed from ex-works base + what-if tariff + freight (same shape as Cost Master)."""
+        if self.base_cost_per_lb is None and not (self.freight_per_lb or 0):
+            return None
         base = float(self.base_cost_per_lb or 0)
-        add = float(self.additional_cost_per_lb or 0)
-        return base + add
+        return base * (1.0 + float(self.tariff_rate or 0)) + float(self.freight_per_lb or 0)
+
+    @property
+    def unit_cost(self):
+        landed = self.landed_whatif_per_lb
+        if landed is None:
+            return float(self.additional_cost_per_lb or 0)
+        return float(landed) + float(self.additional_cost_per_lb or 0)
 
     @property
     def price_per_lb(self):
         m = self.margin
         if m is None or m >= 1:
             return None
-        if self.base_cost_per_lb is None and not self.additional_cost_per_lb:
+        if self.base_cost_per_lb is None and not (self.freight_per_lb or 0) and not (self.additional_cost_per_lb or 0):
             return None
         return self.unit_cost / (1.0 - float(m))
 
@@ -2127,6 +2148,7 @@ class Invoice(models.Model):
     INVOICE_TYPE_CHOICES = [
         ('customer', 'Customer Invoice'),
         ('vendor', 'Vendor Bill'),
+        ('credit', 'Credit Memo'),
     ]
     
     invoice_number = models.CharField(max_length=100, unique=True, db_index=True)

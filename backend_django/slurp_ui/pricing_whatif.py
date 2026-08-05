@@ -224,7 +224,7 @@ def vendor_cost_options_for_item(item_id: int | None) -> list[dict]:
         opts.append(
             {
                 "key": key,
-                "label": f"{vp.vendor_name} list — ${price:.4f}/lb",
+                "label": f"{vp.vendor_name} list — ${price:,.4f}/lb",
                 "vendor_label": vp.vendor_name,
                 "price_per_lb": round(price, 6),
                 "source": "vendor_pricing",
@@ -252,7 +252,7 @@ def vendor_cost_options_for_item(item_id: int | None) -> list[dict]:
                     opts.append(
                         {
                             "key": key,
-                            "label": f"Cost Master {cm.wwi_product_code or cm.vendor_material} — ${float(cost):.4f}/lb",
+                            "label": f"Cost Master {cm.wwi_product_code or cm.vendor_material} — ${float(cost):,.4f}/lb",
                             "vendor_label": cm.vendor or "Cost Master",
                             "price_per_lb": float(cost),
                             "source": "cost_master",
@@ -304,15 +304,30 @@ def formula_ingredient_payload(rd: RDFormula, overrides: dict | None = None) -> 
     }
 
 
+def exw_cost_per_lb(cm: CostMaster) -> float | None:
+    """Ex-works $/lb from Cost Master (NOT landed — landed already embeds tariff + freight)."""
+    if cm.price_per_lb is not None:
+        return float(cm.price_per_lb)
+    if cm.price_per_kg is not None:
+        return float(cm.price_per_kg) / 2.2
+    return None
+
+
+def cm_freight_per_lb(cm: CostMaster) -> float:
+    return float(cm.freight_per_kg or 0) / 2.2
+
+
 def resolve_catalog_selection(catalog_key: str | None = None, product_name: str | None = None, source_type: str | None = None):
-    """Resolve catalog key / name into (kind, cost, cost_master, rd_formula, label)."""
+    """Resolve catalog key / name into (kind, base_cost_exw_or_formula, cost_master, rd_formula, label).
+
+    For Cost Master, base_cost is ex-works $/lb (not landed).
+    """
     kind, pk = parse_catalog_key(catalog_key)
     if kind == "cm" and pk:
         cm = CostMaster.objects.filter(pk=pk).first()
         if cm:
-            cost = cm.landed_cost_per_lb or cm.price_per_lb
             label = (cm.wwi_product_code or cm.vendor_material or "").strip()
-            return "distributed", cost, cm, None, label
+            return "distributed", exw_cost_per_lb(cm), cm, None, label
     if kind == "rd" and pk:
         rd = RDFormula.objects.prefetch_related("lines").filter(pk=pk).exclude(status="scrapped").first()
         if rd:
@@ -328,11 +343,11 @@ def resolve_catalog_selection(catalog_key: str | None = None, product_name: str 
         if rd:
             st = "manufactured" if rd.status == "commercialized" else "rd"
             return st, cost, None, rd, name
-        cost, cm = lookup_distributed_cost(name)
-        return "distributed", cost, cm, None, name
-    cost, cm = lookup_distributed_cost(name)
-    if cost is not None:
-        return "distributed", cost, cm, None, name
+        _landed, cm = lookup_distributed_cost(name)
+        return "distributed", (exw_cost_per_lb(cm) if cm else None), cm, None, name
+    _landed, cm = lookup_distributed_cost(name)
+    if cm is not None:
+        return "distributed", exw_cost_per_lb(cm), cm, None, name
     cost, rd = lookup_manufactured_cost(name)
     if rd:
         st = "manufactured" if rd.status == "commercialized" else "rd"
@@ -340,8 +355,18 @@ def resolve_catalog_selection(catalog_key: str | None = None, product_name: str 
     return src or "distributed", None, None, None, name
 
 
-def refresh_line_cost(line: PricingWhatIfLine, *, force: bool = False) -> PricingWhatIfLine:
-    """Re-pull base cost from Cost Master or R&D (with ingredient overrides)."""
+def refresh_line_cost(
+    line: PricingWhatIfLine,
+    *,
+    force: bool = False,
+    reset_trade: bool = False,
+) -> PricingWhatIfLine:
+    """
+    Re-pull base cost from Cost Master (ex-works) or R&D (with ingredient overrides).
+
+    reset_trade=True copies CM tariff / freight estimates into what-if fields (product select).
+    Never stores Cost Master landed into base_cost_per_lb (avoids double-counting).
+    """
     if line.cost_is_manual and not force:
         return line
 
@@ -352,6 +377,10 @@ def refresh_line_cost(line: PricingWhatIfLine, *, force: bool = False) -> Pricin
         if rd:
             line.base_cost_per_lb = compute_formula_cost(rd, line.ingredient_overrides)
             line.cost_is_manual = False
+            if reset_trade:
+                # Formula $/lb is already a material stack; start freight/tariff at 0 unless user sets them.
+                line.tariff_rate = 0.0
+                line.freight_per_lb = 0.0
             return line
 
     kind, cost, cm, rd, label = resolve_catalog_selection(
@@ -367,6 +396,17 @@ def refresh_line_cost(line: PricingWhatIfLine, *, force: bool = False) -> Pricin
     if rd and kind in ("rd", "manufactured"):
         line.base_cost_per_lb = compute_formula_cost(rd, line.ingredient_overrides)
         line.cost_is_manual = False
+        if reset_trade:
+            line.tariff_rate = 0.0
+            line.freight_per_lb = 0.0
+    elif cm is not None:
+        exw = exw_cost_per_lb(cm)
+        if exw is not None:
+            line.base_cost_per_lb = float(exw)
+            line.cost_is_manual = False
+        if reset_trade:
+            line.tariff_rate = float(cm.tariff or 0)
+            line.freight_per_lb = cm_freight_per_lb(cm)
     elif cost is not None:
         line.base_cost_per_lb = float(cost)
         line.cost_is_manual = False
@@ -376,6 +416,7 @@ def refresh_line_cost(line: PricingWhatIfLine, *, force: bool = False) -> Pricin
 def compute_line_metrics(line: PricingWhatIfLine) -> dict:
     return {
         "unit_cost": line.unit_cost,
+        "landed_whatif_per_lb": line.landed_whatif_per_lb,
         "price_per_lb": line.price_per_lb,
         "annual_revenue": line.annual_revenue,
         "gross_profit": line.gross_profit,

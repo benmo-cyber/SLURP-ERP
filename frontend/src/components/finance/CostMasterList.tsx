@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import { getCostMasters, deleteCostMaster, updateCostMaster, getCostMasterActuals } from '../../api/costMaster'
+import { formatCurrency } from '../../utils/formatNumber'
 import './CostMasterList.css'
 
 const LBS_PER_KG = 2.2
@@ -250,7 +251,7 @@ function CostMasterList() {
                         className="edit-input"
                       />
                     ) : (cm.vendor || '-')}</td>
-                    <td className="read-only">{price != null ? `$${price.toFixed(2)}/${priceUnit}` : '-'}</td>
+                    <td className="read-only">{price != null ? `${formatCurrency(price)}/${priceUnit}` : '-'}</td>
                     <td>{isEditing ? (
                       <span className="edit-tariff-wrap">
                         <input
@@ -287,8 +288,8 @@ function CostMasterList() {
                         title={isEa ? 'Freight per EA' : `Freight per ${unitToggle}`}
                         style={{ width: '5rem' }}
                       />
-                    ) : (freight ? `$${freight.toFixed(2)}/${priceUnit}` : '-')}</td>
-                    <td className={landedCostClass}>{landedCost != null ? `$${landedCost.toFixed(2)}/${priceUnit}` : '-'}</td>
+                    ) : (freight ? `${formatCurrency(freight)}/${priceUnit}` : '-')}</td>
+                    <td className={landedCostClass}>{landedCost != null ? `${formatCurrency(landedCost)}/${priceUnit}` : '-'}</td>
                     <td>{isEditing ? (
                       <input
                         type="text"
@@ -381,15 +382,15 @@ function CostMasterList() {
                             Avg tariff {act.avg_tariff_pct != null ? `${act.avg_tariff_pct.toFixed(1)}%` : '—'}
                             {' · '}
                             Avg freight {act.avg_freight_per_kg != null
-                              ? `$${isEa ? act.avg_freight_per_kg.toFixed(2) : (unitToggle === 'lbs' ? (act.avg_freight_per_kg / LBS_PER_KG).toFixed(2) : act.avg_freight_per_kg.toFixed(2))}/${priceUnit}`
+                              ? `${formatCurrency(isEa ? act.avg_freight_per_kg : (unitToggle === 'lbs' ? act.avg_freight_per_kg / LBS_PER_KG : act.avg_freight_per_kg))}/${priceUnit}`
                               : '—'}
                             {' · '}
                             Actual landed {act.actual_landed_per_kg != null
-                              ? `$${isEa ? act.actual_landed_per_kg.toFixed(2) : (unitToggle === 'lbs' ? (act.actual_landed_per_kg / LBS_PER_KG).toFixed(2) : act.actual_landed_per_kg.toFixed(2))}/${priceUnit}`
+                              ? `${formatCurrency(isEa ? act.actual_landed_per_kg : (unitToggle === 'lbs' ? act.actual_landed_per_kg / LBS_PER_KG : act.actual_landed_per_kg))}/${priceUnit}`
                               : '—'}
                             {' · '}
                             Estimate {act.estimated_landed_per_kg != null
-                              ? `$${isEa ? act.estimated_landed_per_kg.toFixed(2) : (unitToggle === 'lbs' ? (act.estimated_landed_per_kg / LBS_PER_KG).toFixed(2) : act.estimated_landed_per_kg.toFixed(2))}/${priceUnit}`
+                              ? `${formatCurrency(isEa ? act.estimated_landed_per_kg : (unitToggle === 'lbs' ? act.estimated_landed_per_kg / LBS_PER_KG : act.estimated_landed_per_kg))}/${priceUnit}`
                               : '—'}
                           </span>
                           <span className={`cost-master-actuals-badge cost-master-actuals-${act.comparison}`}>

@@ -43,8 +43,8 @@
           <span class="hs-cal-daynum">{{ cell.date.day }}</span>
           {% if cell.ar_total or cell.ap_total %}
           <span class="fin-cal-day-totals">
-            {% if cell.ar_total %}<span class="fin-cal-in">+${{ cell.ar_total|floatformat:0 }}</span>{% endif %}
-            {% if cell.ap_total %}<span class="fin-cal-out">−${{ cell.ap_total|floatformat:0 }}</span>{% endif %}
+            {% if cell.ar_total %}<span class="fin-cal-in">+{{ cell.ar_total|money:0 }}</span>{% endif %}
+            {% if cell.ap_total %}<span class="fin-cal-out">−{{ cell.ap_total|money:0 }}</span>{% endif %}
           </span>
           {% endif %}
           {% for e in cell.events %}
@@ -77,7 +77,7 @@
           {% if e.type == 'receivable' %}<span class="hs-badge ok">AR</span>
           {% else %}<span class="hs-badge warn">AP</span>{% endif %}
           {% if e.is_overdue %}<span class="hs-badge danger">Overdue</span>{% endif %}
-          <div class="hs-list-title">{{ e.customer_name|default:e.vendor_name }} — ${{ e.balance|floatformat:2 }}</div>
+          <div class="hs-list-title">{{ e.customer_name|default:e.vendor_name }} — {{ e.balance|money:2 }}</div>
           <div class="hs-list-sub">{{ e.subtitle }} · due {{ e.date }}</div>
         </div>
         <div class="hs-queue-actions">

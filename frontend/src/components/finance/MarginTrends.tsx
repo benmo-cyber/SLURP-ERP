@@ -12,6 +12,7 @@ import {
 import { getItems } from '../../api/inventory'
 import { getPricingHistory } from '../../api/costMaster'
 import { getCustomerPricingHistory } from '../../api/finance'
+import { formatCurrency } from '../../utils/formatNumber'
 import './MarginTrends.css'
 
 interface Item {
@@ -222,7 +223,7 @@ function MarginTrends() {
                 label={{ value: '$/lb', angle: -90, position: 'insideLeft', style: { fontSize: 12 } }}
               />
               <Tooltip
-                formatter={(value: number) => (typeof value === 'number' ? `$${value.toFixed(3)}` : value)}
+                formatter={(value: number) => (typeof value === 'number' ? formatCurrency(value, 3) : value)}
                 labelFormatter={(label) => `Date: ${label}`}
               />
               <Legend />

@@ -1287,6 +1287,48 @@ def revert_sales_order_to_draft(sales_order: SalesOrder, user) -> SalesOrder:
     return sales_order
 
 
+def cancel_sales_order(sales_order: SalesOrder, user) -> SalesOrder:
+    """
+    Cancel a sales order that has not been completed.
+    Releases allocations; cancels draft invoices. Blocked if shipments / shipped qty /
+    issued invoices remain.
+    """
+    from .sales_order_allocation_release import release_sales_order_allocations
+
+    if sales_order.status in ("cancelled",):
+        raise SellFlowError("Sales order is already cancelled.")
+    if sales_order.status in ("completed", "shipped"):
+        raise SellFlowError(
+            f"Cannot cancel a {sales_order.status} order. Reverse shipments first if applicable."
+        )
+    if sales_order.shipments.exists():
+        raise SellFlowError(
+            "This order has checkout shipments. Reverse each shipment first, then cancel."
+        )
+    for item in sales_order.items.all():
+        if float(item.quantity_shipped or 0) > 1e-6:
+            raise SellFlowError(
+                "This order has shipped quantities on file. Reverse shipments first, then cancel."
+            )
+    blocking = Invoice.objects.filter(sales_order=sales_order).exclude(
+        status__in=("draft", "cancelled")
+    )
+    if blocking.exists():
+        nums = ", ".join(blocking.values_list("invoice_number", flat=True)[:5])
+        raise SellFlowError(
+            f"Void non-draft invoices in Finance first (mark cancelled). Blocking: {nums}"
+        )
+
+    with transaction.atomic():
+        release_sales_order_allocations(sales_order)
+        Invoice.objects.filter(sales_order=sales_order, status="draft").update(status="cancelled")
+        sales_order.status = "cancelled"
+        sales_order.save(update_fields=["status"])
+
+    sales_order.refresh_from_db()
+    return sales_order
+
+
 def reverse_sales_shipment(
     shipment_id: int, user, *, allow_non_draft_invoice: bool = False
 ) -> dict:
