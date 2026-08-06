@@ -27,15 +27,8 @@ body {
   min-height: 100vh;
 }
 
-header {
-  background-color: var(--app-header-bg);
-  color: var(--app-header-text);
-  padding: 1rem 2rem;
-}
-
-main {
-  padding: 2rem;
-}
+/* Do not style bare header/main tags — module pages use those for local chrome. */
+/* App shell chrome lives in App.css (.app-header / .app-main). */
 
 /* Global Button Styles */
 .btn {

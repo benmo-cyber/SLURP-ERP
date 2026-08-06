@@ -1,94 +1,531 @@
 ﻿{% extends "slurp_ui/base_module.html" %}
+{% load static %}
 {% block title %}Finance — SLURP{% endblock %}
 {% block module_title %}Finance{% endblock %}
 {% block header_actions %}
   <a class="hs-btn" href="{% url 'slurp_ui:finance_calendar' %}">Cash calendar</a>
   <a class="hs-btn hs-btn-primary" href="{% url 'slurp_ui:finance_invoice_create' %}">Create invoice</a>
 {% endblock %}
+{% block extra_css %}
+{# Cache-bust dashboard canvas after style rewrite #}
+<link rel="stylesheet" href="{% static 'slurp_ui/css/Finance.css' %}?v=pbi-20260806d" />
+{% endblock %}
 {% block main %}
-<div class="hs-bleed" style="padding:1.25rem 1.5rem 2rem">
-  <header class="finance-home__intro">
-    <h2>Finance dashboard</h2>
-    <p>Cash calendar for AR/AP dues, today’s collection &amp; pay tasks, and draft invoices ready to issue.</p>
-  </header>
-
-  <div class="hs-stat-row" style="margin-bottom:1rem">
-    <div class="hs-stat">
-      <div class="label">Open AR</div>
-      <div class="value">{{ ar_open_total|money:0 }}</div>
+<div class="hs-bleed pbi">
+  <div class="pbi-bar">
+    <div class="pbi-bar__title">
+      <div class="pbi-bar__h">Finance</div>
+      <span>Cash &amp; performance</span>
     </div>
-    <div class="hs-stat">
-      <div class="label">Open AP</div>
-      <div class="value">{{ ap_open_total|money:0 }}</div>
-    </div>
-    <div class="hs-stat">
-      <div class="label">AR due (7d)</div>
-      <div class="value">{{ ar_due_week|money:0 }}</div>
-    </div>
-    <div class="hs-stat">
-      <div class="label">AP due (7d)</div>
-      <div class="value">{{ ap_due_week|money:0 }}</div>
-    </div>
-    <div class="hs-stat">
-      <div class="label">Net 7d (AR−AP)</div>
-      <div class="value">{% if net_week >= 0 %}+{% endif %}{{ net_week|money:0 }}</div>
-    </div>
-    <div class="hs-stat">
-      <div class="label">Overdue / today</div>
-      <div class="value">{{ overdue_count }} / {{ due_today_count }}</div>
+    <div class="pbi-bar__filters">
+      <div class="pbi-slicer" role="tablist" aria-label="Period">
+        <button type="button" class="is-on" data-range="quarter">Quarter</button>
+        <button type="button" data-range="six_month">6 mo</button>
+        <button type="button" data-range="ytd">YTD</button>
+        <button type="button" data-range="twelve_month">12 mo</button>
+      </div>
+      <div class="pbi-slicer" role="tablist" aria-label="Primary visual">
+        <button type="button" class="is-on" data-mode="rev_exp_cogs" data-title="Revenue / COGS / OpEx by month">P&amp;L</button>
+        <button type="button" data-mode="cashflow" data-title="Cash in vs cash out by month">Cash</button>
+        <button type="button" data-mode="margin" data-title="Average margin by product family">Margin</button>
+        <button type="button" data-mode="aging" data-title="Open AR vs AP by aging bucket">Aging</button>
+      </div>
+      <div class="pbi-slicer" id="fin-margin-sort" hidden>
+        <button type="button" class="is-on" data-sort="margin_desc">High</button>
+        <button type="button" data-sort="margin_asc">Low</button>
+        <button type="button" data-sort="label">A–Z</button>
+        <button type="button" data-sort="count">Count</button>
+      </div>
     </div>
   </div>
 
-  <div class="fin-dash-layout">
-    <div class="fin-dash-main">
-      {% include "slurp_ui/finance/_cash_calendar.html" with compact=1 %}
-    </div>
+  <div class="pbi-grid">
+    <aside class="pbi-scores">
+      <article class="pbi-card pbi-score">
+        <div class="pbi-score__label">Open AR</div>
+        <div class="pbi-score__sub">{{ ar_open }} receivables</div>
+        <div class="pbi-score__value">{{ ar_open_total|money:0 }}</div>
+      </article>
+      <article class="pbi-card pbi-score">
+        <div class="pbi-score__label">Open AP</div>
+        <div class="pbi-score__sub">{{ ap_open }} payables</div>
+        <div class="pbi-score__value">{{ ap_open_total|money:0 }}</div>
+      </article>
+      <article class="pbi-card pbi-score">
+        <div class="pbi-score__label">AR due (7d)</div>
+        <div class="pbi-score__sub">Collections</div>
+        <div class="pbi-score__value">{{ ar_due_week|money:0 }}</div>
+      </article>
+      <article class="pbi-card pbi-score">
+        <div class="pbi-score__label">AP due (7d)</div>
+        <div class="pbi-score__sub">Payables</div>
+        <div class="pbi-score__value">{{ ap_due_week|money:0 }}</div>
+      </article>
+      <article class="pbi-card pbi-score {% if net_week < 0 %}is-neg{% else %}is-pos{% endif %}">
+        <div class="pbi-score__label">Net 7d (AR−AP)</div>
+        <div class="pbi-score__sub">Week outlook</div>
+        <div class="pbi-score__value">{% if net_week >= 0 %}+{% endif %}{{ net_week|money:0 }}</div>
+      </article>
+      <article class="pbi-card pbi-score {% if overdue_count %}is-alert{% endif %}">
+        <div class="pbi-score__label">Overdue / today</div>
+        <div class="pbi-score__sub">Needs attention</div>
+        <div class="pbi-score__value">{{ overdue_count }} / {{ due_today_count }}</div>
+      </article>
+    </aside>
 
-    <div class="fin-dash-side hs-side-stack">
-      <div class="hs-card">
-        <div class="hs-card-header">
-          <h3>Today’s cash tasks</h3>
-          <span class="hs-muted" style="font-size:0.8rem">Overdue + due today</span>
+    <section class="pbi-card pbi-viz pbi-viz--main">
+      <div class="pbi-viz__head">
+        <div>
+          <div class="pbi-viz__title" id="fin-chart-title">Revenue / COGS / OpEx by month</div>
+          <p id="fin-chart-note"></p>
         </div>
-        <div class="hs-card-body tight">
+      </div>
+      <div class="pbi-viz__body">
+        <canvas id="fin-dash-chart" aria-label="Primary finance chart"></canvas>
+      </div>
+    </section>
+
+    <section class="pbi-card pbi-viz pbi-viz--side">
+      <div class="pbi-viz__head">
+        <div>
+          <div class="pbi-viz__title" id="fin-side-title">Open AR vs AP by aging</div>
+          <p id="fin-side-note"></p>
+        </div>
+      </div>
+      <div class="pbi-viz__body">
+        <canvas id="fin-side-chart" aria-label="Secondary finance chart"></canvas>
+      </div>
+    </section>
+
+    <section class="pbi-card pbi-viz pbi-viz--cal">
+      {% include "slurp_ui/finance/_cash_calendar.html" with compact=1 %}
+    </section>
+
+    <aside class="pbi-side-stack">
+      <section class="pbi-card pbi-listcard">
+        <div class="pbi-viz__head">
+          <div class="pbi-viz__title">Cash tasks</div>
+          <span>{{ overdue_count }} overdue · {{ due_today_count }} today</span>
+        </div>
+        <div class="pbi-list">
           {% for t in today_tasks %}
-          <div class="hs-list-link" style="cursor:default">
-            <div style="display:flex;justify-content:space-between;gap:0.5rem;align-items:flex-start">
-              <div>
-                <div class="hs-list-title">
-                  {% if t.kind == 'ar' %}<span class="hs-badge ok">AR</span>{% else %}<span class="hs-badge warn">AP</span>{% endif %}
-                  {% if t.urgency == 'overdue' %}<span class="hs-badge danger">Overdue</span>{% else %}<span class="hs-badge info">Today</span>{% endif %}
-                  {{ t.label }}
-                </div>
-                <div class="hs-list-sub">{{ t.detail }} · {{ t.amount|money:2 }} · due {{ t.due|date:"M j" }}</div>
+          <div class="pbi-list__row">
+            <div>
+              <div class="pbi-list__title">
+                <span class="pbi-pill pbi-pill--{{ t.kind }}">{{ t.kind|upper }}</span>
+                {{ t.label }}
               </div>
-              <a class="hs-btn hs-btn-sm hs-btn-primary" href="{{ t.pay_url }}">Mark as paid</a>
+              <div class="pbi-list__meta">{% if t.urgency == 'overdue' %}Overdue · {% endif %}{{ t.amount|money:0 }} · {{ t.due|date:"M j" }}</div>
             </div>
+            <a class="pbi-list__btn" href="{{ t.pay_url }}">Paid</a>
           </div>
           {% empty %}
-          <div class="hs-empty">Nothing overdue or due today. Nice.</div>
+          <div class="pbi-list__empty">Nothing due today.</div>
           {% endfor %}
         </div>
-      </div>
+      </section>
 
-      <div class="hs-card">
-        <div class="hs-card-header">
-          <h3>Draft invoices</h3>
-          <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:finance_invoices' %}?status=draft">All drafts</a>
+      <section class="pbi-card pbi-listcard">
+        <div class="pbi-viz__head">
+          <div class="pbi-viz__title">Draft invoices</div>
+          <a href="{% url 'slurp_ui:finance_invoices' %}?status=draft">All</a>
         </div>
-        <div class="hs-card-body tight">
+        <div class="pbi-list">
           {% for inv in draft_invoices %}
-          <a class="hs-list-link" href="{% url 'slurp_ui:finance_invoice_detail' inv.id %}">
-            <div class="hs-list-title">{{ inv.invoice_number }}</div>
-            <div class="hs-list-sub">{{ inv.customer_vendor_name }} · {{ inv.grand_total|money:2 }}</div>
+          <a class="pbi-list__row pbi-list__row--link" href="{% url 'slurp_ui:finance_invoice_detail' inv.id %}">
+            <div>
+              <div class="pbi-list__title">{{ inv.invoice_number }}</div>
+              <div class="pbi-list__meta">{{ inv.customer_vendor_name }} · {{ inv.grand_total|money:0 }}</div>
+            </div>
           </a>
           {% empty %}
-          <div class="hs-empty">No drafts waiting.</div>
+          <div class="pbi-list__empty">No drafts.</div>
           {% endfor %}
         </div>
-      </div>
-
-    </div>
+      </section>
+    </aside>
   </div>
 </div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+{{ chart_payload|json_script:"fin-chart-data" }}
+<script>
+(function () {
+  var el = document.getElementById("fin-chart-data");
+  if (!el || typeof Chart === "undefined") return;
+  var data;
+  try { data = JSON.parse(el.textContent); } catch (e) { return; }
+
+  var mainCanvas = document.getElementById("fin-dash-chart");
+  var sideCanvas = document.getElementById("fin-side-chart");
+  var noteEl = document.getElementById("fin-chart-note");
+  var titleEl = document.getElementById("fin-chart-title");
+  var sideTitle = document.getElementById("fin-side-title");
+  var sideNote = document.getElementById("fin-side-note");
+  var sortWrap = document.getElementById("fin-margin-sort");
+
+  var mode = data.default_mode || "rev_exp_cogs";
+  var range = data.default_range || "quarter";
+  var marginSort = "margin_desc";
+  var mainChart = null;
+  var sideChart = null;
+
+  /* Power BI–adjacent palette */
+  var C = {
+    teal: "#01B8AA",
+    dark: "#374649",
+    red: "#FD625E",
+    yellow: "#F2C811",
+    mute: "#605E5C",
+    ink: "#252423",
+    grid: "rgba(96,94,92,0.14)",
+    tip: "rgba(37,36,35,0.94)"
+  };
+
+  function moneyTick(v) {
+    if (Math.abs(v) >= 1e6) return "$" + (v / 1e6).toFixed(1) + "M";
+    if (Math.abs(v) >= 1e3) return "$" + (v / 1e3).toFixed(0) + "k";
+    return "$" + v;
+  }
+
+  function rangeIndex() {
+    var start = (data.range_starts && data.range_starts[range]) || data.month_keys[0];
+    var keys = data.month_keys || [];
+    for (var i = 0; i < keys.length; i++) {
+      if (keys[i] >= start) return i;
+    }
+    return 0;
+  }
+
+  function sliceArr(arr) {
+    return arr ? arr.slice(rangeIndex()) : [];
+  }
+
+  function sortedFamilies() {
+    var rows = (data.margin.families || []).slice();
+    rows.sort(function (a, b) {
+      if (marginSort === "margin_asc") return a.avg_margin_pct - b.avg_margin_pct;
+      if (marginSort === "label") return String(a.label).localeCompare(String(b.label));
+      if (marginSort === "count") return b.item_count - a.item_count;
+      return b.avg_margin_pct - a.avg_margin_pct;
+    });
+    return rows;
+  }
+
+  function axisDefaults(isMoney) {
+    return {
+      x: {
+        grid: { display: false, drawBorder: false },
+        ticks: { maxRotation: 0, color: C.mute, font: { size: 10, family: "Segoe UI, system-ui, sans-serif" }, autoSkipPadding: 8 }
+      },
+      y: {
+        beginAtZero: true,
+        border: { display: false },
+        ticks: {
+          color: C.mute,
+          font: { size: 10, family: "Segoe UI, system-ui, sans-serif" },
+          padding: 6,
+          callback: isMoney === "%" ? function (v) { return v + "%"; } : moneyTick
+        },
+        grid: { color: C.grid, drawBorder: false }
+      }
+    };
+  }
+
+  function legendTop() {
+    return {
+      position: "top",
+      align: "end",
+      labels: {
+        boxWidth: 8,
+        boxHeight: 8,
+        color: C.mute,
+        font: { size: 10, family: "Segoe UI, system-ui, sans-serif" },
+        padding: 10
+      }
+    };
+  }
+
+  function tooltipMoney(modeName) {
+    return {
+      backgroundColor: C.tip,
+      titleFont: { size: 11, family: "Segoe UI, system-ui, sans-serif" },
+      bodyFont: { size: 11, family: "Segoe UI, system-ui, sans-serif" },
+      padding: 8,
+      cornerRadius: 2,
+      callbacks: {
+        label: function (ctx) {
+          var v = modeName === "margin" ? ctx.parsed.x : ctx.parsed.y;
+          if (modeName === "margin") return " " + ctx.dataset.label + ": " + Number(v).toFixed(1) + "%";
+          return " " + ctx.dataset.label + ": $" + Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 });
+        }
+      }
+    };
+  }
+
+  function configMain(modeName) {
+    if (modeName === "rev_exp_cogs") {
+      return {
+        type: "bar",
+        data: {
+          labels: sliceArr(data.labels),
+          datasets: [
+            { label: "Revenue", data: sliceArr(data.rev_exp_cogs.revenue), backgroundColor: C.teal, borderWidth: 0 },
+            { label: "COGS", data: sliceArr(data.rev_exp_cogs.cogs), backgroundColor: C.red, borderWidth: 0 },
+            { label: "OpEx", data: sliceArr(data.rev_exp_cogs.expenses), backgroundColor: C.dark, borderWidth: 0 }
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          animation: { duration: 220 },
+          interaction: { mode: "index", intersect: false },
+          plugins: { legend: legendTop(), tooltip: tooltipMoney(modeName) },
+          scales: axisDefaults(true),
+          datasets: { bar: { maxBarThickness: 18, categoryPercentage: 0.7, barPercentage: 0.88 } }
+        },
+        note: data.rev_exp_cogs.note
+      };
+    }
+
+    if (modeName === "cashflow") {
+      return {
+        type: "line",
+        data: {
+          labels: sliceArr(data.labels),
+          datasets: [
+            {
+              label: "Cash in",
+              data: sliceArr(data.cashflow.cash_in),
+              borderColor: C.teal,
+              backgroundColor: "rgba(1,184,170,0.12)",
+              fill: true,
+              tension: 0.2,
+              pointRadius: 0,
+              pointHoverRadius: 3,
+              borderWidth: 2
+            },
+            {
+              label: "Cash out",
+              data: sliceArr(data.cashflow.cash_out),
+              borderColor: C.red,
+              backgroundColor: "rgba(253,98,94,0.10)",
+              fill: true,
+              tension: 0.2,
+              pointRadius: 0,
+              pointHoverRadius: 3,
+              borderWidth: 2
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          animation: { duration: 220 },
+          interaction: { mode: "index", intersect: false },
+          plugins: { legend: legendTop(), tooltip: tooltipMoney(modeName) },
+          scales: axisDefaults(true)
+        },
+        note: data.cashflow.note
+      };
+    }
+
+    if (modeName === "margin") {
+      var fams = sortedFamilies();
+      return {
+        type: "bar",
+        data: {
+          labels: fams.map(function (f) { return f.label; }),
+          datasets: [{
+            label: "Avg margin %",
+            data: fams.map(function (f) { return f.avg_margin_pct; }),
+            backgroundColor: fams.map(function (f, i) {
+              var colors = [C.teal, C.dark, C.red, C.yellow];
+              return f.avg_margin_pct >= 0 ? colors[i % colors.length] : C.red;
+            }),
+            borderWidth: 0
+          }]
+        },
+        options: {
+          indexAxis: "y",
+          responsive: true,
+          maintainAspectRatio: false,
+          animation: { duration: 220 },
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              backgroundColor: C.tip,
+              cornerRadius: 2,
+              callbacks: {
+                afterLabel: function (ctx) {
+                  var f = fams[ctx.dataIndex];
+                  return f ? " " + f.item_count + " item" + (f.item_count === 1 ? "" : "s") : "";
+                },
+                label: function (ctx) { return " " + ctx.parsed.x.toFixed(1) + "%"; }
+              }
+            }
+          },
+          scales: {
+            x: {
+              beginAtZero: true,
+              border: { display: false },
+              ticks: { color: C.mute, font: { size: 10, family: "Segoe UI, system-ui, sans-serif" }, callback: function (v) { return v + "%"; } },
+              grid: { color: C.grid, drawBorder: false }
+            },
+            y: {
+              grid: { display: false, drawBorder: false },
+              ticks: { color: C.ink, font: { size: 10, family: "Segoe UI, system-ui, sans-serif" } }
+            }
+          },
+          datasets: { bar: { maxBarThickness: 16, categoryPercentage: 0.72, barPercentage: 0.9 } }
+        },
+        note: data.margin.note
+      };
+    }
+
+    return {
+      type: "bar",
+      data: {
+        labels: data.aging.labels,
+        datasets: [
+          { label: "Open AR", data: data.aging.ar, backgroundColor: C.teal, borderWidth: 0 },
+          { label: "Open AP", data: data.aging.ap, backgroundColor: C.red, borderWidth: 0 }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: { duration: 220 },
+        interaction: { mode: "index", intersect: false },
+        plugins: { legend: legendTop(), tooltip: tooltipMoney("aging") },
+        scales: axisDefaults(true),
+        datasets: { bar: { maxBarThickness: 28, categoryPercentage: 0.65, barPercentage: 0.85 } }
+      },
+      note: data.aging.note
+    };
+  }
+
+  function configSide(primaryMode) {
+    /* Companion visual: Aging when primary isn't Aging; otherwise Margin */
+    if (primaryMode === "aging") {
+      var fams = sortedFamilies();
+      return {
+        title: "Average margin by product family",
+        note: data.margin.note,
+        type: "bar",
+        data: {
+          labels: fams.map(function (f) { return f.label; }),
+          datasets: [{
+            label: "Avg margin %",
+            data: fams.map(function (f) { return f.avg_margin_pct; }),
+            backgroundColor: [C.teal, C.dark, C.red, C.yellow].slice(0, fams.length),
+            borderWidth: 0
+          }]
+        },
+        options: {
+          indexAxis: "y",
+          responsive: true,
+          maintainAspectRatio: false,
+          animation: { duration: 220 },
+          plugins: { legend: { display: false }, tooltip: tooltipMoney("margin") },
+          scales: {
+            x: {
+              beginAtZero: true,
+              border: { display: false },
+              ticks: { color: C.mute, font: { size: 10, family: "Segoe UI, system-ui, sans-serif" }, callback: function (v) { return v + "%"; } },
+              grid: { color: C.grid, drawBorder: false }
+            },
+            y: {
+              grid: { display: false, drawBorder: false },
+              ticks: { color: C.ink, font: { size: 10, family: "Segoe UI, system-ui, sans-serif" } }
+            }
+          },
+          datasets: { bar: { maxBarThickness: 16, categoryPercentage: 0.72, barPercentage: 0.9 } }
+        }
+      };
+    }
+
+    return {
+      title: "Open AR vs AP by aging",
+      note: data.aging.note,
+      type: "bar",
+      data: {
+        labels: data.aging.labels,
+        datasets: [
+          { label: "Open AR", data: data.aging.ar, backgroundColor: C.teal, borderWidth: 0 },
+          { label: "Open AP", data: data.aging.ap, backgroundColor: C.dark, borderWidth: 0 }
+        ]
+      },
+      options: {
+        indexAxis: "y",
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: { duration: 220 },
+        interaction: { mode: "index", intersect: false },
+        plugins: { legend: legendTop(), tooltip: tooltipMoney("aging") },
+        scales: {
+          x: {
+            beginAtZero: true,
+            border: { display: false },
+            ticks: { color: C.mute, font: { size: 10, family: "Segoe UI, system-ui, sans-serif" }, callback: moneyTick },
+            grid: { color: C.grid, drawBorder: false }
+          },
+          y: {
+            grid: { display: false, drawBorder: false },
+            ticks: { color: C.ink, font: { size: 10, family: "Segoe UI, system-ui, sans-serif" } }
+          }
+        },
+        datasets: { bar: { maxBarThickness: 14, categoryPercentage: 0.7, barPercentage: 0.85 } }
+      }
+    };
+  }
+
+  function render() {
+    var mainCfg = configMain(mode);
+    if (noteEl) noteEl.textContent = mainCfg.note || "";
+    if (sortWrap) sortWrap.hidden = mode !== "margin";
+    if (mainChart) mainChart.destroy();
+    mainChart = new Chart(mainCanvas.getContext("2d"), { type: mainCfg.type, data: mainCfg.data, options: mainCfg.options });
+
+    var sideCfg = configSide(mode);
+    if (sideTitle) sideTitle.textContent = sideCfg.title;
+    if (sideNote) sideNote.textContent = sideCfg.note || "";
+    if (sideChart) sideChart.destroy();
+    sideChart = new Chart(sideCanvas.getContext("2d"), { type: sideCfg.type, data: sideCfg.data, options: sideCfg.options });
+  }
+
+  document.querySelectorAll(".pbi-slicer button[data-mode]").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      mode = btn.getAttribute("data-mode");
+      if (titleEl) titleEl.textContent = btn.getAttribute("data-title") || btn.textContent;
+      document.querySelectorAll(".pbi-slicer button[data-mode]").forEach(function (b) {
+        b.classList.toggle("is-on", b === btn);
+      });
+      render();
+    });
+  });
+
+  document.querySelectorAll(".pbi-slicer button[data-range]").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      range = btn.getAttribute("data-range");
+      document.querySelectorAll(".pbi-slicer button[data-range]").forEach(function (b) {
+        b.classList.toggle("is-on", b === btn);
+      });
+      if (mode === "rev_exp_cogs" || mode === "cashflow") render();
+    });
+  });
+
+  document.querySelectorAll(".pbi-slicer button[data-sort]").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      marginSort = btn.getAttribute("data-sort");
+      document.querySelectorAll(".pbi-slicer button[data-sort]").forEach(function (b) {
+        b.classList.toggle("is-on", b === btn);
+      });
+      render();
+    });
+  });
+
+  render();
+})();
+</script>
 {% endblock %}

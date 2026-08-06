@@ -1,6 +1,6 @@
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
-from django.db.models import Prefetch, Q
+from django.db.models import Prefetch, Q, Sum
 from django.http import HttpRequest, HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
@@ -11,12 +11,15 @@ from urllib.parse import urlencode
 
 from erp_core.buy_services import (
     BuyFlowError,
+    assert_po_is_current_version,
     cancel_purchase_order,
     check_in_lot,
     create_purchase_order,
+    create_revision_purchase_order,
     issue_purchase_order,
+    po_line_open_on_order_native,
+    po_line_ordered_native,
     reverse_check_in,
-    revise_purchase_order,
 )
 from erp_core.inventory_table_data import (
     fetch_inventory_details,
@@ -45,6 +48,7 @@ from erp_core.models import (
     PurchaseOrderItem,
     PurchaseOrderLog,
     Vendor,
+    VendorPricing,
 )
 from erp_core.serializers import ItemSerializer
 
@@ -337,20 +341,131 @@ def inventory_items(request: HttpRequest) -> HttpResponse:
     )
 
 
+def _enrich_po_rows(pos: list) -> list:
+    for po in pos:
+        lines = list(po.items.all())
+        po.line_count = len(lines)
+        ordered = 0.0
+        received = 0.0
+        skus = []
+        for li in lines:
+            ordered += float(li.quantity_ordered or 0)
+            received += float(li.quantity_received or 0)
+            li.line_ext = float(li.quantity_ordered or 0) * float(li.unit_price or 0)
+            if li.item_id and li.item:
+                skus.append(li.item.sku)
+        po.qty_ordered = ordered
+        po.qty_received = received
+        po.receive_pct = (100.0 * received / ordered) if ordered > 0 else 0.0
+        po.lines_detail = lines
+        if not skus:
+            po.line_summary = "No lines"
+        elif len(skus) == 1:
+            po.line_summary = skus[0]
+        else:
+            po.line_summary = f"{skus[0]} +{len(skus) - 1} more"
+    return pos
+
+
 @login_required
+@require_http_methods(["GET"])
 def inventory_purchase_orders(request: HttpRequest) -> HttpResponse:
-    pos = (
-        PurchaseOrder.objects.prefetch_related(
-            Prefetch("items", queryset=PurchaseOrderItem.objects.select_related("item"))
-        )
-        .order_by("-created_at")[:200]
+    q = (request.GET.get("q") or "").strip()
+    queue = (request.GET.get("queue") or "open").strip().lower()
+    layout = (request.GET.get("layout") or "cards").strip().lower()
+    if queue not in ("open", "draft", "issued", "receive", "done", "cancelled", "all"):
+        queue = "open"
+    if layout not in ("cards", "split", "board"):
+        layout = "cards"
+
+    base = PurchaseOrder.objects.all()
+    counts = {
+        "open": base.exclude(status__in=["completed", "cancelled", "superseded"]).count(),
+        "draft": base.filter(status="draft").count(),
+        "issued": base.filter(status="issued").count(),
+        "receive": base.filter(status="issued", drop_ship=False).count(),
+        "done": base.filter(status__in=["received", "completed"]).count(),
+        "cancelled": base.filter(status="cancelled").count(),
+        "all": base.count(),
+    }
+
+    qs = PurchaseOrder.objects.prefetch_related(
+        Prefetch("items", queryset=PurchaseOrderItem.objects.select_related("item"))
     )
+    if queue == "open":
+        qs = qs.exclude(status__in=["completed", "cancelled", "superseded"])
+    elif queue == "draft":
+        qs = qs.filter(status="draft")
+    elif queue == "issued":
+        qs = qs.filter(status="issued")
+    elif queue == "receive":
+        qs = qs.filter(status="issued", drop_ship=False)
+    elif queue == "done":
+        qs = qs.filter(status__in=["received", "completed"])
+    elif queue == "cancelled":
+        qs = qs.filter(status="cancelled")
+
+    if q:
+        qs = qs.filter(
+            Q(po_number__icontains=q)
+            | Q(vendor_customer_name__icontains=q)
+            | Q(notes__icontains=q)
+        )
+
+    pos = _enrich_po_rows(list(qs.order_by("-created_at")[:200]))
+
+    selected = None
+    selected_id = request.GET.get("po")
+    if selected_id:
+        try:
+            sid = int(selected_id)
+        except (TypeError, ValueError):
+            sid = None
+        if sid:
+            selected = next((p for p in pos if p.id == sid), None)
+            if selected is None:
+                selected = (
+                    PurchaseOrder.objects.prefetch_related(
+                        Prefetch(
+                            "items",
+                            queryset=PurchaseOrderItem.objects.select_related("item"),
+                        )
+                    )
+                    .filter(pk=sid)
+                    .first()
+                )
+                if selected:
+                    _enrich_po_rows([selected])
+    if selected is None and pos and layout == "split":
+        selected = pos[0]
+
+    open_value = (
+        PurchaseOrder.objects.exclude(status__in=["completed", "cancelled", "superseded"]).aggregate(
+            s=Sum("total")
+        )["s"]
+        or 0.0
+    )
+
     return render(
         request,
         "slurp_ui/inventory/purchase_orders.html",
         _inventory_ctx(
             active_tab="purchase-orders",
             purchase_orders=pos,
+            selected_po=selected,
+            q=q,
+            queue=queue,
+            layout=layout,
+            counts=counts,
+            open_value=float(open_value or 0),
+            page_css=[
+                "Inventory.css",
+                "SalesWorkspace.css",
+                "InventoryTable.css",
+                "ItemsList.css",
+                "CreateItemForm.css",
+                "Logs.css",
+            ],
             port_status="full",
         ),
     )
@@ -384,20 +499,60 @@ def inventory_cancel_po(request: HttpRequest, pk: int) -> HttpResponse:
 
 
 @login_required
-@require_POST
+@require_http_methods(["GET"])
 def inventory_revise_po(request: HttpRequest, pk: int) -> HttpResponse:
+    """Open the create-PO form prefilled for revising an existing PO."""
     po = get_object_or_404(PurchaseOrder, pk=pk)
     try:
-        new_po = revise_purchase_order(po)
-        messages.success(
-            request,
-            f"Created revision draft {new_po.po_number} (r{new_po.revision_number}).",
-        )
+        assert_po_is_current_version(po)
     except BuyFlowError as e:
         messages.error(request, e.message)
-    except Exception as e:
-        messages.error(request, str(e))
-    return redirect("slurp_ui:inventory_purchase_orders")
+        return redirect("slurp_ui:inventory_purchase_orders")
+    return redirect(reverse("slurp_ui:inventory_create_po") + f"?revise={po.id}")
+
+
+def _po_revise_form_payload(po: PurchaseOrder) -> dict:
+    """JSON payload used to prefill create_po.html when revising."""
+    lines = []
+    for li in po.items.select_related("item").all():
+        lines.append(
+            {
+                "item_id": li.item_id,
+                "quantity": li.quantity_ordered,
+                "unit_cost": li.unit_price or 0,
+                "order_uom": getattr(li, "order_uom", None) or "",
+                "notes": li.notes or "",
+            }
+        )
+    required = po.required_date or po.expected_delivery_date
+    vendor_id = None
+    try:
+        vendor_id = int(po.vendor_customer_id) if po.vendor_customer_id else None
+    except (TypeError, ValueError):
+        vendor_id = None
+    if vendor_id is None:
+        vendor = Vendor.objects.filter(name__iexact=(po.vendor_customer_name or "").strip()).first()
+        vendor_id = vendor.id if vendor else None
+    return {
+        "source_id": po.id,
+        "source_number": po.po_number,
+        "vendor_id": vendor_id,
+        "required_date": required.isoformat() if required else "",
+        "payment_terms": po.shipping_terms or "",
+        "shipping_method": po.shipping_method or "",
+        "coa_sds_email": po.coa_sds_email or "",
+        "discount": po.discount or 0,
+        "shipping_cost": po.shipping_cost or 0,
+        "notes": po.notes or "",
+        "drop_ship": bool(po.drop_ship),
+        "ship_to_name": po.ship_to_name or "Wildwood Ingredients, LLC",
+        "ship_to_address": po.ship_to_address or "6431 Michels Dr.",
+        "ship_to_city": po.ship_to_city or "Washington",
+        "ship_to_state": po.ship_to_state or "MO",
+        "ship_to_zip": po.ship_to_zip or "63090",
+        "ship_to_country": po.ship_to_country or "USA",
+        "lines": lines,
+    }
 
 
 @login_required
@@ -604,6 +759,30 @@ def inventory_check_in(request: HttpRequest) -> HttpResponse:
             messages.error(request, str(e))
 
     today = timezone.localdate().isoformat()
+    check_in_lines = []
+    if selected_po:
+        for li in selected_po.items.all():
+            if not li.item_id:
+                continue
+            native_uom = (li.item.unit_of_measure or "lbs").strip()
+            order_uom = (li.order_uom or native_uom or "lbs").strip()
+            ordered_native = po_line_ordered_native(li)
+            remaining = po_line_open_on_order_native(li)
+            check_in_lines.append(
+                {
+                    "item_id": li.item_id,
+                    "sku": li.item.sku,
+                    "name": li.item.name or "",
+                    "native_uom": native_uom,
+                    "order_uom": order_uom,
+                    "ordered": float(li.quantity_ordered or 0),
+                    "ordered_native": float(ordered_native),
+                    "received": float(li.quantity_received or 0),
+                    "remaining": float(remaining),
+                    "fully_received": remaining <= 0.01,
+                }
+            )
+
     return render(
         request,
         "slurp_ui/inventory/check_in.html",
@@ -611,6 +790,7 @@ def inventory_check_in(request: HttpRequest) -> HttpResponse:
             active_tab="inventory",
             issued_pos=issued_pos,
             selected_po=selected_po,
+            check_in_lines=check_in_lines,
             today=today,
             god_mode=bool(request.session.get("god_mode")) and request.user.is_staff,
             port_status="full",
@@ -766,83 +946,276 @@ def inventory_edit_item(request: HttpRequest, pk: int) -> HttpResponse:
     )
 
 
+def _vendor_po_catalog_payload(vendors) -> dict:
+    """Per-vendor catalog for create-PO: payment terms + approved items with price/UoM/pack."""
+    today = timezone.localdate()
+    vendor_list = list(vendors)
+    name_by_lower = {(v.name or "").strip().lower(): v for v in vendor_list if (v.name or "").strip()}
+
+    items = list(
+        Item.objects.exclude(item_type="finished_good")
+        .exclude(Q(vendor__isnull=True) | Q(vendor=""))
+        .prefetch_related(
+            Prefetch(
+                "pack_sizes",
+                queryset=ItemPackSize.objects.filter(is_active=True).order_by(
+                    "-is_default", "pack_size", "pack_size_unit"
+                ),
+            )
+        )
+        .order_by("sku")
+    )
+    items = [it for it in items if (it.vendor or "").strip().lower() in name_by_lower]
+
+    pricing_best: dict[tuple[str, int], VendorPricing] = {}
+    item_ids = [it.id for it in items]
+    if item_ids:
+        for vp in (
+            VendorPricing.objects.filter(is_active=True, item_id__in=item_ids)
+            .order_by("-effective_date", "-id")
+        ):
+            vkey = (vp.vendor_name or "").strip().lower()
+            if vkey not in name_by_lower:
+                continue
+            if vp.effective_date and vp.effective_date > today:
+                continue
+            if vp.expiry_date and vp.expiry_date < today:
+                continue
+            key = (vkey, int(vp.item_id))
+            if key not in pricing_best:
+                pricing_best[key] = vp
+
+    items_by_vendor: dict[str, list] = {str(v.id): [] for v in vendor_list}
+    for it in items:
+        v = name_by_lower.get((it.vendor or "").strip().lower())
+        if not v:
+            continue
+        vkey = (v.name or "").strip().lower()
+        vp = pricing_best.get((vkey, it.id))
+        # Order UoM always follows the item master (SKU) default — not vendor-pricing UoM.
+        uom = (it.unit_of_measure or "lbs").strip() or "lbs"
+        packs = []
+        default_pack_id = None
+        for ps in it.pack_sizes.all():
+            label = (ps.description or "").strip() or f"{ps.pack_size:g} {ps.pack_size_unit}"
+            packs.append({"id": str(ps.id), "label": label})
+            if default_pack_id is None and ps.is_default:
+                default_pack_id = str(ps.id)
+        if not packs and it.pack_size is not None and float(it.pack_size) > 0:
+            # Legacy Item.pack_size (no ItemPackSize rows in this DB yet)
+            legacy_id = f"legacy:{float(it.pack_size):g}:{uom}"
+            packs.append({"id": legacy_id, "label": f"{float(it.pack_size):g} {uom}"})
+            default_pack_id = legacy_id
+        if default_pack_id is None and packs:
+            default_pack_id = packs[0]["id"]
+        unit_price = float(vp.unit_price) if vp and vp.unit_price is not None else float(it.price or 0)
+        items_by_vendor[str(v.id)].append(
+            {
+                "id": it.id,
+                "sku": it.sku,
+                "name": it.name,
+                "vendor_item_name": it.vendor_item_name or it.name,
+                "vendor_item_number": it.vendor_item_number or "",
+                "unit_of_measure": uom,
+                "unit_price": unit_price,
+                "pack_sizes": packs,
+                "default_pack_size_id": default_pack_id,
+            }
+        )
+
+    catalog = {}
+    for v in vendor_list:
+        catalog[str(v.id)] = {
+            "payment_terms": (v.payment_terms or "").strip(),
+            "name": v.name,
+            "items": items_by_vendor.get(str(v.id), []),
+        }
+    return catalog
+
+
 @login_required
 @require_http_methods(["GET", "POST"])
 def inventory_create_po(request: HttpRequest) -> HttpResponse:
-    vendors = Vendor.objects.order_by("name")
-    items = Item.objects.exclude(item_type="finished_good").order_by("sku")[:500]
+    vendors = list(_approved_vendors())
+    vendor_catalog = _vendor_po_catalog_payload(vendors)
+    revise_source = None
+    revise_prefill = None
+
+    revise_raw = (request.POST.get("revise_source_id") or request.GET.get("revise") or "").strip()
+    if revise_raw:
+        try:
+            revise_source = PurchaseOrder.objects.prefetch_related(
+                Prefetch("items", queryset=PurchaseOrderItem.objects.select_related("item"))
+            ).get(pk=int(revise_raw))
+        except (PurchaseOrder.DoesNotExist, ValueError, TypeError):
+            messages.error(request, "Purchase order to revise was not found.")
+            return redirect("slurp_ui:inventory_purchase_orders")
+        if revise_source.status in ("cancelled", "superseded", "completed"):
+            messages.error(request, f"Cannot revise a {revise_source.status} PO.")
+            return redirect("slurp_ui:inventory_purchase_orders")
+        try:
+            assert_po_is_current_version(revise_source)
+        except BuyFlowError as e:
+            messages.error(request, e.message)
+            return redirect("slurp_ui:inventory_purchase_orders")
+        revise_prefill = _po_revise_form_payload(revise_source)
 
     if request.method == "POST":
         try:
             line_count = int(request.POST.get("line_count") or 0)
         except ValueError:
             line_count = 0
-        lines = []
-        for i in range(line_count):
-            item_id = request.POST.get(f"item_id_{i}")
-            qty = request.POST.get(f"quantity_{i}")
-            if not item_id or not qty:
-                continue
-            try:
-                q = float(qty)
-            except ValueError:
-                continue
-            if q <= 0:
-                continue
-            lines.append(
-                {
-                    "item_id": int(item_id),
-                    "quantity": q,
-                    "unit_cost": float(request.POST.get(f"unit_cost_{i}") or 0),
-                    "order_uom": (request.POST.get(f"order_uom_{i}") or "").strip() or None,
-                    "notes": request.POST.get(f"notes_{i}") or "",
-                }
-            )
-        payload = {
-            "vendor_id": request.POST.get("vendor_id"),
-            "required_date": request.POST.get("required_date") or None,
-            "expected_delivery_date": request.POST.get("required_date") or None,
-            "shipping_terms": request.POST.get("shipping_terms") or "",
-            "shipping_method": request.POST.get("shipping_method") or "",
-            "coa_sds_email": request.POST.get("coa_sds_email") or "",
-            "discount": float(request.POST.get("discount") or 0),
-            "shipping_cost": float(request.POST.get("shipping_cost") or 0),
-            "notes": request.POST.get("notes") or "",
-            "drop_ship": request.POST.get("drop_ship") == "on",
-            "ship_to_name": request.POST.get("ship_to_name") or "Wildwood Ingredients, LLC",
-            "ship_to_address": request.POST.get("ship_to_address") or "6431 Michels Dr.",
-            "ship_to_city": request.POST.get("ship_to_city") or "Washington",
-            "ship_to_state": request.POST.get("ship_to_state") or "MO",
-            "ship_to_zip": request.POST.get("ship_to_zip") or "63090",
-            "ship_to_country": request.POST.get("ship_to_country") or "USA",
-            "items": lines,
-            "status": "draft",
-            "po_type": "vendor",
-        }
-        if request.user.is_staff and request.session.get("god_mode"):
-            od = (request.POST.get("order_date") or "").strip()
-            if od:
-                payload["order_date"] = od
 
-        # Snapshot vendor address fields if available
+        vendor = None
         try:
-            v = Vendor.objects.get(pk=payload["vendor_id"])
-            payload["vendor_address"] = v.street_address or v.address or ""
-            payload["vendor_city"] = v.city or ""
-            payload["vendor_state"] = v.state or ""
-            payload["vendor_zip"] = v.zip_code or ""
-            payload["vendor_country"] = v.country or ""
+            vendor = Vendor.objects.get(pk=int(request.POST.get("vendor_id")))
         except (Vendor.DoesNotExist, ValueError, TypeError):
-            pass
+            messages.error(request, "Select a valid vendor.")
 
-        try:
-            po = create_purchase_order(request.user, payload)
-            messages.success(request, f"Created draft PO {po.po_number}.")
-            return redirect("slurp_ui:inventory_purchase_orders")
-        except BuyFlowError as e:
-            messages.error(request, e.message)
-        except Exception as e:
-            messages.error(request, str(e))
+        lines = []
+        had_item_error = False
+        if vendor:
+            vendor_name_key = (vendor.name or "").strip().lower()
+            allowed_item_ids = {
+                int(row["id"])
+                for row in (vendor_catalog.get(str(vendor.id), {}) or {}).get("items", [])
+            }
+            pack_labels = {
+                int(ps.id): ((ps.description or "").strip() or f"{ps.pack_size:g} {ps.pack_size_unit}")
+                for ps in ItemPackSize.objects.filter(is_active=True)
+            }
+            for i in range(line_count):
+                item_id = request.POST.get(f"item_id_{i}")
+                qty = request.POST.get(f"quantity_{i}")
+                if not item_id or not qty:
+                    continue
+                try:
+                    item_id_int = int(item_id)
+                    q = float(qty)
+                except ValueError:
+                    continue
+                if q <= 0:
+                    continue
+                if item_id_int not in allowed_item_ids:
+                    messages.error(
+                        request,
+                        f"Item id {item_id_int} is not an approved item for {vendor.name}.",
+                    )
+                    had_item_error = True
+                    lines = []
+                    break
+                item = Item.objects.filter(pk=item_id_int).first()
+                if not item or (item.vendor or "").strip().lower() != vendor_name_key:
+                    messages.error(
+                        request,
+                        f"Item {getattr(item, 'sku', item_id_int)} is not approved for {vendor.name}.",
+                    )
+                    had_item_error = True
+                    lines = []
+                    break
+                notes = (request.POST.get(f"notes_{i}") or "").strip()
+                pack_raw = (request.POST.get(f"pack_size_id_{i}") or "").strip()
+                if pack_raw:
+                    pack_tag = None
+                    if pack_raw.startswith("legacy:"):
+                        # legacy:{qty}:{uom}
+                        parts = pack_raw.split(":", 2)
+                        if len(parts) == 3:
+                            pack_tag = f"[Pack: {parts[1]} {parts[2]}]"
+                    else:
+                        try:
+                            pack_id = int(pack_raw)
+                        except ValueError:
+                            pack_id = None
+                        if pack_id and pack_id in pack_labels:
+                            pack_tag = f"[Pack: {pack_labels[pack_id]}]"
+                    if pack_tag and pack_tag not in notes:
+                        notes = f"{pack_tag} {notes}".strip() if notes else pack_tag
+                lines.append(
+                    {
+                        "item_id": item_id_int,
+                        "quantity": q,
+                        "unit_cost": float(request.POST.get(f"unit_cost_{i}") or 0),
+                        "order_uom": (request.POST.get(f"order_uom_{i}") or "").strip() or None,
+                        "notes": notes,
+                    }
+                )
+
+        if vendor and lines:
+            payment_terms = (request.POST.get("payment_terms") or "").strip()
+            payload = {
+                "vendor_id": vendor.id,
+                "required_date": request.POST.get("required_date") or None,
+                "expected_delivery_date": request.POST.get("required_date") or None,
+                # PO.shipping_terms stores this PO's payment-terms override (PDF Payment Terms).
+                "shipping_terms": payment_terms,
+                "shipping_method": request.POST.get("shipping_method") or "",
+                "coa_sds_email": request.POST.get("coa_sds_email") or "",
+                "discount": float(request.POST.get("discount") or 0),
+                "shipping_cost": float(request.POST.get("shipping_cost") or 0),
+                "notes": request.POST.get("notes") or "",
+                "drop_ship": request.POST.get("drop_ship") == "on",
+                "ship_to_name": request.POST.get("ship_to_name") or "Wildwood Ingredients, LLC",
+                "ship_to_address": request.POST.get("ship_to_address") or "6431 Michels Dr.",
+                "ship_to_city": request.POST.get("ship_to_city") or "Washington",
+                "ship_to_state": request.POST.get("ship_to_state") or "MO",
+                "ship_to_zip": request.POST.get("ship_to_zip") or "63090",
+                "ship_to_country": request.POST.get("ship_to_country") or "USA",
+                "items": lines,
+                "status": "draft",
+                "po_type": "vendor",
+            }
+            if request.user.is_staff and request.session.get("god_mode"):
+                od = (request.POST.get("order_date") or "").strip()
+                if od:
+                    payload["order_date"] = od
+
+            payload["vendor_address"] = vendor.street_address or vendor.address or ""
+            payload["vendor_city"] = vendor.city or ""
+            payload["vendor_state"] = vendor.state or ""
+            payload["vendor_zip"] = vendor.zip_code or ""
+            payload["vendor_country"] = vendor.country or ""
+
+            try:
+                want_issue = (request.POST.get("submit_action") or "draft").strip().lower() == "issue"
+                if revise_source:
+                    po = create_revision_purchase_order(request.user, revise_source, payload)
+                    if want_issue:
+                        issue_purchase_order(po, request.user)
+                        messages.success(
+                            request,
+                            f"Saved and issued revision {po.po_number} "
+                            f"(closed prior open version of that PO only).",
+                        )
+                        return redirect(
+                            reverse("slurp_ui:inventory_purchase_orders")
+                            + f"?queue=open&po={po.id}"
+                        )
+                    messages.success(
+                        request,
+                        f"Saved revision draft {po.po_number} "
+                        f"(closed prior open version of that PO only). Use Issue PO when ready.",
+                    )
+                    return redirect(
+                        reverse("slurp_ui:inventory_purchase_orders")
+                        + f"?queue=open&po={po.id}"
+                    )
+                po = create_purchase_order(request.user, payload)
+                if want_issue:
+                    issue_purchase_order(po, request.user)
+                    messages.success(request, f"Created and issued PO {po.po_number}.")
+                    return redirect("slurp_ui:inventory_purchase_orders")
+                messages.success(
+                    request,
+                    f"Created draft PO {po.po_number}. Use Issue PO on the list when ready.",
+                )
+                return redirect(reverse("slurp_ui:inventory_purchase_orders") + "?queue=draft")
+            except BuyFlowError as e:
+                messages.error(request, e.message)
+            except Exception as e:
+                messages.error(request, str(e))
+        elif vendor and not lines and not had_item_error:
+            messages.error(request, "Add at least one valid line item.")
 
     return render(
         request,
@@ -850,9 +1223,11 @@ def inventory_create_po(request: HttpRequest) -> HttpResponse:
         _inventory_ctx(
             active_tab="purchase-orders",
             vendors=vendors,
-            items=items,
+            vendor_catalog=vendor_catalog,
             god_mode=bool(request.session.get("god_mode")) and request.user.is_staff,
             today=timezone.localdate().isoformat(),
+            revise_source=revise_source,
+            revise_prefill=revise_prefill,
             port_status="full",
         ),
     )

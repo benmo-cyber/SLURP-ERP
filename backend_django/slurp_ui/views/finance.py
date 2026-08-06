@@ -1,5 +1,7 @@
 from calendar import monthrange
+from collections import defaultdict
 from datetime import date, timedelta
+from typing import Any
 
 import json
 
@@ -23,6 +25,7 @@ from erp_core.models import (
     Customer,
     CustomerPricing,
     FiscalPeriod,
+    GeneralLedgerEntry,
     Invoice,
     Item,
     JournalEntry,
@@ -359,12 +362,233 @@ def _finance_today_board(today: date) -> dict:
 # ---------------------------------------------------------------------------
 
 
+def _month_keys(end: date, months_back: int = 12) -> list[str]:
+    """Return YYYY-MM keys for the last N months ending at `end` (inclusive)."""
+    keys: list[str] = []
+    y, m = end.year, end.month
+    for _ in range(months_back):
+        keys.append(f"{y:04d}-{m:02d}")
+        m -= 1
+        if m == 0:
+            m = 12
+            y -= 1
+    keys.reverse()
+    return keys
+
+
+def _month_label(key: str) -> str:
+    y, m = key.split("-")
+    months = "Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec".split()
+    return f"{months[int(m) - 1]} {y[2:]}"
+
+
+def _family_label(code: str) -> str:
+    return (code or "other").replace("_", " ").strip().title() or "Other"
+
+
+def _aging_bucket_totals(qs, today: date) -> dict[str, float]:
+    buckets = {
+        "Current": 0.0,
+        "1–30": 0.0,
+        "31–60": 0.0,
+        "61–90": 0.0,
+        "90+": 0.0,
+    }
+    for row in qs:
+        bal = float(row.balance or 0)
+        if bal <= 0:
+            continue
+        due = row.due_date
+        if due is None or due >= today:
+            buckets["Current"] += bal
+            continue
+        days = (today - due).days
+        if days <= 30:
+            buckets["1–30"] += bal
+        elif days <= 60:
+            buckets["31–60"] += bal
+        elif days <= 90:
+            buckets["61–90"] += bal
+        else:
+            buckets["90+"] += bal
+    return {k: round(v, 2) for k, v in buckets.items()}
+
+
+def _finance_chart_payload(today: date) -> dict[str, Any]:
+    """Live chart series for the Finance dashboard toggles."""
+    months = _month_keys(today, 12)
+    month_set = set(months)
+    start = date(int(months[0][:4]), int(months[0][5:7]), 1)
+
+    revenue: dict[str, float] = {k: 0.0 for k in months}
+    cogs: dict[str, float] = {k: 0.0 for k in months}
+    opex: dict[str, float] = {k: 0.0 for k in months}
+
+    entries = (
+        GeneralLedgerEntry.objects.filter(entry_date__gte=start, entry_date__lte=today)
+        .select_related("account")
+        .only("amount", "debit_credit", "entry_date", "account__account_type", "account__account_number")
+    )
+    for entry in entries:
+        key = f"{entry.entry_date.year:04d}-{entry.entry_date.month:02d}"
+        if key not in month_set:
+            continue
+        amt = float(entry.amount or 0)
+        atype = (entry.account.account_type or "").lower() if entry.account_id else ""
+        anum = (entry.account.account_number or "") if entry.account_id else ""
+        if atype == "revenue":
+            if entry.debit_credit == "credit":
+                revenue[key] += amt
+            else:
+                revenue[key] -= amt
+        elif atype == "expense":
+            signed = amt if entry.debit_credit == "debit" else -amt
+            if anum.startswith("5"):
+                cogs[key] += signed
+            else:
+                opex[key] += signed
+
+    # Invoice totals backfill months with billed AR not yet in GL
+    inv_by_month: dict[str, float] = defaultdict(float)
+    for inv in Invoice.objects.exclude(status__in=["cancelled", "draft"]).filter(
+        invoice_date__gte=start, invoice_date__lte=today
+    ).only("invoice_date", "grand_total"):
+        d = inv.invoice_date
+        if not d:
+            continue
+        key = f"{d.year:04d}-{d.month:02d}"
+        if key in month_set:
+            inv_by_month[key] += float(inv.grand_total or 0)
+    for key, total in inv_by_month.items():
+        if revenue[key] == 0 and total:
+            revenue[key] = total
+
+    cash_in: dict[str, float] = {k: 0.0 for k in months}
+    cash_out: dict[str, float] = {k: 0.0 for k in months}
+    for row in (
+        Payment.objects.filter(payment_date__gte=start, payment_date__lte=today)
+        .values("payment_date", "payment_type")
+        .annotate(s=Sum("amount"))
+    ):
+        d = row["payment_date"]
+        key = f"{d.year:04d}-{d.month:02d}"
+        if key not in month_set:
+            continue
+        if row["payment_type"] == "ar_payment":
+            cash_in[key] += float(row["s"] or 0)
+        elif row["payment_type"] == "ap_payment":
+            cash_out[key] += float(row["s"] or 0)
+
+    # Catalog margin by product family (sell vs landed cost)
+    cm_by_sku: dict[str, CostMaster] = {}
+    for cm in CostMaster.objects.exclude(wwi_product_code__isnull=True).exclude(wwi_product_code="").order_by(
+        "-updated_at"
+    ):
+        sku = (cm.wwi_product_code or "").strip()
+        if sku and sku not in cm_by_sku:
+            cm_by_sku[sku] = cm
+
+    price_by_item: dict[int, float] = {}
+    for cp in CustomerPricing.objects.filter(is_active=True).order_by("-effective_date"):
+        if cp.item_id and cp.item_id not in price_by_item and cp.unit_price:
+            price_by_item[cp.item_id] = float(cp.unit_price)
+
+    family_vals: dict[str, list[float]] = defaultdict(list)
+    for item in Item.objects.exclude(product_category__isnull=True).exclude(product_category=""):
+        sku = (item.sku or "").strip()
+        cm = cm_by_sku.get(sku)
+        if not cm:
+            continue
+        cost = cm.landed_cost_per_lb
+        if cost is None and cm.landed_cost_per_kg:
+            cost = float(cm.landed_cost_per_kg) / 2.20462
+        if cost is None and cm.price_per_lb:
+            cost = float(cm.price_per_lb)
+        if not cost or float(cost) <= 0:
+            continue
+        sell = price_by_item.get(item.id)
+        if sell is None and item.price:
+            sell = float(item.price)
+        if not sell or sell <= 0:
+            continue
+        family_vals[item.product_category or "other"].append((sell - float(cost)) / sell * 100)
+
+    margin_families = []
+    for code, vals in family_vals.items():
+        margin_families.append(
+            {
+                "family": code,
+                "label": _family_label(code),
+                "avg_margin_pct": round(sum(vals) / len(vals), 1),
+                "item_count": len(vals),
+            }
+        )
+    margin_families.sort(key=lambda r: r["avg_margin_pct"], reverse=True)
+
+    open_statuses = ["open", "partial", "overdue"]
+    ar_aging = _aging_bucket_totals(
+        AccountsReceivable.objects.filter(status__in=open_statuses).only("balance", "due_date"),
+        today,
+    )
+    ap_aging = _aging_bucket_totals(
+        AccountsPayable.objects.filter(status__in=open_statuses).only("balance", "due_date"),
+        today,
+    )
+    aging_labels = list(ar_aging.keys())
+
+    q_start_month = ((today.month - 1) // 3) * 3 + 1
+    quarter_key = f"{today.year:04d}-{q_start_month:02d}"
+    ytd_key = f"{today.year:04d}-01"
+    six_key = months[-6] if len(months) >= 6 else months[0]
+
+    return {
+        "default_mode": "rev_exp_cogs",
+        "default_range": "quarter",
+        "ranges": [
+            {"id": "quarter", "label": "Quarter"},
+            {"id": "six_month", "label": "6 mo"},
+            {"id": "ytd", "label": "YTD"},
+            {"id": "twelve_month", "label": "12 mo"},
+        ],
+        "range_starts": {
+            "quarter": quarter_key if quarter_key >= months[0] else months[0],
+            "six_month": six_key,
+            "ytd": ytd_key if ytd_key >= months[0] else months[0],
+            "twelve_month": months[0],
+        },
+        "labels": [_month_label(k) for k in months],
+        "month_keys": months,
+        "rev_exp_cogs": {
+            "revenue": [round(revenue[k], 2) for k in months],
+            "cogs": [round(cogs[k], 2) for k in months],
+            "expenses": [round(opex[k], 2) for k in months],
+            "note": "GL revenue, COGS (5xxx), and OpEx (6xxx+). Invoice totals fill months with no revenue posts.",
+        },
+        "cashflow": {
+            "cash_in": [round(cash_in[k], 2) for k in months],
+            "cash_out": [round(cash_out[k], 2) for k in months],
+            "note": "AR payments received vs AP payments made.",
+        },
+        "margin": {
+            "families": margin_families,
+            "note": "Catalog margin by family (sell vs landed). Period slicer does not apply.",
+        },
+        "aging": {
+            "labels": aging_labels,
+            "ar": [ar_aging[k] for k in aging_labels],
+            "ap": [ap_aging[k] for k in aging_labels],
+            "note": "Open AR/AP by days past due. Period slicer does not apply.",
+        },
+    }
+
+
 @login_required
 def finance_dashboard(request: HttpRequest) -> HttpResponse:
     """Cash calendar + today's AR/AP tasks + invoicing glance."""
     today = timezone.localdate()
     cal = _finance_calendar_context(request, base_path=reverse("slurp_ui:finance"))
     board = _finance_today_board(today)
+    chart_payload = _finance_chart_payload(today)
 
     draft = Invoice.objects.filter(status="draft").count()
     issued = Invoice.objects.filter(status__in=["sent", "overdue"]).count()
@@ -374,7 +598,7 @@ def finance_dashboard(request: HttpRequest) -> HttpResponse:
     draft_rows = list(
         Invoice.objects.filter(status="draft")
         .select_related("sales_order")
-        .order_by("-invoice_date", "-id")[:6]
+        .order_by("-invoice_date", "-id")[:4]
     )
     for inv in draft_rows:
         inv.status_label = _status_label(inv.status)
@@ -390,6 +614,7 @@ def finance_dashboard(request: HttpRequest) -> HttpResponse:
             ar_open=ar_open,
             ap_open=ap_open,
             draft_invoices=draft_rows,
+            chart_payload=chart_payload,
             **board,
             **cal,
             port_status="full",

@@ -4074,69 +4074,13 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'])
     def revise(self, request, pk=None):
         """Create a revision of a purchase order"""
+        from .buy_services import BuyFlowError, revise_purchase_order
+
         original_po = self.get_object()
-        
-        # Create a copy of the PO
-        new_po_data = {
-            'po_number': original_po.po_number,  # Same PO number
-            'po_type': original_po.po_type,
-            'vendor_customer_name': original_po.vendor_customer_name,
-            'vendor_customer_id': original_po.vendor_customer_id,
-            'status': 'draft',  # New revision starts as draft
-            'revision_number': (original_po.revision_number or 0) + 1,
-            'original_po': original_po,
-            'order_number': original_po.order_number,
-            'expected_delivery_date': original_po.expected_delivery_date,
-            'required_date': original_po.required_date,
-            'shipping_terms': original_po.shipping_terms,
-            'shipping_method': original_po.shipping_method,
-            'ship_to_name': original_po.ship_to_name,
-            'ship_to_address': original_po.ship_to_address,
-            'ship_to_city': original_po.ship_to_city,
-            'ship_to_state': original_po.ship_to_state,
-            'ship_to_zip': original_po.ship_to_zip,
-            'ship_to_country': original_po.ship_to_country,
-            'vendor_address': original_po.vendor_address,
-            'vendor_city': original_po.vendor_city,
-            'vendor_state': original_po.vendor_state,
-            'vendor_zip': original_po.vendor_zip,
-            'vendor_country': original_po.vendor_country,
-            'subtotal': original_po.subtotal,
-            'discount': original_po.discount,
-            'shipping_cost': original_po.shipping_cost,
-            'total': original_po.total,
-            'coa_sds_email': original_po.coa_sds_email,
-            'notes': original_po.notes,
-            'drop_ship': getattr(original_po, 'drop_ship', False),
-            'fulfillment_sales_order_id': getattr(original_po, 'fulfillment_sales_order_id', None),
-        }
-        
-        new_po = PurchaseOrder.objects.create(**new_po_data)
-        
-        # Copy items
-        for original_item in original_po.items.all():
-            PurchaseOrderItem.objects.create(
-                purchase_order=new_po,
-                item=original_item.item,
-                quantity_ordered=original_item.quantity_ordered,
-                unit_price=original_item.unit_price,
-                order_uom=getattr(original_item, 'order_uom', None),
-                notes=original_item.notes,
-            )
-        
-        # If original PO was issued, reverse its inventory impact and mark as superseded
-        if original_po.status == 'issued' and not original_po.drop_ship:
-            # Reverse on_order for each item (native UOM; only still-open qty)
-            from .buy_services import po_line_open_on_order_native
-            for po_item in original_po.items.select_related('item').all():
-                if po_item.item:
-                    item = po_item.item
-                    item.on_order = max(0, (item.on_order or 0) - po_line_open_on_order_native(po_item))
-                    item.save(update_fields=['on_order'])
-            
-            original_po.status = 'superseded'
-            original_po.save()
-        
+        try:
+            new_po = revise_purchase_order(original_po)
+        except BuyFlowError as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
         serializer = self.get_serializer(new_po)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
     

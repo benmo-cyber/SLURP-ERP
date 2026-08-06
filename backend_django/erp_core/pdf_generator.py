@@ -637,14 +637,16 @@ def generate_purchase_order_pdf(purchase_order):
     delivery_str = (purchase_order.expected_delivery_date or purchase_order.required_date)
     delivery_str = delivery_str.strftime('%b %d, %Y') if delivery_str else '—'
     ship_via = (getattr(purchase_order, 'shipping_method', None) or getattr(purchase_order, 'carrier', None) or '').strip() or '—'
-    payment_terms = '—'
-    try:
-        from .models import Vendor
-        v = Vendor.objects.filter(name=purchase_order.vendor_customer_name).first()
-        if v and getattr(v, 'payment_terms', None):
-            payment_terms = (v.payment_terms or '').strip()
-    except Exception:
-        pass
+    # Prefer PO-level override (Slurp stores editable payment terms in shipping_terms).
+    payment_terms = (getattr(purchase_order, 'shipping_terms', None) or '').strip() or '—'
+    if payment_terms == '—':
+        try:
+            from .models import Vendor
+            v = Vendor.objects.filter(name=purchase_order.vendor_customer_name).first()
+            if v and getattr(v, 'payment_terms', None):
+                payment_terms = (v.payment_terms or '').strip() or '—'
+        except Exception:
+            pass
     requested_by = getattr(purchase_order, 'requested_by', None) or '—'
     # 6 rows x 2 cols (Label | Value) so value column is wide and text does not wrap
     meta_data = [

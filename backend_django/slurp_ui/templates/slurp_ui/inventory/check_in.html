@@ -1,12 +1,97 @@
 {% extends "slurp_ui/base.html" %}
 {% block title %}Check-In — SLURP{% endblock %}
 {% block content %}
-<div class="modal-page" style="max-width:820px">
+<style>
+  .check-in-page {
+    max-width: 52rem;
+  }
+  .check-in-page .field-hint {
+    display: block;
+    margin-top: 0.3rem;
+    font-size: 0.82rem;
+    line-height: 1.35;
+    color: #64748b;
+  }
+  .check-in-page .field-hint strong {
+    color: #334155;
+    font-weight: 600;
+  }
+  .check-in-page .ci-grid {
+    display: grid;
+    gap: 0.75rem 0.85rem;
+    margin-bottom: 0.85rem;
+    align-items: start;
+  }
+  .check-in-page .ci-grid-qty {
+    grid-template-columns: minmax(8.5rem, 11rem) minmax(7rem, 9rem) minmax(8rem, 1fr);
+  }
+  .check-in-page .ci-grid-dates {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .check-in-page .ci-grid-2 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .check-in-page .ci-field {
+    min-width: 0;
+    margin-bottom: 0;
+  }
+  .check-in-page .ci-field > label {
+    display: block;
+    font-weight: 500;
+    margin-bottom: 0.25rem;
+  }
+  .check-in-page .ci-field input,
+  .check-in-page .ci-field select,
+  .check-in-page .ci-field textarea {
+    box-sizing: border-box;
+    width: 100%;
+    max-width: 100%;
+    min-height: 2.35rem;
+    padding: 0.45rem 0.6rem;
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+    font: inherit;
+  }
+  .check-in-page .ci-field input[type="number"] {
+    /* Stop browser spin controls from blowing out narrow columns */
+    appearance: textfield;
+    -moz-appearance: textfield;
+  }
+  .check-in-page .ci-field input[type="number"]::-webkit-outer-spin-button,
+  .check-in-page .ci-field input[type="number"]::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+  .check-in-page .ci-progress {
+    margin: 0 0 1rem;
+    padding: 0.7rem 0.85rem;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    font-size: 0.9rem;
+    color: #475569;
+  }
+  .check-in-page .ci-progress ul {
+    margin: 0.4rem 0 0;
+    padding-left: 1.1rem;
+  }
+  @media (max-width: 640px) {
+    .check-in-page .ci-grid-qty,
+    .check-in-page .ci-grid-dates,
+    .check-in-page .ci-grid-2 {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>
+<div class="modal-page check-in-page">
   <h2>Check-In</h2>
-  <p style="margin-bottom:1rem;color:#64748b">Receive against an <strong>issued</strong> PO (not drop-ship). Quantities are stored in the item’s native UoM.</p>
+  <p style="margin-bottom:1rem;color:#64748b">
+    Receive against an <strong>issued</strong> PO (not drop-ship). Partial shipments are supported —
+    the PO stays issued until every line is fully received.
+  </p>
 
-  <form method="get" style="margin-bottom:1rem;display:flex;gap:0.5rem;align-items:end">
-    <div class="form-row" style="flex:1;margin:0">
+  <form method="get" class="ci-grid ci-grid-2" style="margin-bottom:1rem">
+    <div class="ci-field" style="grid-column:1 / -1">
       <label for="po">Purchase order</label>
       <select id="po" name="po" onchange="this.form.submit()">
         <option value="">— Select issued PO —</option>
@@ -20,45 +105,72 @@
   </form>
 
   {% if selected_po %}
-  <form method="post">
+  {% if check_in_lines %}
+  <div class="ci-progress">
+    <strong>{{ selected_po.po_number }}</strong> line status (native item UoM):
+    <ul>
+      {% for row in check_in_lines %}
+      <li>
+        {{ row.sku }} —
+        {% if row.fully_received %}
+          fully received ({{ row.received|floatformat:-2 }} {{ row.native_uom }})
+        {% else %}
+          {{ row.received|floatformat:-2 }} of {{ row.ordered_native|floatformat:-2 }} {{ row.native_uom }} received;
+          <strong>{{ row.remaining|floatformat:-2 }} remaining</strong>
+        {% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+
+  <form method="post" id="check-in-form">
     {% csrf_token %}
     <input type="hidden" name="po_id" value="{{ selected_po.id }}" />
 
-    <div class="form-row">
+    <div class="form-row ci-field">
       <label for="item_id">Product *</label>
       <select id="item_id" name="item_id" required>
         <option value="">— Select line —</option>
-        {% for li in selected_po.items.all %}
-          {% with rem=li.quantity_ordered|add:0 %}
-          <option value="{{ li.item_id }}"
-                  data-uom="{{ li.item.unit_of_measure }}"
-                  data-ordered="{{ li.quantity_ordered }}"
-                  data-received="{{ li.quantity_received }}">
-            {{ li.item.sku }} — remaining
-            {# approximate remaining shown in native UoM #}
-            (ordered {{ li.quantity_ordered }}, received {{ li.quantity_received }})
-            {% if li.order_uom %} [order UoM {{ li.order_uom }}]{% endif %}
-          </option>
-          {% endwith %}
+        {% for row in check_in_lines %}
+        <option value="{{ row.item_id }}"
+                data-native-uom="{{ row.native_uom }}"
+                data-order-uom="{{ row.order_uom }}"
+                data-ordered="{{ row.ordered }}"
+                data-ordered-native="{{ row.ordered_native }}"
+                data-received="{{ row.received }}"
+                data-remaining="{{ row.remaining }}"
+                {% if row.fully_received %}disabled{% endif %}>
+          {{ row.sku }}{% if row.name %} — {{ row.name }}{% endif %}
+          {% if row.fully_received %}
+            (fully received)
+          {% else %}
+            ({{ row.remaining|floatformat:-2 }} {{ row.native_uom }} remaining)
+          {% endif %}
+        </option>
         {% endfor %}
       </select>
+      <span class="field-hint">Only open lines can be received. Fully received lines stay listed for reference.</span>
     </div>
 
-    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0.5rem">
-      <div class="form-row">
+    <div class="ci-grid ci-grid-qty">
+      <div class="ci-field">
         <label for="quantity">Quantity *</label>
         <input id="quantity" name="quantity" type="number" step="any" min="0" required />
+        <span class="field-hint" id="quantity-hint">Select a product to see remaining quantity.</span>
       </div>
-      <div class="form-row">
+      <div class="ci-field">
         <label for="entry_uom">Entry UoM</label>
         <select id="entry_uom" name="entry_uom">
           <option value="">Item native</option>
           <option value="lbs">lbs</option>
           <option value="kg">kg</option>
           <option value="ea">ea</option>
+          <option value="gal">gal</option>
         </select>
+        <span class="field-hint" id="uom-hint">Leave blank to enter in the item’s native UoM. Mass units convert automatically (e.g. kg ↔ lbs).</span>
       </div>
-      <div class="form-row">
+      <div class="ci-field">
         <label for="lot_status">Status</label>
         <select id="lot_status" name="lot_status">
           <option value="accepted">Accepted</option>
@@ -68,47 +180,48 @@
       </div>
     </div>
 
-    <div class="form-row">
+    <div class="form-row ci-field">
       <label for="vendor_lot_number">Vendor lot # (required for raw materials)</label>
       <input id="vendor_lot_number" name="vendor_lot_number" />
     </div>
 
-    <div class="form-row">
+    <div class="form-row ci-field">
       <label for="freight_actual">Freight actual ($ for this receipt, optional)</label>
       <input id="freight_actual" name="freight_actual" type="number" step="0.01" min="0"
              placeholder="Stored on lot for landed-cost actuals" />
     </div>
 
-    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0.5rem">
-      <div class="form-row">
+    <div class="ci-grid ci-grid-dates">
+      <div class="ci-field">
         <label for="received_date">Received date</label>
         <input id="received_date" name="received_date" type="date" value="{{ today }}" {% if not god_mode %}max="{{ today }}"{% endif %} />
       </div>
-      <div class="form-row">
+      <div class="ci-field">
         <label for="manufacture_date">Manufacture date</label>
         <input id="manufacture_date" name="manufacture_date" type="date" />
       </div>
-      <div class="form-row">
+      <div class="ci-field">
         <label for="expiration_date">Expiration date</label>
         <input id="expiration_date" name="expiration_date" type="date" />
       </div>
     </div>
 
     {% if god_mode %}
-    <div class="form-row">
+    <div class="form-row ci-field">
       <label for="lot_number">Internal lot # (staff override)</label>
       <input id="lot_number" name="lot_number" placeholder="Leave blank for auto" />
     </div>
     {% endif %}
 
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem">
-      <div class="form-row">
+    <div class="ci-grid ci-grid-2">
+      <div class="ci-field">
         <label for="carrier">Carrier</label>
         <input id="carrier" name="carrier" value="{{ selected_po.carrier|default:'' }}" />
       </div>
-      <div class="form-row">
+      <div class="ci-field">
         <label for="short_reason">Short reason (if under-received)</label>
-        <input id="short_reason" name="short_reason" />
+        <input id="short_reason" name="short_reason" placeholder="Optional note when closing short" />
+        <span class="field-hint">Partial receipts leave the PO open; use this when documenting a short ship.</span>
       </div>
     </div>
 
@@ -118,13 +231,13 @@
       <label style="display:block;margin:0.25rem 0"><input type="checkbox" name="prod_free_pests" required /> Product free of pests</label>
       <label style="display:block;margin:0.25rem 0"><input type="checkbox" name="carrier_free_pests" required /> Carrier free of pests</label>
       <label style="display:block;margin:0.25rem 0"><input type="checkbox" name="shipment_accepted" required /> Shipment accepted</label>
-      <div class="form-row" style="margin-top:0.5rem">
+      <div class="ci-field" style="margin-top:0.5rem;max-width:8rem">
         <label for="initials">Initials *</label>
-        <input id="initials" name="initials" required maxlength="10" style="max-width:8rem" />
+        <input id="initials" name="initials" required maxlength="10" />
       </div>
     </fieldset>
 
-    <div class="form-row">
+    <div class="form-row ci-field">
       <label for="notes">Notes</label>
       <textarea id="notes" name="notes" rows="2"></textarea>
     </div>
@@ -141,4 +254,76 @@
   </div>
   {% endif %}
 </div>
+<script>
+(function () {
+  var itemSel = document.getElementById('item_id');
+  var qtyEl = document.getElementById('quantity');
+  var uomEl = document.getElementById('entry_uom');
+  var qtyHint = document.getElementById('quantity-hint');
+  var uomHint = document.getElementById('uom-hint');
+  if (!itemSel || !qtyEl || !uomEl) return;
+
+  function fmt(n) {
+    var x = Number(n);
+    if (!isFinite(x)) return '—';
+    return (Math.round(x * 1000) / 1000).toString();
+  }
+
+  function selectedOption() {
+    return itemSel.options[itemSel.selectedIndex] || null;
+  }
+
+  function syncHints() {
+    var opt = selectedOption();
+    if (!opt || !opt.value) {
+      qtyHint.textContent = 'Select a product to see remaining quantity.';
+      uomHint.textContent = "Leave blank to enter in the item’s native UoM. Mass units convert automatically (e.g. kg ↔ lbs).";
+      qtyEl.removeAttribute('max');
+      qtyEl.placeholder = '';
+      return;
+    }
+    var native = opt.getAttribute('data-native-uom') || '';
+    var orderUom = opt.getAttribute('data-order-uom') || native;
+    var remaining = opt.getAttribute('data-remaining') || '0';
+    var received = opt.getAttribute('data-received') || '0';
+    var orderedNative = opt.getAttribute('data-ordered-native') || '0';
+    var entry = (uomEl.value || '').trim();
+
+    qtyHint.innerHTML =
+      'Open remaining: <strong>' + fmt(remaining) + ' ' + native + '</strong>' +
+      ' (ordered ' + fmt(orderedNative) + ', already received ' + fmt(received) + '). ' +
+      'Enter this shipment’s quantity only — partials are fine.';
+
+    if (!entry || entry.toLowerCase() === String(native).toLowerCase()) {
+      uomHint.innerHTML =
+        'Item native UoM is <strong>' + native + '</strong>' +
+        (orderUom && orderUom.toLowerCase() !== String(native).toLowerCase()
+          ? ' (PO ordered in ' + orderUom + '; remaining is shown in native).'
+          : '.') +
+        ' Over-receipt against remaining is blocked.';
+      qtyEl.placeholder = fmt(remaining);
+      qtyEl.max = remaining;
+    } else {
+      uomHint.innerHTML =
+        'Entering in <strong>' + entry + '</strong>; system converts to native <strong>' +
+        native + '</strong> before saving. Remaining open: <strong>' +
+        fmt(remaining) + ' ' + native + '</strong>.';
+      qtyEl.placeholder = '';
+      qtyEl.removeAttribute('max');
+    }
+  }
+
+  itemSel.addEventListener('change', function () {
+    var opt = selectedOption();
+    if (opt && opt.value && !qtyEl.value) {
+      // Suggest remaining in native UoM when field is empty
+      qtyEl.value = opt.getAttribute('data-remaining') || '';
+      uomEl.value = '';
+    }
+    syncHints();
+  });
+  uomEl.addEventListener('change', syncHints);
+  syncHints();
+})();
+</script>
 {% endblock %}

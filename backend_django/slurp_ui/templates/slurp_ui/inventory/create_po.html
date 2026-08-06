@@ -1,130 +1,696 @@
 {% extends "slurp_ui/base.html" %}
 {% block title %}Create PO — SLURP{% endblock %}
 {% block content %}
-<div class="modal-page" style="max-width:960px">
+<style>
+  .create-po-page {
+    max-width: 1080px !important;
+  }
+  .create-po-page h2 {
+    margin: 0 0 1.25rem;
+    font-size: 1.35rem;
+    color: #0f172a;
+  }
+  .create-po-page h3 {
+    margin: 0 0 0.85rem;
+    font-size: 0.95rem;
+    font-weight: 650;
+    color: #334155;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+  }
+  .create-po-page .po-section {
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    background: #fff;
+    padding: 1rem 1.15rem 1.1rem;
+    margin-bottom: 1rem;
+  }
+  .create-po-page .field {
+    margin: 0;
+  }
+  .create-po-page .field > label {
+    display: block;
+    margin: 0 0 0.3rem;
+    font-size: 0.78rem;
+    font-weight: 650;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    color: #64748b;
+  }
+  .create-po-page .field input,
+  .create-po-page .field select,
+  .create-po-page .field textarea {
+    width: 100%;
+    box-sizing: border-box;
+    min-height: 2.4rem;
+    padding: 0.5rem 0.7rem;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    background: #fff;
+    color: #0f172a;
+    font-size: 0.95rem;
+  }
+  .create-po-page .field input:focus,
+  .create-po-page .field select:focus,
+  .create-po-page .field textarea:focus {
+    outline: none;
+    border-color: #0f766e;
+    box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.12);
+  }
+  .create-po-page .field-hint {
+    margin-top: 0.35rem;
+    font-size: 0.8rem;
+    color: #64748b;
+  }
+  .create-po-page .row {
+    display: grid;
+    gap: 0.75rem 0.85rem;
+    margin-bottom: 0.85rem;
+  }
+  .create-po-page .row:last-child {
+    margin-bottom: 0;
+  }
+  .create-po-page .row-2 {
+    grid-template-columns: 1fr 1fr;
+  }
+  .create-po-page .row-money {
+    grid-template-columns: 12rem 12rem;
+  }
+  .create-po-page .row-ship {
+    grid-template-columns: minmax(0, 2.4fr) 5.5rem 8rem 6.5rem;
+  }
+  .create-po-page .row-line {
+    grid-template-columns:
+      minmax(0, 1.05fr)
+      minmax(0, 1.2fr)
+      7.5rem
+      minmax(0, 1.35fr)
+      8.5rem;
+    align-items: end;
+  }
+  .create-po-page .check-row {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    margin: 0.15rem 0 0.85rem;
+  }
+  .create-po-page .check-row input[type="checkbox"] {
+    width: 1.05rem;
+    height: 1.05rem;
+    margin: 0;
+    flex: 0 0 auto;
+    accent-color: #0f766e;
+  }
+  .create-po-page .check-row label {
+    margin: 0;
+    font-weight: 500;
+    color: #0f172a;
+    cursor: pointer;
+  }
+  .create-po-page .money-input {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    min-height: 2.4rem;
+    padding: 0 0.65rem 0 0.7rem;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    background: #fff;
+  }
+  .create-po-page .money-input:focus-within {
+    border-color: #0f766e;
+    box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.12);
+  }
+  .create-po-page .money-prefix {
+    color: #64748b;
+    font-weight: 650;
+  }
+  .create-po-page .money-input input {
+    border: 0 !important;
+    box-shadow: none !important;
+    padding: 0.45rem 0 !important;
+    min-height: 2.2rem;
+    background: transparent;
+  }
+  .create-po-page .po-line {
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    background: #f8fafc;
+    padding: 0.9rem 1rem;
+    margin-bottom: 0.75rem;
+  }
+  .create-po-page .po-line .field-item {
+    margin-bottom: 0.85rem;
+  }
+  .create-po-page .po-extended {
+    min-height: 2.4rem;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    padding: 0 0.15rem;
+    font-size: 1.02rem;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    color: #0f172a;
+    white-space: nowrap;
+  }
+  .create-po-page .po-extended-muted {
+    color: #94a3b8;
+    font-weight: 550;
+  }
+  .create-po-page .po-line-notes {
+    margin-top: 0.85rem;
+  }
+  .create-po-page .lines-toolbar {
+    display: flex;
+    gap: 0.65rem;
+    align-items: center;
+    margin: 0.15rem 0 1rem;
+  }
+  .create-po-page .form-actions {
+    display: flex;
+    gap: 0.75rem;
+    margin-top: 0.35rem;
+  }
+  @media (max-width: 900px) {
+    .create-po-page .row-2,
+    .create-po-page .row-money,
+    .create-po-page .row-ship,
+    .create-po-page .row-line {
+      grid-template-columns: 1fr 1fr;
+    }
+  }
+  @media (max-width: 620px) {
+    .create-po-page .row-2,
+    .create-po-page .row-money,
+    .create-po-page .row-ship,
+    .create-po-page .row-line {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>
+<div class="modal-page create-po-page">
+  {% if revise_source %}
+  <h2>Revise Purchase Order {{ revise_source.po_number }}</h2>
+  <p class="field-hint" style="margin:0 0 1rem">
+    Edit the details below, then save as the next <strong>-R#</strong> version.
+    Saving closes every other open version of this PO so open metrics never double-count. Issue when ready to send.
+  </p>
+  {% else %}
   <h2>Create Purchase Order</h2>
+  {% endif %}
   <form method="post" id="create-po-form">
     {% csrf_token %}
-    <div class="form-row">
-      <label for="vendor_id">Vendor *</label>
-      <select id="vendor_id" name="vendor_id" required>
-        <option value="">— Select vendor —</option>
-        {% for v in vendors %}
-        <option value="{{ v.id }}">{{ v.name }}</option>
-        {% endfor %}
-      </select>
-    </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem">
-      <div class="form-row">
-        <label for="required_date">Required date</label>
-        <input id="required_date" name="required_date" type="date" />
-      </div>
-      {% if god_mode %}
-      <div class="form-row">
-        <label for="order_date">Order / issue date (God mode)</label>
-        <input id="order_date" name="order_date" type="date" value="{{ today }}" />
-      </div>
-      {% endif %}
-    </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem">
-      <div class="form-row">
-        <label for="shipping_terms">Shipping terms</label>
-        <input id="shipping_terms" name="shipping_terms" />
-      </div>
-      <div class="form-row">
-        <label for="shipping_method">Shipping method</label>
-        <input id="shipping_method" name="shipping_method" />
-      </div>
-    </div>
-    <div class="form-row">
-      <label for="coa_sds_email">CoA / SDS email</label>
-      <input id="coa_sds_email" name="coa_sds_email" type="email" placeholder="customerservice@wildwoodingredients.com" />
-    </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem">
-      <div class="form-row">
-        <label for="discount">Discount</label>
-        <input id="discount" name="discount" type="number" step="0.01" value="0" />
-      </div>
-      <div class="form-row">
-        <label for="shipping_cost">Shipping cost</label>
-        <input id="shipping_cost" name="shipping_cost" type="number" step="0.01" value="0" />
-      </div>
-    </div>
-    <div class="form-row">
-      <label><input type="checkbox" name="drop_ship" /> Drop ship (do not check in to inventory)</label>
-    </div>
-    <div class="form-row">
-      <label for="notes">Notes</label>
-      <textarea id="notes" name="notes" rows="2"></textarea>
-    </div>
+    {% if revise_source %}
+    <input type="hidden" name="revise_source_id" value="{{ revise_source.id }}" />
+    {% endif %}
 
-    <h3 style="margin:1.25rem 0 0.5rem">Ship to</h3>
-    <div class="form-row"><label>Name</label><input name="ship_to_name" value="Wildwood Ingredients, LLC" /></div>
-    <div class="form-row"><label>Address</label><input name="ship_to_address" value="6431 Michels Dr." /></div>
-    <div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr;gap:0.5rem">
-      <div class="form-row"><label>City</label><input name="ship_to_city" value="Washington" /></div>
-      <div class="form-row"><label>State</label><input name="ship_to_state" value="MO" /></div>
-      <div class="form-row"><label>ZIP</label><input name="ship_to_zip" value="63090" /></div>
-      <div class="form-row"><label>Country</label><input name="ship_to_country" value="USA" /></div>
-    </div>
-
-    <h3 style="margin:1.25rem 0 0.5rem">Lines</h3>
-    <input type="hidden" name="line_count" id="line_count" value="1" />
-    <div id="po-lines">
-      <div class="po-line" data-index="0" style="border:1px solid #e5e7eb;padding:0.75rem;margin-bottom:0.5rem;border-radius:6px">
-        <div class="form-row">
-          <label>Item *</label>
-          <select name="item_id_0" required>
-            <option value="">— Select item —</option>
-            {% for it in items %}
-            <option value="{{ it.id }}" data-uom="{{ it.unit_of_measure }}">
-              {{ it.sku }} — {{ it.vendor_item_name|default:it.name }}{% if it.vendor_item_number %} ({{ it.vendor_item_number }}){% endif %}
-            </option>
-            {% endfor %}
-          </select>
+    <div class="po-section">
+      <h3>Order header</h3>
+      <div class="field" style="margin-bottom:0.85rem;max-width:28rem">
+        <label for="vendor_id">Vendor *</label>
+        <select id="vendor_id" name="vendor_id" required>
+          <option value="">— Select vendor —</option>
+          {% for v in vendors %}
+          <option value="{{ v.id }}">{{ v.name }}</option>
+          {% endfor %}
+        </select>
+        <div class="field-hint">Items, payment terms, price, UoM, and pack size load from this vendor.</div>
+      </div>
+      <div class="row row-2">
+        <div class="field">
+          <label for="required_date">Required date</label>
+          <input id="required_date" name="required_date" type="date" />
         </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0.5rem">
-          <div class="form-row"><label>Qty *</label><input name="quantity_0" type="number" step="any" min="0" required /></div>
-          <div class="form-row"><label>Unit cost</label><input name="unit_cost_0" type="number" step="0.01" value="0" /></div>
-          <div class="form-row">
-            <label>Order UoM</label>
-            <select name="order_uom_0">
-              <option value="">Item default</option>
-              <option value="lbs">lbs</option>
-              <option value="kg">kg</option>
-              <option value="ea">ea</option>
-            </select>
+        {% if god_mode %}
+        <div class="field">
+          <label for="order_date">Order / issue date (God mode)</label>
+          <input id="order_date" name="order_date" type="date" value="{{ today }}" />
+        </div>
+        {% endif %}
+      </div>
+      <div class="row row-2">
+        <div class="field">
+          <label for="payment_terms">Payment terms</label>
+          <input id="payment_terms" name="payment_terms" placeholder="Net 30" autocomplete="off" />
+        </div>
+        <div class="field">
+          <label for="shipping_method">Shipping method</label>
+          <input id="shipping_method" name="shipping_method" placeholder="Sea / Air / Truck" autocomplete="off" />
+        </div>
+      </div>
+      <div class="field" style="margin-bottom:0.85rem;max-width:32rem">
+        <label for="coa_sds_email">CoA / SDS email</label>
+        <input id="coa_sds_email" name="coa_sds_email" type="email"
+               placeholder="customerservice@wildwoodingredients.com" />
+      </div>
+      <div class="row row-money">
+        <div class="field">
+          <label for="discount">Discount</label>
+          <div class="money-input">
+            <span class="money-prefix">$</span>
+            <input id="discount" name="discount" type="number" step="0.01" value="0" />
           </div>
         </div>
-        <div class="form-row"><label>Line notes</label><input name="notes_0" /></div>
+        <div class="field">
+          <label for="shipping_cost">Shipping cost</label>
+          <div class="money-input">
+            <span class="money-prefix">$</span>
+            <input id="shipping_cost" name="shipping_cost" type="number" step="0.01" value="0" />
+          </div>
+        </div>
+      </div>
+      <div class="check-row">
+        <input id="drop_ship" type="checkbox" name="drop_ship" />
+        <label for="drop_ship">Drop ship (do not check in to inventory)</label>
+      </div>
+      <div class="field">
+        <label for="notes">Notes</label>
+        <textarea id="notes" name="notes" rows="2"></textarea>
       </div>
     </div>
-    <button type="button" class="btn btn-secondary" id="add-line">Add line</button>
+
+    <div class="po-section">
+      <h3>Ship to</h3>
+      <div class="field" style="margin-bottom:0.85rem">
+        <label>Name</label>
+        <input name="ship_to_name" value="Wildwood Ingredients, LLC" />
+      </div>
+      <div class="field" style="margin-bottom:0.85rem">
+        <label>Address</label>
+        <input name="ship_to_address" value="6431 Michels Dr." />
+      </div>
+      <div class="row row-ship">
+        <div class="field">
+          <label>City</label>
+          <input name="ship_to_city" value="Washington" autocomplete="address-level2" />
+        </div>
+        <div class="field">
+          <label>State</label>
+          <input name="ship_to_state" value="MO" maxlength="12" autocomplete="address-level1" />
+        </div>
+        <div class="field">
+          <label>ZIP</label>
+          <input name="ship_to_zip" value="63090" maxlength="12" autocomplete="postal-code" />
+        </div>
+        <div class="field">
+          <label>Country</label>
+          <input name="ship_to_country" value="USA" maxlength="20" autocomplete="country-name" />
+        </div>
+      </div>
+    </div>
+
+    <div class="po-section">
+      <h3>Lines</h3>
+      <input type="hidden" name="line_count" id="line_count" value="1" />
+      <div id="po-lines">
+        <div class="po-line" data-index="0">
+          <div class="field field-item">
+            <label>Item *</label>
+            <select name="item_id_0" class="po-item-select" required disabled>
+              <option value="">— Select vendor first —</option>
+            </select>
+          </div>
+          <div class="row row-line">
+            <div class="field">
+              <label>Qty *</label>
+              <input name="quantity_0" class="po-qty" type="number" step="any" min="0" required />
+            </div>
+            <div class="field">
+              <label>Unit cost</label>
+              <div class="money-input">
+                <span class="money-prefix">$</span>
+                <input name="unit_cost_0" class="po-unit-cost" type="number" step="0.01" value="0" />
+              </div>
+            </div>
+            <div class="field">
+              <label>UoM</label>
+              <select name="order_uom_0" class="po-order-uom">
+                <option value="">Default</option>
+                <option value="lbs">lbs</option>
+                <option value="kg">kg</option>
+                <option value="ea">ea</option>
+                <option value="gal">gal</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>Pack size</label>
+              <select name="pack_size_id_0" class="po-pack-size">
+                <option value="">—</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>Extended</label>
+              <div class="po-extended po-extended-muted" data-extended>$0.00</div>
+            </div>
+          </div>
+          <div class="field po-line-notes">
+            <label>Line notes</label>
+            <input name="notes_0" class="po-notes" />
+          </div>
+        </div>
+      </div>
+      <div class="lines-toolbar">
+        <button type="button" class="btn btn-secondary" id="add-line">Add line</button>
+      </div>
+    </div>
 
     <div class="form-actions">
-      <button type="submit" class="btn btn-primary">Create draft PO</button>
+      {% if revise_source %}
+      <button type="submit" name="submit_action" value="draft" class="btn btn-secondary">Save revision draft</button>
+      <button type="submit" name="submit_action" value="issue" class="btn btn-primary"
+              onclick="return confirm('Save this revision and issue it? The original PO will be superseded.');">Save &amp; issue revision</button>
+      {% else %}
+      <button type="submit" name="submit_action" value="draft" class="btn btn-secondary">Create draft</button>
+      <button type="submit" name="submit_action" value="issue" class="btn btn-primary"
+              onclick="return confirm('Create and issue this purchase order?');">Create &amp; issue</button>
+      {% endif %}
       <a class="btn btn-secondary" href="{% url 'slurp_ui:inventory_purchase_orders' %}">Cancel</a>
     </div>
   </form>
 </div>
+{{ vendor_catalog|json_script:"vendor-po-catalog" }}
+{% if revise_prefill %}{{ revise_prefill|json_script:"po-revise-prefill" }}{% endif %}
 <script>
 (function(){
-  const holder = document.getElementById('po-lines');
-  const countInput = document.getElementById('line_count');
-  const first = holder.querySelector('.po-line');
+  var catalog = {};
+  try {
+    catalog = JSON.parse(document.getElementById('vendor-po-catalog').textContent || '{}');
+  } catch (e) {
+    catalog = {};
+  }
+  var revisePrefill = null;
+  try {
+    var prefillEl = document.getElementById('po-revise-prefill');
+    if (prefillEl) revisePrefill = JSON.parse(prefillEl.textContent || 'null');
+  } catch (e) {
+    revisePrefill = null;
+  }
+  var vendorSelect = document.getElementById('vendor_id');
+  var paymentTerms = document.getElementById('payment_terms');
+  var holder = document.getElementById('po-lines');
+  var countInput = document.getElementById('line_count');
+  var uomTouched = new WeakMap();
+  var costTouched = new WeakMap();
+  var packTouched = new WeakMap();
+
+  function vendorData() {
+    return catalog[String(vendorSelect.value)] || null;
+  }
+
+  function itemLabel(it) {
+    var label = it.sku + ' — ' + (it.vendor_item_name || it.name || '');
+    if (it.vendor_item_number) label += ' (' + it.vendor_item_number + ')';
+    if (it.unit_of_measure) label += ' [' + it.unit_of_measure + ']';
+    return label;
+  }
+
+  function normalizeUom(uom) {
+    uom = String(uom || '').trim().toLowerCase();
+    if (uom === 'lb' || uom === 'pound' || uom === 'pounds') return 'lbs';
+    return uom;
+  }
+
+  function setOrderUom(uomEl, itemUom) {
+    if (!uomEl) return;
+    var target = normalizeUom(itemUom);
+    if (!target) {
+      uomEl.selectedIndex = 0;
+      return;
+    }
+    for (var i = 0; i < uomEl.options.length; i++) {
+      if (normalizeUom(uomEl.options[i].value) === target) {
+        uomEl.selectedIndex = i;
+        return;
+      }
+    }
+    var opt = document.createElement('option');
+    opt.value = itemUom;
+    opt.textContent = itemUom;
+    uomEl.appendChild(opt);
+    uomEl.value = itemUom;
+  }
+
+  function fillItemOptions(sel, items, selectedId) {
+    sel.innerHTML = '';
+    var blank = document.createElement('option');
+    blank.value = '';
+    blank.textContent = items && items.length ? '— Select item —' : '— No approved items for this vendor —';
+    sel.appendChild(blank);
+    (items || []).forEach(function(it){
+      var opt = document.createElement('option');
+      opt.value = String(it.id);
+      opt.textContent = itemLabel(it);
+      if (selectedId && String(selectedId) === String(it.id)) opt.selected = true;
+      sel.appendChild(opt);
+    });
+    sel.disabled = !vendorSelect.value;
+  }
+
+  function fillPackOptions(sel, item, selectedId) {
+    sel.innerHTML = '';
+    var blank = document.createElement('option');
+    blank.value = '';
+    blank.textContent = (item && item.pack_sizes && item.pack_sizes.length) ? '— Select pack —' : '— No pack size on item —';
+    sel.appendChild(blank);
+    if (!item || !item.pack_sizes) return;
+    var pick = selectedId || item.default_pack_size_id || '';
+    item.pack_sizes.forEach(function(ps){
+      var opt = document.createElement('option');
+      opt.value = String(ps.id);
+      opt.textContent = ps.label;
+      if (pick && String(pick) === String(ps.id)) opt.selected = true;
+      sel.appendChild(opt);
+    });
+  }
+
+  function findItem(itemId) {
+    var data = vendorData();
+    if (!data) return null;
+    itemId = String(itemId || '');
+    for (var i = 0; i < data.items.length; i++) {
+      if (String(data.items[i].id) === itemId) return data.items[i];
+    }
+    return null;
+  }
+
+  function formatMoney(n) {
+    var neg = n < 0;
+    var abs = Math.abs(Number(n) || 0);
+    var parts = abs.toFixed(2).split('.');
+    parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    return (neg ? '-$' : '$') + parts.join('.');
+  }
+
+  function updateExtended(lineEl) {
+    var qtyEl = lineEl.querySelector('.po-qty');
+    var costEl = lineEl.querySelector('.po-unit-cost');
+    var out = lineEl.querySelector('[data-extended]');
+    if (!out) return;
+    var qty = parseFloat(qtyEl && qtyEl.value);
+    var cost = parseFloat(costEl && costEl.value);
+    if (!isFinite(qty) || !isFinite(cost) || (qty === 0 && (!qtyEl || qtyEl.value === ''))) {
+      out.textContent = '$0.00';
+      out.classList.add('po-extended-muted');
+      return;
+    }
+    var ext = qty * cost;
+    out.textContent = formatMoney(ext);
+    out.classList.toggle('po-extended-muted', !(Math.abs(ext) > 0));
+  }
+
+  function applyItemDefaults(lineEl, item) {
+    var costEl = lineEl.querySelector('.po-unit-cost');
+    var uomEl = lineEl.querySelector('.po-order-uom');
+    var packEl = lineEl.querySelector('.po-pack-size');
+    if (!item) {
+      fillPackOptions(packEl, null, '');
+      updateExtended(lineEl);
+      return;
+    }
+    if (costEl && !costTouched.get(costEl)) {
+      costEl.value = (item.unit_price != null ? Number(item.unit_price) : 0).toFixed(2);
+    }
+    if (uomEl && !uomTouched.get(uomEl)) {
+      setOrderUom(uomEl, item.unit_of_measure);
+    }
+    fillPackOptions(packEl, item, packTouched.get(packEl) ? packEl.value : item.default_pack_size_id);
+    updateExtended(lineEl);
+  }
+
+  function wireLine(lineEl) {
+    var itemSel = lineEl.querySelector('.po-item-select');
+    var qtyEl = lineEl.querySelector('.po-qty');
+    var costEl = lineEl.querySelector('.po-unit-cost');
+    var uomEl = lineEl.querySelector('.po-order-uom');
+    var packEl = lineEl.querySelector('.po-pack-size');
+    if (qtyEl) {
+      qtyEl.addEventListener('input', function(){ updateExtended(lineEl); });
+    }
+    if (costEl) {
+      costEl.addEventListener('input', function(){
+        costTouched.set(costEl, true);
+        updateExtended(lineEl);
+      });
+    }
+    if (uomEl) {
+      uomEl.addEventListener('change', function(){ uomTouched.set(uomEl, true); });
+    }
+    if (packEl) {
+      packEl.addEventListener('change', function(){ packTouched.set(packEl, true); });
+    }
+    if (itemSel) {
+      itemSel.addEventListener('change', function(){
+        costTouched.delete(costEl);
+        uomTouched.delete(uomEl);
+        packTouched.delete(packEl);
+        applyItemDefaults(lineEl, findItem(itemSel.value));
+      });
+    }
+    updateExtended(lineEl);
+  }
+
+  function refreshAllLines() {
+    var data = vendorData();
+    var items = data ? data.items : [];
+    holder.querySelectorAll('.po-line').forEach(function(lineEl){
+      var itemSel = lineEl.querySelector('.po-item-select');
+      var prev = itemSel.value;
+      var stillValid = items.some(function(it){ return String(it.id) === String(prev); });
+      fillItemOptions(itemSel, items, stillValid ? prev : '');
+      if (!stillValid) {
+        var costEl = lineEl.querySelector('.po-unit-cost');
+        var uomEl = lineEl.querySelector('.po-order-uom');
+        var packEl = lineEl.querySelector('.po-pack-size');
+        if (costEl) { costEl.value = '0'; costTouched.delete(costEl); }
+        if (uomEl) { uomEl.selectedIndex = 0; uomTouched.delete(uomEl); }
+        packTouched.delete(packEl);
+        fillPackOptions(packEl, null, '');
+        updateExtended(lineEl);
+      } else {
+        applyItemDefaults(lineEl, findItem(itemSel.value));
+      }
+    });
+  }
+
+  vendorSelect.addEventListener('change', function(){
+    var data = vendorData();
+    if (!revisePrefill) {
+      paymentTerms.value = data && data.payment_terms ? data.payment_terms : '';
+    }
+    refreshAllLines();
+  });
+
   document.getElementById('add-line').addEventListener('click', function(){
-    const i = holder.querySelectorAll('.po-line').length;
-    const clone = first.cloneNode(true);
-    clone.dataset.index = i;
+    var i = holder.querySelectorAll('.po-line').length;
+    var first = holder.querySelector('.po-line');
+    var clone = first.cloneNode(true);
+    clone.dataset.index = String(i);
     clone.querySelectorAll('[name]').forEach(function(el){
       el.name = el.name.replace(/_\d+$/, '_' + i);
-      if (el.tagName === 'INPUT' && el.type !== 'hidden') el.value = el.type === 'number' && el.name.indexOf('unit_cost')>=0 ? '0' : '';
+      if (el.tagName === 'INPUT') {
+        if (el.type === 'number' && el.classList.contains('po-unit-cost')) el.value = '0';
+        else if (el.type !== 'hidden') el.value = '';
+      }
       if (el.tagName === 'SELECT') el.selectedIndex = 0;
-      if (el.name.indexOf('item_id')===0 || el.name.indexOf('quantity')===0) el.required = true;
+      if (el.classList.contains('po-item-select') || el.classList.contains('po-qty')) el.required = true;
     });
+    var ext = clone.querySelector('[data-extended]');
+    if (ext) {
+      ext.textContent = '$0.00';
+      ext.classList.add('po-extended-muted');
+    }
     holder.appendChild(clone);
     countInput.value = String(i + 1);
+    wireLine(clone);
+    var data = vendorData();
+    fillItemOptions(clone.querySelector('.po-item-select'), data ? data.items : [], '');
+    fillPackOptions(clone.querySelector('.po-pack-size'), null, '');
+    updateExtended(clone);
   });
+
+  function ensureLineCount(n) {
+    n = Math.max(1, n || 1);
+    while (holder.querySelectorAll('.po-line').length < n) {
+      document.getElementById('add-line').click();
+    }
+  }
+
+  function applyRevisePrefill(data) {
+    if (!data) return;
+    var form = document.getElementById('create-po-form');
+    function setName(name, value) {
+      var el = form.querySelector('[name="' + name + '"]');
+      if (!el || value == null) return;
+      if (el.type === 'checkbox') {
+        el.checked = !!value;
+      } else {
+        el.value = value;
+      }
+    }
+    if (data.vendor_id) {
+      vendorSelect.value = String(data.vendor_id);
+    }
+    setName('required_date', data.required_date || '');
+    setName('payment_terms', data.payment_terms || '');
+    setName('shipping_method', data.shipping_method || '');
+    setName('coa_sds_email', data.coa_sds_email || '');
+    setName('discount', data.discount != null ? data.discount : 0);
+    setName('shipping_cost', data.shipping_cost != null ? data.shipping_cost : 0);
+    setName('notes', data.notes || '');
+    setName('drop_ship', !!data.drop_ship);
+    setName('ship_to_name', data.ship_to_name || '');
+    setName('ship_to_address', data.ship_to_address || '');
+    setName('ship_to_city', data.ship_to_city || '');
+    setName('ship_to_state', data.ship_to_state || '');
+    setName('ship_to_zip', data.ship_to_zip || '');
+    setName('ship_to_country', data.ship_to_country || '');
+
+    var lines = data.lines || [];
+    ensureLineCount(Math.max(1, lines.length));
+    var lineEls = holder.querySelectorAll('.po-line');
+    var vdata = vendorData();
+    var items = vdata ? vdata.items : [];
+    lineEls.forEach(function(lineEl, idx){
+      var row = lines[idx];
+      var itemSel = lineEl.querySelector('.po-item-select');
+      var qtyEl = lineEl.querySelector('.po-qty');
+      var costEl = lineEl.querySelector('.po-unit-cost');
+      var uomEl = lineEl.querySelector('.po-order-uom');
+      var notesEl = lineEl.querySelector('.po-notes');
+      var packEl = lineEl.querySelector('.po-pack-size');
+      if (!row) {
+        fillItemOptions(itemSel, items, '');
+        if (qtyEl) qtyEl.value = '';
+        if (costEl) costEl.value = '0';
+        if (notesEl) notesEl.value = '';
+        fillPackOptions(packEl, null, '');
+        updateExtended(lineEl);
+        return;
+      }
+      fillItemOptions(itemSel, items, row.item_id);
+      if (qtyEl) qtyEl.value = row.quantity != null ? row.quantity : '';
+      if (costEl) {
+        costEl.value = row.unit_cost != null ? Number(row.unit_cost).toFixed(2) : '0';
+        costTouched.set(costEl, true);
+      }
+      if (uomEl && row.order_uom) {
+        setOrderUom(uomEl, row.order_uom);
+        uomTouched.set(uomEl, true);
+      }
+      if (notesEl) notesEl.value = row.notes || '';
+      fillPackOptions(packEl, findItem(row.item_id), '');
+      updateExtended(lineEl);
+    });
+    countInput.value = String(lineEls.length);
+  }
+
+  holder.querySelectorAll('.po-line').forEach(wireLine);
+  if (revisePrefill) {
+    applyRevisePrefill(revisePrefill);
+  } else {
+    refreshAllLines();
+  }
 })();
 </script>
 {% endblock %}

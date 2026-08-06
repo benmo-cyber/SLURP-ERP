@@ -1,70 +1,660 @@
 {% extends "slurp_ui/base_module.html" %}
 {% block title %}Purchase Orders — SLURP{% endblock %}
-{% block module_title %}Inventory{% endblock %}
+{% block module_title %}Purchase Orders{% endblock %}
 {% block header_actions %}
-  <a href="{% url 'slurp_ui:inventory_create_po' %}" class="btn btn-primary">Create Purchase Order</a>
+  <a href="{% url 'slurp_ui:inventory_create_po' %}" class="hs-btn hs-btn-primary">+ Create purchase order</a>
 {% endblock %}
 {% block main %}
-<table class="data-table">
-  <thead>
-    <tr>
-      <th>PO #</th>
-      <th>Vendor</th>
-      <th>Status</th>
-      <th>Order date</th>
-      <th>Required</th>
-      <th>Total</th>
-      <th>Lines</th>
-      <th>Actions</th>
-    </tr>
-  </thead>
-  <tbody>
-    {% for po in purchase_orders %}
-    <tr>
-      <td>{{ po.po_number }}{% if po.revision_number %} (r{{ po.revision_number }}){% endif %}{% if po.drop_ship %} · DS{% endif %}</td>
-      <td>{{ po.vendor_customer_name }}</td>
-      <td>{{ po.status }}</td>
-      <td>{{ po.order_date|date:"Y-m-d" }}</td>
-      <td>{{ po.required_date|default:"—" }}</td>
-      <td>{{ po.total|money:2 }}</td>
-      <td>
-        {% for li in po.items.all %}
-          {{ li.item.sku }}: {{ li.quantity_received|floatformat:1 }} {{ li.item.unit_of_measure }} / {{ li.quantity_ordered|floatformat:1 }} {{ li.order_uom|default:li.item.unit_of_measure }}{% if not forloop.last %}<br>{% endif %}
-        {% empty %}—{% endfor %}
-      </td>
-      <td style="white-space:nowrap">
-        <a class="btn btn-secondary" style="padding:0.35rem 0.7rem;font-size:0.85rem"
-           href="{% url 'slurp_ui:inventory_po_pdf' po.id %}" target="_blank">PDF</a>
+<style>
+  .po-home { padding: 1.25rem 1.5rem 2.25rem; }
+  .po-layout-switch {
+    display: inline-flex;
+    gap: 0.25rem;
+    padding: 0.2rem;
+    background: #eef2f7;
+    border-radius: 8px;
+    margin-bottom: 1rem;
+  }
+  .po-layout-switch a {
+    padding: 0.4rem 0.75rem;
+    border-radius: 6px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: #475569;
+    text-decoration: none;
+  }
+  .po-layout-switch a.active {
+    background: #fff;
+    color: #0f172a;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
+  }
+  .po-metrics {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 0.75rem;
+    margin-bottom: 1rem;
+  }
+  .po-metric {
+    background: #fff;
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    padding: 0.9rem 1rem;
+  }
+  .po-metric .k {
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: #64748b;
+    margin-bottom: 0.35rem;
+  }
+  .po-metric .v {
+    font-size: 1.55rem;
+    font-weight: 700;
+    color: #0f172a;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.1;
+  }
+  .po-metric .s { margin-top: 0.25rem; font-size: 0.8rem; color: #64748b; }
+  .po-filterbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.65rem;
+    align-items: center;
+    margin-bottom: 1rem;
+    padding: 0.75rem 0.9rem;
+    background: #fff;
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+  }
+  .po-filterbar form { display: flex; gap: 0.5rem; flex: 1 1 280px; min-width: 220px; }
+  .po-filterbar .hs-search { flex: 1; }
+  .po-filterbar select {
+    min-width: 10.5rem;
+    min-height: 2.35rem;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    padding: 0.4rem 0.65rem;
+    background: #fff;
+  }
+  .po-stack {
+    --po-cols: 9.5rem minmax(11rem, 1.35fr) 7.25rem 8.75rem minmax(10rem, 1.25fr) 7.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+  .po-cols,
+  .po-card-grid {
+    display: grid;
+    grid-template-columns: var(--po-cols);
+    gap: 0.65rem 0.85rem;
+    align-items: center;
+  }
+  .po-cols-head {
+    padding: 0 1.05rem 0.35rem;
+  }
+  .po-cols-head span {
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: #94a3b8;
+  }
+  .po-card {
+    background: #fff;
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    padding: 0.85rem 1.05rem 0.75rem;
+  }
+  .po-card:hover { border-color: #cbd5e1; box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04); }
+  .po-card .po-num {
+    font-size: 0.98rem;
+    font-weight: 700;
+    color: #0f172a;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .po-card .po-rev {
+    display: block;
+    margin-top: 0.15rem;
+    font-size: 0.78rem;
+    font-weight: 500;
+    color: #94a3b8;
+  }
+  .po-card .po-vendor {
+    color: #0f172a;
+    font-weight: 550;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .po-card .po-status { display: flex; flex-wrap: wrap; gap: 0.3rem; align-items: center; }
+  .po-card .po-dates,
+  .po-card .po-lines {
+    font-size: 0.9rem;
+    color: #475569;
+    line-height: 1.35;
+    min-width: 0;
+  }
+  .po-card .po-dates .main,
+  .po-card .po-lines .main {
+    color: #0f172a;
+    font-weight: 550;
+  }
+  .po-card .po-dates .sub,
+  .po-card .po-lines .sub {
+    margin-top: 0.12rem;
+    color: #64748b;
+    font-size: 0.82rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .po-card .amt {
+    text-align: right;
+    font-size: 1rem;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    color: #0f172a;
+    white-space: nowrap;
+    justify-self: end;
+  }
+  .po-card-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    align-items: center;
+    justify-content: flex-end;
+    margin-top: 0.7rem;
+    padding-top: 0.7rem;
+    border-top: 1px solid #eef2f7;
+  }
+  .po-card-actions form { display: inline-flex; gap: 0.35rem; align-items: center; margin: 0; }
+  /* Fallback if hs tokens fail to resolve on this page */
+  .po-card-actions .hs-btn-primary,
+  .po-actions .hs-btn-primary {
+    background: #ff7a59;
+    border-color: #ff7a59;
+    color: #fff;
+  }
+  .po-card-actions .hs-btn-primary:hover,
+  .po-actions .hs-btn-primary:hover {
+    background: #ff8f73;
+    border-color: #ff8f73;
+    color: #fff;
+  }
+  .po-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    justify-content: flex-end;
+    min-width: 0;
+  }
+  .po-actions form { display: inline-flex; gap: 0.35rem; align-items: center; margin: 0; }
+  .po-empty {
+    padding: 2.5rem 1rem;
+    text-align: center;
+    color: #64748b;
+    background: #fff;
+    border: 1px dashed #cbd5e1;
+    border-radius: 10px;
+  }
+
+  /* Split layout */
+  .po-split {
+    display: grid;
+    grid-template-columns: minmax(18rem, 22rem) minmax(0, 1fr);
+    gap: 0.85rem;
+    min-height: 62vh;
+  }
+  .po-split-list, .po-split-detail {
+    background: #fff;
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+  .po-split-list-head, .po-split-detail-head {
+    padding: 0.85rem 1rem;
+    border-bottom: 1px solid #e2e8f0;
+    background: #f8fafc;
+  }
+  .po-split-list-head h3, .po-split-detail-head h3 {
+    margin: 0;
+    font-size: 0.95rem;
+    color: #0f172a;
+  }
+  .po-split-list-body { overflow: auto; flex: 1; }
+  .po-split-item {
+    display: block;
+    padding: 0.8rem 1rem;
+    border-bottom: 1px solid #f1f5f9;
+    text-decoration: none;
+    color: inherit;
+  }
+  .po-split-item:hover { background: #f8fafc; }
+  .po-split-item.active {
+    background: #ecfeff;
+    border-left: 3px solid #0f766e;
+    padding-left: calc(1rem - 3px);
+  }
+  .po-split-item .t { font-weight: 700; color: #0f172a; }
+  .po-split-item .v { margin-top: 0.15rem; color: #475569; font-size: 0.9rem; }
+  .po-split-item .b { margin-top: 0.35rem; display: flex; gap: 0.35rem; flex-wrap: wrap; align-items: center; }
+  .po-split-item .m {
+    margin-left: auto;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    color: #0f172a;
+    font-size: 0.92rem;
+  }
+  .po-split-detail-body { padding: 1.1rem 1.15rem 1.25rem; overflow: auto; flex: 1; }
+  .po-detail-title {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    align-items: flex-start;
+    margin-bottom: 1rem;
+  }
+  .po-detail-title h2 { margin: 0; font-size: 1.3rem; color: #0f172a; }
+  .po-detail-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.65rem 1rem;
+    margin-bottom: 1.1rem;
+  }
+  .po-detail-grid .k {
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: #64748b;
+  }
+  .po-detail-grid .v { margin-top: 0.2rem; color: #0f172a; font-weight: 550; }
+  .po-detail-lines { width: 100%; border-collapse: collapse; margin: 0.75rem 0 1rem; }
+  .po-detail-lines th, .po-detail-lines td {
+    text-align: left;
+    padding: 0.55rem 0.45rem;
+    border-bottom: 1px solid #e2e8f0;
+    font-size: 0.9rem;
+  }
+  .po-detail-lines th {
+    color: #64748b;
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  /* Board layout */
+  .po-board {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.75rem;
+    align-items: start;
+  }
+  .po-col {
+    background: #f1f5f9;
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    min-height: 18rem;
+    padding: 0.65rem;
+  }
+  .po-col-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.35rem 0.4rem 0.65rem;
+  }
+  .po-col-head h3 { margin: 0; font-size: 0.9rem; color: #334155; }
+  .po-col-head .n {
+    font-size: 0.78rem;
+    font-weight: 700;
+    color: #64748b;
+    background: #fff;
+    border-radius: 999px;
+    padding: 0.15rem 0.5rem;
+  }
+  .po-col-card {
+    background: #fff;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    padding: 0.75rem 0.8rem;
+    margin-bottom: 0.55rem;
+  }
+  .po-col-card .t { font-weight: 700; color: #0f172a; }
+  .po-col-card .v { margin-top: 0.2rem; color: #475569; font-size: 0.88rem; }
+  .po-col-card .row {
+    margin-top: 0.45rem;
+    display: flex;
+    justify-content: space-between;
+    gap: 0.5rem;
+    align-items: center;
+  }
+  .po-col-card .amt { font-weight: 700; font-variant-numeric: tabular-nums; }
+
+  @media (max-width: 1100px) {
+    .po-stack {
+      --po-cols: 8.5rem minmax(9rem, 1.2fr) 6.75rem 8rem minmax(8rem, 1fr) 6.75rem;
+    }
+  }
+  @media (max-width: 980px) {
+    .po-metrics { grid-template-columns: 1fr 1fr; }
+    .po-cols-head { display: none; }
+    .po-card-grid {
+      grid-template-columns: 1fr 1fr;
+    }
+    .po-card-grid .po-status { grid-column: 1 / -1; }
+    .po-card-grid .amt { text-align: left; justify-self: start; }
+    .po-card-actions { justify-content: flex-start; }
+    .po-split { grid-template-columns: 1fr; }
+    .po-board { grid-template-columns: 1fr; }
+  }
+</style>
+
+<div class="po-home">
+  <div class="po-layout-switch">
+    <a href="?layout=cards&queue={{ queue }}{% if q %}&q={{ q|urlencode }}{% endif %}" class="{% if layout == 'cards' %}active{% endif %}">Cards</a>
+    <a href="?layout=split&queue={{ queue }}{% if q %}&q={{ q|urlencode }}{% endif %}" class="{% if layout == 'split' %}active{% endif %}">Split</a>
+    <a href="?layout=board&queue={{ queue }}{% if q %}&q={{ q|urlencode }}{% endif %}" class="{% if layout == 'board' %}active{% endif %}">Board</a>
+  </div>
+
+  <div class="po-metrics">
+    <div class="po-metric">
+      <div class="k">Open</div>
+      <div class="v">{{ counts.open }}</div>
+      <div class="s">Not completed / cancelled</div>
+    </div>
+    <div class="po-metric">
+      <div class="k">Draft</div>
+      <div class="v">{{ counts.draft }}</div>
+      <div class="s">Ready to issue</div>
+    </div>
+    <div class="po-metric">
+      <div class="k">Awaiting check-in</div>
+      <div class="v">{{ counts.receive }}</div>
+      <div class="s">Issued &amp; receivable</div>
+    </div>
+    <div class="po-metric">
+      <div class="k">Open value</div>
+      <div class="v">{{ open_value|money:0 }}</div>
+      <div class="s">Draft + issued totals</div>
+    </div>
+  </div>
+
+  <div class="po-filterbar">
+    <form method="get">
+      <input type="hidden" name="layout" value="{{ layout }}" />
+      <input type="search" name="q" value="{{ q }}" placeholder="Search PO # or vendor…" class="hs-search" />
+      <select name="queue" onchange="this.form.submit()">
+        <option value="open" {% if queue == 'open' %}selected{% endif %}>Open</option>
+        <option value="draft" {% if queue == 'draft' %}selected{% endif %}>Draft</option>
+        <option value="issued" {% if queue == 'issued' %}selected{% endif %}>Issued</option>
+        <option value="receive" {% if queue == 'receive' %}selected{% endif %}>Check-in</option>
+        <option value="done" {% if queue == 'done' %}selected{% endif %}>Received</option>
+        <option value="cancelled" {% if queue == 'cancelled' %}selected{% endif %}>Cancelled</option>
+        <option value="all" {% if queue == 'all' %}selected{% endif %}>All</option>
+      </select>
+      <button class="hs-btn hs-btn-primary" type="submit">Apply</button>
+    </form>
+    <span class="hs-muted" style="font-size:0.82rem">Showing {{ purchase_orders|length }}</span>
+  </div>
+
+  {% if layout == 'split' %}
+  <div class="po-split">
+    <aside class="po-split-list">
+      <div class="po-split-list-head"><h3>Orders</h3></div>
+      <div class="po-split-list-body">
+        {% for po in purchase_orders %}
+        <a class="po-split-item {% if selected_po and selected_po.id == po.id %}active{% endif %}"
+           href="?layout=split&queue={{ queue }}&po={{ po.id }}{% if q %}&q={{ q|urlencode }}{% endif %}">
+          <div style="display:flex;gap:0.5rem;align-items:flex-start">
+            <div style="min-width:0;flex:1">
+              <div class="t">{{ po.po_number }}</div>
+              <div class="v">{{ po.vendor_customer_name }}</div>
+              <div class="b">
+                {% if po.status == 'draft' %}<span class="hs-badge">Draft</span>
+                {% elif po.status == 'issued' %}<span class="hs-badge info">Issued</span>
+                {% elif po.status == 'received' or po.status == 'completed' %}<span class="hs-badge ok">{{ po.status|title }}</span>
+                {% elif po.status == 'cancelled' %}<span class="hs-badge danger">Cancelled</span>
+                {% else %}<span class="hs-badge">{{ po.status }}</span>{% endif %}
+                {% if po.drop_ship %}<span class="hs-badge warn">DS</span>{% endif %}
+              </div>
+            </div>
+            <div class="m">{{ po.total|money:0 }}</div>
+          </div>
+        </a>
+        {% empty %}
+        <div class="po-empty" style="border:none;background:transparent">No purchase orders.</div>
+        {% endfor %}
+      </div>
+    </aside>
+
+    <section class="po-split-detail">
+      {% if selected_po %}
+      <div class="po-split-detail-head"><h3>Order detail</h3></div>
+      <div class="po-split-detail-body">
+        <div class="po-detail-title">
+          <div>
+            <h2>{{ selected_po.po_number }}{% if selected_po.revision_number %} <span class="hs-muted" style="font-size:0.9rem;font-weight:500">r{{ selected_po.revision_number }}</span>{% endif %}</h2>
+            <div style="margin-top:0.35rem;color:#475569">{{ selected_po.vendor_customer_name }}</div>
+            <div style="margin-top:0.45rem;display:flex;gap:0.35rem;flex-wrap:wrap">
+              {% if selected_po.status == 'draft' %}<span class="hs-badge">Draft</span>
+              {% elif selected_po.status == 'issued' %}<span class="hs-badge info">Issued</span>
+              {% elif selected_po.status == 'received' or selected_po.status == 'completed' %}<span class="hs-badge ok">{{ selected_po.status|title }}</span>
+              {% elif selected_po.status == 'cancelled' %}<span class="hs-badge danger">Cancelled</span>
+              {% else %}<span class="hs-badge">{{ selected_po.status }}</span>{% endif %}
+              {% if selected_po.drop_ship %}<span class="hs-badge warn">Drop-ship</span>{% endif %}
+            </div>
+          </div>
+          <div style="text-align:right">
+            <div class="hs-muted" style="font-size:0.72rem;text-transform:uppercase;letter-spacing:0.04em;font-weight:700">Total</div>
+            <div style="font-size:1.35rem;font-weight:750;font-variant-numeric:tabular-nums">{{ selected_po.total|money:2 }}</div>
+          </div>
+        </div>
+
+        <div class="po-detail-grid">
+          <div><div class="k">Order date</div><div class="v">{{ selected_po.order_date|date:"Y-m-d" }}</div></div>
+          <div><div class="k">Required</div><div class="v">{% if selected_po.required_date %}{{ selected_po.required_date|date:"Y-m-d" }}{% else %}—{% endif %}</div></div>
+          <div><div class="k">Payment terms</div><div class="v">{{ selected_po.shipping_terms|default:"—" }}</div></div>
+          <div><div class="k">Ship method</div><div class="v">{{ selected_po.shipping_method|default:"—" }}</div></div>
+          <div><div class="k">Receive progress</div><div class="v">{% if selected_po.qty_ordered %}{{ selected_po.qty_received|floatformat:1 }} / {{ selected_po.qty_ordered|floatformat:1 }}{% if selected_po.receive_pct %} · {{ selected_po.receive_pct|floatformat:0 }}%{% endif %}{% else %}—{% endif %}</div></div>
+          <div><div class="k">Ship to</div><div class="v">{{ selected_po.ship_to_city }}{% if selected_po.ship_to_state %}, {{ selected_po.ship_to_state }}{% endif %}</div></div>
+        </div>
+
+        <h3 style="margin:0 0 0.35rem;font-size:0.9rem;color:#334155">Lines</h3>
+        <table class="po-detail-lines">
+          <thead>
+            <tr><th>Item</th><th>Ordered</th><th>Received</th><th>Unit</th><th>Ext</th></tr>
+          </thead>
+          <tbody>
+            {% for li in selected_po.lines_detail %}
+            <tr>
+              <td>
+                <div style="font-weight:600">{{ li.item.sku }}</div>
+                <div class="hs-muted" style="font-size:0.8rem">{{ li.item.vendor_item_name|default:li.item.name }}</div>
+              </td>
+              <td>{{ li.quantity_ordered|floatformat:2 }} {{ li.order_uom|default:li.item.unit_of_measure }}</td>
+              <td>{{ li.quantity_received|floatformat:2 }}</td>
+              <td>{{ li.unit_price|money:2 }}</td>
+              <td>{{ li.line_ext|money:2 }}</td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="5" class="hs-muted">No lines.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+
+        <div class="po-actions" style="justify-content:flex-start">
+          <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:inventory_po_pdf' selected_po.id %}" target="_blank">PDF</a>
+          {% if selected_po.status == 'draft' %}
+          <form method="post" action="{% url 'slurp_ui:inventory_issue_po' selected_po.id %}">
+            {% csrf_token %}
+            {% if slurp_god_mode %}
+            <input type="date" name="issue_date" value="{{ selected_po.order_date|date:'Y-m-d' }}" style="max-width:9rem" />
+            {% endif %}
+            <button type="submit" class="hs-btn hs-btn-primary"
+                    onclick="return confirm('Issue PO {{ selected_po.po_number }}?');">Issue PO</button>
+          </form>
+          {% elif selected_po.status == 'issued' and not selected_po.drop_ship %}
+          <a class="hs-btn hs-btn-primary hs-btn-sm"
+             href="{% url 'slurp_ui:inventory_check_in' %}?po={{ selected_po.id }}">Check-in</a>
+          {% endif %}
+          {% if selected_po.status != 'completed' and selected_po.status != 'cancelled' and selected_po.status != 'superseded' %}
+          <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:inventory_revise_po' selected_po.id %}">Revise</a>
+          <form method="post" action="{% url 'slurp_ui:inventory_cancel_po' selected_po.id %}">
+            {% csrf_token %}
+            <button type="submit" class="hs-btn hs-btn-sm hs-btn-danger"
+                    onclick="return confirm('Cancel PO {{ selected_po.po_number }}?');">Cancel</button>
+          </form>
+          {% endif %}
+        </div>
+      </div>
+      {% else %}
+      <div class="po-empty" style="border:none;margin:2rem">Select a purchase order.</div>
+      {% endif %}
+    </section>
+  </div>
+
+  {% elif layout == 'board' %}
+  <div class="po-board">
+    <div class="po-col">
+      <div class="po-col-head"><h3>Draft</h3><span class="n">{{ counts.draft }}</span></div>
+      {% for po in purchase_orders %}
         {% if po.status == 'draft' %}
-        <form method="post" action="{% url 'slurp_ui:inventory_issue_po' po.id %}" style="display:inline">
+        <div class="po-col-card">
+          <div class="t">{{ po.po_number }}</div>
+          <div class="v">{{ po.vendor_customer_name }}</div>
+          <div class="row">
+            <span class="hs-muted" style="font-size:0.8rem">{{ po.line_summary }}</span>
+            <span class="amt">{{ po.total|money:0 }}</span>
+          </div>
+          <div class="po-actions" style="justify-content:flex-start;margin-top:0.55rem">
+            <form method="post" action="{% url 'slurp_ui:inventory_issue_po' po.id %}">
+              {% csrf_token %}
+              <button type="submit" class="hs-btn hs-btn-primary"
+                      onclick="return confirm('Issue PO {{ po.po_number }}?');">Issue PO</button>
+            </form>
+            <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:inventory_po_pdf' po.id %}" target="_blank">PDF</a>
+          </div>
+        </div>
+        {% endif %}
+      {% endfor %}
+    </div>
+    <div class="po-col">
+      <div class="po-col-head"><h3>Issued</h3><span class="n">{{ counts.issued }}</span></div>
+      {% for po in purchase_orders %}
+        {% if po.status == 'issued' %}
+        <div class="po-col-card">
+          <div class="t">{{ po.po_number }}</div>
+          <div class="v">{{ po.vendor_customer_name }}</div>
+          <div class="row">
+            <span class="hs-muted" style="font-size:0.8rem">{% if po.qty_ordered %}{{ po.receive_pct|floatformat:0 }}% recv{% else %}{{ po.line_summary }}{% endif %}</span>
+            <span class="amt">{{ po.total|money:0 }}</span>
+          </div>
+          <div class="po-actions" style="justify-content:flex-start;margin-top:0.55rem">
+            <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:inventory_po_pdf' po.id %}" target="_blank">PDF</a>
+            {% if not po.drop_ship %}
+            <a class="hs-btn hs-btn-primary hs-btn-sm" href="{% url 'slurp_ui:inventory_check_in' %}?po={{ po.id }}">Check-in</a>
+            {% endif %}
+          </div>
+        </div>
+        {% endif %}
+      {% endfor %}
+    </div>
+    <div class="po-col">
+      <div class="po-col-head"><h3>Received / done</h3><span class="n">{{ counts.done }}</span></div>
+      {% for po in purchase_orders %}
+        {% if po.status == 'received' or po.status == 'completed' %}
+        <div class="po-col-card">
+          <div class="t">{{ po.po_number }}</div>
+          <div class="v">{{ po.vendor_customer_name }}</div>
+          <div class="row">
+            <span class="hs-badge ok">{{ po.status|title }}</span>
+            <span class="amt">{{ po.total|money:0 }}</span>
+          </div>
+          <div class="po-actions" style="justify-content:flex-start;margin-top:0.55rem">
+            <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:inventory_po_pdf' po.id %}" target="_blank">PDF</a>
+          </div>
+        </div>
+        {% endif %}
+      {% endfor %}
+    </div>
+  </div>
+
+  {% else %}
+  {# Cards layout — data grid + full-width action bar so Issue is always visible #}
+  <div class="po-stack">
+    {% if purchase_orders %}
+    <div class="po-cols po-cols-head" aria-hidden="true">
+      <span>PO</span>
+      <span>Vendor</span>
+      <span>Status</span>
+      <span>Dates</span>
+      <span>Lines</span>
+      <span style="text-align:right">Total</span>
+    </div>
+    {% endif %}
+    {% for po in purchase_orders %}
+    <article class="po-card">
+      <div class="po-card-grid">
+        <div>
+          <div class="po-num" title="{{ po.po_number }}">{{ po.po_number }}</div>
+          {% if po.revision_number %}<span class="po-rev">r{{ po.revision_number }}</span>{% endif %}
+        </div>
+        <div class="po-vendor" title="{{ po.vendor_customer_name }}">{{ po.vendor_customer_name }}</div>
+        <div class="po-status">
+          {% if po.status == 'draft' %}<span class="hs-badge">Draft</span>
+          {% elif po.status == 'issued' %}<span class="hs-badge info">Issued</span>
+          {% elif po.status == 'received' %}<span class="hs-badge ok">Received</span>
+          {% elif po.status == 'completed' %}<span class="hs-badge ok">Completed</span>
+          {% elif po.status == 'cancelled' %}<span class="hs-badge danger">Cancelled</span>
+          {% else %}<span class="hs-badge">{{ po.status }}</span>{% endif %}
+          {% if po.drop_ship %}<span class="hs-badge warn">DS</span>{% endif %}
+        </div>
+        <div class="po-dates">
+          <div class="main">{{ po.order_date|date:"Y-m-d" }}</div>
+          <div class="sub">Req {% if po.required_date %}{{ po.required_date|date:"Y-m-d" }}{% else %}—{% endif %}</div>
+        </div>
+        <div class="po-lines">
+          <div class="main">{{ po.line_count }} line{% if po.line_count != 1 %}s{% endif %} · {{ po.line_summary }}</div>
+          <div class="sub">
+            {% if po.qty_ordered %}
+            Recv {{ po.qty_received|floatformat:1 }} / {{ po.qty_ordered|floatformat:1 }}{% if po.receive_pct %} · {{ po.receive_pct|floatformat:0 }}%{% endif %}
+            {% else %}—{% endif %}
+          </div>
+        </div>
+        <div class="amt">{{ po.total|money:2 }}</div>
+      </div>
+      <div class="po-card-actions">
+        {% if po.status == 'draft' %}
+        <form method="post" action="{% url 'slurp_ui:inventory_issue_po' po.id %}">
           {% csrf_token %}
           {% if slurp_god_mode %}
           <input type="date" name="issue_date" value="{{ po.order_date|date:'Y-m-d' }}" style="max-width:9rem" />
           {% endif %}
-          <button type="submit" class="btn btn-primary" style="padding:0.35rem 0.7rem;font-size:0.85rem"
-                  onclick="return confirm('Issue PO {{ po.po_number }}?');">Issue</button>
+          <button type="submit" class="hs-btn hs-btn-primary"
+                  onclick="return confirm('Issue PO {{ po.po_number }}?');">Issue PO</button>
         </form>
         {% elif po.status == 'issued' and not po.drop_ship %}
-        <a class="btn btn-secondary" style="padding:0.35rem 0.7rem;font-size:0.85rem"
-           href="{% url 'slurp_ui:inventory_check_in' %}?po={{ po.id }}">Check-In</a>
+        <a class="hs-btn hs-btn-primary" href="{% url 'slurp_ui:inventory_check_in' %}?po={{ po.id }}">Check in</a>
         {% endif %}
+        <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:inventory_po_pdf' po.id %}" target="_blank">PDF</a>
         {% if po.status != 'completed' and po.status != 'cancelled' and po.status != 'superseded' %}
-        <form method="post" action="{% url 'slurp_ui:inventory_revise_po' po.id %}" style="display:inline">
+        <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:inventory_revise_po' po.id %}">Revise</a>
+        <form method="post" action="{% url 'slurp_ui:inventory_cancel_po' po.id %}">
           {% csrf_token %}
-          <button type="submit" class="btn btn-secondary" style="padding:0.35rem 0.7rem;font-size:0.85rem"
-                  onclick="return confirm('Create a new draft revision of {{ po.po_number }}?');">Revise</button>
-        </form>
-        <form method="post" action="{% url 'slurp_ui:inventory_cancel_po' po.id %}" style="display:inline">
-          {% csrf_token %}
-          <button type="submit" class="btn btn-danger" style="padding:0.35rem 0.7rem;font-size:0.85rem"
+          <button type="submit" class="hs-btn hs-btn-sm hs-btn-danger"
                   onclick="return confirm('Cancel PO {{ po.po_number }}?');">Cancel</button>
         </form>
         {% endif %}
-      </td>
-    </tr>
+      </div>
+    </article>
     {% empty %}
-    <tr><td colspan="8">No purchase orders.</td></tr>
+    <div class="po-empty">No purchase orders in this view.</div>
     {% endfor %}
-  </tbody>
-</table>
+  </div>
+  {% endif %}
+</div>
 {% endblock %}

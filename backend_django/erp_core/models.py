@@ -1066,6 +1066,7 @@ class PurchaseOrder(models.Model):
         ('received', 'Received'),
         ('completed', 'Completed'),
         ('cancelled', 'Cancelled'),
+        ('superseded', 'Superseded'),
     ]
     
     po_number = models.CharField(max_length=100, unique=True, db_index=True)

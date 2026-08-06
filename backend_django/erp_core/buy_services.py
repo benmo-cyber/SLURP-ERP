@@ -10,6 +10,7 @@ from copy import deepcopy
 from typing import Any
 
 from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 
 from .mass_quantity import convert_mass_uom, normalize_quantity_by_uom
@@ -531,17 +532,165 @@ def cancel_purchase_order(purchase_order: PurchaseOrder) -> PurchaseOrder:
     return purchase_order
 
 
-def revise_purchase_order(original_po: PurchaseOrder) -> PurchaseOrder:
-    """Create a new draft revision; supersede issued original and reverse its on_order."""
+def _po_root_number(po: PurchaseOrder) -> str:
+    """Business PO number without -R# revision suffix."""
+    import re
+
+    root = po
+    seen = set()
+    while root.original_po_id and root.original_po_id not in seen:
+        seen.add(root.id)
+        root = root.original_po
+    base = (root.po_number or po.po_number or "").strip()
+    return re.sub(r"-R\d+$", "", base, flags=re.IGNORECASE)
+
+
+def _next_revision_po_number(original_po: PurchaseOrder, revision_number: int) -> str:
+    """Allocate a unique PO number like 226017-R1 for a revision row."""
+    base = _po_root_number(original_po) or (original_po.po_number or "PO")
+    rev = max(1, int(revision_number or 1))
+    while True:
+        candidate = f"{base}-R{rev}"
+        if not PurchaseOrder.objects.filter(po_number=candidate).exists():
+            return candidate
+        rev += 1
+
+
+_INACTIVE_PO_STATUSES = ("cancelled", "superseded", "completed")
+
+
+def _iter_active_pos_for_root(root: str):
+    """Yield open POs that belong to the same business number (root / root-R#)."""
+    root = (root or "").strip()
+    if not root:
+        return
+    qs = (
+        PurchaseOrder.objects.exclude(status__in=_INACTIVE_PO_STATUSES)
+        .filter(Q(po_number=root) | Q(po_number__startswith=f"{root}-R"))
+        .order_by("id")
+    )
+    for po in qs:
+        if _po_root_number(po) == root:
+            yield po
+
+
+def current_active_po_for_root(root: str):
+    """The single preferred open version for a root number (highest revision, else latest id)."""
+    actives = list(_iter_active_pos_for_root(root))
+    if not actives:
+        return None
+    return max(actives, key=lambda p: (p.revision_number or 0, p.id))
+
+
+def _retire_po_version(po: PurchaseOrder) -> None:
+    """
+    Close one PO version so it leaves open metrics / on_order.
+    Draft → cancelled; anything else still open → superseded (reversing on_order when issued).
+    """
+    if po.status in _INACTIVE_PO_STATUSES:
+        return
+
+    if po.status == "issued" and not po.drop_ship:
+        for po_item in po.items.select_related("item"):
+            if po_item.item:
+                item = po_item.item
+                item.on_order = max(0, (item.on_order or 0) - po_line_open_on_order_native(po_item))
+                item.save(update_fields=["on_order"])
+        po.status = "superseded"
+        po.save(update_fields=["status"])
+        return
+
+    if po.status == "draft":
+        po.status = "cancelled"
+        po.save(update_fields=["status"])
+        return
+
+    # issued drop-ship, received, etc.
+    po.status = "superseded"
+    po.save(update_fields=["status"])
+
+
+def _retire_other_active_versions(keep: PurchaseOrder) -> None:
+    """Guarantee only ``keep`` remains open for that business PO number."""
+    root = _po_root_number(keep)
+    for po in list(_iter_active_pos_for_root(root)):
+        if po.pk == keep.pk:
+            continue
+        _retire_po_version(po)
+
+
+def ensure_single_active_po_version(po: PurchaseOrder) -> PurchaseOrder:
+    """
+    If multiple open revisions share this PO's root, keep the latest and retire the rest.
+    Returns the surviving active PO (may differ from ``po``).
+    """
+    root = _po_root_number(po)
+    survivor = current_active_po_for_root(root)
+    if survivor is None:
+        return po
+    _retire_other_active_versions(survivor)
+    return survivor
+
+
+def assert_po_is_current_version(po: PurchaseOrder) -> None:
+    """Block revise/issue on a stale open sibling when a newer revision is already open."""
+    if po.status in _INACTIVE_PO_STATUSES:
+        raise BuyFlowError(f"Cannot revise a {po.status} PO.")
+    root = _po_root_number(po)
+    current = current_active_po_for_root(root)
+    if current is not None and current.pk != po.pk:
+        raise BuyFlowError(
+            f"{po.po_number} is not the current open version. "
+            f"Use {current.po_number} (only one open version is allowed)."
+        )
+
+
+def create_revision_purchase_order(user, original_po: PurchaseOrder, data: dict) -> PurchaseOrder:
+    """
+    Create a revision PO from edited create-PO form data.
+    Assigns ``{root}-R#``, links ``original_po``, and retires every other open version
+    of that business PO number so metrics never double-count.
+    """
     from .views import log_purchase_order_action
 
+    assert_po_is_current_version(original_po)
+
+    revision_number = (original_po.revision_number or 0) + 1
+    payload = deepcopy(data) if data is not None else {}
+    payload["po_number"] = _next_revision_po_number(original_po, revision_number)
+    payload["status"] = "draft"
+    payload.setdefault("po_type", original_po.po_type or "vendor")
+
+    new_po = create_purchase_order(user, payload)
+    new_po.revision_number = revision_number
+    new_po.original_po = original_po
+    new_po.save(update_fields=["revision_number", "original_po"])
+
+    _retire_other_active_versions(new_po)
+    log_purchase_order_action(
+        new_po,
+        "created",
+        notes=f"Revision of PO {original_po.po_number} (saved as {new_po.po_number})",
+    )
+    return new_po
+
+
+def revise_purchase_order(original_po: PurchaseOrder) -> PurchaseOrder:
+    """
+    Immediate copy-revision (API / legacy). Prefer the create-PO revise form in Slurp UI.
+    """
+    from .views import log_purchase_order_action
+
+    assert_po_is_current_version(original_po)
+
+    revision_number = (original_po.revision_number or 0) + 1
     new_po = PurchaseOrder.objects.create(
-        po_number=original_po.po_number,
+        po_number=_next_revision_po_number(original_po, revision_number),
         po_type=original_po.po_type,
         vendor_customer_name=original_po.vendor_customer_name,
         vendor_customer_id=original_po.vendor_customer_id,
         status="draft",
-        revision_number=(original_po.revision_number or 0) + 1,
+        revision_number=revision_number,
         original_po=original_po,
         order_number=original_po.order_number,
         expected_delivery_date=original_po.expected_delivery_date,
@@ -579,14 +728,10 @@ def revise_purchase_order(original_po: PurchaseOrder) -> PurchaseOrder:
             notes=original_item.notes,
         )
 
-    if original_po.status == "issued" and not original_po.drop_ship:
-        for po_item in original_po.items.select_related("item"):
-            if po_item.item:
-                item = po_item.item
-                item.on_order = max(0, (item.on_order or 0) - po_line_open_on_order_native(po_item))
-                item.save(update_fields=["on_order"])
-        original_po.status = "superseded"
-        original_po.save(update_fields=["status"])
-
-    log_purchase_order_action(new_po, "created", notes=f"Revision of PO {original_po.po_number}")
+    _retire_other_active_versions(new_po)
+    log_purchase_order_action(
+        new_po,
+        "created",
+        notes=f"Revision of PO {original_po.po_number} (now {new_po.po_number})",
+    )
     return new_po

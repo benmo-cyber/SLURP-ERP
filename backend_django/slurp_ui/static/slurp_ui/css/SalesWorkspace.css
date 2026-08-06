@@ -2,7 +2,9 @@
 
 .sales-page,
 .quality-page,
-.finance-page {
+.finance-page,
+.inventory-page,
+.production-page {
   --hs-bg: #f5f8fa;
   --hs-surface: #ffffff;
   --hs-border: #dfe3eb;
