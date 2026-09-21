@@ -47,7 +47,7 @@
         <tbody>
           {% for f in formulas %}
           <tr onclick="window.location='{% url 'slurp_ui:quality_rd_formula_detail' f.id %}'">
-            <td><a class="hs-entity-name" href="{% url 'slurp_ui:quality_rd_formula_detail' f.id %}">{{ f.rd_code }}</a></td>
+            <td><a class="hs-entity-name" href="{% url 'slurp_ui:quality_rd_formula_detail' f.id %}">{{ f.display_label }}</a></td>
             <td>{{ f.name }}</td>
             <td>
               {% if f.status == 'approved' %}<span class="hs-badge ok">Approved</span>

@@ -103,9 +103,9 @@
 }
 
 .finance-nav-item.active {
-  background: var(--finance-nav-active-bg, #fff4f2);
-  color: var(--finance-nav-active-color, #c04b33);
-  border-left-color: var(--finance-nav-active-accent, #ff7a59);
+  background: var(--finance-nav-active-bg, #eff6ff);
+  color: var(--finance-nav-active-color, #1d4ed8);
+  border-left-color: var(--finance-nav-active-accent, #2563eb);
   font-weight: 600;
 }
 

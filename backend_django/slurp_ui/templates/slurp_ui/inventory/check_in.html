@@ -3,7 +3,7 @@
 {% block content %}
 <style>
   .check-in-page {
-    max-width: 52rem;
+    max-width: 56rem;
   }
   .check-in-page .field-hint {
     display: block;
@@ -22,14 +22,11 @@
     margin-bottom: 0.85rem;
     align-items: start;
   }
-  .check-in-page .ci-grid-qty {
-    grid-template-columns: minmax(8.5rem, 11rem) minmax(7rem, 9rem) minmax(8rem, 1fr);
-  }
-  .check-in-page .ci-grid-dates {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
   .check-in-page .ci-grid-2 {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .check-in-page .ci-grid-3 {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
   .check-in-page .ci-field {
     min-width: 0;
@@ -53,7 +50,6 @@
     font: inherit;
   }
   .check-in-page .ci-field input[type="number"] {
-    /* Stop browser spin controls from blowing out narrow columns */
     appearance: textfield;
     -moz-appearance: textfield;
   }
@@ -75,10 +71,52 @@
     margin: 0.4rem 0 0;
     padding-left: 1.1rem;
   }
+  .check-in-page .ci-lines {
+    display: flex;
+    flex-direction: column;
+    gap: 0.85rem;
+    margin: 0.75rem 0 1rem;
+  }
+  .check-in-page .ci-line {
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    padding: 0.85rem 1rem;
+    background: #fff;
+  }
+  .check-in-page .ci-line-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 0.65rem;
+  }
+  .check-in-page .ci-line-head strong {
+    font-size: 0.85rem;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    color: #64748b;
+  }
+  .check-in-page .ci-line-remove {
+    background: none;
+    border: none;
+    color: #b91c1c;
+    font: inherit;
+    font-size: 0.85rem;
+    cursor: pointer;
+    padding: 0;
+  }
+  .check-in-page .ci-line-remove:hover {
+    text-decoration: underline;
+  }
+  .check-in-page .ci-lines-actions {
+    display: flex;
+    gap: 0.65rem;
+    flex-wrap: wrap;
+    margin-bottom: 1rem;
+  }
   @media (max-width: 640px) {
-    .check-in-page .ci-grid-qty,
-    .check-in-page .ci-grid-dates,
-    .check-in-page .ci-grid-2 {
+    .check-in-page .ci-grid-2,
+    .check-in-page .ci-grid-3 {
       grid-template-columns: 1fr;
     }
   }
@@ -86,8 +124,8 @@
 <div class="modal-page check-in-page">
   <h2>Check-In</h2>
   <p style="margin-bottom:1rem;color:#64748b">
-    Receive against an <strong>issued</strong> PO (not drop-ship). Partial shipments are supported —
-    the PO stays issued until every line is fully received.
+    Receive against an <strong>issued</strong> PO (not drop-ship). Add multiple lines in one receipt
+    to split disposition — e.g. 190&nbsp;kg Accepted + 570&nbsp;kg On hold for the same PO line.
   </p>
 
   <form method="get" class="ci-grid ci-grid-2" style="margin-bottom:1rem">
@@ -128,92 +166,108 @@
     {% csrf_token %}
     <input type="hidden" name="po_id" value="{{ selected_po.id }}" />
 
-    <div class="form-row ci-field">
-      <label for="item_id">Product *</label>
-      <select id="item_id" name="item_id" required>
-        <option value="">— Select line —</option>
-        {% for row in check_in_lines %}
-        <option value="{{ row.item_id }}"
-                data-native-uom="{{ row.native_uom }}"
-                data-order-uom="{{ row.order_uom }}"
-                data-ordered="{{ row.ordered }}"
-                data-ordered-native="{{ row.ordered_native }}"
-                data-received="{{ row.received }}"
-                data-remaining="{{ row.remaining }}"
-                {% if row.fully_received %}disabled{% endif %}>
-          {{ row.sku }}{% if row.name %} — {{ row.name }}{% endif %}
-          {% if row.fully_received %}
-            (fully received)
-          {% else %}
-            ({{ row.remaining|floatformat:-2 }} {{ row.native_uom }} remaining)
-          {% endif %}
-        </option>
-        {% endfor %}
-      </select>
-      <span class="field-hint">Only open lines can be received. Fully received lines stay listed for reference.</span>
+    <h3 style="font-size:0.95rem;margin:0 0 0.5rem;color:#334155">Receipt lines</h3>
+    <p class="field-hint" style="margin-top:0;margin-bottom:0.75rem">
+      Each line creates its own lot. Accepted and On hold both count against PO remaining;
+      Rejected does not.
+    </p>
+    <div id="ci-lines" class="ci-lines" data-next-index="1"></div>
+    <div class="ci-lines-actions">
+      <button type="button" class="btn btn-secondary" id="ci-add-line">Add line</button>
     </div>
 
-    <div class="ci-grid ci-grid-qty">
-      <div class="ci-field">
-        <label for="quantity">Quantity *</label>
-        <input id="quantity" name="quantity" type="number" step="any" min="0" required />
-        <span class="field-hint" id="quantity-hint">Select a product to see remaining quantity.</span>
+    <template id="ci-line-template">
+      <div class="ci-line" data-line-index="__INDEX__">
+        <div class="ci-line-head">
+          <strong>Line __N__</strong>
+          <button type="button" class="ci-line-remove" data-ci-remove>Remove</button>
+        </div>
+        <div class="ci-field" style="margin-bottom:0.75rem">
+          <label>Product *</label>
+          <select name="line-__INDEX__-item_id" class="ci-item" required>
+            <option value="">— Select line —</option>
+            {% for row in check_in_lines %}
+            <option value="{{ row.item_id }}"
+                    data-native-uom="{{ row.native_uom }}"
+                    data-order-uom="{{ row.order_uom }}"
+                    data-ordered-native="{{ row.ordered_native }}"
+                    data-received="{{ row.received }}"
+                    data-remaining="{{ row.remaining }}"
+                    {% if row.fully_received %}disabled{% endif %}>
+              {{ row.sku }}{% if row.name %} — {{ row.name }}{% endif %}
+              {% if row.fully_received %}
+                (fully received)
+              {% else %}
+                ({{ row.remaining|floatformat:-2 }} {{ row.native_uom }} remaining)
+              {% endif %}
+            </option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="ci-grid ci-grid-3">
+          <div class="ci-field">
+            <label>Quantity *</label>
+            <input name="line-__INDEX__-quantity" class="ci-qty" type="number" step="any" min="0" required />
+            <span class="field-hint ci-qty-hint">Select a product to see remaining.</span>
+          </div>
+          <div class="ci-field">
+            <label>Entry UoM</label>
+            <select name="line-__INDEX__-entry_uom" class="ci-uom">
+              <option value="">Item native</option>
+              <option value="lbs">lbs</option>
+              <option value="kg">kg</option>
+              <option value="ea">ea</option>
+              <option value="gal">gal</option>
+            </select>
+          </div>
+          <div class="ci-field">
+            <label>Status *</label>
+            <select name="line-__INDEX__-lot_status" class="ci-status">
+              <option value="accepted">Accepted</option>
+              <option value="on_hold">On hold</option>
+              <option value="rejected">Rejected</option>
+            </select>
+          </div>
+        </div>
+        <div class="ci-grid ci-grid-2" style="margin-top:0.75rem">
+          <div class="ci-field">
+            <label>Vendor lot #</label>
+            <input name="line-__INDEX__-vendor_lot_number" />
+            <span class="field-hint">Required for raw materials.</span>
+          </div>
+          <div class="ci-field">
+            <label>Freight actual ($)</label>
+            <input name="line-__INDEX__-freight_actual" type="number" step="0.01" min="0" placeholder="Optional" />
+          </div>
+        </div>
+        <div class="ci-grid ci-grid-2" style="margin-top:0.75rem">
+          <div class="ci-field">
+            <label>Manufacture date</label>
+            <input name="line-__INDEX__-manufacture_date" type="date" />
+          </div>
+          <div class="ci-field">
+            <label>Expiration date</label>
+            <input name="line-__INDEX__-expiration_date" type="date" />
+          </div>
+        </div>
+        {% if god_mode %}
+        <div class="ci-field" style="margin-top:0.75rem">
+          <label>Internal lot # (staff override)</label>
+          <input name="line-__INDEX__-lot_number" placeholder="Leave blank for auto" />
+        </div>
+        {% endif %}
+        <div class="ci-field" style="margin-top:0.75rem">
+          <label>Line notes</label>
+          <input name="line-__INDEX__-notes" placeholder="Optional (e.g. drums 2–4 hold for inspection)" />
+        </div>
       </div>
-      <div class="ci-field">
-        <label for="entry_uom">Entry UoM</label>
-        <select id="entry_uom" name="entry_uom">
-          <option value="">Item native</option>
-          <option value="lbs">lbs</option>
-          <option value="kg">kg</option>
-          <option value="ea">ea</option>
-          <option value="gal">gal</option>
-        </select>
-        <span class="field-hint" id="uom-hint">Leave blank to enter in the item’s native UoM. Mass units convert automatically (e.g. kg ↔ lbs).</span>
-      </div>
-      <div class="ci-field">
-        <label for="lot_status">Status</label>
-        <select id="lot_status" name="lot_status">
-          <option value="accepted">Accepted</option>
-          <option value="on_hold">On hold</option>
-          <option value="rejected">Rejected</option>
-        </select>
-      </div>
-    </div>
+    </template>
 
-    <div class="form-row ci-field">
-      <label for="vendor_lot_number">Vendor lot # (required for raw materials)</label>
-      <input id="vendor_lot_number" name="vendor_lot_number" />
-    </div>
-
-    <div class="form-row ci-field">
-      <label for="freight_actual">Freight actual ($ for this receipt, optional)</label>
-      <input id="freight_actual" name="freight_actual" type="number" step="0.01" min="0"
-             placeholder="Stored on lot for landed-cost actuals" />
-    </div>
-
-    <div class="ci-grid ci-grid-dates">
+    <div class="ci-grid ci-grid-3">
       <div class="ci-field">
         <label for="received_date">Received date</label>
         <input id="received_date" name="received_date" type="date" value="{{ today }}" {% if not god_mode %}max="{{ today }}"{% endif %} />
       </div>
-      <div class="ci-field">
-        <label for="manufacture_date">Manufacture date</label>
-        <input id="manufacture_date" name="manufacture_date" type="date" />
-      </div>
-      <div class="ci-field">
-        <label for="expiration_date">Expiration date</label>
-        <input id="expiration_date" name="expiration_date" type="date" />
-      </div>
-    </div>
-
-    {% if god_mode %}
-    <div class="form-row ci-field">
-      <label for="lot_number">Internal lot # (staff override)</label>
-      <input id="lot_number" name="lot_number" placeholder="Leave blank for auto" />
-    </div>
-    {% endif %}
-
-    <div class="ci-grid ci-grid-2">
       <div class="ci-field">
         <label for="carrier">Carrier</label>
         <input id="carrier" name="carrier" value="{{ selected_po.carrier|default:'' }}" />
@@ -221,12 +275,11 @@
       <div class="ci-field">
         <label for="short_reason">Short reason (if under-received)</label>
         <input id="short_reason" name="short_reason" placeholder="Optional note when closing short" />
-        <span class="field-hint">Partial receipts leave the PO open; use this when documenting a short ship.</span>
       </div>
     </div>
 
     <fieldset style="border:1px solid #e5e7eb;padding:0.75rem;border-radius:6px;margin:0.75rem 0">
-      <legend style="padding:0 0.35rem">Attestations *</legend>
+      <legend style="padding:0 0.35rem">Attestations * (apply to whole receipt)</legend>
       <label style="display:block;margin:0.25rem 0"><input type="checkbox" name="coa" required /> COA received / acceptable</label>
       <label style="display:block;margin:0.25rem 0"><input type="checkbox" name="prod_free_pests" required /> Product free of pests</label>
       <label style="display:block;margin:0.25rem 0"><input type="checkbox" name="carrier_free_pests" required /> Carrier free of pests</label>
@@ -238,12 +291,12 @@
     </fieldset>
 
     <div class="form-row ci-field">
-      <label for="notes">Notes</label>
+      <label for="notes">Receipt notes</label>
       <textarea id="notes" name="notes" rows="2"></textarea>
     </div>
 
     <div class="form-actions">
-      <button type="submit" class="btn btn-primary">Check in</button>
+      <button type="submit" class="btn btn-primary">Check in all lines</button>
       <a class="btn btn-secondary" href="{% url 'slurp_ui:inventory_purchase_orders' %}">Back to POs</a>
     </div>
   </form>
@@ -254,14 +307,13 @@
   </div>
   {% endif %}
 </div>
+{% if selected_po %}
 <script>
 (function () {
-  var itemSel = document.getElementById('item_id');
-  var qtyEl = document.getElementById('quantity');
-  var uomEl = document.getElementById('entry_uom');
-  var qtyHint = document.getElementById('quantity-hint');
-  var uomHint = document.getElementById('uom-hint');
-  if (!itemSel || !qtyEl || !uomEl) return;
+  var host = document.getElementById('ci-lines');
+  var tpl = document.getElementById('ci-line-template');
+  var addBtn = document.getElementById('ci-add-line');
+  if (!host || !tpl || !addBtn) return;
 
   function fmt(n) {
     var x = Number(n);
@@ -269,61 +321,81 @@
     return (Math.round(x * 1000) / 1000).toString();
   }
 
-  function selectedOption() {
-    return itemSel.options[itemSel.selectedIndex] || null;
+  function renumber() {
+    var rows = host.querySelectorAll('.ci-line');
+    rows.forEach(function (row, i) {
+      var label = row.querySelector('.ci-line-head strong');
+      if (label) label.textContent = 'Line ' + (i + 1);
+      var remove = row.querySelector('[data-ci-remove]');
+      if (remove) remove.style.display = rows.length > 1 ? '' : 'none';
+    });
   }
 
-  function syncHints() {
-    var opt = selectedOption();
-    if (!opt || !opt.value) {
-      qtyHint.textContent = 'Select a product to see remaining quantity.';
-      uomHint.textContent = "Leave blank to enter in the item’s native UoM. Mass units convert automatically (e.g. kg ↔ lbs).";
-      qtyEl.removeAttribute('max');
-      qtyEl.placeholder = '';
-      return;
-    }
-    var native = opt.getAttribute('data-native-uom') || '';
-    var orderUom = opt.getAttribute('data-order-uom') || native;
-    var remaining = opt.getAttribute('data-remaining') || '0';
-    var received = opt.getAttribute('data-received') || '0';
-    var orderedNative = opt.getAttribute('data-ordered-native') || '0';
-    var entry = (uomEl.value || '').trim();
+  function wireLine(row) {
+    var itemSel = row.querySelector('.ci-item');
+    var qtyEl = row.querySelector('.ci-qty');
+    var uomEl = row.querySelector('.ci-uom');
+    var hint = row.querySelector('.ci-qty-hint');
+    var remove = row.querySelector('[data-ci-remove]');
 
-    qtyHint.innerHTML =
-      'Open remaining: <strong>' + fmt(remaining) + ' ' + native + '</strong>' +
-      ' (ordered ' + fmt(orderedNative) + ', already received ' + fmt(received) + '). ' +
-      'Enter this shipment’s quantity only — partials are fine.';
-
-    if (!entry || entry.toLowerCase() === String(native).toLowerCase()) {
-      uomHint.innerHTML =
-        'Item native UoM is <strong>' + native + '</strong>' +
-        (orderUom && orderUom.toLowerCase() !== String(native).toLowerCase()
-          ? ' (PO ordered in ' + orderUom + '; remaining is shown in native).'
-          : '.') +
-        ' Over-receipt against remaining is blocked.';
-      qtyEl.placeholder = fmt(remaining);
-      qtyEl.max = remaining;
-    } else {
-      uomHint.innerHTML =
-        'Entering in <strong>' + entry + '</strong>; system converts to native <strong>' +
-        native + '</strong> before saving. Remaining open: <strong>' +
-        fmt(remaining) + ' ' + native + '</strong>.';
-      qtyEl.placeholder = '';
-      qtyEl.removeAttribute('max');
+    function sync() {
+      var opt = itemSel.options[itemSel.selectedIndex];
+      if (!opt || !opt.value) {
+        hint.textContent = 'Select a product to see remaining.';
+        qtyEl.removeAttribute('max');
+        return;
+      }
+      var native = opt.getAttribute('data-native-uom') || '';
+      var remaining = opt.getAttribute('data-remaining') || '0';
+      var received = opt.getAttribute('data-received') || '0';
+      var ordered = opt.getAttribute('data-ordered-native') || '0';
+      hint.innerHTML =
+        'Open remaining: <strong>' + fmt(remaining) + ' ' + native + '</strong>' +
+        ' (ordered ' + fmt(ordered) + ', already received ' + fmt(received) + '). ' +
+        'Combined Accepted + On hold across lines cannot exceed remaining.';
+      if (!(uomEl.value || '').trim()) {
+        qtyEl.placeholder = fmt(remaining);
+      } else {
+        qtyEl.placeholder = '';
+      }
     }
+
+    itemSel.addEventListener('change', function () {
+      var opt = itemSel.options[itemSel.selectedIndex];
+      if (opt && opt.value && !qtyEl.value) {
+        qtyEl.value = opt.getAttribute('data-remaining') || '';
+        uomEl.value = '';
+      }
+      sync();
+    });
+    uomEl.addEventListener('change', sync);
+    if (remove) {
+      remove.addEventListener('click', function () {
+        if (host.querySelectorAll('.ci-line').length <= 1) return;
+        row.remove();
+        renumber();
+      });
+    }
+    sync();
   }
 
-  itemSel.addEventListener('change', function () {
-    var opt = selectedOption();
-    if (opt && opt.value && !qtyEl.value) {
-      // Suggest remaining in native UoM when field is empty
-      qtyEl.value = opt.getAttribute('data-remaining') || '';
-      uomEl.value = '';
-    }
-    syncHints();
-  });
-  uomEl.addEventListener('change', syncHints);
-  syncHints();
+  function addLine() {
+    var idx = parseInt(host.getAttribute('data-next-index') || '0', 10) || 0;
+    var html = tpl.innerHTML
+      .replace(/__INDEX__/g, String(idx))
+      .replace(/__N__/g, String(host.querySelectorAll('.ci-line').length + 1));
+    var wrap = document.createElement('div');
+    wrap.innerHTML = html.trim();
+    var row = wrap.firstElementChild;
+    host.appendChild(row);
+    host.setAttribute('data-next-index', String(idx + 1));
+    wireLine(row);
+    renumber();
+  }
+
+  addBtn.addEventListener('click', addLine);
+  addLine();
 })();
 </script>
+{% endif %}
 {% endblock %}

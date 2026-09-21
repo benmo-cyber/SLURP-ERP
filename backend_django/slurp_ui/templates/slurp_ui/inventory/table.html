@@ -3,6 +3,8 @@
 {% block module_title %}Inventory{% endblock %}
 {% block header_actions %}
   <a href="{% url 'slurp_ui:inventory_check_in' %}" class="btn btn-primary">Check-In</a>
+  <a href="{% url 'slurp_ui:inventory_holds' %}" class="btn btn-primary">On-hold log</a>
+  <a href="{% url 'slurp_ui:inventory_counts' %}" class="btn btn-primary">Physical count</a>
   <a href="{% url 'slurp_ui:inventory_indirect_checkout' %}" class="btn btn-primary">Checkout Indirect Material</a>
   <a href="{% url 'slurp_ui:inventory_reverse_check_in' %}" class="btn btn-danger"
      title="Reverse a mistaken check-in (removes receipt lot, rolls back PO received qty when allowed)">Reverse check-in</a>
@@ -63,7 +65,7 @@
           <td>{{ row.description }}</td>
           <td><span class="inventory-type-badge inventory-type-badge--{{ row.item_type|default:'unknown' }}">{{ row.item_type }}</span></td>
           <td><span class="inventory-category-badge">{{ row.product_category|default:"—" }}</span></td>
-          <td>—</td>
+          <td>{{ row.vendors_label }}</td>
           <td>{{ row.pack_size_unit }}</td>
           <td class="{% if row.available > 0 %}available{% else %}unavailable{% endif %}">{{ row.available|floatformat:2 }} {{ display_uom }}</td>
           {% if show_on_order %}<td class="{% if row.on_order > 0 %}on-order{% endif %}">{{ row.on_order|floatformat:2 }}</td>{% endif %}
@@ -157,6 +159,8 @@
                           {% if lot.hold_native > 0 %}
                           <a class="btn btn-secondary" style="padding:0.2rem 0.45rem;font-size:0.75rem"
                              href="{% url 'slurp_ui:inventory_lot_release' lot.id %}?tab={{ tab }}&uom={{ display_uom }}&sku={{ row.sku|urlencode }}&vendor={{ v.vendor|urlencode }}{% if deeper %}&deeper=1{% endif %}&quantity={{ lot.hold_native }}">Release</a>
+                          <a class="btn btn-secondary" style="padding:0.2rem 0.45rem;font-size:0.75rem"
+                             href="{% url 'slurp_ui:inventory_lot_hold_log' lot.id %}">Hold log</a>
                           {% endif %}
                           {% if request.user.is_staff %}
                           <a class="btn btn-secondary" style="padding:0.2rem 0.45rem;font-size:0.75rem"

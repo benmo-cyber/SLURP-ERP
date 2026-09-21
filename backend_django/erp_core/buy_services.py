@@ -211,10 +211,18 @@ def create_purchase_order(user, data: dict) -> PurchaseOrder:
 
 
 def issue_purchase_order(purchase_order: PurchaseOrder, user, issue_date=None) -> PurchaseOrder:
-    """Issue a draft PO: status=issued, on_order++, email PDF (best effort)."""
+    """
+    Issue a draft PO: status=issued, on_order++, email PDF (best effort).
+
+    Sets purchase_order._email_sent (bool|None) and purchase_order._email_error (str|None)
+    for callers that want to surface email outcome in the UI.
+    """
     from .po_pdf_html import generate_po_pdf_from_html
     from .email_service import send_purchase_order_email
     from .views import _parse_staff_datetime, log_purchase_order_action
+
+    purchase_order._email_sent = None
+    purchase_order._email_error = None
 
     if purchase_order.status != "draft":
         raise BuyFlowError(
@@ -245,9 +253,21 @@ def issue_purchase_order(purchase_order: PurchaseOrder, user, issue_date=None) -
 
     try:
         pdf_content = generate_po_pdf_from_html(purchase_order)
-        if pdf_content:
-            send_purchase_order_email(purchase_order, pdf_content)
+        if not pdf_content:
+            purchase_order._email_sent = False
+            purchase_order._email_error = "PO PDF could not be generated; email was not sent."
+            logger.error("Failed to generate PO PDF for %s", purchase_order.po_number)
+        else:
+            ok = send_purchase_order_email(purchase_order, pdf_content)
+            purchase_order._email_sent = bool(ok)
+            if not ok:
+                purchase_order._email_error = (
+                    "PO issued, but the vendor email could not be sent "
+                    "(check SMTP credentials / vendor email)."
+                )
     except Exception as e:
+        purchase_order._email_sent = False
+        purchase_order._email_error = f"PO issued, but email failed: {e}"
         logger.error("Failed to send purchase order email: %s", e)
 
     return purchase_order
@@ -401,15 +421,23 @@ def check_in_lot(user, data: dict) -> Lot:
     if lot_status == "accepted":
         lot.quantity_remaining = lot.quantity
         lot.on_hold = False
+        lot.quantity_on_hold = 0.0
     elif lot_status == "rejected":
         lot.quantity_remaining = 0
         lot.on_hold = False
+        lot.quantity_on_hold = 0.0
     elif lot_status == "on_hold":
         lot.quantity_remaining = lot.quantity
         lot.on_hold = True
+        # Inventory available math uses quantity_on_hold (not status alone).
+        lot.quantity_on_hold = float(lot.quantity or 0)
     lot.save()
 
-    if lot_status == "accepted":
+    # Physical dock receipt: accepted + on_hold both count against the PO line.
+    # Rejected is disposition-only and does not reduce open PO qty (unchanged).
+    counts_against_po = lot_status in ("accepted", "on_hold")
+
+    if counts_against_po:
         txn = InventoryTransaction.objects.create(
             transaction_type="receipt",
             lot=lot,
@@ -424,7 +452,11 @@ def check_in_lot(user, data: dict) -> Lot:
             reference_type="po_number",
             transaction_id=txn.id,
             purchase_order_id=po.id if po else None,
-            notes=f"Lot received - PO: {lot.po_number}" if lot.po_number else "Lot received",
+            notes=(
+                f"Lot received ({lot_status}) - PO: {lot.po_number}"
+                if lot.po_number
+                else f"Lot received ({lot_status})"
+            ),
         )
 
         if po:
@@ -453,7 +485,7 @@ def check_in_lot(user, data: dict) -> Lot:
                     po,
                     "partial_check_in",
                     lot=lot,
-                    notes=f"Partial check-in: {lot.quantity} received",
+                    notes=f"Partial check-in ({lot_status}): {lot.quantity} received",
                 )
             try:
                 create_ap_entry_from_po(
@@ -499,7 +531,97 @@ def check_in_lot(user, data: dict) -> Lot:
     except Exception as e:
         logger.error("Failed to persist CheckInLog for lot %s: %s", lot.lot_number, e, exc_info=True)
 
+    if lot_status == "on_hold":
+        try:
+            from .hold_services import ensure_open_hold_case
+
+            ensure_open_hold_case(
+                lot,
+                user=user,
+                summary=(payload.get("short_reason") or payload.get("notes") or "On hold at check-in")[
+                    :255
+                ],
+                initial_note=(payload.get("notes") or payload.get("short_reason") or "").strip()
+                or f"Checked in on hold from PO {lot.po_number or '—'}.",
+            )
+        except Exception as e:
+            logger.warning("Failed to open hold case for lot %s: %s", lot.lot_number, e)
+
     return lot
+
+
+def check_in_lots_batch(user, shared: dict, lines: list[dict]) -> list[Lot]:
+    """
+    Check in multiple disposition lines in one dock receipt (one transaction).
+
+    Example: 760 kg PO line → one line Accepted 190 kg + one line On hold 570 kg.
+    Shared keys: po_number, attestations, initials, carrier, received_date, short_reason, notes.
+    Each line: item_id, quantity, entry_uom, status, vendor_lot_number, dates, freight_actual, lot_number.
+    """
+    if not lines:
+        raise BuyFlowError("Add at least one check-in line.")
+
+    # Pre-validate combined qty per item against remaining (before any write).
+    po_number = (shared.get("po_number") or "").strip()
+    po = _po_by_number(po_number) if po_number else None
+    if po_number and not po:
+        raise BuyFlowError(f"Purchase order {po_number} was not found.")
+
+    planned: dict[int, float] = {}
+    for i, line in enumerate(lines, start=1):
+        item_id = line.get("item_id")
+        if not item_id:
+            raise BuyFlowError(f"Line {i}: product is required.")
+        try:
+            item = Item.objects.get(id=int(item_id))
+        except (Item.DoesNotExist, TypeError, ValueError) as e:
+            raise BuyFlowError(f"Line {i}: item not found.") from e
+        try:
+            qty_entry = float(line.get("quantity") or 0)
+        except (TypeError, ValueError) as e:
+            raise BuyFlowError(f"Line {i}: invalid quantity.") from e
+        if qty_entry <= 0:
+            raise BuyFlowError(f"Line {i}: quantity must be greater than 0.")
+        entry_uom = (line.get("entry_uom") or "").strip().lower()
+        item_uom = (item.unit_of_measure or "lbs").lower()
+        if entry_uom and entry_uom != item_uom:
+            try:
+                qty_native = convert_mass_uom(qty_entry, entry_uom, item_uom)
+            except ValueError as e:
+                raise BuyFlowError(f"Line {i}: {e}") from e
+        else:
+            qty_native = normalize_quantity_by_uom(qty_entry, item_uom)
+        status = (line.get("status") or "accepted").strip().lower()
+        if status in ("accepted", "on_hold"):
+            planned[item.id] = planned.get(item.id, 0.0) + qty_native
+
+    if po:
+        for item_id, need in planned.items():
+            po_item = next((li for li in po.items.all() if li.item_id == item_id), None)
+            if po_item is None:
+                sku = Item.objects.filter(pk=item_id).values_list("sku", flat=True).first() or item_id
+                raise BuyFlowError(f"Item {sku} is not on PO {po.po_number}.")
+            remaining = po_line_open_on_order_native(po_item)
+            if need > remaining + 0.01:
+                item_uom = (po_item.item.unit_of_measure or "lbs") if po_item.item else "lbs"
+                raise BuyFlowError(
+                    f"Combined accepted + on-hold qty {need:.2f} {item_uom} exceeds remaining "
+                    f"{remaining:.2f} {item_uom} for {po_item.item.sku}."
+                )
+
+    lots: list[Lot] = []
+    with transaction.atomic():
+        for i, line in enumerate(lines, start=1):
+            payload = {
+                **shared,
+                **line,
+                "status": (line.get("status") or "accepted"),
+            }
+            try:
+                lots.append(check_in_lot(user, payload))
+            except BuyFlowError as e:
+                raise BuyFlowError(f"Line {i}: {e.message}") from e
+    return lots
 
 
 def reverse_check_in(lot: Lot) -> dict:
@@ -713,6 +835,14 @@ def revise_purchase_order(original_po: PurchaseOrder) -> PurchaseOrder:
         shipping_cost=original_po.shipping_cost,
         total=original_po.total,
         coa_sds_email=original_po.coa_sds_email,
+        tracking_number=original_po.tracking_number,
+        carrier=original_po.carrier,
+        shipment_mode=getattr(original_po, "shipment_mode", "") or "",
+        bill_of_lading=getattr(original_po, "bill_of_lading", "") or "",
+        vessel_name=getattr(original_po, "vessel_name", "") or "",
+        destination_place=getattr(original_po, "destination_place", "") or "",
+        inbound_eta_date=getattr(original_po, "inbound_eta_date", None),
+        tracking_notes=getattr(original_po, "tracking_notes", "") or "",
         notes=original_po.notes,
         drop_ship=getattr(original_po, "drop_ship", False),
         fulfillment_sales_order_id=getattr(original_po, "fulfillment_sales_order_id", None),

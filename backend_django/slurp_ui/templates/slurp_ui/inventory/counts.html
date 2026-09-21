@@ -1,0 +1,149 @@
+{% extends "slurp_ui/base_module.html" %}
+{% block title %}Inventory Counts — SLURP{% endblock %}
+{% block module_title %}Physical inventory / beginning balance{% endblock %}
+{% block header_actions %}
+  <a href="{% url 'slurp_ui:inventory' %}" class="btn btn-secondary">Inventory table</a>
+{% endblock %}
+{% block main %}
+<style>
+  .count-page .hs-card { background:#fff; border:1px solid #e2e8f0; border-radius:8px; padding:1rem 1.15rem; margin-bottom:1rem; }
+  .count-page table { width:100%; border-collapse:collapse; font-size:0.9rem; }
+  .count-page th, .count-page td { padding:0.45rem 0.55rem; border-bottom:1px solid #e5e7eb; text-align:left; }
+  .count-page th { background: var(--app-header-bg, #2c3e50); color: var(--app-header-text, #fff); }
+  .count-page .muted { color:#64748b; font-size:0.88rem; }
+  .count-page .row-form { display:grid; grid-template-columns:repeat(auto-fit,minmax(11rem,1fr)); gap:0.75rem; align-items:end; }
+  .count-page label { display:block; font-weight:500; margin-bottom:0.25rem; font-size:0.88rem; }
+  .count-page input, .count-page select, .count-page textarea {
+    width:100%; box-sizing:border-box; padding:0.45rem 0.55rem; border:1px solid #cbd5e1; border-radius:4px;
+  }
+  .badge { display:inline-block; padding:0.15rem 0.45rem; border-radius:999px; font-size:0.75rem; background:#e2e8f0; }
+  .badge.draft { background:#dbeafe; color:#1e40af; }
+  .badge.review { background:#fef3c7; color:#92400e; }
+  .badge.posted { background:#dcfce7; color:#166534; }
+  .badge.cancelled { background:#fee2e2; color:#991b1b; }
+  .prog {
+    display:inline-flex; align-items:center; justify-content:center;
+    width:1.35rem; height:1.35rem; border-radius:999px; font-weight:700; font-size:0.85rem; line-height:1;
+  }
+  .prog.ok { background:#dcfce7; color:#15803d; }
+  .prog.warn { background:#fef3c7; color:#b45309; }
+  .prog.bad { background:#fee2e2; color:#b91c1c; }
+  .prog-wrap { display:inline-flex; align-items:center; gap:0.4rem; }
+</style>
+<div class="count-page">
+  <p class="muted" style="margin-bottom:1rem">
+    Counts can run over several days — stay in <strong>Draft</strong>, use <strong>Save draft</strong> often, and resume from this page.
+    Beginning balance creates lots on post; annual physical snapshots open lots then adjusts quantities.
+  </p>
+
+  {% if open_session %}
+  <div class="hs-card" style="display:flex;flex-wrap:wrap;gap:1rem;align-items:center;justify-content:space-between">
+    <div>
+      <div style="font-weight:600;margin-bottom:0.25rem">Resume draft count</div>
+      <a href="{% url 'slurp_ui:inventory_count_detail' open_session.id %}">{{ open_session.session_number }}</a>
+      — {{ open_session.get_count_type_display }} ·
+      <span class="badge {{ open_session.status }}">{{ open_session.get_status_display }}</span>
+    </div>
+    <div class="prog-wrap" title="Count progress">
+      {% if open_session.progress_status == 'complete' %}
+      <span class="prog ok" title="All lines counted">✓</span>
+      {% elif open_session.progress_status == 'in_progress' %}
+      <span class="prog warn" title="Started — not finished">!</span>
+      {% else %}
+      <span class="prog bad" title="Not started">✕</span>
+      {% endif %}
+      <span class="muted">{{ open_session.progress_counted }}/{{ open_session.progress_lines }} lines ({{ open_session.progress_pct }}%)</span>
+    </div>
+    <a class="btn btn-primary" href="{% url 'slurp_ui:inventory_count_detail' open_session.id %}">Continue counting</a>
+  </div>
+  {% else %}
+  <div class="hs-card">
+    <h3 style="margin:0 0 0.75rem;font-size:1.05rem">Start a count</h3>
+    <form method="post" class="row-form">
+      {% csrf_token %}
+      <div>
+        <label for="count_type">Type</label>
+        <select id="count_type" name="count_type" required>
+          {% for value, label in count_type_choices %}
+          <option value="{{ value }}" {% if value == 'annual_physical' %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label for="count_date">Count date</label>
+        <input id="count_date" name="count_date" type="date" value="{{ today }}" required />
+      </div>
+      <div>
+        <label for="name">Name (optional)</label>
+        <input id="name" name="name" placeholder="e.g. 2026 annual physical" />
+      </div>
+      <div style="grid-column:1 / -1">
+        <label for="notes">Notes</label>
+        <textarea id="notes" name="notes" rows="2"></textarea>
+      </div>
+      <div>
+        <button type="submit" class="btn btn-primary">Start count</button>
+      </div>
+    </form>
+    <p class="muted" style="margin:0.75rem 0 0">
+      Annual / ad hoc snapshots all open lots (qty &gt; 0). Beginning balance starts blank — add lots, then post to create them.
+      Only one open draft at a time.
+    </p>
+  </div>
+  {% endif %}
+
+  <div class="hs-card">
+    <h3 style="margin:0 0 0.75rem;font-size:1.05rem">Recent sessions</h3>
+    <table>
+      <thead>
+        <tr>
+          <th></th>
+          <th>Session</th>
+          <th>Type</th>
+          <th>Date</th>
+          <th>Status</th>
+          <th>Progress</th>
+          <th>Created</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for s in sessions %}
+        <tr>
+          <td>
+            {% if s.progress_status == 'complete' %}
+            <span class="prog ok" title="Complete / posted">✓</span>
+            {% elif s.progress_status == 'in_progress' %}
+            <span class="prog warn" title="Started — not finished">!</span>
+            {% else %}
+            <span class="prog bad" title="Not started / cancelled">✕</span>
+            {% endif %}
+          </td>
+          <td><a href="{% url 'slurp_ui:inventory_count_detail' s.id %}">{{ s.session_number }}</a></td>
+          <td>{{ s.get_count_type_display }}</td>
+          <td>{{ s.count_date }}</td>
+          <td><span class="badge {{ s.status }}">{{ s.get_status_display }}</span></td>
+          <td class="muted">
+            {% if s.progress_counted != None %}
+              {{ s.progress_counted }}/{{ s.progress_lines }} ({{ s.progress_pct }}%)
+            {% elif s.status == 'posted' %}Posted
+            {% else %}—
+            {% endif %}
+          </td>
+          <td class="muted">{{ s.created_by }} · {{ s.created_at|date:"Y-m-d H:i" }}</td>
+          <td>
+            {% if s.status == 'draft' %}
+            <a href="{% url 'slurp_ui:inventory_count_detail' s.id %}">Resume</a>
+            {% else %}
+            <a href="{% url 'slurp_ui:inventory_count_variances' s.id %}">Variance report</a>
+            {% endif %}
+          </td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="8" class="muted">No counts yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

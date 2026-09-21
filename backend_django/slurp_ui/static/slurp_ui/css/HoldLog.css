@@ -1,0 +1,374 @@
+/* —— On-hold investigation queue —— */
+.hold-log {
+  --hl-ink: #1e2a3a;
+  --hl-muted: #6a7d92;
+  --hl-line: rgba(30, 42, 58, 0.1);
+  --hl-surface: #ffffff;
+  --hl-amber: #c97816;
+  --hl-amber-deep: #9a5c0f;
+  --hl-amber-wash: rgba(201, 120, 22, 0.12);
+  --hl-ok: #0f8a72;
+  --hl-info: #1a7a9c;
+  --hl-danger: #c23d45;
+  --hl-shadow: 0 10px 28px rgba(30, 42, 58, 0.07);
+  margin: 0 !important;
+  padding: 0;
+  min-height: 100%;
+  background:
+    radial-gradient(ellipse 80% 50% at 12% -10%, rgba(201, 120, 22, 0.14), transparent 55%),
+    radial-gradient(ellipse 60% 40% at 100% 0%, rgba(26, 122, 156, 0.08), transparent 50%),
+    linear-gradient(180deg, #e9eef4 0%, #f4f6f8 38%, #f7f8fa 100%);
+  animation: hold-log-fade 0.45s ease-out;
+}
+
+@keyframes hold-log-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.hold-log-hero {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1.5rem;
+  padding: 1.75rem 1.75rem 1.25rem;
+  border-bottom: 1px solid var(--hl-line);
+}
+
+.hold-log-kicker {
+  margin: 0 0 0.35rem;
+  font-size: 0.72rem;
+  font-weight: 650;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--hl-amber-deep);
+}
+
+.hold-log-hero-copy h2 {
+  margin: 0 0 0.45rem;
+  font-size: clamp(1.55rem, 2.4vw, 1.9rem);
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  color: var(--hl-ink);
+  line-height: 1.15;
+}
+
+.hold-log-lede {
+  margin: 0;
+  max-width: 36rem;
+  font-size: 0.95rem;
+  line-height: 1.5;
+  color: var(--hl-muted);
+}
+
+.hold-log-stats {
+  display: flex;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+}
+
+.hold-log-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  min-width: 5.25rem;
+  padding: 0.65rem 0.85rem;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid transparent;
+  text-decoration: none;
+  color: inherit;
+  backdrop-filter: blur(6px);
+  transition: transform 0.18s ease, border-color 0.18s ease, background 0.18s ease;
+}
+
+.hold-log-stat:hover {
+  transform: translateY(-2px);
+  border-color: rgba(201, 120, 22, 0.35);
+  background: #fff;
+}
+
+.hold-log-stat.is-active {
+  background: #fff;
+  border-color: rgba(201, 120, 22, 0.45);
+  box-shadow: var(--hl-shadow);
+}
+
+.hold-log-stat-n {
+  font-size: 1.45rem;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  color: var(--hl-ink);
+  line-height: 1.1;
+}
+
+.hold-log-stat-l {
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--hl-muted);
+  margin-top: 0.15rem;
+}
+
+.hold-log-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 1rem 1.75rem 0.35rem;
+}
+
+.hold-log-seg {
+  display: inline-flex;
+  padding: 0.2rem;
+  border-radius: 999px;
+  background: rgba(30, 42, 58, 0.06);
+  gap: 0.15rem;
+}
+
+.hold-log-seg-btn {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.4rem 0.95rem;
+  border-radius: 999px;
+  font-size: 0.84rem;
+  font-weight: 600;
+  color: var(--hl-muted);
+  text-decoration: none;
+  transition: background 0.16s ease, color 0.16s ease, box-shadow 0.16s ease;
+}
+
+.hold-log-seg-btn:hover {
+  color: var(--hl-ink);
+}
+
+.hold-log-seg-btn.is-active {
+  background: var(--hl-surface);
+  color: var(--hl-ink);
+  box-shadow: 0 1px 3px rgba(30, 42, 58, 0.12);
+}
+
+.hold-log-toolbar-hint {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--hl-muted);
+}
+
+.hold-log-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+  padding: 0.85rem 1.75rem 2.25rem;
+}
+
+.hold-log-case {
+  position: relative;
+  display: grid;
+  grid-template-columns: 4px minmax(0, 1fr) auto;
+  align-items: stretch;
+  gap: 0;
+  background: var(--hl-surface);
+  border: 1px solid rgba(30, 42, 58, 0.08);
+  border-radius: 12px;
+  text-decoration: none;
+  color: inherit;
+  box-shadow: 0 1px 2px rgba(30, 42, 58, 0.04);
+  overflow: hidden;
+  transition:
+    transform 0.18s ease,
+    box-shadow 0.18s ease,
+    border-color 0.18s ease;
+}
+
+.hold-log-case:hover {
+  transform: translateY(-2px);
+  border-color: rgba(201, 120, 22, 0.35);
+  box-shadow: var(--hl-shadow);
+}
+
+.hold-log-case:hover .hold-log-case-go {
+  opacity: 1;
+  transform: translateX(0);
+}
+
+.hold-log-case-rail {
+  background: #cbd5e1;
+}
+
+.hold-log-case.is-open .hold-log-case-rail {
+  background: linear-gradient(180deg, #e8a23a, #c97816);
+}
+
+.hold-log-case.is-resolved .hold-log-case-rail {
+  background: #94a3b8;
+}
+
+.hold-log-case-body {
+  padding: 1rem 1.1rem 1rem 1.15rem;
+  min-width: 0;
+}
+
+.hold-log-case-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  margin-bottom: 0.45rem;
+}
+
+.hold-log-case-identity {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.45rem 0.75rem;
+  min-width: 0;
+}
+
+.hold-log-lot {
+  font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--hl-ink);
+}
+
+.hold-log-sku {
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: #33475b;
+  font-variant-numeric: tabular-nums;
+}
+
+.hold-log-vendor {
+  font-size: 0.82rem;
+  color: var(--hl-muted);
+}
+
+.hold-log-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  background: #eef2f6;
+  color: #475569;
+}
+
+.hold-log-chip.is-open {
+  background: var(--hl-amber-wash);
+  color: var(--hl-amber-deep);
+}
+
+.hold-log-chip.is-accept {
+  background: rgba(15, 138, 114, 0.12);
+  color: var(--hl-ok);
+}
+
+.hold-log-chip.is-return {
+  background: rgba(26, 122, 156, 0.12);
+  color: var(--hl-info);
+}
+
+.hold-log-chip.is-discard {
+  background: rgba(194, 61, 69, 0.12);
+  color: var(--hl-danger);
+}
+
+.hold-log-summary {
+  margin: 0 0 0.65rem;
+  font-size: 0.92rem;
+  line-height: 1.45;
+  color: #3d4f63;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.hold-log-summary-empty {
+  color: var(--hl-muted);
+  font-style: italic;
+}
+
+.hold-log-case-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 0.55rem;
+  font-size: 0.8rem;
+  color: var(--hl-muted);
+}
+
+.hold-log-qty strong {
+  color: var(--hl-ink);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.hold-log-dot {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.55;
+}
+
+.hold-log-case-go {
+  align-self: center;
+  margin-right: 1.1rem;
+  font-size: 0.8rem;
+  font-weight: 650;
+  color: var(--hl-amber-deep);
+  white-space: nowrap;
+  opacity: 0;
+  transform: translateX(-6px);
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+
+.hold-log-empty {
+  text-align: center;
+  padding: 3rem 1.5rem;
+  background: rgba(255, 255, 255, 0.7);
+  border: 1px dashed rgba(30, 42, 58, 0.18);
+  border-radius: 14px;
+}
+
+.hold-log-empty-title {
+  margin: 0 0 0.4rem;
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: var(--hl-ink);
+}
+
+.hold-log-empty-copy {
+  margin: 0 0 1.1rem;
+  color: var(--hl-muted);
+  font-size: 0.92rem;
+  max-width: 26rem;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+@media (max-width: 720px) {
+  .hold-log-hero,
+  .hold-log-toolbar,
+  .hold-log-list {
+    padding-left: 1.1rem;
+    padding-right: 1.1rem;
+  }
+
+  .hold-log-case {
+    grid-template-columns: 4px minmax(0, 1fr);
+  }
+
+  .hold-log-case-go {
+    display: none;
+  }
+}
+

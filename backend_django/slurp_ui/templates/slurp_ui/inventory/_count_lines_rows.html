@@ -1,0 +1,65 @@
+{% for ln in section_lines %}
+<tr class="count-line-row {% if show_hold_hint %}on-hold-row{% endif %}"
+    data-line-id="{{ ln.id }}"
+    data-saved-qty="{% if ln.counted_qty != None %}{{ ln.counted_qty }}{% endif %}"
+    data-saved-notes="{{ ln.line_notes|default:''|escape }}">
+  <td>
+    <span class="prog {% if ln.progress_status == 'complete' %}ok{% elif ln.progress_status == 'in_progress' %}warn{% else %}bad{% endif %}"
+          data-progress-icon
+          title="{% if ln.progress_status == 'complete' %}Counted{% elif ln.progress_status == 'in_progress' %}Started{% else %}Not started{% endif %}">
+      {% if ln.progress_status == 'complete' %}✓{% elif ln.progress_status == 'in_progress' %}!{% else %}✕{% endif %}
+    </span>
+  </td>
+  <td>
+    <strong>{{ ln.sku_snapshot }}</strong>
+    {% if ln.is_new_lot %}<span style="color:#1d4ed8"> · new</span>{% endif %}
+    <div style="font-size:0.78rem;color:#94a3b8">{{ ln.item_name_snapshot }}</div>
+  </td>
+  <td>{{ ln.lot_number_snapshot|default:"(creates on post)" }}</td>
+  <td>{{ ln.vendor_snapshot|default:"—" }}</td>
+  <td>{{ ln.unit_of_measure }}</td>
+  <td>
+    {{ ln.system_qty|floatformat:-3 }}
+    {% if show_hold_hint and ln.on_hold_qty_snapshot %}
+    <div style="font-size:0.75rem;color:#b45309">hold {{ ln.on_hold_qty_snapshot|floatformat:-3 }}</div>
+    {% elif show_hold_hint %}
+    <div style="font-size:0.75rem;color:#b45309">on hold</div>
+    {% endif %}
+  </td>
+  <td class="qty">
+    {% if session.is_editable %}
+    <input type="number" step="any" min="0" name="counted_{{ ln.id }}"
+           class="counted-input"
+           value="{% if ln.counted_qty != None %}{{ ln.counted_qty }}{% endif %}"
+           placeholder="—" />
+    {% else %}
+      {% if ln.counted_qty != None %}{{ ln.counted_qty|floatformat:-3 }}{% else %}—{% endif %}
+    {% endif %}
+  </td>
+  <td data-variance-cell data-system="{{ ln.system_qty }}">
+    {% if ln.variance != None %}
+      <span class="{% if ln.variance > 0 %}var-pos{% elif ln.variance < 0 %}var-neg{% endif %}">
+        {{ ln.variance|floatformat:-3 }}
+      </span>
+    {% else %}—{% endif %}
+  </td>
+  <td style="text-align:center">
+    {% if session.is_editable %}
+    <input type="checkbox" name="include_{{ ln.id }}" {% if ln.include_in_post %}checked{% endif %} />
+    {% else %}
+      {% if ln.include_in_post %}Yes{% else %}No{% endif %}
+    {% endif %}
+  </td>
+  <td class="notes">
+    {% if session.is_editable %}
+    <input type="text" name="notes_{{ ln.id }}" class="notes-input" value="{{ ln.line_notes }}" maxlength="500" />
+    {% else %}{{ ln.line_notes|default:"—" }}{% endif %}
+  </td>
+</tr>
+{% empty %}
+<tr>
+  <td colspan="10" style="color:#64748b;padding:1rem">
+    {% if empty_message %}{{ empty_message }}{% else %}No lines in this section.{% endif %}
+  </td>
+</tr>
+{% endfor %}

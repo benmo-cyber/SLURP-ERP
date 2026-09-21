@@ -1,93 +1,212 @@
 {% extends "slurp_ui/base.html" %}
 {% block title %}Edit {{ item.sku }} — SLURP{% endblock %}
+{% block extra_css %}
+<style>
+  html, body, .App { overflow-x: hidden; max-width: 100%; }
+</style>
+{% endblock %}
 {% block content %}
-<div class="modal-page" style="max-width:820px">
-  <div style="display:flex;justify-content:space-between;align-items:start;gap:1rem">
-    <div>
+<div class="modal-page create-item-modal edit-item-page">
+  <div class="edit-item-header">
+    <div class="edit-item-header-text">
       <h2>{{ item.sku }}</h2>
-      <p style="color:#64748b;margin:0">{{ item.name }} · {{ item.get_item_type_display }}{% if item.vendor %} · {{ item.vendor }}{% endif %}</p>
+      <p class="create-item-subtitle">
+        {{ item.name }}
+        · {{ item.get_item_type_display }}
+        {% if item.vendor %} · {{ item.vendor }}{% endif %}
+      </p>
     </div>
     <a class="btn btn-secondary" href="{% url 'slurp_ui:inventory_items' %}">Back to items</a>
   </div>
 
-  <form method="post" style="margin-top:1rem">
+  <form method="post" class="create-item-form" id="edit-item-form">
     {% csrf_token %}
     <input type="hidden" name="action" value="save" />
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem">
-      <div class="form-row"><label>SKU</label><input name="sku" value="{{ item.sku }}" required /></div>
-      <div class="form-row"><label>Vendor</label><input name="vendor" value="{{ item.vendor|default:'' }}" /></div>
-      <div class="form-row"><label>Name</label><input name="name" value="{{ item.name }}" required /></div>
-      <div class="form-row"><label>UoM</label>
-        <select name="unit_of_measure">
-          {% for val, label in uom_choices %}
-          <option value="{{ val }}" {% if item.unit_of_measure == val %}selected{% endif %}>{{ label }}</option>
-          {% endfor %}
-        </select>
+
+    <div class="create-item-section">
+      <div class="create-item-section-head">
+        <h3 class="create-item-section-title">Identity</h3>
       </div>
-      <div class="form-row"><label>Type</label>
-        <select name="item_type">
-          {% for val, label in item_type_choices %}
-          <option value="{{ val }}" {% if item.item_type == val %}selected{% endif %}>{{ label }}</option>
-          {% endfor %}
-        </select>
-      </div>
-      <div class="form-row"><label>Category</label>
-        <select name="product_category">
-          <option value="">—</option>
-          {% for val, label in product_category_choices %}
-          <option value="{{ val }}" {% if item.product_category == val %}selected{% endif %}>{{ label }}</option>
-          {% endfor %}
-        </select>
+      <div class="create-item-panel">
+        <div class="form-grid">
+          <div class="form-group">
+            <label>WWI SKU *</label>
+            <input name="sku" value="{{ item.sku }}" required />
+          </div>
+          <div class="form-group">
+            <label>Vendor</label>
+            <input name="vendor" value="{{ item.vendor|default:'' }}" />
+          </div>
+          <div class="form-group full-width">
+            <label>WWI name *</label>
+            <input name="name" value="{{ item.name }}" required />
+          </div>
+          <div class="form-group full-width">
+            <label>Description</label>
+            <textarea name="description" rows="2">{{ item.description|default:'' }}</textarea>
+          </div>
+          <div class="form-group">
+            <label>Family letter</label>
+            <select name="product_family" title="{% if item.product_family %}{{ item.product_family.code }} — {{ item.product_family.name }}{% endif %}">
+              <option value="">—</option>
+              {% for f in product_families %}
+              <option value="{{ f.pk }}" {% if item.product_family_id == f.pk %}selected{% endif %}>{{ f.code }} — {{ f.name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Product category</label>
+            <select name="product_category">
+              <option value="">—</option>
+              {% for val, label in product_category_choices %}
+              <option value="{{ val }}" {% if item.product_category == val %}selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Type</label>
+            <select name="item_type">
+              {% for val, label in item_type_choices %}
+              <option value="{{ val }}" {% if item.item_type == val %}selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="form-group">
+            <label>UoM</label>
+            <select name="unit_of_measure">
+              {% for val, label in uom_choices %}
+              <option value="{{ val }}" {% if item.unit_of_measure == val %}selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+        </div>
       </div>
     </div>
-    <div class="form-row"><label>Description</label><textarea name="description" rows="2">{{ item.description|default:'' }}</textarea></div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem">
-      <div class="form-row"><label>Vendor item name</label><input name="vendor_item_name" value="{{ item.vendor_item_name|default:'' }}" /></div>
-      <div class="form-row"><label>Vendor item #</label><input name="vendor_item_number" value="{{ item.vendor_item_number|default:'' }}" /></div>
-      <div class="form-row"><label>HTS</label><input name="hts_code" value="{{ item.hts_code|default:'' }}" /></div>
-      <div class="form-row"><label>Origin</label><input name="country_of_origin" value="{{ item.country_of_origin|default:'' }}" /></div>
+
+    <div class="create-item-section">
+      <div class="create-item-section-head">
+        <h3 class="create-item-section-title">Vendor &amp; trade</h3>
+      </div>
+      <div class="create-item-panel">
+        <div class="form-grid">
+          <div class="form-group">
+            <label>Vendor item name</label>
+            <input name="vendor_item_name" value="{{ item.vendor_item_name|default:'' }}" />
+          </div>
+          <div class="form-group">
+            <label>Vendor item #</label>
+            <input name="vendor_item_number" value="{{ item.vendor_item_number|default:'' }}" />
+          </div>
+          <div class="form-group">
+            <label>HTS code</label>
+            <input name="hts_code" value="{{ item.hts_code|default:'' }}" />
+          </div>
+          <div class="form-group">
+            <label>Country of origin</label>
+            <input name="country_of_origin" value="{{ item.country_of_origin|default:'' }}" />
+          </div>
+        </div>
+      </div>
     </div>
-    <button type="submit" class="btn btn-primary">Save item</button>
+
+    <div class="form-actions">
+      <a class="btn btn-secondary" href="{% url 'slurp_ui:inventory_items' %}">Cancel</a>
+      <button type="submit" class="btn btn-primary">Save item</button>
+    </div>
   </form>
 
-  <h3 style="margin-top:2rem">Pack sizes</h3>
-  <table class="data-table">
-    <thead><tr><th>Size</th><th>Unit</th><th>Price</th><th>Default</th><th>Active</th><th></th></tr></thead>
-    <tbody>
-      {% for ps in pack_sizes %}
-      <tr>
-        <td>{{ ps.pack_size }}</td>
-        <td>{{ ps.pack_size_unit }}</td>
-        <td>{{ ps.price|default:"—" }}</td>
-        <td>{% if ps.is_default %}Yes{% else %}
-          <form method="post" style="display:inline">{% csrf_token %}<input type="hidden" name="action" value="toggle_pack_size" /><input type="hidden" name="pack_size_id" value="{{ ps.pk }}" /><input type="hidden" name="toggle_field" value="is_default" /><button type="submit" class="btn-link">Set default</button></form>
-        {% endif %}</td>
-        <td>{% if ps.is_active %}Yes{% else %}No{% endif %}</td>
-        <td>
-          <form method="post" style="display:inline" onsubmit="return confirm('Remove pack size?');">
-            {% csrf_token %}<input type="hidden" name="action" value="delete_pack_size" /><input type="hidden" name="pack_size_id" value="{{ ps.pk }}" />
-            <button type="submit" class="btn-link" style="color:#b91c1c">Delete</button>
-          </form>
-        </td>
-      </tr>
-      {% empty %}
-      <tr><td colspan="6">No pack sizes — add one below.</td></tr>
-      {% endfor %}
-    </tbody>
-  </table>
-  <form method="post" style="margin-top:1rem;display:grid;grid-template-columns:repeat(5,1fr) auto;gap:0.5rem;align-items:end">
-    {% csrf_token %}
-    <input type="hidden" name="action" value="add_pack_size" />
-    <div class="form-row"><label>Pack size</label><input type="number" step="any" name="pack_size" required /></div>
-    <div class="form-row"><label>Unit</label>
-      <select name="pack_size_unit">
-        {% for val, label in pack_unit_choices %}<option value="{{ val }}">{{ label }}</option>{% endfor %}
-      </select>
+  <div class="create-item-section edit-pack-section">
+    <div class="create-item-section-head">
+      <h3 class="create-item-section-title">Pack sizes</h3>
+      <p class="create-item-section-lead">How this SKU is stocked and priced.</p>
     </div>
-    <div class="form-row"><label>Price</label><input type="number" step="any" name="pack_price" /></div>
-    <div class="form-row"><label>Description</label><input name="pack_description" /></div>
-    <div class="form-row"><label><input type="checkbox" name="is_default" /> Default</label></div>
-    <button type="submit" class="btn btn-secondary">Add</button>
-  </form>
+    <div class="create-item-panel">
+      <div class="edit-pack-table-wrap">
+        <table class="edit-pack-table">
+          <thead>
+            <tr>
+              <th>Size</th>
+              <th>Unit</th>
+              <th>Price</th>
+              <th>Default</th>
+              <th>Active</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for ps in pack_sizes %}
+            <tr>
+              <td>{{ ps.pack_size }}</td>
+              <td>{{ ps.pack_size_unit }}</td>
+              <td>{% if ps.price is not None %}{{ ps.price }}{% else %}—{% endif %}</td>
+              <td>
+                {% if ps.is_default %}
+                <span class="edit-pack-badge">Default</span>
+                {% else %}
+                <form method="post" class="edit-pack-inline-form">
+                  {% csrf_token %}
+                  <input type="hidden" name="action" value="toggle_pack_size" />
+                  <input type="hidden" name="pack_size_id" value="{{ ps.pk }}" />
+                  <input type="hidden" name="toggle_field" value="is_default" />
+                  <button type="submit" class="btn-link">Set default</button>
+                </form>
+                {% endif %}
+              </td>
+              <td>{% if ps.is_active %}Yes{% else %}No{% endif %}</td>
+              <td class="edit-pack-actions">
+                <form method="post" class="edit-pack-inline-form" onsubmit="return confirm('Remove pack size?');">
+                  {% csrf_token %}
+                  <input type="hidden" name="action" value="delete_pack_size" />
+                  <input type="hidden" name="pack_size_id" value="{{ ps.pk }}" />
+                  <button type="submit" class="btn-link btn-link-danger">Delete</button>
+                </form>
+              </td>
+            </tr>
+            {% empty %}
+            <tr>
+              <td colspan="6" class="edit-pack-empty">No pack sizes yet — add one below.</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+
+      <form method="post" class="edit-pack-add">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="add_pack_size" />
+        <div class="form-grid edit-pack-add-grid">
+          <div class="form-group">
+            <label>Pack size</label>
+            <input type="number" step="any" name="pack_size" required placeholder="e.g. 10" />
+          </div>
+          <div class="form-group">
+            <label>Unit</label>
+            <select name="pack_size_unit">
+              {% for val, label in pack_unit_choices %}
+              <option value="{{ val }}">{{ label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Price</label>
+            <input type="number" step="any" name="pack_price" placeholder="0.00" />
+          </div>
+          <div class="form-group">
+            <label>Description</label>
+            <input name="pack_description" placeholder="Optional" />
+          </div>
+          <div class="form-group edit-pack-default">
+            <label class="family-add-toggle">
+              <input type="checkbox" name="is_default" />
+              Default pack
+            </label>
+          </div>
+          <div class="form-group edit-pack-add-btn">
+            <button type="submit" class="btn btn-secondary">Add pack size</button>
+          </div>
+        </div>
+      </form>
+    </div>
+  </div>
 </div>
 {% endblock %}

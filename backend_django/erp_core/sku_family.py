@@ -5,20 +5,23 @@ Child (pack) suffix when present (all applicable categories):
   K or L + exactly four digits at end = pack quantity (lbs or kgs).
 
 Natural colors, antioxidants, other:
-  Parent = one family letter (e.g. pigment line) + material code: either legacy all-digit material,
-  or four or more letters/digits (e.g. YM100). Optional K/L + four digits at end for pack size.
+  Parent = family prefix + material code.
+  Family prefix is usually one letter (A–Q pigment lines), or a multi-letter blend code
+  (registered on RDFormulaFamily, or composed from two single-letter families, e.g. L+H → LH).
+  Optional K/L + four digits at end.
 
 Synthetic colors:
   Parent = V + next four or five letters or digits (material stem). Same child suffix rules.
 
 Indirect materials: no auto-parse.
 
-Vendor-style stems that look like a suffix but are not in these categories are not auto-split.
+When product_category is blank, still attempt pack-split using registered / composed family
+codes and natural heuristics so parent codes appear for subsequent pack-line creates.
 """
 from __future__ import annotations
 
 import re
-from typing import Optional, Tuple
+from typing import Optional, Sequence, Tuple
 
 _CHILD_PACK_RE = re.compile(r"([KL])(\d{4})$", re.IGNORECASE)
 # Synthetic parent: V then exactly 4 or 5 alphanumeric (A-Z, 0-9); input normalized to uppercase before match.
@@ -26,6 +29,66 @@ _SYNTHETIC_PARENT_RE = re.compile(r"^V[A-Z0-9]{4,5}$")
 
 # Categories that use the natural-color parent rules
 _NATURAL_LIKE_CATEGORIES = frozenset({"natural_colors", "antioxidants", "other"})
+
+
+def registered_family_codes() -> list[str]:
+    """Active product-family codes from RDFormulaFamily, longest first (HL before H)."""
+    try:
+        from erp_core.models import RDFormulaFamily
+
+        codes = [
+            (c or "").strip().upper()
+            for c in RDFormulaFamily.objects.filter(is_active=True).values_list("code", flat=True)
+        ]
+    except Exception:
+        codes = []
+    return sorted(
+        {c for c in codes if c and c.isalpha() and 1 <= len(c) <= 4},
+        key=lambda x: (-len(x), x),
+    )
+
+
+def composed_blend_codes(singles: Sequence[str] | None = None) -> list[str]:
+    """
+    Two-letter blend prefixes from pairs of distinct single-letter families (L+H → LH).
+    Lets Natural Green LH01L0044 parse as parent LH01 without a pre-created LH row.
+    """
+    if singles is None:
+        singles = [c for c in registered_family_codes() if len(c) == 1]
+    else:
+        singles = [c.strip().upper() for c in singles if c and len(c.strip()) == 1]
+    out: list[str] = []
+    for a in singles:
+        for b in singles:
+            if a != b:
+                out.append(a + b)
+    return out
+
+
+def all_family_prefixes(codes: Sequence[str] | None = None) -> list[str]:
+    """Registered codes plus composed two-letter blends, longest first."""
+    registered = list(codes) if codes is not None else registered_family_codes()
+    singles = [c for c in registered if len(c) == 1]
+    combined = set(registered) | set(composed_blend_codes(singles))
+    return sorted(combined, key=lambda x: (-len(x), x))
+
+
+def match_family_prefix(stem: str, codes: Sequence[str] | None = None) -> Optional[str]:
+    """Longest family code that prefixes stem."""
+    s = (stem or "").strip().upper()
+    if not s:
+        return None
+    if codes is None:
+        ordered = all_family_prefixes()
+    else:
+        ordered = sorted(
+            {(c or "").strip().upper() for c in codes if c},
+            key=lambda x: (-len(x), x),
+        )
+    for code in ordered:
+        if code and s.startswith(code):
+            return code
+    return None
 
 
 def _natural_material_alphanumeric_ok(rest: str) -> bool:
@@ -67,10 +130,9 @@ def _rules_summary_for_category(product_category: str) -> str:
         )
     if key in _NATURAL_LIKE_CATEGORIES:
         return (
-            "For Natural colors, Antioxidants, and Other, the parent stem is one family letter plus a material code: "
-            "either the legacy all-digit pattern (first digit 1-3, second 3-4, at least four digits), "
-            "or four or more letters or digits (e.g. YM100). "
-            "A pack variant may end with K or L and exactly four digits (e.g. …L0050)."
+            "For Natural colors, Antioxidants, and Other, the parent stem is a family code (one letter, or a "
+            "two-letter blend like LH from two pigment letters) plus a material code, "
+            "with an optional K/L + four digits pack tail (e.g. D1307L0040 or LH01L0044)."
         )
     return "SKU family parsing depends on Product category; set Natural vs Synthetic colors so the correct rules apply."
 
@@ -100,30 +162,21 @@ def _diagnose_unparsed_with_pack_tail(sku: str, product_category: str) -> str:
         )
 
     if key in _NATURAL_LIKE_CATEGORIES:
-        if validate_parent_sku(parent, strict_legacy=False):
+        if validate_parent_sku(parent, strict_legacy=False) or validate_parent_sku_registered(parent):
             return (
                 "The parent stem looks valid for natural-style rules but parsing failed - check SKU for "
                 "extra characters or spacing."
             )
         detail_parts = []
-        if len(parent) < 5:
-            detail_parts.append("the stem is shorter than one family letter plus four material characters")
+        if len(parent) < 3:
+            detail_parts.append("the stem is shorter than a family code plus material characters")
         elif not parent[0].isalpha():
             detail_parts.append("the stem does not start with a letter")
         else:
-            rest = parent[1:]
-            if len(rest) < 4:
-                detail_parts.append("after the family letter, the material code needs at least four characters")
-            elif not rest.isdigit() and not _natural_material_alphanumeric_ok(rest):
-                detail_parts.append(
-                    "after the family letter, use four or more letters or digits (e.g. 1307 or M100)"
-                )
-            elif rest.isdigit() and not validate_parent_material_code(rest, strict_legacy=False):
-                detail_parts.append(
-                    "legacy all-digit material codes should start with 1-3 and have 3 or 4 in the second position "
-                    "(at least four digits total)"
-                )
-        detail = "; ".join(detail_parts) if detail_parts else "the stem does not match the expected letter + material pattern"
+            detail_parts.append(
+                "expected a family code (e.g. D or LH) plus material, then optional K/L+4 pack"
+            )
+        detail = "; ".join(detail_parts) if detail_parts else "the stem does not match the expected family + material pattern"
         return (
             f"The part before the pack suffix is “{parent}”. For {_category_display_name(key)}, {detail}."
         )
@@ -136,11 +189,12 @@ def parse_sku_family(
     *,
     product_category: Optional[str] = None,
     item_type: Optional[str] = None,
+    family_codes: Sequence[str] | None = None,
 ) -> Tuple[Optional[str], Optional[str]]:
     """
     Split SKU into (parent_code, pack_suffix). pack_suffix is e.g. L0040, or None for parent-only.
 
-    Requires product_category when auto-parsing (otherwise returns (None, None)).
+    Uses registered product-family codes and composed two-letter blends (e.g. LH) when available.
     indirect_material never parses.
     """
     s = (full_sku or "").strip().upper()
@@ -149,13 +203,21 @@ def parse_sku_family(
     if item_type == "indirect_material":
         return None, None
 
+    prefixes = all_family_prefixes(family_codes) if family_codes is not None else all_family_prefixes()
     pc = (product_category or "").strip().lower()
     if pc == "synthetic_colors":
         return _parse_synthetic_family(s)
+
+    # Prefer family-prefix-aware parse (single or multi-letter) for natural-like + uncategorized.
+    parsed = _parse_registered_family(s, prefixes)
+    if parsed != (None, None):
+        return parsed
+
     if pc in _NATURAL_LIKE_CATEGORIES:
         return _parse_natural_family(s)
-    # Uncategorized / unknown: do not guess which rule set applies
-    return None, None
+
+    # No category: still accept classic single-letter natural parent / pack shapes.
+    return _parse_natural_family(s)
 
 
 def _parse_synthetic_family(s: str) -> Tuple[Optional[str], Optional[str]]:
@@ -177,6 +239,22 @@ def _validate_synthetic_parent(p: str) -> bool:
     return bool(_SYNTHETIC_PARENT_RE.match(u))
 
 
+def _parse_registered_family(
+    s: str, codes: Sequence[str]
+) -> Tuple[Optional[str], Optional[str]]:
+    """Split using family prefixes (longest match), then optional K/L+4 pack."""
+    m = _CHILD_PACK_RE.search(s)
+    if m:
+        pack = f"{m.group(1).upper()}{m.group(2)}"
+        parent = s[: m.start()]
+        if parent and validate_parent_sku_registered(parent, codes=codes):
+            return parent, pack
+        # Ambiguous tails (e.g. HL1301 looks like H + L1301 pack) — try full stem as parent.
+    if validate_parent_sku_registered(s, codes=codes):
+        return s, None
+    return None, None
+
+
 def _parse_natural_family(s: str) -> Tuple[Optional[str], Optional[str]]:
     """Natural / antioxidant / other: one letter + material (digits or 4+ alnum); optional child K/L + 4 digits."""
     m = _CHILD_PACK_RE.search(s)
@@ -185,8 +263,10 @@ def _parse_natural_family(s: str) -> Tuple[Optional[str], Optional[str]]:
         parent = s[: m.start()]
         if parent and validate_parent_sku(parent, strict_legacy=False):
             return parent, pack
-        return None, None
+        # Same ambiguity as registered path — prefer full stem when pack split fails.
     if _looks_like_parent_only_natural(s):
+        return s, None
+    if validate_parent_sku(s, strict_legacy=False):
         return s, None
     return None, None
 
@@ -242,6 +322,32 @@ def validate_parent_sku(parent: str, *, strict_legacy: bool = True) -> bool:
         return False
     if rest.isdigit():
         return validate_parent_material_code(rest, strict_legacy=strict_legacy)
+    return _natural_material_alphanumeric_ok(rest)
+
+
+def validate_parent_sku_registered(
+    parent: str, *, codes: Sequence[str] | None = None
+) -> bool:
+    """
+    Parent stem valid under registered / composed family codes.
+    Multi-letter families (LH, HL): family + at least 2 alphanumeric material chars (e.g. LH01).
+    Single-letter: existing natural rules (e.g. D1307).
+    """
+    p = (parent or "").strip().upper()
+    if not p or not p[0].isalpha():
+        return False
+    code_list = list(codes) if codes is not None else all_family_prefixes()
+    fam = match_family_prefix(p, code_list)
+    if not fam:
+        return validate_parent_sku(p, strict_legacy=False)
+    rest = p[len(fam) :]
+    if not rest:
+        return False
+    if len(fam) >= 2:
+        # Blend / multi-letter family: allow shorter material (LH01, HL1301).
+        return len(rest) >= 2 and all(c.isalnum() for c in rest)
+    if rest.isdigit():
+        return validate_parent_material_code(rest, strict_legacy=False)
     return _natural_material_alphanumeric_ok(rest)
 
 

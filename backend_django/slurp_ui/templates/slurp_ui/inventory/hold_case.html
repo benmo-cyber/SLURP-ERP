@@ -1,0 +1,148 @@
+{% extends "slurp_ui/base_module.html" %}
+{% block title %}Hold log {{ case.pk }} — SLURP{% endblock %}
+{% block module_title %}Hold log{% endblock %}
+{% block header_actions %}
+  <a class="hs-btn" href="{% url 'slurp_ui:inventory_holds' %}">All holds</a>
+  <a class="hs-btn" href="{{ next_url }}">Inventory table</a>
+{% endblock %}
+{% block main %}
+<style>
+  .hold-note-photo {
+    display: block;
+    max-width: 100%;
+    max-height: 280px;
+    margin-top: 0.5rem;
+    border-radius: 6px;
+    border: 1px solid #e2e8f0;
+  }
+  .hold-timeline-item {
+    border-top: 1px solid #eef2f7;
+    padding: 0.85rem 0;
+  }
+  .hold-timeline-item:first-child { border-top: none; padding-top: 0; }
+</style>
+<div class="hs-bleed" style="padding:1.25rem 1.5rem 2rem;max-width:46rem">
+  <div class="hs-card" style="margin-bottom:1rem">
+    <div class="hs-card-header">
+      <h3>Case #{{ case.pk }} · {{ lot.lot_number }}</h3>
+      {% if case.status == 'open' %}
+      <span class="hs-badge warn">Open</span>
+      {% else %}
+      <span class="hs-badge ok">Resolved</span>
+      {% endif %}
+    </div>
+    <div class="hs-card-body">
+      <p class="hs-section-note" style="margin-top:0">
+        {{ lot.item.sku }} — {{ lot.item.name }}
+        {% if lot.item.vendor %} · {{ lot.item.vendor }}{% endif %}
+        {% if lot.po_number %} · PO {{ lot.po_number }}{% endif %}
+        · Vendor lot {{ lot.vendor_lot_number|default:"—" }}
+      </p>
+      <div class="hs-props" style="margin-bottom:0">
+        <div class="hs-prop"><span class="k">On hold</span><span class="v">{{ hold_qty|floatformat:-2 }} {{ lot.item.unit_of_measure }}</span></div>
+        <div class="hs-prop"><span class="k">Opened</span><span class="v">{{ case.opened_at|date:"M j, Y H:i" }}{% if case.opened_by %} · {{ case.opened_by }}{% endif %}</span></div>
+        <div class="hs-prop"><span class="k">Summary</span><span class="v">{{ case.summary|default:"—" }}</span></div>
+        {% if case.status == 'resolved' %}
+        <div class="hs-prop"><span class="k">Resolution</span><span class="v">{{ case.get_resolution_display }}{% if case.resolution_qty %} · {{ case.resolution_qty|floatformat:-2 }} {{ lot.item.unit_of_measure }}{% endif %}</span></div>
+        <div class="hs-prop"><span class="k">Resolved</span><span class="v">{% if case.resolved_at %}{{ case.resolved_at|date:"M j, Y H:i" }}{% else %}—{% endif %}{% if case.resolved_by %} · {{ case.resolved_by }}{% endif %}</span></div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <div class="hs-card" style="margin-bottom:1rem">
+    <div class="hs-card-header"><h3>Timeline</h3></div>
+    <div class="hs-card-body">
+      {% for n in notes %}
+      <div class="hold-timeline-item">
+        <div class="hs-muted" style="font-size:0.8rem;margin-bottom:0.35rem">
+          {{ n.created_at|date:"M j, Y H:i" }} · {{ n.created_by|default:"—" }}
+        </div>
+        {% if n.body %}<div style="white-space:pre-wrap">{{ n.body }}</div>{% endif %}
+        {% if n.photo %}<img class="hold-note-photo" src="{{ n.photo.url }}" alt="Hold evidence" />{% endif %}
+      </div>
+      {% empty %}
+      <div class="hs-empty">No notes yet.</div>
+      {% endfor %}
+    </div>
+  </div>
+
+  {% if case.status == 'open' %}
+  <div class="hs-card" style="margin-bottom:1rem">
+    <div class="hs-card-header"><h3>Add note / photo</h3></div>
+    <div class="hs-card-body">
+      <form method="post" enctype="multipart/form-data">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="add_note" />
+        <div class="form-row">
+          <label for="body">Note</label>
+          <textarea id="body" name="body" rows="3" placeholder="e.g. dented seam on drums 2–4; photos attached"></textarea>
+        </div>
+        <div class="form-row">
+          <label for="photo">Photo</label>
+          <input id="photo" name="photo" type="file" accept="image/*" />
+        </div>
+        <div class="hs-form-actions" style="margin-bottom:0">
+          <button type="submit" class="hs-btn hs-btn-primary">Add to log</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="hs-card">
+    <div class="hs-card-header"><h3>Resolve</h3></div>
+    <div class="hs-card-body">
+      <p class="hs-section-note" style="margin-top:0">
+        Accept releases to available. Return / discard remove qty from on-hand.
+        Partial resolves leave remaining hold open.
+      </p>
+      <form method="post">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="resolve" />
+        <div class="form-row">
+          <label for="quantity">Quantity ({{ lot.item.unit_of_measure }})</label>
+          <input id="quantity" name="quantity" type="number" step="any" min="0.01"
+                 max="{{ hold_qty }}" value="{{ hold_qty }}" required />
+        </div>
+        <div class="form-row">
+          <label for="resolution">Outcome</label>
+          <select id="resolution" name="resolution" required>
+            <option value="accept">Accept after investigation</option>
+            <option value="return">Return material to vendor</option>
+            <option value="discard">Discard / scrap</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <label for="resolution_notes">Resolution notes</label>
+          <textarea id="resolution_notes" name="resolution_notes" rows="2"></textarea>
+        </div>
+
+        {% if preview and preview.coa_required %}
+        <div class="hs-card" style="margin:0.75rem 0;box-shadow:none">
+          <div class="hs-card-header"><h3>COA / micro required to accept</h3></div>
+          <div class="hs-card-body">
+            {% for line in preview.template_lines %}
+            <div class="form-row">
+              <label>{{ line.test_name }}{% if line.specification_text %} ({{ line.specification_text }}){% endif %}</label>
+              <input name="line_{{ line.id }}" type="text" required />
+            </div>
+            {% endfor %}
+            {% if preview.formula_qc %}
+            <div class="form-row" style="margin-bottom:0">
+              <label>{{ preview.formula_qc.qc_parameter_name }}</label>
+              <input name="qc_result_value" type="number" step="any" required />
+            </div>
+            {% endif %}
+          </div>
+        </div>
+        {% endif %}
+
+        <div class="hs-form-actions" style="margin-bottom:0">
+          <button type="submit" class="hs-btn hs-btn-primary">Resolve</button>
+        </div>
+      </form>
+    </div>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

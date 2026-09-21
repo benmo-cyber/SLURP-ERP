@@ -11,7 +11,11 @@ MAIN_TABS = [
 INVENTORY_NAV = [
     {
         "label": "Stock",
-        "items": [{"id": "inventory", "label": "Inventory Table", "url_name": "slurp_ui:inventory"}],
+        "items": [
+            {"id": "inventory", "label": "Inventory Table", "url_name": "slurp_ui:inventory"},
+            {"id": "counts", "label": "Physical Counts", "url_name": "slurp_ui:inventory_counts"},
+            {"id": "holds", "label": "On-hold log", "url_name": "slurp_ui:inventory_holds"},
+        ],
     },
     {
         "label": "Items",

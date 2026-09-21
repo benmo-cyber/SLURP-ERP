@@ -574,6 +574,70 @@
   </div>
   </div>
 
+  {% elif tab == 'investigations' %}
+  <div class="hs-col" style="grid-column:1 / -1;max-width:960px">
+  <div class="hs-card">
+    <div class="hs-card-header">
+      <h3>Hold investigations</h3>
+      <span class="hs-muted" style="font-size:0.8rem">From inventory hold log · {{ hold_investigations|length }} case{{ hold_investigations|length|pluralize }}</span>
+    </div>
+    <div class="hs-card-body tight">
+      <table class="hs-table">
+        <thead>
+          <tr>
+            <th>Opened</th>
+            <th>Lot</th>
+            <th>SKU</th>
+            <th>PO</th>
+            <th>Summary</th>
+            <th>On hold</th>
+            <th>Notes</th>
+            <th>Status</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in hold_investigations %}
+          <tr>
+            <td>{{ row.case.opened_at|date:"M j, Y" }}</td>
+            <td>{{ row.lot.lot_number }}</td>
+            <td>{{ row.lot.item.sku }}</td>
+            <td>{{ row.lot.po_number|default:"—" }}</td>
+            <td>{{ row.case.summary|default:"—" }}</td>
+            <td>
+              {% if row.case.status == 'open' %}
+              {{ row.hold_qty|floatformat:-2 }} {{ row.lot.item.unit_of_measure }}
+              {% elif row.case.resolution_qty %}
+              {{ row.case.resolution_qty|floatformat:-2 }} {{ row.lot.item.unit_of_measure }}
+              {% else %}—{% endif %}
+            </td>
+            <td>{{ row.note_count }}</td>
+            <td>
+              {% if row.case.status == 'open' %}
+              <span class="hs-badge warn">Open</span>
+              {% elif row.case.resolution == 'accept' %}
+              <span class="hs-badge ok">Accepted</span>
+              {% elif row.case.resolution == 'return' %}
+              <span class="hs-badge info">Returned</span>
+              {% elif row.case.resolution == 'discard' %}
+              <span class="hs-badge danger">Discarded</span>
+              {% else %}
+              <span class="hs-badge">Resolved</span>
+              {% endif %}
+            </td>
+            <td>
+              <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:inventory_hold_case' row.case.pk %}">View log</a>
+            </td>
+          </tr>
+          {% empty %}
+          <tr><td colspan="9"><div class="hs-empty">No hold investigations for this vendor.</div></td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  </div>
+
   {% elif tab == 'history' %}
   <div class="hs-col" style="grid-column:1 / -1;max-width:880px">
   <div class="hs-card" style="margin-bottom:1rem">

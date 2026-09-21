@@ -165,30 +165,116 @@
     flex-wrap: wrap;
     gap: 0.4rem;
     align-items: center;
-    justify-content: flex-end;
+    justify-content: flex-start;
     margin-top: 0.7rem;
     padding-top: 0.7rem;
     border-top: 1px solid #eef2f7;
   }
   .po-card-actions form { display: inline-flex; gap: 0.35rem; align-items: center; margin: 0; }
+  .po-track-panel {
+    margin: 0.75rem 0 0;
+    border: 1px solid #fed7aa;
+    border-radius: 8px;
+    background: #fff7ed;
+  }
+  .po-track-panel > summary {
+    list-style: none;
+    cursor: pointer;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.45rem 0.75rem;
+    padding: 0.55rem 0.75rem;
+    user-select: none;
+  }
+  .po-track-panel > summary::-webkit-details-marker { display: none; }
+  .po-track-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    background: #2563eb;
+    border: 1px solid #2563eb;
+    color: #fff;
+    border-radius: 6px;
+    padding: 0.32rem 0.7rem;
+    font-size: 0.85rem;
+    font-weight: 650;
+    line-height: 1.2;
+  }
+  .po-track-panel[open] .po-track-toggle { background: #1d4ed8; border-color: #1d4ed8; }
+  .po-track-toggle::before {
+    content: "▸";
+    font-size: 0.75rem;
+    transition: transform 0.12s ease;
+  }
+  .po-track-panel[open] .po-track-toggle::before { content: "▾"; }
+  .po-track-summary {
+    color: #1e40af;
+    font-size: 0.84rem;
+    min-width: 0;
+  }
+  .po-track-summary .muted { color: #94a3b8; }
+  .po-track-body {
+    padding: 0 0.85rem 0.85rem;
+    border-top: 1px solid #fed7aa;
+  }
+  .po-track-body .po-track-hint {
+    margin: 0.55rem 0 0.45rem;
+    font-size: 0.82rem;
+    color: #64748b;
+  }
+  .po-track-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr));
+    gap: 0.55rem 0.75rem;
+    align-items: end;
+  }
+  .po-track-grid label {
+    display: block;
+    font-size: 0.78rem;
+    font-weight: 500;
+    margin-bottom: 0.2rem;
+    color: #334155;
+  }
+  .po-track-grid input,
+  .po-track-grid select,
+  .po-track-grid textarea {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 0.35rem 0.45rem;
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+    background: #fff;
+  }
+  .po-track-grid .span-all { grid-column: 1 / -1; }
+  .po-track-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    align-items: center;
+    justify-content: flex-start;
+    margin-top: 0.65rem;
+  }
   /* Fallback if hs tokens fail to resolve on this page */
   .po-card-actions .hs-btn-primary,
-  .po-actions .hs-btn-primary {
-    background: #ff7a59;
-    border-color: #ff7a59;
+  .po-actions .hs-btn-primary,
+  .po-track-panel .hs-btn-primary {
+    background: #2563eb;
+    border-color: #2563eb;
     color: #fff;
   }
   .po-card-actions .hs-btn-primary:hover,
-  .po-actions .hs-btn-primary:hover {
-    background: #ff8f73;
-    border-color: #ff8f73;
+  .po-actions .hs-btn-primary:hover,
+  .po-track-panel .hs-btn-primary:hover {
+    background: #3b82f6;
+    border-color: #3b82f6;
     color: #fff;
   }
   .po-actions {
     display: flex;
     flex-wrap: wrap;
     gap: 0.35rem;
-    justify-content: flex-end;
+    justify-content: flex-start;
     min-width: 0;
   }
   .po-actions form { display: inline-flex; gap: 0.35rem; align-items: center; margin: 0; }
@@ -459,6 +545,8 @@
           <div><div class="k">Required</div><div class="v">{% if selected_po.required_date %}{{ selected_po.required_date|date:"Y-m-d" }}{% else %}—{% endif %}</div></div>
           <div><div class="k">Payment terms</div><div class="v">{{ selected_po.shipping_terms|default:"—" }}</div></div>
           <div><div class="k">Ship method</div><div class="v">{{ selected_po.shipping_method|default:"—" }}</div></div>
+          <div><div class="k">Inbound ETA</div><div class="v">{% if selected_po.inbound_eta_date %}{{ selected_po.inbound_eta_date|date:"Y-m-d" }}{% else %}—{% endif %}</div></div>
+          <div><div class="k">Tracking</div><div class="v">{% if selected_po.carrier or selected_po.tracking_number %}{{ selected_po.carrier|default:"" }}{% if selected_po.carrier and selected_po.tracking_number %} · {% endif %}{{ selected_po.tracking_number|default:"" }}{% else %}—{% endif %}</div></div>
           <div><div class="k">Receive progress</div><div class="v">{% if selected_po.qty_ordered %}{{ selected_po.qty_received|floatformat:1 }} / {{ selected_po.qty_ordered|floatformat:1 }}{% if selected_po.receive_pct %} · {{ selected_po.receive_pct|floatformat:0 }}%{% endif %}{% else %}—{% endif %}</div></div>
           <div><div class="k">Ship to</div><div class="v">{{ selected_po.ship_to_city }}{% if selected_po.ship_to_state %}, {{ selected_po.ship_to_state }}{% endif %}</div></div>
         </div>
@@ -486,7 +574,73 @@
           </tbody>
         </table>
 
-        <div class="po-actions" style="justify-content:flex-start">
+        {% if selected_po.status != 'cancelled' and selected_po.status != 'superseded' %}
+        <details class="po-track-panel">
+          <summary>
+            <span class="po-track-toggle">Tracking</span>
+            <span class="po-track-summary">
+              {% if selected_po.carrier or selected_po.tracking_number or selected_po.inbound_eta_date or selected_po.vessel_name %}
+                {% if selected_po.carrier %}{{ selected_po.carrier }}{% endif %}
+                {% if selected_po.carrier and selected_po.tracking_number %} · {% endif %}
+                {% if selected_po.tracking_number %}{{ selected_po.tracking_number }}{% endif %}
+                {% if selected_po.inbound_eta_date %}{% if selected_po.carrier or selected_po.tracking_number %} · {% endif %}ETA {{ selected_po.inbound_eta_date|date:"Y-m-d" }}{% endif %}
+                {% if selected_po.vessel_name %}{% if selected_po.carrier or selected_po.tracking_number or selected_po.inbound_eta_date %} · {% endif %}{{ selected_po.vessel_name }}{% endif %}
+              {% else %}
+                <span class="muted">No tracking entered yet</span>
+              {% endif %}
+            </span>
+          </summary>
+          <div class="po-track-body">
+            <div class="po-track-hint">Manual for now — paste from carrier / MarineTraffic</div>
+            <form method="post" action="{% url 'slurp_ui:inventory_update_po_tracking' selected_po.id %}">
+              {% csrf_token %}
+              <input type="hidden" name="queue" value="{{ queue }}" />
+              <input type="hidden" name="layout" value="{{ layout }}" />
+              <div class="po-track-grid">
+                <div>
+                  <label>Mode</label>
+                  <select name="shipment_mode">
+                    {% for val, label in shipment_mode_choices %}
+                    <option value="{{ val }}" {% if selected_po.shipment_mode == val %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                  </select>
+                </div>
+                <div>
+                  <label>Carrier</label>
+                  <input name="carrier" value="{{ selected_po.carrier|default:'' }}" placeholder="e.g. R&amp;L, FedEx, Maersk" />
+                </div>
+                <div>
+                  <label>Tracking / PRO #</label>
+                  <input name="tracking_number" value="{{ selected_po.tracking_number|default:'' }}" placeholder="12345" />
+                </div>
+                <div>
+                  <label>Bill of lading</label>
+                  <input name="bill_of_lading" value="{{ selected_po.bill_of_lading|default:'' }}" />
+                </div>
+                <div>
+                  <label>Vessel name</label>
+                  <input name="vessel_name" value="{{ selected_po.vessel_name|default:'' }}" placeholder="Ocean only" />
+                </div>
+                <div>
+                  <label>ETA to</label>
+                  <input name="destination_place" value="{% if selected_po.destination_place %}{{ selected_po.destination_place }}{% else %}Wildwood Ingredients — Washington, MO{% endif %}" />
+                </div>
+                <div>
+                  <label>Inbound ETA date</label>
+                  <input type="date" name="inbound_eta_date" value="{% if selected_po.inbound_eta_date %}{{ selected_po.inbound_eta_date|date:'Y-m-d' }}{% endif %}" />
+                </div>
+                <div class="span-all">
+                  <label>Tracking notes</label>
+                  <textarea name="tracking_notes" rows="2" placeholder="Status from last manual check…">{{ selected_po.tracking_notes|default:'' }}</textarea>
+                </div>
+              </div>
+              <div class="po-track-actions">
+                <button type="submit" class="hs-btn hs-btn-primary">Save tracking</button>
+              </div>
+            </form>
+          </div>
+        </details>
+        <div class="po-actions" style="margin-top:0.65rem">
           <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:inventory_po_pdf' selected_po.id %}" target="_blank">PDF</a>
           {% if selected_po.status == 'draft' %}
           <form method="post" action="{% url 'slurp_ui:inventory_issue_po' selected_po.id %}">
@@ -501,7 +655,7 @@
           <a class="hs-btn hs-btn-primary hs-btn-sm"
              href="{% url 'slurp_ui:inventory_check_in' %}?po={{ selected_po.id }}">Check-in</a>
           {% endif %}
-          {% if selected_po.status != 'completed' and selected_po.status != 'cancelled' and selected_po.status != 'superseded' %}
+          {% if selected_po.status != 'completed' %}
           <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:inventory_revise_po' selected_po.id %}">Revise</a>
           <form method="post" action="{% url 'slurp_ui:inventory_cancel_po' selected_po.id %}">
             {% csrf_token %}
@@ -510,6 +664,11 @@
           </form>
           {% endif %}
         </div>
+        {% else %}
+        <div class="po-actions">
+          <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:inventory_po_pdf' selected_po.id %}" target="_blank">PDF</a>
+        </div>
+        {% endif %}
       </div>
       {% else %}
       <div class="po-empty" style="border:none;margin:2rem">Select a purchase order.</div>
@@ -616,17 +775,87 @@
         <div class="po-dates">
           <div class="main">{{ po.order_date|date:"Y-m-d" }}</div>
           <div class="sub">Req {% if po.required_date %}{{ po.required_date|date:"Y-m-d" }}{% else %}—{% endif %}</div>
+          {% if po.inbound_eta_date %}<div class="sub">ETA {{ po.inbound_eta_date|date:"Y-m-d" }}</div>{% endif %}
         </div>
         <div class="po-lines">
           <div class="main">{{ po.line_count }} line{% if po.line_count != 1 %}s{% endif %} · {{ po.line_summary }}</div>
           <div class="sub">
-            {% if po.qty_ordered %}
+            {% if po.carrier or po.tracking_number %}
+            {{ po.carrier|default:"" }}{% if po.carrier and po.tracking_number %} · {% endif %}{{ po.tracking_number|default:"" }}
+            {% elif po.qty_ordered %}
             Recv {{ po.qty_received|floatformat:1 }} / {{ po.qty_ordered|floatformat:1 }}{% if po.receive_pct %} · {{ po.receive_pct|floatformat:0 }}%{% endif %}
             {% else %}—{% endif %}
           </div>
         </div>
         <div class="amt">{{ po.total|money:2 }}</div>
       </div>
+      {% if po.status != 'cancelled' and po.status != 'superseded' %}
+      <details class="po-track-panel">
+        <summary>
+          <span class="po-track-toggle">Tracking</span>
+          <span class="po-track-summary">
+            {% if po.carrier or po.tracking_number or po.inbound_eta_date or po.vessel_name %}
+              {% if po.carrier %}{{ po.carrier }}{% endif %}
+              {% if po.carrier and po.tracking_number %} · {% endif %}
+              {% if po.tracking_number %}{{ po.tracking_number }}{% endif %}
+              {% if po.inbound_eta_date %}{% if po.carrier or po.tracking_number %} · {% endif %}ETA {{ po.inbound_eta_date|date:"Y-m-d" }}{% endif %}
+              {% if po.vessel_name %}{% if po.carrier or po.tracking_number or po.inbound_eta_date %} · {% endif %}{{ po.vessel_name }}{% endif %}
+            {% else %}
+              <span class="muted">No tracking entered yet</span>
+            {% endif %}
+          </span>
+        </summary>
+        <div class="po-track-body">
+          <div class="po-track-hint">Manual for now — paste from carrier / MarineTraffic</div>
+          <form method="post" action="{% url 'slurp_ui:inventory_update_po_tracking' po.id %}">
+            {% csrf_token %}
+            <input type="hidden" name="queue" value="{{ queue }}" />
+            <input type="hidden" name="layout" value="{{ layout }}" />
+            <div class="po-track-grid">
+              <div>
+                <label>Mode</label>
+                <select name="shipment_mode">
+                  {% for val, label in shipment_mode_choices %}
+                  <option value="{{ val }}" {% if po.shipment_mode == val %}selected{% endif %}>{{ label }}</option>
+                  {% endfor %}
+                </select>
+              </div>
+              <div>
+                <label>Carrier</label>
+                <input name="carrier" value="{{ po.carrier|default:'' }}" placeholder="e.g. R&amp;L, FedEx, Maersk" />
+              </div>
+              <div>
+                <label>Tracking / PRO #</label>
+                <input name="tracking_number" value="{{ po.tracking_number|default:'' }}" placeholder="12345" />
+              </div>
+              <div>
+                <label>Bill of lading</label>
+                <input name="bill_of_lading" value="{{ po.bill_of_lading|default:'' }}" />
+              </div>
+              <div>
+                <label>Vessel name</label>
+                <input name="vessel_name" value="{{ po.vessel_name|default:'' }}" placeholder="Ocean only" />
+              </div>
+              <div>
+                <label>ETA to</label>
+                <input name="destination_place" value="{% if po.destination_place %}{{ po.destination_place }}{% else %}Wildwood Ingredients — Washington, MO{% endif %}" />
+              </div>
+              <div>
+                <label>Inbound ETA date</label>
+                <input type="date" name="inbound_eta_date" value="{% if po.inbound_eta_date %}{{ po.inbound_eta_date|date:'Y-m-d' }}{% endif %}" />
+              </div>
+              <div class="span-all">
+                <label>Tracking notes</label>
+                <textarea name="tracking_notes" rows="2" placeholder="Status from last manual check…">{{ po.tracking_notes|default:'' }}</textarea>
+              </div>
+            </div>
+            <div class="po-track-actions">
+              <button type="submit" class="hs-btn hs-btn-primary">Save tracking</button>
+            </div>
+          </form>
+        </div>
+      </details>
+      {% endif %}
       <div class="po-card-actions">
         {% if po.status == 'draft' %}
         <form method="post" action="{% url 'slurp_ui:inventory_issue_po' po.id %}">

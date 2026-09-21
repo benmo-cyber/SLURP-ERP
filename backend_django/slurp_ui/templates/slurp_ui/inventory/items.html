@@ -14,17 +14,24 @@
     <option value="{{ val }}" {% if item_type == val %}selected{% endif %}>{{ label }}</option>
     {% endfor %}
   </select>
+  <select name="family">
+    <option value="">All families</option>
+    {% for f in product_families %}
+    <option value="{{ f.code }}" {% if family == f.code %}selected{% endif %}>{{ f.code }} — {{ f.name }}</option>
+    {% endfor %}
+  </select>
   <button type="submit" class="btn btn-primary">Filter</button>
 </form>
 <table class="data-table">
   <thead>
     <tr>
-      <th>SKU</th><th>Name</th><th>Type</th><th>Vendor</th><th>Vendor #</th><th>UoM</th><th>Pack sizes</th><th></th>
+      <th>Family</th><th>SKU</th><th>Name</th><th>Type</th><th>Vendor</th><th>Vendor #</th><th>UoM</th><th>Pack sizes</th><th></th>
     </tr>
   </thead>
   <tbody>
     {% for item in items %}
     <tr>
+      <td>{% if item.product_family %}<strong>{{ item.product_family.code }}</strong> {{ item.product_family.name }}{% else %}—{% endif %}</td>
       <td>{{ item.sku }}</td>
       <td>{{ item.name }}</td>
       <td>{{ item.get_item_type_display }}</td>
@@ -35,7 +42,7 @@
       <td><a href="{% url 'slurp_ui:inventory_edit_item' item.pk %}">Edit</a></td>
     </tr>
     {% empty %}
-    <tr><td colspan="8">No items.</td></tr>
+    <tr><td colspan="9">No items.</td></tr>
     {% endfor %}
   </tbody>
 </table>

@@ -1,4 +1,9 @@
 /* Inventory page – sidebar layout (matches Finance/Sales style) */
+@import url('SalesWorkspace.css');
+
+.inventory-main > .hs-bleed {
+  margin: 0;
+}
 
 .inventory-page {
   min-height: 100vh;
@@ -174,4 +179,3 @@
     margin: 1rem;
   }
 }
-

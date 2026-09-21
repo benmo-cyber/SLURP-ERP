@@ -15,7 +15,6 @@ urlpatterns = [
         name="reset_password",
     ),
     path("god-mode/", views.toggle_god_mode, name="toggle_god_mode"),
-    path("import-sample-xml/", views.import_sample_xml, name="import_sample_xml"),
     # Inventory
     path("", views.inventory_table, name="home"),
     path("inventory/", views.inventory_table, name="inventory"),
@@ -44,6 +43,11 @@ urlpatterns = [
         "inventory/purchase-orders/<int:pk>/issue/",
         views.inventory_issue_po,
         name="inventory_issue_po",
+    ),
+    path(
+        "inventory/purchase-orders/<int:pk>/tracking/",
+        views.inventory_update_po_tracking,
+        name="inventory_update_po_tracking",
     ),
     path("inventory/logs/", views.inventory_logs, name="inventory_logs"),
     path("inventory/check-in/", views.inventory_check_in, name="inventory_check_in"),
@@ -74,14 +78,44 @@ urlpatterns = [
         name="inventory_lot_hold",
     ),
     path(
+        "inventory/lots/<int:pk>/hold-log/",
+        views.inventory_lot_hold_log,
+        name="inventory_lot_hold_log",
+    ),
+    path(
         "inventory/lots/<int:pk>/release/",
         views.inventory_lot_release,
         name="inventory_lot_release",
     ),
     path(
+        "inventory/holds/",
+        views.inventory_holds,
+        name="inventory_holds",
+    ),
+    path(
+        "inventory/holds/<int:pk>/",
+        views.inventory_hold_case,
+        name="inventory_hold_case",
+    ),
+    path(
         "inventory/lots/<int:pk>/reconcile/",
         views.inventory_lot_reconcile,
         name="inventory_lot_reconcile",
+    ),
+    path(
+        "inventory/counts/",
+        views.inventory_counts,
+        name="inventory_counts",
+    ),
+    path(
+        "inventory/counts/<int:pk>/",
+        views.inventory_count_detail,
+        name="inventory_count_detail",
+    ),
+    path(
+        "inventory/counts/<int:pk>/variances/",
+        views.inventory_count_variances,
+        name="inventory_count_variances",
     ),
     # Sales
     path("sales/", views.sales_crm, name="sales"),

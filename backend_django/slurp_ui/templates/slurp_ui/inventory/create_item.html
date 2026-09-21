@@ -1,83 +1,200 @@
 {% extends "slurp_ui/base.html" %}
 {% block title %}Create Item — SLURP{% endblock %}
+{% block extra_css %}
+<style>
+  html, body, .App { overflow-x: hidden; max-width: 100%; }
+</style>
+{% endblock %}
 {% block content %}
-<div class="modal-page create-item-modal" style="max-width:720px">
+<div class="modal-page create-item-modal">
   <h2>{% if mode == 'add-vendor' %}Add vendor to existing SKU{% else %}Create catalog item{% endif %}</h2>
-  <form method="post">
+  <form method="post" class="create-item-form" id="create-item-form">
     {% csrf_token %}
     <input type="hidden" name="action" value="create" />
     <input type="hidden" name="mode" value="{{ mode }}" />
 
-    {% if mode == 'add-vendor' %}
-    <div class="form-row"><label>Existing SKU *</label>
-      <input name="existing_sku" required placeholder="D1307L0040" list="sku-list" />
-      <datalist id="sku-list">
-        {% for m in master_items %}<option value="{{ m.sku }}"></option>{% endfor %}
-      </datalist>
-    </div>
-    {% else %}
-    <div class="form-row"><label>WWI SKU *</label><input name="sku" required placeholder="D1307 or D1307L0040" /></div>
-    <div class="form-row"><label>Parent item (pack variant)</label>
-      <select name="sku_parent_item">
-        <option value="">—</option>
-        {% for m in master_items %}
-        <option value="{{ m.pk }}" {% if selected_parent.pk == m.pk %}selected{% endif %}>{{ m.sku }} — {{ m.name }}</option>
-        {% endfor %}
-      </select>
-    </div>
-    {% endif %}
+    <div class="create-item-section">
+      <div class="create-item-section-head">
+        <h3 class="create-item-section-title">Identity</h3>
+      </div>
+      <div class="create-item-panel">
+        <div class="form-grid">
+          {% if mode == 'add-vendor' %}
+          <div class="form-group full-width">
+            <label>Existing SKU *</label>
+            <input name="existing_sku" required placeholder="D1307L0040" list="sku-list" />
+            <datalist id="sku-list">
+              {% for s in existing_skus %}<option value="{{ s }}"></option>{% endfor %}
+            </datalist>
+          </div>
+          {% else %}
+          <div class="form-group">
+            <label>WWI SKU *</label>
+            <input name="sku" required placeholder="D1307 or D1307L0040" />
+          </div>
+          <div class="form-group">
+            <label>Parent SKU (optional)</label>
+            <select name="sku_parent_item" title="Parent material code for pack variants">
+              <option value="">— None —</option>
+              {% for m in master_items %}
+              <option value="{{ m.pk }}"
+                      title="{{ m.sku_parent_code|default:m.sku }} — {{ m.name }}{% if m.vendor %} ({{ m.vendor }}){% endif %}"
+                      {% if selected_parent.pk == m.pk %}selected{% endif %}>
+                {{ m.sku_parent_code|default:m.sku }}
+              </option>
+              {% endfor %}
+            </select>
+            <span class="form-hint">Optional link. Parent code is parsed from the SKU on save (e.g. D1307L0040 → D1307, LH01L0044 → LH01) and appears here for later pack lines.</span>
+          </div>
+          {% endif %}
 
-    <div class="form-row"><label>Vendor *</label>
-      <select name="vendor" required>
-        <option value="">Select approved vendor</option>
-        {% for v in vendors %}<option value="{{ v.name }}">{{ v.name }}</option>{% endfor %}
-      </select>
-    </div>
-    <div class="form-row"><label>WWI name *</label><input name="name" required /></div>
-    <div class="form-row"><label>Description</label><textarea name="description" rows="2"></textarea></div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem">
-      <div class="form-row"><label>Vendor item name</label><input name="vendor_item_name" /></div>
-      <div class="form-row"><label>Vendor item #</label><input name="vendor_item_number" /></div>
-    </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem">
-      <div class="form-row"><label>Type</label>
-        <select name="item_type">
-          {% for val, label in item_type_choices %}
-          <option value="{{ val }}">{{ label }}</option>
-          {% endfor %}
-        </select>
+          <div class="form-group">
+            <label>Family letter</label>
+            <select name="product_family" id="product_family">
+              <option value="">—</option>
+              {% for f in product_families %}
+              <option value="{{ f.pk }}">{{ f.code }} — {{ f.name }}</option>
+              {% endfor %}
+            </select>
+            <span class="form-hint">Same registry as R&amp;D. Blends (e.g. LH) can be added below, or inferred from two pigment letters when parsing.</span>
+          </div>
+          <div class="form-group">
+            <label class="family-add-toggle">
+              <input type="checkbox" name="add_new_family" id="show_new_family" value="1" />
+              Add a new family letter
+            </label>
+          </div>
+
+          <div class="form-group full-width new-family-fields is-collapsed" id="new-family-fields" hidden aria-hidden="true">
+            <div class="form-grid">
+              <div class="form-group">
+                <label for="new_family_code">Code</label>
+                <input name="new_family_code" id="new_family_code" maxlength="4" placeholder="e.g. LH"
+                       autocomplete="off" disabled />
+              </div>
+              <div class="form-group">
+                <label for="new_family_name">Name</label>
+                <input name="new_family_name" id="new_family_name" maxlength="120" placeholder="e.g. Natural Green"
+                       disabled />
+              </div>
+            </div>
+          </div>
+
+          <div class="form-group full-width">
+            <label>Vendor *</label>
+            <select name="vendor" required>
+              <option value="">Select approved vendor</option>
+              {% for v in vendors %}<option value="{{ v.name }}">{{ v.name }}</option>{% endfor %}
+            </select>
+          </div>
+          <div class="form-group full-width">
+            <label>WWI name *</label>
+            <input name="name" required />
+          </div>
+          <div class="form-group full-width">
+            <label>Description</label>
+            <textarea name="description" rows="2"></textarea>
+          </div>
+          <div class="form-group">
+            <label>Vendor item name</label>
+            <input name="vendor_item_name" />
+          </div>
+          <div class="form-group">
+            <label>Vendor item #</label>
+            <input name="vendor_item_number" />
+          </div>
+          <div class="form-group">
+            <label>Type</label>
+            <select name="item_type">
+              {% for val, label in item_type_choices %}
+              <option value="{{ val }}">{{ label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Product category</label>
+            <select name="product_category">
+              <option value="">—</option>
+              {% for val, label in product_category_choices %}
+              <option value="{{ val }}">{{ label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+        </div>
       </div>
-      <div class="form-row"><label>Product category</label>
-        <select name="product_category">
-          <option value="">—</option>
-          {% for val, label in product_category_choices %}
-          <option value="{{ val }}">{{ label }}</option>
-          {% endfor %}
-        </select>
+    </div>
+
+    <div class="create-item-section">
+      <div class="create-item-section-head">
+        <h3 class="create-item-section-title">Pack &amp; price</h3>
+        <p class="create-item-section-lead">Pack size and unit define how this SKU is stocked and ordered. Price has its own unit.</p>
+      </div>
+      <div class="create-item-panel">
+        <div class="form-grid">
+          <div class="form-group">
+            <label>Pack size</label>
+            <div class="input-with-unit">
+              <input type="number" step="any" name="pack_size" placeholder="e.g. 40" />
+              <select name="pack_size_unit" title="Pack unit">
+                {% for val, label in pack_unit_choices %}
+                <option value="{{ val }}">{{ label }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <span class="form-hint">Inventory / order UoM follows this pack unit.</span>
+          </div>
+          <div class="form-group">
+            <label>Price</label>
+            <div class="input-with-unit">
+              <input type="number" step="any" name="price" placeholder="0.00" />
+              <select name="price_uom" title="Price unit">
+                {% for val, label in price_uom_choices %}
+                <option value="{{ val }}" {% if val == 'lbs' %}selected{% endif %}>{{ label }}</option>
+                {% endfor %}
+              </select>
+            </div>
+          </div>
+          <div class="form-group">
+            <label>HTS code</label>
+            <input name="hts_code" />
+          </div>
+          <div class="form-group">
+            <label>Country of origin</label>
+            <input name="country_of_origin" />
+          </div>
+        </div>
       </div>
     </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0.5rem">
-      <div class="form-row"><label>UoM</label>
-        <select name="unit_of_measure">
-          {% for val, label in uom_choices %}<option value="{{ val }}">{{ label }}</option>{% endfor %}
-        </select>
-      </div>
-      <div class="form-row"><label>Pack size</label><input type="number" step="any" name="pack_size" /></div>
-      <div class="form-row"><label>Pack unit</label>
-        <select name="pack_size_unit">
-          {% for val, label in pack_unit_choices %}<option value="{{ val }}">{{ label }}</option>{% endfor %}
-        </select>
-      </div>
-    </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem">
-      <div class="form-row"><label>Price</label><input type="number" step="any" name="price" /></div>
-      <div class="form-row"><label>HTS code</label><input name="hts_code" /></div>
-    </div>
-    <div class="form-row"><label>Country of origin</label><input name="country_of_origin" /></div>
+
     <div class="form-actions">
-      <button type="submit" class="btn btn-primary">Create item</button>
       <a class="btn btn-secondary" href="{% url 'slurp_ui:inventory_items' %}">Cancel</a>
+      <button type="submit" class="btn btn-primary">Create item</button>
     </div>
   </form>
 </div>
+<script>
+(function () {
+  var cb = document.getElementById('show_new_family');
+  var box = document.getElementById('new-family-fields');
+  var fam = document.getElementById('product_family');
+  var code = document.getElementById('new_family_code');
+  var name = document.getElementById('new_family_name');
+  if (!cb || !box) return;
+  function sync() {
+    var on = !!cb.checked;
+    box.hidden = !on;
+    box.setAttribute('aria-hidden', on ? 'false' : 'true');
+    box.classList.toggle('is-collapsed', !on);
+    if (code) code.disabled = !on;
+    if (name) name.disabled = !on;
+    if (on && fam) fam.value = '';
+    if (!on) {
+      if (code) code.value = '';
+      if (name) name.value = '';
+    }
+  }
+  cb.addEventListener('change', sync);
+  sync();
+})();
+</script>
 {% endblock %}

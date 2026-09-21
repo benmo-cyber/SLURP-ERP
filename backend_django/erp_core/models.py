@@ -72,6 +72,14 @@ class Item(models.Model):
         related_name='sku_variant_items',
         help_text='Optional link to the master item row for this family (same vendor when possible).',
     )
+    product_family = models.ForeignKey(
+        'RDFormulaFamily',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='catalog_items',
+        help_text='Commercial family code (e.g. D, L, HL) — used for sorting/filtering and aligned with R&D families.',
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -1010,6 +1018,14 @@ class RDFormula(models.Model):
         return f"{self.rd_code} — {self.name}"
 
     @property
+    def display_label(self):
+        from erp_core.rd_codes import format_rd_display_label
+
+        return format_rd_display_label(
+            name=self.name, rd_code=self.rd_code, family_letter=self.family_letter
+        )
+
+    @property
     def total_cost_per_lb(self):
         total = sum(
             (line.formula_cost or 0) for line in self.lines.all()
@@ -1100,6 +1116,49 @@ class PurchaseOrder(models.Model):
     coa_sds_email = models.EmailField(blank=True, null=True, help_text='Email for CoA and SDS')
     tracking_number = models.CharField(max_length=255, blank=True, null=True)
     carrier = models.CharField(max_length=255, blank=True, null=True)
+    SHIPMENT_MODE_CHOICES = [
+        ('', '—'),
+        ('parcel', 'Parcel'),
+        ('ltl', 'LTL / truck'),
+        ('ocean', 'Ocean'),
+        ('air', 'Air'),
+        ('other', 'Other'),
+    ]
+    shipment_mode = models.CharField(
+        max_length=20,
+        choices=SHIPMENT_MODE_CHOICES,
+        blank=True,
+        default='',
+        help_text='Inbound shipment mode for tracking (parcel, LTL, ocean, …).',
+    )
+    bill_of_lading = models.CharField(
+        max_length=255,
+        blank=True,
+        default='',
+        help_text='Bill of lading / ocean BL / master B/L when applicable.',
+    )
+    vessel_name = models.CharField(
+        max_length=255,
+        blank=True,
+        default='',
+        help_text='Vessel name for ocean freight (e.g. for MarineTraffic lookup).',
+    )
+    destination_place = models.CharField(
+        max_length=255,
+        blank=True,
+        default='',
+        help_text='Place the ETA is relative to (plant, port, warehouse).',
+    )
+    inbound_eta_date = models.DateField(
+        blank=True,
+        null=True,
+        help_text='User-entered estimated arrival (manual tracking for now).',
+    )
+    tracking_notes = models.TextField(
+        blank=True,
+        default='',
+        help_text='Freeform tracking status notes from manual checks.',
+    )
     revision_number = models.IntegerField(default=0)
     original_po = models.ForeignKey('self', on_delete=models.SET_NULL, blank=True, null=True, related_name='revisions')
     notes = models.TextField(blank=True, null=True)
@@ -2665,4 +2724,219 @@ class UserProfile(models.Model):
 
     def __str__(self):
         return f"{self.user.username} ({self.get_role_display()})"
+
+
+class InventoryCountSession(models.Model):
+    """Physical inventory / beginning-balance count event (lot-level)."""
+
+    COUNT_TYPE_CHOICES = [
+        ("beginning_balance", "Beginning balance"),
+        ("annual_physical", "Annual physical"),
+        ("ad_hoc", "Ad hoc count"),
+    ]
+    STATUS_CHOICES = [
+        ("draft", "Draft / counting"),
+        ("review", "Variance review"),
+        ("posted", "Posted"),
+        ("cancelled", "Cancelled"),
+    ]
+
+    session_number = models.CharField(max_length=40, unique=True, db_index=True)
+    count_type = models.CharField(max_length=32, choices=COUNT_TYPE_CHOICES)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="draft")
+    count_date = models.DateField(help_text="As-of date for the physical count / beginning balance")
+    name = models.CharField(max_length=255, blank=True, default="")
+    notes = models.TextField(blank=True, default="")
+    created_by = models.CharField(max_length=255, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    reviewed_at = models.DateTimeField(blank=True, null=True)
+    reviewed_by = models.CharField(max_length=255, blank=True, default="")
+    posted_at = models.DateTimeField(blank=True, null=True)
+    posted_by = models.CharField(max_length=255, blank=True, default="")
+
+    class Meta:
+        ordering = ["-created_at"]
+        verbose_name = "Inventory count session"
+        verbose_name_plural = "Inventory count sessions"
+
+    def __str__(self):
+        return self.session_number
+
+    @property
+    def is_editable(self) -> bool:
+        return self.status == "draft"
+
+
+class InventoryCountLine(models.Model):
+    """One counted lot row (existing lot or new/found / beginning-balance create)."""
+
+    session = models.ForeignKey(
+        InventoryCountSession,
+        on_delete=models.CASCADE,
+        related_name="lines",
+    )
+    lot = models.ForeignKey(
+        Lot,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="count_lines",
+        help_text="Existing lot being counted; null when creating a new lot on post",
+    )
+    item = models.ForeignKey(Item, on_delete=models.PROTECT, related_name="count_lines")
+    lot_number_snapshot = models.CharField(max_length=40, blank=True, default="")
+    sku_snapshot = models.CharField(max_length=255, blank=True, default="")
+    item_name_snapshot = models.CharField(max_length=255, blank=True, default="")
+    vendor_snapshot = models.CharField(max_length=255, blank=True, default="")
+    unit_of_measure = models.CharField(max_length=10, blank=True, default="lbs")
+    system_qty = models.FloatField(
+        default=0.0,
+        help_text="quantity_remaining frozen when the line was added (0 for new/found lots)",
+    )
+    counted_qty = models.FloatField(
+        blank=True,
+        null=True,
+        help_text="Physical count; null until entered",
+    )
+    include_in_post = models.BooleanField(
+        default=True,
+        help_text="If false, line is left out when posting (variance kept on report only)",
+    )
+    is_new_lot = models.BooleanField(
+        default=False,
+        help_text="True for beginning-balance / found stock that creates a lot on post",
+    )
+    on_hold_snapshot = models.BooleanField(
+        default=False,
+        help_text="True when the lot was on hold (full or partial) when added to the count",
+    )
+    on_hold_qty_snapshot = models.FloatField(
+        default=0.0,
+        help_text="quantity_on_hold (or full remaining if status on_hold) when line was added",
+    )
+    vendor_lot_number = models.CharField(max_length=100, blank=True, default="")
+    manufacture_date = models.DateField(blank=True, null=True)
+    expiration_date = models.DateField(blank=True, null=True)
+    line_notes = models.CharField(max_length=500, blank=True, default="")
+    posted = models.BooleanField(default=False)
+    posted_variance = models.FloatField(
+        blank=True,
+        null=True,
+        help_text="counted - system at post time",
+    )
+    created_lot = models.ForeignKey(
+        Lot,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="created_by_count_lines",
+    )
+
+    class Meta:
+        ordering = ["sku_snapshot", "lot_number_snapshot", "id"]
+        verbose_name = "Inventory count line"
+        verbose_name_plural = "Inventory count lines"
+        indexes = [
+            models.Index(fields=["session", "sku_snapshot"]),
+        ]
+
+    def __str__(self):
+        return f"{self.session_id}:{self.sku_snapshot}:{self.lot_number_snapshot or 'NEW'}"
+
+    @property
+    def variance(self):
+        if self.counted_qty is None:
+            return None
+        return float(self.counted_qty) - float(self.system_qty or 0)
+
+    @property
+    def progress_status(self) -> str:
+        """
+        complete — counted qty entered
+        in_progress — notes / vendor-lot started but no counted qty yet
+        not_started — blank
+        """
+        if self.counted_qty is not None:
+            return "complete"
+        if (self.line_notes or "").strip() or (
+            self.is_new_lot and (self.vendor_lot_number or "").strip()
+        ):
+            return "in_progress"
+        return "not_started"
+
+    @property
+    def is_on_hold_line(self) -> bool:
+        """Prefer snapshot; fall back to live lot hold flags for older lines."""
+        if self.on_hold_snapshot:
+            return True
+        lot = getattr(self, "lot", None)
+        if lot is None:
+            return False
+        if (lot.status or "") == "on_hold" or bool(lot.on_hold):
+            return True
+        return float(getattr(lot, "quantity_on_hold", 0) or 0) > 0.0001
+
+
+class LotHoldCase(models.Model):
+    """
+    Investigation case for material on hold (damage, QC, etc.).
+    Notes/photos live on LotHoldNote; resolve via accept / return / discard.
+    """
+    STATUS_CHOICES = [
+        ("open", "Open"),
+        ("resolved", "Resolved"),
+    ]
+    RESOLUTION_CHOICES = [
+        ("accept", "Accept (release to available)"),
+        ("return", "Return to vendor"),
+        ("discard", "Discard / scrap"),
+    ]
+
+    lot = models.ForeignKey(Lot, on_delete=models.CASCADE, related_name="hold_cases")
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="open", db_index=True)
+    summary = models.CharField(
+        max_length=255,
+        blank=True,
+        default="",
+        help_text="Short reason shown in hold lists (e.g. drum damage).",
+    )
+    opened_at = models.DateTimeField(auto_now_add=True)
+    opened_by = models.CharField(max_length=150, blank=True, default="")
+    resolved_at = models.DateTimeField(blank=True, null=True)
+    resolved_by = models.CharField(max_length=150, blank=True, default="")
+    resolution = models.CharField(
+        max_length=20, choices=RESOLUTION_CHOICES, blank=True, null=True
+    )
+    resolution_qty = models.FloatField(
+        blank=True,
+        null=True,
+        help_text="Quantity resolved in the closing action (native UoM).",
+    )
+    resolution_notes = models.TextField(blank=True, default="")
+
+    class Meta:
+        ordering = ["-opened_at"]
+        indexes = [
+            models.Index(fields=["status", "-opened_at"]),
+            models.Index(fields=["lot", "status"]),
+        ]
+
+    def __str__(self):
+        return f"Hold case {self.pk} · lot {self.lot_id} · {self.status}"
+
+
+class LotHoldNote(models.Model):
+    """Timeline entry on a hold case — text and optional photo evidence."""
+    case = models.ForeignKey(LotHoldCase, on_delete=models.CASCADE, related_name="notes")
+    body = models.TextField(blank=True, default="")
+    photo = models.ImageField(upload_to="hold_photos/%Y/%m/", blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    created_by = models.CharField(max_length=150, blank=True, default="")
+
+    class Meta:
+        ordering = ["created_at", "id"]
+
+    def __str__(self):
+        return f"Hold note {self.pk} on case {self.case_id}"
 

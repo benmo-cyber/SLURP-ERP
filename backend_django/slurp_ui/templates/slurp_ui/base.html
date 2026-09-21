@@ -67,20 +67,13 @@
         </nav>
         <div class="header-user">
           {% if slurp_can_god_mode %}
-          <form method="post" action="{% url 'slurp_ui:import_sample_xml' %}" class="header-sample-import" style="display:inline">
-            {% csrf_token %}
-            <button type="submit" class="header-sample-import-btn"
-                    title="Loads all .xml files from server folder data/private_sample_data/">
-              Import sample XML
-            </button>
-          </form>
           <form method="post" action="{% url 'slurp_ui:toggle_god_mode' %}" class="header-god-mode-toggle">
             {% csrf_token %}
             <label>
               <input type="checkbox" name="god_mode" value="on"
                      {% if slurp_god_mode %}checked{% endif %}
                      onchange="this.form.submit()"
-                     title="God mode: set any date on forms and flows (staff only)" />
+                     title="God mode: allow backdating / override dates on forms (staff only)" />
               <span>God mode</span>
             </label>
           </form>

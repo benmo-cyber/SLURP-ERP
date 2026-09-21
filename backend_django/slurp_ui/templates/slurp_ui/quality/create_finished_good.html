@@ -5,20 +5,58 @@
   <a href="{% url 'slurp_ui:quality_finished_goods' %}" class="hs-btn">All finished goods</a>
 {% endblock %}
 {% block main %}
+{{ rd_choices|json_script:"rd-choices-data" }}
 <div class="hs-bleed" style="padding:1.25rem 1.5rem 2rem">
   <form method="post" id="fg-form">
     {% csrf_token %}
 
     <div class="hs-card" style="margin-bottom:1rem">
+      <div class="hs-card-header"><h3>Source</h3></div>
+      <div class="hs-card-body">
+        <label style="display:flex;align-items:center;gap:0.5rem;font-weight:500;cursor:pointer">
+          <input type="checkbox" name="from_rd" id="from_rd" value="1"
+                 {% if selected_rd_id %}checked{% endif %} />
+          Commercialize from R&amp;D formula
+        </label>
+        <p class="hs-muted" style="font-size:0.85rem;margin:0.4rem 0 0.75rem">
+          Creates the finished-good catalog item and marks the R&amp;D code commercialized in one step.
+          R&amp;D codes stay as history (e.g. D-R001 shown as Natural Red · D · RD1).
+        </p>
+        <div class="form-row" id="rd-pick-wrap" {% if not selected_rd_id %}hidden{% endif %}>
+          <label>R&amp;D formula *</label>
+          <select name="rd_formula_id" id="rd_formula_id">
+            <option value="">Select open R&amp;D formula…</option>
+            {% for rd in rd_choices %}
+            <option value="{{ rd.id }}" {% if selected_rd_id == rd.id|stringformat:"s" %}selected{% endif %}>
+              {{ rd.label }}
+            </option>
+            {% endfor %}
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <div class="hs-card" style="margin-bottom:1rem">
       <div class="hs-card-header"><h3>Product</h3></div>
       <div class="hs-card-body">
         <div class="hs-form-grid">
-          <div class="form-row"><label>SKU *</label><input name="sku" required /></div>
-          <div class="form-row"><label>Name *</label><input name="name" required /></div>
+          <div class="form-row"><label>SKU *</label><input name="sku" id="fg_sku" required /></div>
+          <div class="form-row"><label>Name *</label><input name="name" id="fg_name" required /></div>
         </div>
-        <div class="form-row">
-          <label>Description</label>
-          <textarea name="description" rows="2"></textarea>
+        <div class="hs-form-grid">
+          <div class="form-row">
+            <label>Family letter</label>
+            <select name="product_family" id="product_family">
+              <option value="">—</option>
+              {% for f in product_families %}
+              <option value="{{ f.pk }}" data-code="{{ f.code }}">{{ f.code }} — {{ f.name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="form-row">
+            <label>Description</label>
+            <textarea name="description" id="fg_description" rows="2"></textarea>
+          </div>
         </div>
         <div class="hs-form-grid-3">
           <div class="form-row"><label>Pack size</label><input name="pack_size" type="number" step="any" value="1" /></div>
@@ -83,13 +121,13 @@
         <button type="button" class="hs-btn hs-btn-sm" id="add-ing" style="margin-top:0.75rem">+ Add ingredient</button>
         <div class="form-row" style="margin-top:0.75rem;margin-bottom:0">
           <label>Formula notes</label>
-          <textarea name="formula_notes" rows="2"></textarea>
+          <textarea name="formula_notes" id="formula_notes" rows="2"></textarea>
         </div>
       </div>
     </div>
 
     <div class="hs-form-actions">
-      <button type="submit" class="hs-btn hs-btn-primary">Create finished good</button>
+      <button type="submit" class="hs-btn hs-btn-primary" id="fg-submit">Create finished good</button>
       <a class="hs-btn" href="{% url 'slurp_ui:quality_finished_goods' %}">Cancel</a>
     </div>
   </form>
@@ -99,23 +137,94 @@
   var wrap = document.getElementById('ing-lines');
   var countInput = document.getElementById('line_count');
   var addBtn = document.getElementById('add-ing');
-  if (!wrap || !addBtn) return;
-  var opts = wrap.querySelector('select');
-  var optionHtml = opts ? opts.innerHTML : '';
-  addBtn.addEventListener('click', function () {
-    var n = parseInt(countInput.value || '0', 10) || 0;
-    if (n >= 40) return;
-    var div = document.createElement('div');
-    div.className = 'ing-line hs-line-card';
-    div.innerHTML =
-      '<div class="hs-form-grid-3">' +
-      '<div class="form-row" style="margin:0"><label>Item</label><select name="ing_item_' + n + '">' + optionHtml + '</select></div>' +
-      '<div class="form-row" style="margin:0"><label>%</label><input name="ing_pct_' + n + '" type="number" step="any" /></div>' +
-      '<div class="form-row" style="margin:0"><label>Notes</label><input name="ing_notes_' + n + '" /></div>' +
-      '</div>';
-    wrap.appendChild(div);
-    countInput.value = String(n + 1);
-  });
+  var fromRd = document.getElementById('from_rd');
+  var rdWrap = document.getElementById('rd-pick-wrap');
+  var rdSel = document.getElementById('rd_formula_id');
+  var nameEl = document.getElementById('fg_name');
+  var notesEl = document.getElementById('formula_notes');
+  var famEl = document.getElementById('product_family');
+  var submitBtn = document.getElementById('fg-submit');
+  var dataEl = document.getElementById('rd-choices-data');
+  var rdData = [];
+  try { rdData = dataEl ? JSON.parse(dataEl.textContent) : []; } catch (e) { rdData = []; }
+
+  var optionHtml = '';
+  if (wrap) {
+    var opts = wrap.querySelector('select');
+    optionHtml = opts ? opts.innerHTML : '';
+  }
+
+  function setLineCount(n) {
+    if (countInput) countInput.value = String(n);
+  }
+
+  function rebuildIngredientLines(lines) {
+    if (!wrap) return;
+    wrap.innerHTML = '';
+    var rows = (lines && lines.length) ? lines : [{ item_id: '', percentage: 100, notes: '' }];
+    rows.forEach(function (row, i) {
+      var div = document.createElement('div');
+      div.className = 'ing-line hs-line-card';
+      div.innerHTML =
+        '<div class="hs-form-grid-3">' +
+        '<div class="form-row" style="margin:0"><label>Item</label><select name="ing_item_' + i + '"' + (i === 0 ? ' required' : '') + '>' + optionHtml + '</select></div>' +
+        '<div class="form-row" style="margin:0"><label>%</label><input name="ing_pct_' + i + '" type="number" step="any" value="' + (row.percentage != null ? row.percentage : '') + '"' + (i === 0 ? ' required' : '') + ' /></div>' +
+        '<div class="form-row" style="margin:0"><label>Notes</label><input name="ing_notes_' + i + '" value="' + (row.notes || '').replace(/"/g, '&quot;') + '" /></div>' +
+        '</div>';
+      wrap.appendChild(div);
+      var sel = div.querySelector('select');
+      if (sel && row.item_id) sel.value = String(row.item_id);
+    });
+    setLineCount(rows.length);
+  }
+
+  function applyRd() {
+    if (!rdSel || !rdSel.value) return;
+    var rd = rdData.find(function (r) { return String(r.id) === String(rdSel.value); });
+    if (!rd) return;
+    if (nameEl && !nameEl.value) nameEl.value = rd.name || '';
+    else if (nameEl) nameEl.value = rd.name || nameEl.value;
+    if (notesEl && rd.notes) notesEl.value = rd.notes;
+    if (famEl && rd.family_letter) {
+      var opts = famEl.options;
+      for (var i = 0; i < opts.length; i++) {
+        if ((opts[i].getAttribute('data-code') || '').toUpperCase() === rd.family_letter) {
+          famEl.value = opts[i].value;
+          break;
+        }
+      }
+    }
+    rebuildIngredientLines(rd.ingredient_lines || []);
+  }
+
+  function syncFromRdUi() {
+    var on = !!(fromRd && fromRd.checked);
+    if (rdWrap) rdWrap.hidden = !on;
+    if (rdSel) rdSel.required = on;
+    if (submitBtn) submitBtn.textContent = on ? 'Commercialize & create FG' : 'Create finished good';
+    if (on) applyRd();
+  }
+
+  if (addBtn && wrap && countInput) {
+    addBtn.addEventListener('click', function () {
+      var n = parseInt(countInput.value || '0', 10) || 0;
+      if (n >= 40) return;
+      var div = document.createElement('div');
+      div.className = 'ing-line hs-line-card';
+      div.innerHTML =
+        '<div class="hs-form-grid-3">' +
+        '<div class="form-row" style="margin:0"><label>Item</label><select name="ing_item_' + n + '">' + optionHtml + '</select></div>' +
+        '<div class="form-row" style="margin:0"><label>%</label><input name="ing_pct_' + n + '" type="number" step="any" /></div>' +
+        '<div class="form-row" style="margin:0"><label>Notes</label><input name="ing_notes_' + n + '" /></div>' +
+        '</div>';
+      wrap.appendChild(div);
+      countInput.value = String(n + 1);
+    });
+  }
+
+  if (fromRd) fromRd.addEventListener('change', syncFromRdUi);
+  if (rdSel) rdSel.addEventListener('change', applyRd);
+  syncFromRdUi();
 })();
 </script>
 {% endblock %}

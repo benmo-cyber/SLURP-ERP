@@ -10,6 +10,31 @@ from corsheaders.defaults import default_headers
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+
+def _load_dotenv(path: Path) -> None:
+    """Load KEY=VALUE pairs from a local .env into os.environ (does not override existing)."""
+    if not path.is_file():
+        return
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        key = key.strip()
+        if not key or key in os.environ:
+            continue
+        val = val.strip()
+        if (val.startswith('"') and val.endswith('"')) or (val.startswith("'") and val.endswith("'")):
+            val = val[1:-1]
+        os.environ[key] = val
+
+
+_load_dotenv(BASE_DIR / ".env")
+
 # SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = 'django-insecure-dev-key-change-in-production'
 
@@ -162,15 +187,16 @@ CORS_ALLOW_HEADERS = list(default_headers) + [
     'x-idempotency-key',
 ]
 
-# Email configuration (GoDaddy Microsoft 365)
-EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
-EMAIL_HOST = 'smtp.office365.com'
-EMAIL_PORT = 587
-EMAIL_USE_TLS = True
-EMAIL_HOST_USER = 'customerservice@wildwoodingredients.com'
-EMAIL_HOST_PASSWORD = 'dR2501$Dr'
-DEFAULT_FROM_EMAIL = 'customerservice@wildwoodingredients.com'
-EMAIL_REPLY_TO = 'customerservice@wildwoodingredients.com'
+# Email configuration — set values in backend_django/.env (not in this file).
+# After leaving GoDaddy, use your new Microsoft 365 mailbox password or app password.
+EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
+EMAIL_HOST = os.environ.get("EMAIL_HOST", "smtp.office365.com")
+EMAIL_PORT = int(os.environ.get("EMAIL_PORT", "587"))
+EMAIL_USE_TLS = os.environ.get("EMAIL_USE_TLS", "true").lower() in ("1", "true", "yes")
+EMAIL_HOST_USER = (os.environ.get("EMAIL_HOST_USER") or "").strip()
+EMAIL_HOST_PASSWORD = os.environ.get("EMAIL_HOST_PASSWORD") or ""
+DEFAULT_FROM_EMAIL = (os.environ.get("DEFAULT_FROM_EMAIL") or EMAIL_HOST_USER).strip()
+EMAIL_REPLY_TO = (os.environ.get("EMAIL_REPLY_TO") or DEFAULT_FROM_EMAIL).strip()
 
 # Frontend URL for password reset links in email
 FRONTEND_URL = os.environ.get('FRONTEND_URL', 'http://localhost:5173')

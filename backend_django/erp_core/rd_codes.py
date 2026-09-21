@@ -27,6 +27,23 @@ def format_rd_code(family_letter: str, sequence_number: int) -> str:
     return f"{family_letter}-R{sequence_number:03d}"
 
 
+def format_rd_display_label(*, name: str | None, rd_code: str, family_letter: str | None = None) -> str:
+    """
+    Human label for UI: \"Natural Red · D · RD1\".
+    Storage remains D-R001; this is display-only.
+    """
+    title = (name or "").strip() or "Untitled"
+    parsed = parse_rd_code(rd_code)
+    if parsed:
+        letter, n = parsed
+        return f"{title} · {letter} · RD{n}"
+    letter = (family_letter or "").strip().upper()
+    code = (rd_code or "").strip().upper()
+    if letter and code:
+        return f"{title} · {letter} · {code}"
+    return f"{title} · {code}" if code else title
+
+
 @transaction.atomic
 def allocate_rd_code(family_letter: str) -> tuple[str, str]:
     """

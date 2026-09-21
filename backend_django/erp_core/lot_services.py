@@ -64,7 +64,7 @@ def checkout_indirect_material(user, lot: Lot, quantity: float, notes: str = "",
     return lot
 
 
-def put_on_hold(lot: Lot, quantity: float) -> Lot:
+def put_on_hold(lot: Lot, quantity: float, *, user=None, reason: str = "") -> Lot:
     try:
         quantity = round(float(quantity), 2)
     except (TypeError, ValueError):
@@ -85,6 +85,19 @@ def put_on_hold(lot: Lot, quantity: float) -> Lot:
     if lot.quantity_on_hold >= lot.quantity_remaining:
         lot.status = "on_hold"
     lot.save(update_fields=["quantity_on_hold", "on_hold", "status"])
+
+    try:
+        from .hold_services import ensure_open_hold_case
+
+        ensure_open_hold_case(
+            lot,
+            user=user,
+            summary=(reason or "Put on hold")[:255],
+            initial_note=(reason or f"Put {quantity} on hold.").strip(),
+        )
+    except Exception as e:
+        logger.warning("Failed to open hold case for lot %s: %s", lot.lot_number, e)
+
     return lot
 
 

@@ -40,11 +40,15 @@ from erp_core.models import (
 
     LotCoaCustomerCopy,
 
+    LotHoldCase,
+
     ProductionBatchInput,
 
     ProductionBatchOutput,
 
     RDFormula,
+
+    RDFormulaFamily,
 
     RDFormulaLine,
 
@@ -64,7 +68,7 @@ from erp_core.models import (
 
 from erp_core.vendor_address_display import build_display_address
 
-from erp_core.rd_codes import allocate_rd_code, normalize_family_letter
+from erp_core.rd_codes import allocate_rd_code, format_rd_display_label, normalize_family_letter
 from erp_core.vendor_rename import cascade_vendor_name_change
 
 
@@ -78,23 +82,15 @@ _PCT_TOLERANCE = 0.05
 
 
 _VENDOR_TABS = (
-
     "overview",
-
     "contacts",
-
     "payments",
-
     "survey",
-
     "documents",
-
     "items",
-
     "exceptions",
-
+    "investigations",
     "history",
-
 )
 
 
@@ -973,6 +969,7 @@ def quality_vendor_detail(request: HttpRequest, pk: int) -> HttpResponse:
         ("survey", "Survey"),
         ("items", "Items"),
         ("exceptions", "Exceptions"),
+        ("investigations", "Investigations"),
         ("history", "History"),
     ]
 
@@ -1016,6 +1013,35 @@ def quality_vendor_detail(request: HttpRequest, pk: int) -> HttpResponse:
 
     payment_history = vendor_payment_timeliness(vendor)
 
+    from erp_core.models import PurchaseOrder
+
+    vname = (vendor.name or "").strip()
+    hold_investigations = []
+    if vname:
+        po_numbers = list(
+            PurchaseOrder.objects.filter(vendor_customer_name__iexact=vname)
+            .values_list("po_number", flat=True)
+            .distinct()
+        )
+        hold_filter = Q(lot__item__vendor__iexact=vname)
+        if po_numbers:
+            hold_filter |= Q(lot__po_number__in=po_numbers)
+        hold_qs = (
+            LotHoldCase.objects.filter(hold_filter)
+            .select_related("lot", "lot__item")
+            .prefetch_related("notes")
+            .order_by("-opened_at")[:80]
+        )
+        for case in hold_qs:
+            hold_investigations.append(
+                {
+                    "case": case,
+                    "lot": case.lot,
+                    "hold_qty": float(getattr(case.lot, "quantity_on_hold", 0) or 0),
+                    "note_count": case.notes.count(),
+                }
+            )
+
     return render(
 
         request,
@@ -1055,6 +1081,8 @@ def quality_vendor_detail(request: HttpRequest, pk: int) -> HttpResponse:
             exceptions=list(vendor.exceptions.all()[:50]),
 
             history_entries=list(vendor.history.all()[:50]),
+
+            hold_investigations=hold_investigations,
 
             contacts=list(vendor.contacts.all()),
 
@@ -1315,6 +1343,8 @@ def quality_create_finished_good(request: HttpRequest) -> HttpResponse:
 
     )
 
+
+
     ingredient_items = (
 
         Item.objects.filter(
@@ -1328,6 +1358,8 @@ def quality_create_finished_good(request: HttpRequest) -> HttpResponse:
         .order_by("sku")[:500]
 
     )
+
+
 
     seen_sku = set()
 
@@ -1347,15 +1379,147 @@ def quality_create_finished_good(request: HttpRequest) -> HttpResponse:
 
     ccps = CriticalControlPoint.objects.all().order_by("name")
 
-    rd_formulas = RDFormula.objects.order_by("-updated_at")[:100]
+
+
+    open_rd = list(
+
+        RDFormula.objects.exclude(status__in=["commercialized", "scrapped"])
+
+        .prefetch_related("lines")
+
+        .order_by("family_letter", "rd_code")
+
+    )
+
+    rd_choices = []
+
+    for rd in open_rd:
+
+        ingredient_lines = []
+
+        for ln in rd.lines.all():
+
+            if ln.line_type != "ingredient" or not ln.item_id or not ln.composition_pct:
+
+                continue
+
+            ingredient_lines.append(
+
+                {
+
+                    "item_id": ln.item_id,
+
+                    "percentage": ln.composition_pct,
+
+                    "notes": (ln.description or "").strip() or "",
+
+                }
+
+            )
+
+        rd_choices.append(
+
+            {
+
+                "id": rd.pk,
+
+                "label": format_rd_display_label(
+
+                    name=rd.name, rd_code=rd.rd_code, family_letter=rd.family_letter
+
+                ),
+
+                "name": rd.name,
+
+                "rd_code": rd.rd_code,
+
+                "family_letter": (rd.family_letter or "").strip().upper(),
+
+                "notes": rd.notes or "",
+
+                "ingredient_lines": ingredient_lines,
+
+            }
+
+        )
+
+
+
+    selected_rd_id = request.GET.get("rd") or request.POST.get("rd_formula_id") or ""
+
+
+
+    def _ctx(**extra):
+
+        return _quality_ctx(
+
+            "finished-goods",
+
+            ingredient_items=unique_ingredients,
+
+            ccps=ccps,
+
+            rd_choices=rd_choices,
+
+            selected_rd_id=str(selected_rd_id),
+
+            product_families=list(
+
+                RDFormulaFamily.objects.filter(is_active=True).order_by("code", "name")
+
+            ),
+
+            port_status="full",
+
+            **extra,
+
+        )
 
 
 
     if request.method == "POST":
 
-        sku = (request.POST.get("sku") or "").strip()
+        sku = (request.POST.get("sku") or "").strip().upper()
 
         name = (request.POST.get("name") or "").strip()
+
+        from_rd = (request.POST.get("from_rd") or "").strip() in ("1", "on", "true", "yes")
+
+        rd = None
+
+        if from_rd:
+
+            rd_id = (request.POST.get("rd_formula_id") or "").strip()
+
+            if not rd_id:
+
+                messages.error(request, "Select an R&D formula to commercialize.")
+
+                return render(request, "slurp_ui/quality/create_finished_good.html", _ctx())
+
+            rd = (
+
+                RDFormula.objects.prefetch_related("lines")
+
+                .exclude(status__in=["commercialized", "scrapped"])
+
+                .filter(pk=rd_id)
+
+                .first()
+
+            )
+
+            if not rd:
+
+                messages.error(request, "That R&D formula is not available to commercialize.")
+
+                return render(request, "slurp_ui/quality/create_finished_good.html", _ctx())
+
+            if not name:
+
+                name = (rd.name or "").strip()
+
+
 
         if not sku or not name:
 
@@ -1465,25 +1629,39 @@ def quality_create_finished_good(request: HttpRequest) -> HttpResponse:
 
                             "slurp_ui/quality/create_finished_good.html",
 
-                            _quality_ctx(
-
-                                "finished-goods",
-
-                                ingredient_items=unique_ingredients,
-
-                                ccps=ccps,
-
-                                rd_formulas=rd_formulas,
-
-                                port_status="full",
-
-                            ),
+                            _ctx(),
 
                         )
 
 
 
                 ccp_id = (request.POST.get("critical_control_point") or "").strip()
+
+                pack_unit = (request.POST.get("pack_size_unit") or "lbs").strip() or "lbs"
+
+                if pack_unit not in ("lbs", "kg", "ea"):
+
+                    pack_unit = "lbs"
+
+
+
+                family = None
+
+                fam_id = (request.POST.get("product_family") or "").strip()
+
+                if fam_id:
+
+                    family = RDFormulaFamily.objects.filter(pk=fam_id, is_active=True).first()
+
+                elif rd:
+
+                    family = RDFormulaFamily.objects.filter(
+
+                        code__iexact=(rd.family_letter or "").strip(), is_active=True
+
+                    ).first()
+
+
 
                 try:
 
@@ -1499,9 +1677,11 @@ def quality_create_finished_good(request: HttpRequest) -> HttpResponse:
 
                             item_type="finished_good",
 
-                            unit_of_measure=request.POST.get("pack_size_unit") or "lbs",
+                            unit_of_measure=pack_unit,
 
                             pack_size=pack_size,
+
+                            product_family=family,
 
                             on_order=0,
 
@@ -1551,7 +1731,29 @@ def quality_create_finished_good(request: HttpRequest) -> HttpResponse:
 
                             )
 
-                    messages.success(request, f"Created finished good {sku} with formula.")
+                        if rd:
+
+                            rd.commercial_sku = sku
+
+                            rd.status = "commercialized"
+
+                            rd.save(update_fields=["commercial_sku", "status", "updated_at"])
+
+
+
+                    if rd:
+
+                        messages.success(
+
+                            request,
+
+                            f"Commercialized {rd.rd_code} as finished good {sku}. R&D code kept for history.",
+
+                        )
+
+                    else:
+
+                        messages.success(request, f"Created finished good {sku} with formula.")
 
                     return redirect("slurp_ui:quality_finished_good_detail", pk=item.pk)
 
@@ -1567,29 +1769,11 @@ def quality_create_finished_good(request: HttpRequest) -> HttpResponse:
 
         "slurp_ui/quality/create_finished_good.html",
 
-        _quality_ctx(
-
-            "finished-goods",
-
-            ingredient_items=unique_ingredients,
-
-            ccps=ccps,
-
-            rd_formulas=rd_formulas,
-
-            port_status="full",
-
-        ),
+        _ctx(),
 
     )
 
 
-
-
-
-@login_required
-
-@require_http_methods(["GET", "POST"])
 
 def quality_unlink_finished_good(request: HttpRequest) -> HttpResponse:
 

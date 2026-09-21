@@ -1,0 +1,331 @@
+{% extends "slurp_ui/base_module.html" %}
+{% block title %}{{ session.session_number }} — Count — SLURP{% endblock %}
+{% block module_title %}{{ session.session_number }}{% endblock %}
+{% block header_actions %}
+  <a href="{% url 'slurp_ui:inventory_counts' %}" class="btn btn-secondary">All counts</a>
+  <a href="{% url 'slurp_ui:inventory_count_variances' session.id %}" class="btn btn-primary">Variance report</a>
+{% endblock %}
+{% block main %}
+<style>
+  .count-detail .meta { color:#64748b; margin-bottom:1rem; font-size:0.92rem; }
+  .count-detail .stats { display:flex; flex-wrap:wrap; gap:0.75rem; margin-bottom:1rem; }
+  .count-detail .stat { background:#fff; border:1px solid #e2e8f0; border-radius:8px; padding:0.55rem 0.85rem; min-width:7rem; }
+  .count-detail .stat .k { font-size:0.75rem; color:#64748b; text-transform:uppercase; letter-spacing:0.03em; }
+  .count-detail .stat .v { font-size:1.15rem; font-weight:600; color:#0f172a; }
+  .count-detail .toolbar { display:flex; flex-wrap:wrap; gap:0.5rem; align-items:center; margin-bottom:0.75rem; }
+  .count-detail table { width:100%; border-collapse:collapse; font-size:0.85rem; background:#fff; }
+  .count-detail th, .count-detail td { padding:0.4rem 0.45rem; border-bottom:1px solid #e5e7eb; vertical-align:middle; }
+  .count-detail th { background: var(--app-header-bg, #2c3e50); color: var(--app-header-text, #fff); position:sticky; top:0; z-index:1; }
+  .count-detail input[type="number"], .count-detail input[type="text"] {
+    width:100%; box-sizing:border-box; padding:0.35rem 0.45rem; border:1px solid #cbd5e1; border-radius:4px; min-width:0;
+  }
+  .count-detail .qty { width:6.5rem; }
+  .count-detail .notes { min-width:8rem; }
+  .count-detail .var-pos { color:#166534; }
+  .count-detail .var-neg { color:#991b1b; }
+  .count-detail .table-wrap { overflow:auto; max-height:55vh; border:1px solid #e2e8f0; border-radius:8px; margin-bottom:0.75rem; }
+  .count-detail .section-head {
+    display:flex; align-items:baseline; justify-content:space-between; gap:0.75rem;
+    margin:1rem 0 0.45rem; padding-bottom:0.25rem; border-bottom:2px solid #e2e8f0;
+  }
+  .count-detail .section-head h3 { margin:0; font-size:1rem; color:#0f172a; }
+  .count-detail .section-head.on-hold { border-bottom-color:#f59e0b; }
+  .count-detail .section-head.on-hold h3 { color:#b45309; }
+  .count-detail .section-meta { font-size:0.82rem; color:#64748b; }
+  .count-detail tr.on-hold-row { background:#fffbeb; }
+  .count-detail .add-card { background:#fff; border:1px solid #e2e8f0; border-radius:8px; padding:1rem; margin-top:1rem; }
+  .count-detail .add-grid { display:grid; grid-template-columns:2fr 1fr 1fr 1fr 1fr auto; gap:0.5rem; align-items:end; }
+  .count-detail label { display:block; font-size:0.8rem; font-weight:500; margin-bottom:0.2rem; }
+  .count-detail select { width:100%; padding:0.35rem 0.45rem; border:1px solid #cbd5e1; border-radius:4px; }
+  .count-detail .prog {
+    display:inline-flex; align-items:center; justify-content:center;
+    width:1.35rem; height:1.35rem; border-radius:999px; font-weight:700; font-size:0.85rem; line-height:1;
+  }
+  .count-detail .prog.ok { background:#dcfce7; color:#15803d; }
+  .count-detail .prog.warn { background:#fef3c7; color:#b45309; }
+  .count-detail .prog.bad { background:#fee2e2; color:#b91c1c; }
+  .count-detail .legend { display:flex; flex-wrap:wrap; gap:0.85rem; margin:0 0 0.75rem; font-size:0.82rem; color:#64748b; }
+  .count-detail .legend span { display:inline-flex; align-items:center; gap:0.3rem; }
+  .count-detail .draft-bar {
+    position:sticky; bottom:0; z-index:5;
+    display:flex; flex-wrap:wrap; gap:0.75rem; align-items:center; justify-content:space-between;
+    margin-top:0.75rem; padding:0.75rem 1rem;
+    background:#f8fafc; border:1px solid #cbd5e1; border-radius:8px;
+    box-shadow:0 -4px 16px rgba(15,23,42,0.08);
+  }
+  .count-detail .draft-bar .hint { color:#64748b; font-size:0.85rem; }
+  .count-detail tr.dirty td:first-child .prog { box-shadow:0 0 0 2px #fbbf24; }
+  @media (max-width: 900px) {
+    .count-detail .add-grid { grid-template-columns:1fr 1fr; }
+  }
+</style>
+<div class="count-detail">
+  <div class="meta">
+    {{ session.get_count_type_display }} · count date {{ session.count_date }} ·
+    status <strong>{{ session.get_status_display }}</strong>
+    {% if session.name %} · {{ session.name }}{% endif %}
+    {% if session.is_editable %}
+    · <span style="color:#1d4ed8">Draft — save anytime and resume later</span>
+    {% endif %}
+  </div>
+
+  <div class="stats">
+    <div class="stat"><div class="k">Lines</div><div class="v" id="stat-lines">{{ summary.line_count }}</div></div>
+    <div class="stat"><div class="k">Complete ✓</div><div class="v" id="stat-complete">{{ summary.counted_count }}</div></div>
+    <div class="stat"><div class="k">In progress !</div><div class="v" id="stat-progress">{{ summary.in_progress_count }}</div></div>
+    <div class="stat"><div class="k">Not started ✕</div><div class="v" id="stat-notstarted">{{ summary.not_started_count }}</div></div>
+    <div class="stat"><div class="k">Progress</div><div class="v" id="stat-pct">{{ summary.progress_pct }}%</div></div>
+    <div class="stat"><div class="k">Variances</div><div class="v">{{ summary.variance_count }}</div></div>
+  </div>
+
+  <div class="legend">
+    <span><span class="prog ok">✓</span> Counted</span>
+    <span><span class="prog warn">!</span> Started (notes only / unsaved edit)</span>
+    <span><span class="prog bad">✕</span> Not started</span>
+  </div>
+
+  <div class="toolbar">
+    <form method="get" style="display:flex;gap:0.4rem;flex-wrap:wrap;align-items:center">
+      <input type="search" name="q" value="{{ q }}" placeholder="Filter SKU / lot / vendor" style="padding:0.4rem 0.55rem;border:1px solid #cbd5e1;border-radius:4px;min-width:14rem" />
+      <label style="display:inline-flex;align-items:center;gap:0.3rem;font-size:0.85rem">
+        <input type="checkbox" name="filter" value="uncounted" {% if filter_mode == 'uncounted' %}checked{% endif %} onchange="this.form.submit()" />
+        Uncounted only
+      </label>
+      <button type="submit" class="btn btn-secondary">Filter</button>
+    </form>
+    {% if session.is_editable %}
+    <form method="post" style="display:inline">{% csrf_token %}
+      <input type="hidden" name="action" value="refresh_lots" />
+      <button type="submit" class="btn btn-secondary">Refresh open lots</button>
+    </form>
+    <form method="post" style="display:inline" onsubmit="return confirm('Move to variance review? All included lines need a counted qty. You can reopen later if needed.');">{% csrf_token %}
+      <input type="hidden" name="action" value="to_review" />
+      <button type="submit" class="btn btn-secondary">Go to variance review</button>
+    </form>
+    <form method="post" style="display:inline;margin-left:auto" onsubmit="return confirm('Cancel this count session?');">{% csrf_token %}
+      <input type="hidden" name="action" value="cancel" />
+      <button type="submit" class="btn btn-danger">Cancel count</button>
+    </form>
+    {% elif session.status == 'review' %}
+    <form method="post" style="display:inline">{% csrf_token %}
+      <input type="hidden" name="action" value="reopen" />
+      <button type="submit" class="btn btn-secondary">Reopen draft for edits</button>
+    </form>
+    {% endif %}
+  </div>
+
+  <form method="post" id="count-entry-form">
+    {% csrf_token %}
+    <input type="hidden" name="action" value="save_counts" />
+
+    <div class="section-head">
+      <h3>Available lots</h3>
+      <span class="section-meta">{{ available_lines|length }} line{{ available_lines|length|pluralize }} · not on hold</span>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th style="width:2.5rem"></th>
+            <th>SKU</th>
+            <th>Lot</th>
+            <th>Vendor</th>
+            <th>UoM</th>
+            <th>System</th>
+            <th>Counted</th>
+            <th>Variance</th>
+            <th>Include</th>
+            <th>Notes</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% include "slurp_ui/inventory/_count_lines_rows.html" with section_lines=available_lines show_hold_hint=False empty_message="No available (non-hold) lines. On-hold lots are listed below, or add a beginning-balance / found lot." %}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="section-head on-hold">
+      <h3>On hold</h3>
+      <span class="section-meta">{{ on_hold_lines|length }} line{{ on_hold_lines|length|pluralize }} · count remaining qty; hold status is unchanged on post</span>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th style="width:2.5rem"></th>
+            <th>SKU</th>
+            <th>Lot</th>
+            <th>Vendor</th>
+            <th>UoM</th>
+            <th>System</th>
+            <th>Counted</th>
+            <th>Variance</th>
+            <th>Include</th>
+            <th>Notes</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% include "slurp_ui/inventory/_count_lines_rows.html" with section_lines=on_hold_lines show_hold_hint=True empty_message="No on-hold lots in this count." %}
+        </tbody>
+      </table>
+    </div>
+
+    {% if session.is_editable and lines %}
+    <div class="draft-bar">
+      <div class="hint">
+        <strong>Save draft</strong> before leaving — your counted qtys stay on this session until you post.
+        Unsaved edits show a yellow ring on the row icon.
+      </div>
+      <button type="submit" class="btn btn-primary">Save draft</button>
+    </div>
+    {% endif %}
+  </form>
+
+  {% if session.is_editable %}
+  <div class="add-card">
+    <h3 style="margin:0 0 0.65rem;font-size:1rem">Add found lot / beginning balance line</h3>
+    <form method="post" class="add-grid">
+      {% csrf_token %}
+      <input type="hidden" name="action" value="add_lot" />
+      <div>
+        <label for="item_id">Item *</label>
+        <select id="item_id" name="item_id" required>
+          <option value="">— Select item —</option>
+          {% for it in items %}
+          <option value="{{ it.id }}">{{ it.sku }} — {{ it.name }}{% if it.vendor %} ({{ it.vendor }}){% endif %}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label for="counted_qty">Counted qty *</label>
+        <input id="counted_qty" name="counted_qty" type="number" step="any" min="0" required />
+      </div>
+      <div>
+        <label for="vendor_lot_number">Vendor lot #</label>
+        <input id="vendor_lot_number" name="vendor_lot_number" />
+      </div>
+      <div>
+        <label for="manufacture_date">Mfg date</label>
+        <input id="manufacture_date" name="manufacture_date" type="date" />
+      </div>
+      <div>
+        <label for="expiration_date">Exp date</label>
+        <input id="expiration_date" name="expiration_date" type="date" />
+      </div>
+      <div>
+        <button type="submit" class="btn btn-primary">Add line</button>
+      </div>
+    </form>
+  </div>
+  {% endif %}
+</div>
+<script>
+(function () {
+  var form = document.getElementById('count-entry-form');
+  if (!form) return;
+
+  function norm(v) {
+    if (v == null) return '';
+    return String(v).trim();
+  }
+
+  function hasQty(v) {
+    v = norm(v);
+    if (!v) return false;
+    var n = Number(v);
+    return isFinite(n);
+  }
+
+  function setIcon(icon, status) {
+    if (!icon) return;
+    icon.classList.remove('ok', 'warn', 'bad');
+    if (status === 'complete') {
+      icon.classList.add('ok');
+      icon.textContent = '✓';
+      icon.title = 'Counted';
+    } else if (status === 'in_progress') {
+      icon.classList.add('warn');
+      icon.textContent = '!';
+      icon.title = 'Started — not finished';
+    } else {
+      icon.classList.add('bad');
+      icon.textContent = '✕';
+      icon.title = 'Not started';
+    }
+  }
+
+  function rowStatus(row) {
+    var qtyEl = row.querySelector('.counted-input');
+    var notesEl = row.querySelector('.notes-input');
+    var qty = qtyEl ? qtyEl.value : row.getAttribute('data-saved-qty');
+    var notes = notesEl ? notesEl.value : row.getAttribute('data-saved-notes');
+    var savedQty = norm(row.getAttribute('data-saved-qty'));
+    var savedNotes = norm(row.getAttribute('data-saved-notes'));
+    var dirty = norm(qty) !== savedQty || norm(notes) !== savedNotes;
+    row.classList.toggle('dirty', dirty);
+
+    if (hasQty(qty)) return 'complete';
+    if (norm(notes) || dirty) return 'in_progress';
+    return 'not_started';
+  }
+
+  function updateVariance(row) {
+    var qtyEl = row.querySelector('.counted-input');
+    var cell = row.querySelector('[data-variance-cell]');
+    if (!qtyEl || !cell) return;
+    var system = Number(cell.getAttribute('data-system') || 0);
+    if (!hasQty(qtyEl.value)) {
+      cell.textContent = '—';
+      return;
+    }
+    var v = Number(qtyEl.value) - system;
+    var span = document.createElement('span');
+    if (v > 0) span.className = 'var-pos';
+    else if (v < 0) span.className = 'var-neg';
+    span.textContent = (Math.round(v * 1000) / 1000).toString();
+    cell.textContent = '';
+    cell.appendChild(span);
+  }
+
+  function refreshAll() {
+    var complete = 0, progress = 0, notStarted = 0;
+    var rows = form.querySelectorAll('.count-line-row');
+    rows.forEach(function (row) {
+      var status = rowStatus(row);
+      setIcon(row.querySelector('[data-progress-icon]'), status);
+      updateVariance(row);
+      if (status === 'complete') complete += 1;
+      else if (status === 'in_progress') progress += 1;
+      else notStarted += 1;
+    });
+    var total = rows.length;
+    var pct = total ? Math.round(100 * complete / total) : 0;
+    var el;
+    if ((el = document.getElementById('stat-complete'))) el.textContent = String(complete);
+    if ((el = document.getElementById('stat-progress'))) el.textContent = String(progress);
+    if ((el = document.getElementById('stat-notstarted'))) el.textContent = String(notStarted);
+    if ((el = document.getElementById('stat-pct'))) el.textContent = pct + '%';
+  }
+
+  form.addEventListener('input', function (e) {
+    if (e.target && (e.target.classList.contains('counted-input') || e.target.classList.contains('notes-input'))) {
+      refreshAll();
+    }
+  });
+
+  window.addEventListener('beforeunload', function (e) {
+    if (form.dataset.allowUnload === '1') return;
+    if (form.querySelector('.count-line-row.dirty')) {
+      e.preventDefault();
+      e.returnValue = '';
+    }
+  });
+
+  form.addEventListener('submit', function () {
+    form.dataset.allowUnload = '1';
+  });
+
+  refreshAll();
+})();
+</script>
+{% endblock %}

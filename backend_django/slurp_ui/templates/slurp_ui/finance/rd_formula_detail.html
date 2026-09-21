@@ -13,9 +13,9 @@
       <div class="hs-record-identity">
         <span class="hs-avatar">{{ rd.family_letter }}</span>
         <div>
-          <h1 class="hs-record-title" style="margin:0">{{ rd.rd_code }}</h1>
+          <h1 class="hs-record-title" style="margin:0">{{ rd.display_label }}</h1>
           <div class="hs-record-meta">
-            <span>{{ rd.name }}</span>
+            <span class="hs-muted">{{ rd.rd_code }}</span>
             {% if rd.status == 'approved' %}<span class="hs-badge ok">Approved</span>
             {% elif rd.status == 'commercialized' %}<span class="hs-badge info">Commercialized</span>
             {% elif rd.status == 'scrapped' %}<span class="hs-badge">Scrapped</span>
@@ -152,20 +152,12 @@
 
   {% if rd and rd.status != 'scrapped' and rd.status != 'commercialized' %}
   <div class="hs-card" style="margin-top:1rem;max-width:520px">
-    <div class="hs-card-header"><h3>Mark commercialized</h3></div>
+    <div class="hs-card-header"><h3>Commercialize</h3></div>
     <div class="hs-card-body">
-      <p class="hs-section-note" style="margin-top:0">Keeps this R&amp;D record and code forever. Enter the commercial SKU assigned at commercialization.</p>
-      <form method="post">
-        {% csrf_token %}
-        <input type="hidden" name="action" value="commercialize" />
-        <div class="form-row">
-          <label>Commercial SKU *</label>
-          <input name="commercial_sku" placeholder="e.g. L1303" required />
-        </div>
-        <div class="hs-form-actions" style="margin-bottom:0">
-          <button type="submit" class="hs-btn hs-btn-primary" onclick="return confirm('Mark {{ rd.rd_code }} as commercialized?');">Save commercial SKU</button>
-        </div>
-      </form>
+      <p class="hs-section-note" style="margin-top:0">
+        Create the finished-good catalog item from this R&amp;D formula. That step assigns the commercial SKU and marks this code commercialized.
+      </p>
+      <a class="hs-btn hs-btn-primary" href="{% url 'slurp_ui:quality_create_finished_good' %}?rd={{ rd.pk }}">Commercialize via Create FG</a>
     </div>
   </div>
   {% endif %}

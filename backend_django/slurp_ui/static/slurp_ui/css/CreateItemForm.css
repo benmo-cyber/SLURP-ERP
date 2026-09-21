@@ -1,11 +1,22 @@
+.modal-page.create-item-modal,
 .create-item-modal {
   background: white;
   border-radius: 10px;
-  max-width: 560px;
-  width: 92%;
-  max-height: 92vh;
-  overflow-y: auto;
+  max-width: 760px;
+  width: calc(100% - 2rem);
+  box-sizing: border-box;
+  max-height: none;
+  overflow: visible;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
+  padding: 1.25rem;
+  margin: 1.25rem auto;
+}
+
+.app-main:has(.create-item-modal) {
+  overflow-x: hidden;
+  padding: 0 0.75rem 1.5rem;
+  box-sizing: border-box;
+  max-width: 100%;
 }
 
 .create-item-modal .modal-header {
@@ -152,8 +163,11 @@
 .create-item-panel {
   border: 1px solid #e8ecf0;
   border-radius: 8px;
-  padding: 1rem;
+  padding: 0.85rem 1rem;
   background: #fff;
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow: hidden;
 }
 
 .selected-item-info {
@@ -258,26 +272,42 @@
 }
 
 .pack-row select {
-  min-width: 5.5rem;
+  min-width: 7.5rem;
+  min-height: 2.6rem;
+  font-size: 1rem;
 }
 
 .pack-row input[type='text'] {
-  width: 5rem;
+  width: 6.5rem;
+  min-height: 2.6rem;
+  font-size: 1rem;
+  padding: 0.7rem 0.85rem;
+  border: 1px solid #d5dde4;
+  border-radius: 6px;
+  box-sizing: border-box;
 }
 
 form.create-item-form {
   padding: 0;
+  max-width: 100%;
+  overflow: visible;
 }
 
 .form-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 1rem 1.25rem;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 0.85rem;
+  max-width: 100%;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .form-group {
   display: flex;
   flex-direction: column;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
 }
 
 .form-group.full-width {
@@ -294,11 +324,24 @@ form.create-item-form {
 .form-group input,
 .form-group select,
 .form-group textarea {
-  padding: 0.6rem 0.75rem;
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+  min-width: 0 !important;
+  min-height: 2.5rem;
+  padding: 0.55rem 0.7rem;
   border: 1px solid #d5dde4;
   border-radius: 6px;
-  font-size: 0.9375rem;
+  font-size: 0.95rem;
+  line-height: 1.35;
   font-family: inherit;
+}
+
+.form-group select {
+  text-overflow: ellipsis;
+  overflow: hidden;
+  white-space: nowrap;
 }
 
 .form-group input:focus,
@@ -330,8 +373,10 @@ form.create-item-form {
 
 .input-with-unit {
   display: flex;
-  gap: 0.5rem;
+  gap: 0.4rem;
   align-items: stretch;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .input-with-unit input {
@@ -340,7 +385,9 @@ form.create-item-form {
 }
 
 .input-with-unit select {
-  width: 5.5rem;
+  width: 7.25rem;
+  min-width: 6.5rem;
+  max-width: 8rem;
   flex-shrink: 0;
 }
 
@@ -356,12 +403,46 @@ form.create-item-form {
   white-space: nowrap;
 }
 
+.family-add-toggle {
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center;
+  gap: 0.45rem;
+  font-weight: 500;
+  font-size: 0.875rem;
+  color: #2c3e50;
+  margin-top: 1.55rem;
+  cursor: pointer;
+  max-width: 100%;
+}
+
+.family-add-toggle input {
+  width: auto !important;
+  min-width: auto !important;
+  min-height: auto !important;
+  margin: 0;
+  flex-shrink: 0;
+}
+
 .form-hint {
   display: block;
   margin-top: 0.3rem;
   font-size: 0.78rem;
   color: #8b99a8;
   line-height: 1.35;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  max-width: 100%;
+}
+
+/* .form-group { display:flex } would otherwise override the [hidden] UA rule */
+.new-family-fields[hidden],
+.new-family-fields.is-collapsed {
+  display: none !important;
+}
+
+#new_family_code {
+  text-transform: uppercase;
 }
 
 .form-hint.form-hint-info {
@@ -468,6 +549,170 @@ form.create-item-form {
 
 @media (max-width: 640px) {
   .form-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* —— Edit item —— */
+.edit-item-page .edit-item-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  margin-bottom: 1.25rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid #e8ecf0;
+}
+
+.edit-item-page .edit-item-header h2 {
+  margin: 0 0 0.25rem 0;
+  font-size: 1.35rem;
+  font-weight: 600;
+  color: #1a252f;
+  letter-spacing: -0.01em;
+}
+
+.edit-item-page .edit-item-header-text {
+  min-width: 0;
+}
+
+.edit-item-page .edit-item-header .btn {
+  flex-shrink: 0;
+}
+
+.edit-pack-section {
+  margin-top: 1.75rem;
+  padding-top: 0.25rem;
+}
+
+.edit-pack-table-wrap {
+  overflow-x: auto;
+  margin: 0 -0.15rem 1rem;
+}
+
+.edit-pack-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+
+.edit-pack-table th,
+.edit-pack-table td {
+  padding: 0.55rem 0.65rem;
+  text-align: left;
+  border-bottom: 1px solid #eef1f4;
+  vertical-align: middle;
+}
+
+.edit-pack-table thead th {
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #7f8c9a;
+  background: #f7f9fb;
+  border-bottom: 1px solid #e8ecf0;
+}
+
+.edit-pack-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.edit-pack-empty {
+  color: #8b99a8;
+  font-style: italic;
+  padding: 0.85rem 0.65rem !important;
+}
+
+.edit-pack-badge {
+  display: inline-block;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: #1e6b3a;
+  background: #e8f6ee;
+  border-radius: 4px;
+  padding: 0.15rem 0.45rem;
+}
+
+.edit-pack-inline-form {
+  display: inline;
+  margin: 0;
+}
+
+.edit-pack-actions {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.btn-link {
+  background: none;
+  border: none;
+  padding: 0;
+  color: #3498db;
+  font: inherit;
+  font-size: 0.8125rem;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.btn-link:hover {
+  text-decoration: underline;
+  color: #2980b9;
+}
+
+.btn-link-danger {
+  color: #c0392b;
+}
+
+.btn-link-danger:hover {
+  color: #922b21;
+}
+
+.edit-pack-add {
+  margin: 0;
+  padding-top: 1rem;
+  border-top: 1px solid #eef1f4;
+}
+
+.edit-pack-add-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: end;
+}
+
+.edit-pack-add-grid .form-group:nth-child(4) {
+  grid-column: 1 / -1;
+}
+
+.edit-pack-default {
+  justify-content: center;
+  padding-bottom: 0.45rem;
+}
+
+.edit-pack-add-btn .btn {
+  width: 100%;
+  min-height: 2.5rem;
+}
+
+@media (max-width: 720px) {
+  .edit-pack-add-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .edit-pack-add-grid .form-group:nth-child(4),
+  .edit-pack-default,
+  .edit-pack-add-btn {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 520px) {
+  .edit-item-page .edit-item-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .edit-pack-add-grid {
     grid-template-columns: 1fr;
   }
 }

@@ -1,0 +1,122 @@
+{% extends "slurp_ui/base_module.html" %}
+{% block title %}Variance report {{ session.session_number }} — SLURP{% endblock %}
+{% block module_title %}Variance report — {{ session.session_number }}{% endblock %}
+{% block header_actions %}
+  <a href="{% url 'slurp_ui:inventory_count_detail' session.id %}" class="btn btn-secondary">Back to count entry</a>
+  <a href="{% url 'slurp_ui:inventory_counts' %}" class="btn btn-secondary">All counts</a>
+{% endblock %}
+{% block main %}
+<style>
+  .var-page .stats { display:flex; flex-wrap:wrap; gap:0.75rem; margin-bottom:1rem; }
+  .var-page .stat { background:#fff; border:1px solid #e2e8f0; border-radius:8px; padding:0.55rem 0.85rem; min-width:8rem; }
+  .var-page .stat .k { font-size:0.75rem; color:#64748b; text-transform:uppercase; }
+  .var-page .stat .v { font-size:1.15rem; font-weight:600; }
+  .var-page .toolbar { display:flex; flex-wrap:wrap; gap:0.5rem; align-items:center; margin-bottom:0.85rem; }
+  .var-page table { width:100%; border-collapse:collapse; font-size:0.88rem; background:#fff; }
+  .var-page th, .var-page td { padding:0.45rem 0.55rem; border-bottom:1px solid #e5e7eb; text-align:left; }
+  .var-page th { background: var(--app-header-bg, #2c3e50); color: var(--app-header-text, #fff); }
+  .var-page .var-pos { color:#166534; font-weight:600; }
+  .var-page .var-neg { color:#991b1b; font-weight:600; }
+  .var-page .panel { background:#fff; border:1px solid #e2e8f0; border-radius:8px; padding:1rem; margin-top:1rem; }
+  .var-page .muted { color:#64748b; font-size:0.9rem; }
+</style>
+<div class="var-page">
+  <p class="muted">
+    {{ session.get_count_type_display }} · {{ session.count_date }} ·
+    <strong>{{ session.get_status_display }}</strong>
+    {% if session.posted_at %} · posted {{ session.posted_at|date:"Y-m-d H:i" }} by {{ session.posted_by }}{% endif %}
+  </p>
+
+  <div class="stats">
+    <div class="stat"><div class="k">Lines</div><div class="v">{{ summary.line_count }}</div></div>
+    <div class="stat"><div class="k">With variance</div><div class="v">{{ summary.variance_count }}</div></div>
+    <div class="stat"><div class="k">Zero variance</div><div class="v">{{ summary.zero_variance_count }}</div></div>
+    <div class="stat"><div class="k">Uncounted</div><div class="v">{{ summary.uncounted_count }}</div></div>
+    <div class="stat"><div class="k">Net qty variance</div><div class="v">{{ summary.net_variance_qty|floatformat:-3 }}</div></div>
+    <div class="stat"><div class="k">Abs qty variance</div><div class="v">{{ summary.absolute_variance_qty|floatformat:-3 }}</div></div>
+  </div>
+
+  <div class="toolbar">
+    <a class="btn {% if show == 'variances' %}btn-primary{% else %}btn-secondary{% endif %}"
+       href="?show=variances">Variances only</a>
+    <a class="btn {% if show == 'all' %}btn-primary{% else %}btn-secondary{% endif %}"
+       href="?show=all">All counted lines</a>
+    <a class="btn {% if show == 'uncounted' %}btn-primary{% else %}btn-secondary{% endif %}"
+       href="?show=uncounted">Uncounted</a>
+
+    {% if session.status != 'posted' and session.status != 'cancelled' %}
+    {% if session.status == 'draft' %}
+    <form method="post" style="display:inline;margin-left:auto">{% csrf_token %}
+      <input type="hidden" name="action" value="to_review" />
+      <button type="submit" class="btn btn-secondary">Mark review ready</button>
+    </form>
+    {% endif %}
+    <form method="post" style="display:inline" onsubmit="return confirm('Post this count? Included lines will update lot quantities (or create lots). This cannot be undone from here.');">{% csrf_token %}
+      <input type="hidden" name="action" value="post" />
+      <button type="submit" class="btn btn-primary">Post adjustments</button>
+    </form>
+    {% if session.status == 'review' %}
+    <form method="post" style="display:inline">{% csrf_token %}
+      <input type="hidden" name="action" value="reopen" />
+      <button type="submit" class="btn btn-secondary">Reopen for edits</button>
+    </form>
+    {% endif %}
+    {% endif %}
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>SKU</th>
+        <th>Lot</th>
+        <th>Vendor</th>
+        <th>UoM</th>
+        <th>System</th>
+        <th>Counted</th>
+        <th>Variance</th>
+        <th>Include</th>
+        <th>Notes</th>
+        {% if session.status == 'posted' %}<th>Posted var</th>{% endif %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for ln in report_lines %}
+      <tr>
+        <td>
+          <strong>{{ ln.sku_snapshot }}</strong>
+          {% if ln.is_new_lot %}<span style="color:#1d4ed8;font-size:0.8rem"> new</span>{% endif %}
+        </td>
+        <td>{% firstof ln.lot_number_snapshot ln.created_lot.lot_number "—" %}</td>
+        <td>{{ ln.vendor_snapshot|default:"—" }}</td>
+        <td>{{ ln.unit_of_measure }}</td>
+        <td>{{ ln.system_qty|floatformat:-3 }}</td>
+        <td>{% if ln.counted_qty != None %}{{ ln.counted_qty|floatformat:-3 }}{% else %}—{% endif %}</td>
+        <td>
+          {% if ln.variance != None %}
+          <span class="{% if ln.variance > 0 %}var-pos{% elif ln.variance < 0 %}var-neg{% endif %}">
+            {{ ln.variance|floatformat:-3 }}
+          </span>
+          {% else %}—{% endif %}
+        </td>
+        <td>{% if ln.include_in_post %}Yes{% else %}No{% endif %}</td>
+        <td>{{ ln.line_notes|default:"—" }}</td>
+        {% if session.status == 'posted' %}
+        <td>{% if ln.posted_variance != None %}{{ ln.posted_variance|floatformat:-3 }}{% else %}—{% endif %}</td>
+        {% endif %}
+      </tr>
+      {% empty %}
+      <tr><td colspan="9" class="muted" style="padding:1rem">No lines in this view.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <div class="panel">
+    <h3 style="margin:0 0 0.4rem;font-size:1rem">Reconcile / post</h3>
+    <p class="muted" style="margin:0">
+      Posting sets each included lot’s <code>quantity_remaining</code> to the counted qty (via the same path as admin reconcile),
+      and creates new lots for beginning-balance / found lines. Lot transaction logs get
+      <code>reference_type=inventory_count</code>. No general-ledger entry is written yet.
+    </p>
+  </div>
+</div>
+{% endblock %}

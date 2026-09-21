@@ -63,6 +63,26 @@ def _round_lot_qty_remaining(value, lot):
     return round(v, 2)
 
 
+def inventory_empty_vendor_label(item_type=None):
+    """Bucket label when an item/lot has no PO or Item.vendor.
+
+    Manufactured finished goods are plant-made (no external vendor) → MFG.
+    Everything else with a missing vendor stays Unknown.
+    """
+    if (item_type or "") == "finished_good":
+        return "MFG"
+    return "Unknown"
+
+
+def inventory_empty_vendor_label_for_sku(sku_items):
+    """Default empty-vendor bucket for a SKU's inventory rollup rows."""
+    if sku_items and all(
+        (getattr(i, "item_type", None) or "") == "finished_good" for i in sku_items
+    ):
+        return "MFG"
+    return "Unknown"
+
+
 def _expiration_datetime_for_fg_output(item, base_dt):
     """If the finished good has a formula with shelf_life_months, return expiration datetime from base_dt."""
     if not item or getattr(item, 'item_type', None) != 'finished_good' or not base_dt:
@@ -2360,8 +2380,9 @@ class LotViewSet(viewsets.ModelViewSet):
         Pass item_id= (Item PK) to scope lots to one item row (recommended from Items / pack variants).
         Otherwise pass sku= (all Item rows sharing that SKU, same as inventory vendor rows).
 
-        Vendor rows are grouped by PO vendor (Unknown for lots with no PO). Closed repack output lots
-        have no PO; they are attributed to the same vendor as the repack batch input lot(s) when possible.
+        Vendor rows are grouped by PO vendor (Unknown/MFG for lots with no PO; MFG for manufactured
+        finished goods). Closed repack output lots have no PO; they are attributed to the same vendor
+        as the repack batch input lot(s) when possible.
         Optional query param inventory_table=finished_good|raw_material must match
         the active tab so distributed items show repack inputs vs outputs correctly (same rules as
         inventory_details).
@@ -2481,7 +2502,7 @@ class LotViewSet(viewsets.ModelViewSet):
             return str(vn).strip()
 
         if vendor is not None and vendor != '':
-            if vendor == 'Unknown':
+            if vendor in ('Unknown', 'MFG'):
                 lots = [lot for lot in lots if lot_row_vendor_name(lot) is None]
             else:
                 lots = [lot for lot in lots if lot_row_vendor_name(lot) == vendor]
@@ -2999,15 +3020,23 @@ class LotViewSet(viewsets.ModelViewSet):
                     lots_without_vendor.append(lot)
             
             # Get unique vendors from all items with this SKU (this ensures all items are represented)
-            # IMPORTANT: Include items with null/empty vendor as "Unknown"
+            # Empty Item.vendor → MFG for manufactured finished goods, else Unknown
+            empty_vendor_label = inventory_empty_vendor_label_for_sku(sku_items)
             item_vendors = set()
             for sku_item in sku_items:
-                vendor_name = sku_item.vendor if sku_item.vendor else "Unknown"
+                raw_vendor = (getattr(sku_item, "vendor", None) or "").strip()
+                item_type = getattr(sku_item, "item_type", None)
+                if not raw_vendor or (
+                    raw_vendor == "Unknown" and item_type == "finished_good"
+                ):
+                    vendor_name = inventory_empty_vendor_label(item_type)
+                else:
+                    vendor_name = raw_vendor
                 item_vendors.add(vendor_name)
             
             # ALWAYS ensure we have at least one vendor entry (even if empty)
             if not item_vendors:
-                item_vendors.add("Unknown")
+                item_vendors.add(empty_vendor_label)
             
             # Also get vendors from CostMaster and lots
             cost_master_vendors = set()
@@ -3020,29 +3049,30 @@ class LotViewSet(viewsets.ModelViewSet):
             # Combine all vendor sources - items, cost master, and lots
             all_vendors = item_vendors.union(cost_master_vendors).union(set(vendor_lots_map.keys()))
             
-            # If we have lots without vendor info, ensure "Unknown" is in the list
-            if lots_without_vendor and "Unknown" not in all_vendors:
-                all_vendors.add("Unknown")
+            # If we have lots without vendor info, ensure the empty-vendor bucket is present
+            if lots_without_vendor and empty_vendor_label not in all_vendors:
+                all_vendors.add(empty_vendor_label)
             
             # CRITICAL: Ensure we always have at least one vendor entry for every SKU
             # This guarantees all items are shown, even if they have no vendor and no lots
             if not all_vendors:
-                all_vendors = {"Unknown"}
+                all_vendors = {empty_vendor_label}
             
             # Create an inventory entry for each vendor
             for vendor_name in sorted(all_vendors):
                 # Get lots for this vendor
                 vendor_lots = list(vendor_lots_map.get(vendor_name, []))
-                # Lots with no PO (or unknown PO vendor) belong on Unknown only — not first vendor alphabetically
-                if vendor_name == "Unknown":
+                # Lots with no PO (or unknown PO vendor) belong on the empty bucket only —
+                # not the first vendor alphabetically
+                if vendor_name == empty_vendor_label:
                     vendor_lots.extend(lots_without_vendor)
                 
                 # Find the vendor-specific item - prioritize exact match
                 vendor_item = Item.objects.filter(sku=sku, vendor=vendor_name).first()
                 
-                # If no exact match and vendor is "Unknown", use any item with this SKU
+                # If no exact match and vendor is Unknown/MFG, use any item with this SKU
                 if not vendor_item:
-                    if vendor_name == "Unknown":
+                    if vendor_name in ("Unknown", "MFG"):
                         vendor_item = Item.objects.filter(sku=sku).first()
                     else:
                         # Try to find item with null/empty vendor for this SKU

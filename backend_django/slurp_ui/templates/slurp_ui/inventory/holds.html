@@ -1,0 +1,128 @@
+{% extends "slurp_ui/base_module.html" %}
+{% load static %}
+{% block title %}On-hold log — SLURP{% endblock %}
+{% block module_title %}On-hold log{% endblock %}
+{% block extra_css %}
+<link rel="stylesheet" href="{% static 'slurp_ui/css/HoldLog.css' %}?v=20260921a" />
+{% endblock %}
+{% block header_actions %}
+  <a class="hs-btn" href="{% url 'slurp_ui:inventory' %}?tab=raw_material">Inventory table</a>
+  <a class="hs-btn hs-btn-primary" href="{% url 'slurp_ui:inventory_check_in' %}">Check-In</a>
+{% endblock %}
+{% block main %}
+<div class="hold-log hs-bleed">
+  <section class="hold-log-hero">
+    <div class="hold-log-hero-copy">
+      <p class="hold-log-kicker">Receiving &amp; QC</p>
+      <h2>Investigation queue</h2>
+      <p class="hold-log-lede">
+        Lots parked on hold until someone documents the issue and decides:
+        accept into inventory, return to vendor, or discard.
+      </p>
+    </div>
+    <div class="hold-log-stats" aria-label="Hold case counts">
+      <a class="hold-log-stat {% if show == 'open' %}is-active{% endif %}" href="?show=open">
+        <span class="hold-log-stat-n">{{ open_count }}</span>
+        <span class="hold-log-stat-l">Open</span>
+      </a>
+      <a class="hold-log-stat {% if show == 'resolved' %}is-active{% endif %}" href="?show=resolved">
+        <span class="hold-log-stat-n">{{ resolved_count }}</span>
+        <span class="hold-log-stat-l">Resolved</span>
+      </a>
+      <a class="hold-log-stat {% if show == 'all' %}is-active{% endif %}" href="?show=all">
+        <span class="hold-log-stat-n">{{ open_count|add:resolved_count }}</span>
+        <span class="hold-log-stat-l">All</span>
+      </a>
+    </div>
+  </section>
+
+  <div class="hold-log-toolbar">
+    <div class="hold-log-seg" role="tablist" aria-label="Filter holds">
+      <a class="hold-log-seg-btn {% if show == 'open' %}is-active{% endif %}" href="?show=open" role="tab" aria-selected="{% if show == 'open' %}true{% else %}false{% endif %}">Open</a>
+      <a class="hold-log-seg-btn {% if show == 'resolved' %}is-active{% endif %}" href="?show=resolved" role="tab" aria-selected="{% if show == 'resolved' %}true{% else %}false{% endif %}">Resolved</a>
+      <a class="hold-log-seg-btn {% if show == 'all' %}is-active{% endif %}" href="?show=all" role="tab" aria-selected="{% if show == 'all' %}true{% else %}false{% endif %}">All</a>
+    </div>
+    <p class="hold-log-toolbar-hint">Showing {{ rows|length }} case{{ rows|length|pluralize }}</p>
+  </div>
+
+  <div class="hold-log-list" role="list">
+    {% for row in rows %}
+    <a class="hold-log-case {% if row.case.status == 'open' %}is-open{% else %}is-resolved{% endif %}"
+       href="{% url 'slurp_ui:inventory_hold_case' row.case.pk %}"
+       role="listitem">
+      <div class="hold-log-case-rail" aria-hidden="true"></div>
+      <div class="hold-log-case-body">
+        <div class="hold-log-case-top">
+          <div class="hold-log-case-identity">
+            <span class="hold-log-lot">{{ row.lot.lot_number }}</span>
+            <span class="hold-log-sku">{{ row.lot.item.sku }}</span>
+            {% if row.lot.item.vendor %}
+            <span class="hold-log-vendor">{{ row.lot.item.vendor }}</span>
+            {% endif %}
+          </div>
+          <div class="hold-log-case-flags">
+            {% if row.case.status == 'open' %}
+            <span class="hold-log-chip is-open">Open</span>
+            {% elif row.case.resolution == 'accept' %}
+            <span class="hold-log-chip is-accept">Accepted</span>
+            {% elif row.case.resolution == 'return' %}
+            <span class="hold-log-chip is-return">Returned</span>
+            {% elif row.case.resolution == 'discard' %}
+            <span class="hold-log-chip is-discard">Discarded</span>
+            {% else %}
+            <span class="hold-log-chip">Resolved</span>
+            {% endif %}
+          </div>
+        </div>
+
+        <p class="hold-log-summary">
+          {% if row.case.summary %}
+            {{ row.case.summary }}
+          {% elif row.last_note_preview %}
+            {{ row.last_note_preview }}{% if row.last_note_truncated %}…{% endif %}
+          {% else %}
+            <span class="hold-log-summary-empty">No summary yet — open to add notes or photos</span>
+          {% endif %}
+        </p>
+
+        <div class="hold-log-case-foot">
+          <span class="hold-log-qty">
+            <strong>{{ row.hold_qty|floatformat:-2 }}</strong>
+            {{ row.lot.item.unit_of_measure }} on hold
+          </span>
+          <span class="hold-log-dot" aria-hidden="true"></span>
+          <span>{{ row.note_count }} note{{ row.note_count|pluralize }}</span>
+          <span class="hold-log-dot" aria-hidden="true"></span>
+          <span>
+            {% if row.case.status == 'open' %}
+              Opened {{ row.case.opened_at|date:"M j, Y" }}
+            {% elif row.case.resolved_at %}
+              Resolved {{ row.case.resolved_at|date:"M j, Y" }}
+            {% else %}
+              Opened {{ row.case.opened_at|date:"M j, Y" }}
+            {% endif %}
+          </span>
+        </div>
+      </div>
+      <span class="hold-log-case-go" aria-hidden="true">Open log</span>
+    </a>
+    {% empty %}
+    <div class="hold-log-empty">
+      <p class="hold-log-empty-title">
+        {% if show == 'open' %}Nothing on hold right now{% elif show == 'resolved' %}No resolved cases yet{% else %}No hold cases yet{% endif %}
+      </p>
+      <p class="hold-log-empty-copy">
+        {% if show == 'open' %}
+          When check-in puts quantity on hold, it shows up here for investigation.
+        {% else %}
+          Resolved accepts, returns, and discards will appear in this list.
+        {% endif %}
+      </p>
+      {% if show == 'open' %}
+      <a class="hs-btn hs-btn-primary" href="{% url 'slurp_ui:inventory_check_in' %}">Go to Check-In</a>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endblock %}

@@ -45,14 +45,20 @@ from .finance import (
 from .inventory import (
     inventory_cancel_po,
     inventory_check_in,
+    inventory_count_detail,
+    inventory_count_variances,
+    inventory_counts,
     inventory_create_item,
     inventory_create_po,
     inventory_edit_item,
+    inventory_holds,
+    inventory_hold_case,
     inventory_indirect_checkout,
     inventory_issue_po,
     inventory_items,
     inventory_logs,
     inventory_lot_hold,
+    inventory_lot_hold_log,
     inventory_lot_reconcile,
     inventory_lot_release,
     inventory_po_pdf,
@@ -60,6 +66,7 @@ from .inventory import (
     inventory_reverse_check_in,
     inventory_revise_po,
     inventory_table,
+    inventory_update_po_tracking,
 )
 from .production import (
     production_adjust_batch,
@@ -116,7 +123,7 @@ from .sales import (
     sales_revert_order,
     sales_reverse_shipment,
 )
-from .shell import import_sample_xml, toggle_god_mode
+from .shell import toggle_god_mode
 
 __all__ = [
     "login_view",
@@ -124,7 +131,6 @@ __all__ = [
     "forgot_password",
     "reset_password",
     "toggle_god_mode",
-    "import_sample_xml",
     "inventory_table",
     "inventory_items",
     "inventory_purchase_orders",
@@ -132,6 +138,7 @@ __all__ = [
     "inventory_po_pdf",
     "inventory_cancel_po",
     "inventory_revise_po",
+    "inventory_update_po_tracking",
     "inventory_logs",
     "inventory_check_in",
     "inventory_create_item",
@@ -140,8 +147,14 @@ __all__ = [
     "inventory_indirect_checkout",
     "inventory_reverse_check_in",
     "inventory_lot_hold",
+    "inventory_lot_hold_log",
     "inventory_lot_release",
     "inventory_lot_reconcile",
+    "inventory_holds",
+    "inventory_hold_case",
+    "inventory_counts",
+    "inventory_count_detail",
+    "inventory_count_variances",
     "sales_crm",
     "sales_orders",
     "sales_calendar",
