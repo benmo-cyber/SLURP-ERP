@@ -10,7 +10,7 @@
      title="Reverse a mistaken check-in (removes receipt lot, rolls back PO received qty when allowed)">Reverse check-in</a>
 {% endblock %}
 {% block main %}
-<div class="inventory-table-page">
+<div class="inventory-table-page{% if expand_vendor != None %} has-lot-open{% endif %}">
   <div class="inventory-table-controls" style="display:flex;justify-content:space-between;align-items:center;gap:1rem;flex-wrap:wrap;margin-bottom:1rem">
     <div class="inventory-tabs" style="display:flex;gap:0.35rem">
       <a class="btn {% if tab == 'finished_good' %}btn-primary{% else %}btn-secondary{% endif %}"
@@ -27,6 +27,10 @@
       <a href="?tab={{ tab }}&uom=kg{% if expand_sku %}&sku={{ expand_sku|urlencode }}{% endif %}{% if expand_vendor != None %}&vendor={{ expand_vendor|urlencode }}{% endif %}"
          class="toggle-btn {% if display_uom == 'kg' %}active{% endif %}"
          style="padding:0.4rem 0.9rem;text-decoration:none;background:{% if display_uom == 'kg' %}#1e40af{% else %}#fff{% endif %};color:{% if display_uom == 'kg' %}#fff{% else %}#334155{% endif %}">kg</a>
+      <a href="?tab={{ tab }}&uom=native{% if expand_sku %}&sku={{ expand_sku|urlencode }}{% endif %}{% if expand_vendor != None %}&vendor={{ expand_vendor|urlencode }}{% endif %}"
+         class="toggle-btn {% if display_uom == 'native' %}active{% endif %}"
+         title="Each row in its stored item UoM (no lbs/kg conversion)"
+         style="padding:0.4rem 0.9rem;text-decoration:none;background:{% if display_uom == 'native' %}#1e40af{% else %}#fff{% endif %};color:{% if display_uom == 'native' %}#fff{% else %}#334155{% endif %}">Native</a>
     </div>
   </div>
 
@@ -39,7 +43,7 @@
           <th>Type</th>
           <th>Category</th>
           <th>Vendor</th>
-          <th>Pack / UoM</th>
+          <th>Pack size</th>
           <th>Available</th>
           {% if show_on_order %}<th>On Order</th>{% endif %}
           <th>Alloc. Sales</th>
@@ -50,13 +54,18 @@
       </thead>
       <tbody>
         {% for row in rows %}
-        <tr class="sku-master-row {% if row.on_hold_flag %}on-hold{% endif %}">
+        <tr id="inv-sku-{{ row.sku|slugify }}" class="sku-master-row {% if row.on_hold_flag %}on-hold{% endif %}{% if row.expanded %} is-expanded{% endif %}">
           <td>
             <div class="sku-cell">
               {% if row.expanded %}
               <a class="expand-btn" href="?tab={{ tab }}&uom={{ display_uom }}" title="Collapse">▾</a>
+              {% elif row.sole_vendor %}
+              <a class="expand-btn"
+                 href="?tab={{ tab }}&uom={{ display_uom }}&sku={{ row.sku|urlencode }}&vendor={{ row.sole_vendor|urlencode }}"
+                 title="Expand lots">▸</a>
               {% else %}
-              <a class="expand-btn" href="?tab={{ tab }}&uom={{ display_uom }}&sku={{ row.sku|urlencode }}" title="Expand vendors">▸</a>
+              <a class="expand-btn" href="?tab={{ tab }}&uom={{ display_uom }}&sku={{ row.sku|urlencode }}"
+                 title="Expand vendors">▸</a>
               {% endif %}
               <span class="sku-master-label">{{ row.sku }}</span>
               {% if row.vendor_count > 1 %}<span class="vendor-count-badge">{{ row.vendor_count }}</span>{% endif %}
@@ -66,24 +75,28 @@
           <td><span class="inventory-type-badge inventory-type-badge--{{ row.item_type|default:'unknown' }}">{{ row.item_type }}</span></td>
           <td><span class="inventory-category-badge">{{ row.product_category|default:"—" }}</span></td>
           <td>{{ row.vendors_label }}</td>
-          <td>{{ row.pack_size_unit }}</td>
-          <td class="{% if row.available > 0 %}available{% else %}unavailable{% endif %}">{{ row.available|floatformat:2 }} {{ display_uom }}</td>
-          {% if show_on_order %}<td class="{% if row.on_order > 0 %}on-order{% endif %}">{{ row.on_order|floatformat:2 }}</td>{% endif %}
-          <td>{{ row.allocated_to_sales|floatformat:2 }}</td>
-          <td>{{ row.allocated_to_production|floatformat:2 }}</td>
-          <td>{{ row.on_hold|floatformat:2 }}</td>
+          <td>{{ row.pack_label|default:row.pack_size_unit }}</td>
+          <td class="{% if row.available > 0 %}available{% else %}unavailable{% endif %}">{{ row.available|floatformat:2 }} {{ row.qty_uom }}</td>
+          {% if show_on_order %}<td class="{% if row.on_order > 0 %}on-order{% endif %}">{{ row.on_order|floatformat:2 }} {{ row.qty_uom }}</td>{% endif %}
+          <td>{{ row.allocated_to_sales|floatformat:2 }} {{ row.qty_uom }}</td>
+          <td>{{ row.allocated_to_production|floatformat:2 }} {{ row.qty_uom }}</td>
+          <td>{{ row.on_hold|floatformat:2 }} {{ row.qty_uom }}</td>
           <td>{{ row.lot_count }}</td>
         </tr>
 
         {% if row.expanded %}
           {% for v in row.vendors %}
-          <tr class="vendor-row {% if v.on_hold > 0 %}on-hold{% endif %}">
+          <tr id="inv-vendor-{{ row.sku|slugify }}-{{ v.vendor|default:'unknown'|slugify }}"
+              class="vendor-row {% if v.on_hold > 0 %}on-hold{% endif %}{% if v.expanded %} is-expanded{% endif %}">
             <td>
               <div class="sku-cell" style="padding-left:1.25rem">
                 {% if v.expanded %}
-                <a class="expand-btn" href="?tab={{ tab }}&uom={{ display_uom }}&sku={{ row.sku|urlencode }}" title="Collapse lots">▾</a>
+                <a class="expand-btn" href="?tab={{ tab }}&uom={{ display_uom }}&sku={{ row.sku|urlencode }}"
+                   title="Collapse lots">▾</a>
                 {% else %}
-                <a class="expand-btn" href="?tab={{ tab }}&uom={{ display_uom }}&sku={{ row.sku|urlencode }}&vendor={{ v.vendor|urlencode }}" title="Expand lots">▸</a>
+                <a class="expand-btn"
+                   href="?tab={{ tab }}&uom={{ display_uom }}&sku={{ row.sku|urlencode }}&vendor={{ v.vendor|urlencode }}"
+                   title="Expand lots">▸</a>
                 {% endif %}
                 <span>{{ row.sku }}</span>
               </div>
@@ -92,12 +105,12 @@
             <td><span class="inventory-type-badge">{{ v.item_type }}</span></td>
             <td>{{ v.product_category|default:"—" }}</td>
             <td><strong>{{ v.vendor }}</strong></td>
-            <td>{{ v.pack_size_unit }}</td>
-            <td class="{% if v.available > 0 %}available{% else %}unavailable{% endif %}">{{ v.available|floatformat:2 }} {{ display_uom }}</td>
-            {% if show_on_order %}<td>{{ v.on_order|floatformat:2 }}</td>{% endif %}
-            <td>{{ v.allocated_to_sales|floatformat:2 }}</td>
-            <td>{{ v.allocated_to_production|floatformat:2 }}</td>
-            <td>{{ v.on_hold|floatformat:2 }}</td>
+            <td>{{ v.pack_label|default:v.pack_size_unit }}</td>
+            <td class="{% if v.available > 0 %}available{% else %}unavailable{% endif %}">{{ v.available|floatformat:2 }} {{ v.qty_uom }}</td>
+            {% if show_on_order %}<td>{{ v.on_order|floatformat:2 }} {{ v.qty_uom }}</td>{% endif %}
+            <td>{{ v.allocated_to_sales|floatformat:2 }} {{ v.qty_uom }}</td>
+            <td>{{ v.allocated_to_production|floatformat:2 }} {{ v.qty_uom }}</td>
+            <td>{{ v.on_hold|floatformat:2 }} {{ v.qty_uom }}</td>
             <td>{{ v.lot_count }}</td>
           </tr>
 
@@ -105,7 +118,7 @@
           <tr class="lot-details-row">
             <td colspan="{% if show_on_order %}12{% else %}11{% endif %}" class="lot-details-cell">
               <div class="lot-breakdown">
-                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem">
+                <div class="lot-breakdown-head">
                   <strong>Lots — {{ row.sku }} / {{ v.vendor }}</strong>
                   {% if not deeper %}
                   <a class="btn btn-secondary" style="padding:0.3rem 0.6rem;font-size:0.85rem"
@@ -145,8 +158,8 @@
                         <td>{{ lot.tracking }}</td>
                         <td>{% if lot.received_date %}{{ lot.received_date|slice:":10" }}{% else %}—{% endif %}</td>
                         <td class="lot-table-col-qty">{{ lot.quantity|floatformat:2 }} {{ lot.uom }}</td>
-                        <td class="lot-table-col-qty">{{ lot.available|floatformat:2 }}</td>
-                        <td class="lot-table-col-qty">{{ lot.on_hold|floatformat:2 }}</td>
+                        <td class="lot-table-col-qty">{{ lot.available|floatformat:2 }} {{ lot.uom }}</td>
+                        <td class="lot-table-col-qty">{{ lot.on_hold|floatformat:2 }} {{ lot.uom }}</td>
                         <td><span class="status-badge status-{{ lot.status }}">{{ lot.status }}</span></td>
                         <td class="lot-table-col-committed">
                           S {{ lot.committed_sales|floatformat:2 }} · P {{ lot.committed_prod|floatformat:2 }}
@@ -190,4 +203,52 @@
     </table>
   </div>
 </div>
+<script>
+(function () {
+  try { history.scrollRestoration = 'manual'; } catch (e) {}
+
+  var main = document.querySelector('.inventory-main');
+  if (!main) return;
+
+  var scrollKey = 'inv_table_scroll_y';
+  var saved = null;
+
+  /* Drop any leftover hash so the browser does not fight our scroll container. */
+  if (location.hash) {
+    try {
+      history.replaceState(null, '', location.pathname + location.search);
+    } catch (e) {}
+  }
+
+  try {
+    saved = sessionStorage.getItem(scrollKey);
+    sessionStorage.removeItem(scrollKey);
+  } catch (e) {}
+
+  function saveScroll() {
+    try { sessionStorage.setItem(scrollKey, String(main.scrollTop)); } catch (e) {}
+  }
+
+  document.querySelectorAll(
+    '.inventory-table-page a.expand-btn, .inventory-table-page .unit-toggle a, .inventory-table-page .lot-breakdown a.btn'
+  ).forEach(function (a) {
+    a.addEventListener('click', saveScroll);
+  });
+
+  function restore() {
+    if (saved == null) return;
+    main.scrollTop = parseInt(saved, 10) || 0;
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', restore);
+  } else {
+    restore();
+  }
+  requestAnimationFrame(function () {
+    restore();
+    requestAnimationFrame(restore);
+  });
+})();
+</script>
 {% endblock %}

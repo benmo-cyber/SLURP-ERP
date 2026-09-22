@@ -325,7 +325,8 @@ def log_purchase_order_action(po, action, lot=None, notes=None):
     
     Args:
         po: The PurchaseOrder instance
-        action: One of 'created', 'updated', 'check_in', 'partial_check_in', 'cancelled', 'completed'
+        action: One of 'created', 'updated', 'check_in', 'partial_check_in',
+            'short_closed', 'cancelled', 'completed'
         lot: The Lot instance if this is a check-in
         notes: Additional context
     """
@@ -3689,9 +3690,11 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
                 pack_size_value = lot.pack_size.pack_size
                 pack_size_unit = lot.pack_size.pack_size_unit
                 
-                # Convert pack size to lbs if needed for comparison
+                # Convert pack size to lbs if needed for comparison (plant LBS_PER_KG = 2.2)
+                from .mass_quantity import convert_mass_uom
+
                 if pack_size_unit == 'kg':
-                    pack_size_in_lbs = pack_size_value * 2.2
+                    pack_size_in_lbs = convert_mass_uom(pack_size_value, 'kg', 'lbs')
                 elif pack_size_unit == 'lbs':
                     pack_size_in_lbs = pack_size_value
                 else:
@@ -3843,7 +3846,8 @@ class FormulaViewSet(viewsets.ModelViewSet):
                 formula=formula,
                 item_id=ingredient_data.get('item_id'),
                 percentage=ingredient_data.get('percentage', 0),
-                notes=ingredient_data.get('notes')
+                notes=ingredient_data.get('notes'),
+                match_by_parent=bool(ingredient_data.get('match_by_parent')),
             )
         
         # Return the formula with ingredients
@@ -3873,7 +3877,8 @@ class FormulaViewSet(viewsets.ModelViewSet):
                     formula=formula,
                     item_id=ingredient_data.get('item_id'),
                     percentage=ingredient_data.get('percentage', 0),
-                    notes=ingredient_data.get('notes')
+                    notes=ingredient_data.get('notes'),
+                    match_by_parent=bool(ingredient_data.get('match_by_parent')),
                 )
         
         # Return the formula with ingredients

@@ -1,9 +1,18 @@
 """
-Mass / batch quantity normalization.
+Mass / batch quantity normalization and plant-standard lbs↔kg conversion.
 
 Float drift from kg↔lbs conversions and summed inputs often yields 699.99 instead of 700.
 We round to 2 decimal places, then snap to the nearest integer when within 0.01
 (same tolerance as ProductionBatchInputSerializer.get_quantity_used).
+
+CRITICAL — plant mass factor
+----------------------------
+``LBS_PER_KG = 2.2`` is the single source of truth for inventory, production,
+batch tickets, and costing mass conversion. Do **not** use NIST 2.2046226218
+(or truncated 2.20462) anywhere in WWI / Slurp; those diverge from ticket qty
+display and accumulate inventory errors across batches.
+
+Prefer ``convert_mass_uom(...)`` over local ``* 2.2`` / ``/ 2.2``.
 """
 from __future__ import annotations
 

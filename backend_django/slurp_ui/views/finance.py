@@ -501,7 +501,9 @@ def _finance_chart_payload(today: date) -> dict[str, Any]:
             continue
         cost = cm.landed_cost_per_lb
         if cost is None and cm.landed_cost_per_kg:
-            cost = float(cm.landed_cost_per_kg) / 2.20462
+            from erp_core.mass_quantity import LBS_PER_KG
+
+            cost = float(cm.landed_cost_per_kg) / LBS_PER_KG
         if cost is None and cm.price_per_lb:
             cost = float(cm.price_per_lb)
         if not cost or float(cost) <= 0:

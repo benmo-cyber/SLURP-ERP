@@ -35,6 +35,11 @@ urlpatterns = [
         name="inventory_cancel_po",
     ),
     path(
+        "inventory/purchase-orders/<int:pk>/accept-short/",
+        views.inventory_accept_short_po,
+        name="inventory_accept_short_po",
+    ),
+    path(
         "inventory/purchase-orders/<int:pk>/revise/",
         views.inventory_revise_po,
         name="inventory_revise_po",
@@ -51,6 +56,11 @@ urlpatterns = [
     ),
     path("inventory/logs/", views.inventory_logs, name="inventory_logs"),
     path("inventory/check-in/", views.inventory_check_in, name="inventory_check_in"),
+    path(
+        "inventory/material-activity/",
+        views.inventory_material_activity,
+        name="inventory_material_activity",
+    ),
     path(
         "inventory/create-item/",
         views.inventory_create_item,

@@ -39,7 +39,7 @@ interface InventoryDetail {
   level?: 'sku' | 'vendor'  // Hierarchy level
   vendor_count?: number  // Number of vendors for SKU
   vendors?: InventoryDetail[]  // Nested vendor entries
-  pack_sizes?: { pack_size: number; pack_size_unit: string }[]
+  pack_sizes?: { pack_size: number; pack_size_unit: string; is_default?: boolean }[]
   sku_parent_code?: string
   sku_pack_suffix?: string
   sku_family_warnings?: SkuFamilyWarning[]
@@ -630,7 +630,19 @@ function InventoryTable() {
             </span>
           </td>
           <td>All Vendors</td>
-          <td>{detail.sku_pack_suffix ? <span title="Pack code from SKU">{detail.sku_pack_suffix}</span> : '-'}</td>
+          <td>
+            {(() => {
+              const packs = detail.pack_sizes || []
+              const def = packs.find((p) => p.is_default) || packs[0]
+              if (def) return `${def.pack_size} ${def.pack_size_unit}`
+              if (detail.pack_size) return `${detail.pack_size} ${unit}`
+              return detail.sku_pack_suffix ? (
+                <span title="Pack code from SKU">{detail.sku_pack_suffix}</span>
+              ) : (
+                '-'
+              )
+            })()}
+          </td>
           <td className={detail.available > 0 ? 'available' : 'unavailable'}>
             {displayAvailable} {displayUnit}
           </td>
@@ -653,7 +665,13 @@ function InventoryTable() {
                         const vendorDisplayOnOrder = vendorUnit !== 'ea' ? convertQuantity(vendorDetail.on_order, vendorUnit) : formatNumber(vendorDetail.on_order, 0)
                         const vendorDisplayAvailable = vendorUnit !== 'ea' ? convertQuantity(vendorDetail.available, vendorUnit) : formatNumber(vendorDetail.available, 0)
                         const vendorDisplayUnit = getDisplayUnit(vendorUnit)
-                        const vendorPackSizeDisplay = vendorDetail.pack_size ? `${vendorDetail.pack_size} ${vendorUnit}` : '-'
+                        const vendorPackSizeDisplay = (() => {
+                          const packs = vendorDetail.pack_sizes || []
+                          const def = packs.find((p) => p.is_default) || packs[0]
+                          if (def) return `${def.pack_size} ${def.pack_size_unit}`
+                          if (vendorDetail.pack_size) return `${vendorDetail.pack_size} ${vendorUnit}`
+                          return '-'
+                        })()
 
                         const vendorRowKey = `${vendorDetail.item_sku}_${vendorDetail.vendor}`
                         const isVendorExpanded = expandedRows.has(vendorRowKey)

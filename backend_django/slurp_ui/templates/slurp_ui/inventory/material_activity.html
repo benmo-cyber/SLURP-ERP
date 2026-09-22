@@ -1,0 +1,205 @@
+{% extends "slurp_ui/base_module.html" %}
+{% load static %}
+{% block title %}Material activity — SLURP{% endblock %}
+{% block module_title %}Material activity{% endblock %}
+{% block extra_css %}
+<link rel="stylesheet" href="{% static 'slurp_ui/css/MaterialActivity.css' %}?v=20260922a" />
+{% endblock %}
+{% block header_actions %}
+  <a class="hs-btn" href="{% url 'slurp_ui:inventory_logs' %}">Logs</a>
+  <a class="hs-btn" href="{% url 'slurp_ui:inventory' %}">Inventory table</a>
+{% endblock %}
+{% block main %}
+<div class="mat-act hs-bleed">
+  <section class="mat-act-hero">
+    <div class="mat-act-hero-copy">
+      <p class="mat-act-kicker">Inventory activity</p>
+      <h2>Material activity</h2>
+      <p class="mat-act-lede">
+        Totals for brought in, made, shipped, and returned over a date range.
+        Use <strong>Parent family</strong> to roll pack variants together (e.g. D1307 across L/K suffixes).
+      </p>
+    </div>
+  </section>
+
+  <div class="mat-act-body">
+    <form method="get" class="mat-act-filters">
+      <div class="mat-act-filters-grid">
+        <div class="mat-act-field mat-act-field--subject">
+          <label for="subject">SKU or parent</label>
+          <input id="subject" name="subject" value="{{ subject }}" placeholder="e.g. D1307 or D1307L0040" required />
+        </div>
+        <div class="mat-act-field">
+          <label for="scope">Match</label>
+          <select id="scope" name="scope">
+            <option value="sku" {% if scope == 'sku' %}selected{% endif %}>Exact SKU</option>
+            <option value="parent" {% if scope == 'parent' %}selected{% endif %}>Parent family</option>
+          </select>
+        </div>
+        <div class="mat-act-field">
+          <label for="date_from">From</label>
+          <input id="date_from" name="date_from" type="date" value="{{ date_from }}" />
+        </div>
+        <div class="mat-act-field">
+          <label for="date_to">To</label>
+          <input id="date_to" name="date_to" type="date" value="{{ date_to }}" />
+        </div>
+        <div class="mat-act-field">
+          <label for="vendor">Vendor</label>
+          <input id="vendor" name="vendor" value="{{ vendor }}" placeholder="Optional" />
+        </div>
+        <div class="mat-act-field">
+          <label for="breakdown">Break down by</label>
+          <select id="breakdown" name="breakdown">
+            {% for val, label in breakdown_choices %}
+            <option value="{{ val }}" {% if breakdown == val %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+      </div>
+
+      <div class="mat-act-filters-foot">
+        <div class="mat-act-flows">
+          <span class="mat-act-flows-label">Flows</span>
+          {% for f, label in flow_meta %}
+          <label class="mat-act-flow">
+            <input type="checkbox" name="flow_{{ f }}" value="1" {% if f in flows %}checked{% endif %} />
+            {{ label }}
+          </label>
+          {% endfor %}
+        </div>
+        <div class="mat-act-actions">
+          <button type="submit" class="hs-btn hs-btn-primary">Run</button>
+          {% if subject %}
+          <a class="hs-btn" href="?subject={{ subject|urlencode }}&amp;scope={{ scope }}&amp;date_from={{ date_from }}&amp;date_to={{ date_to }}&amp;vendor={{ vendor|urlencode }}&amp;breakdown={{ breakdown }}{% for f in flows %}&amp;flow_{{ f }}=1{% endfor %}&amp;export=csv">Export CSV</a>
+          <a class="hs-btn" href="{{ logs_url }}">View events</a>
+          {% endif %}
+        </div>
+      </div>
+    </form>
+
+    {% if not subject %}
+    <div class="mat-act-empty">
+      <p class="mat-act-empty-title">Pick a material to summarize</p>
+      <p class="mat-act-empty-copy">
+        Enter a SKU or parent code, set the date range, then click Run.
+        Parent family rolls all pack variants into one view.
+      </p>
+    </div>
+    {% else %}
+
+    {% if result.skus %}
+    <p class="mat-act-meta">
+      <span>Matching SKUs:</span>
+      <span class="mat-act-meta-skus"><strong>{{ result.skus|join:", " }}</strong></span>
+      <span aria-hidden="true">·</span>
+      <span>{{ result.event_count }} event{{ result.event_count|pluralize }} scanned</span>
+      {% if result.mixed_uom %}
+      <span class="mat-act-warn">Mixed UoMs — do not sum lbs/kg</span>
+      {% endif %}
+    </p>
+    {% endif %}
+
+    <div class="mat-act-tiles" aria-label="Flow totals">
+      {% for tile in tiles %}
+      <div class="mat-act-tile" data-flow="{{ tile.flow }}">
+        <div class="mat-act-tile-label">{{ tile.label }}</div>
+        <div class="mat-act-tile-value">
+          {{ tile.qty|floatformat:-2 }}
+          <span class="mat-act-tile-uom">{{ tile.uom }}</span>
+        </div>
+        {% if tile.mixed %}
+        <div class="mat-act-tile-note">Mixed units</div>
+        {% endif %}
+      </div>
+      {% empty %}
+      <div class="mat-act-empty" style="grid-column:1/-1">
+        <p class="mat-act-empty-title">No flows selected</p>
+        <p class="mat-act-empty-copy">Check at least one flow above and run again.</p>
+      </div>
+      {% endfor %}
+    </div>
+
+    <div class="mat-act-panel">
+      <div class="mat-act-panel-head">
+        <h3>
+          {% if breakdown == 'none' %}Totals
+          {% elif breakdown == 'month' %}By month
+          {% elif breakdown == 'vendor' %}By vendor
+          {% elif breakdown == 'sku' %}By child SKU
+          {% else %}By flow{% endif %}
+        </h3>
+        <p class="mat-act-panel-hint">Native quantity · one UoM per row</p>
+      </div>
+      <div class="mat-act-table-wrap">
+        {% if breakdown == 'none' %}
+        <table class="mat-act-table">
+          <thead>
+            <tr>
+              <th>Flow</th>
+              <th>Quantity</th>
+              <th>UoM</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for tile in tiles %}
+            <tr>
+              <td><span class="mat-act-chip" data-flow="{{ tile.flow }}">{{ tile.label }}</span></td>
+              <td class="qty">{{ tile.qty|floatformat:-2 }}</td>
+              <td class="uom">{{ tile.uom }}{% if tile.mixed %} (mixed){% endif %}</td>
+            </tr>
+            {% empty %}
+            <tr>
+              <td colspan="3">
+                <div class="mat-act-empty" style="border:none;background:transparent;padding:2rem 1rem">
+                  <p class="mat-act-empty-title">No flows selected</p>
+                </div>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% else %}
+        <table class="mat-act-table">
+          <thead>
+            <tr>
+              <th>
+                {% if breakdown == 'month' %}Month
+                {% elif breakdown == 'vendor' %}Vendor
+                {% elif breakdown == 'sku' %}SKU
+                {% else %}Flow{% endif %}
+              </th>
+              {% if breakdown != 'flow' %}<th>Flow</th>{% endif %}
+              <th>Quantity</th>
+              <th>UoM</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in result.rows %}
+            <tr>
+              <td><strong>{{ row.label }}</strong></td>
+              {% if breakdown != 'flow' %}
+              <td><span class="mat-act-chip" data-flow="{{ row.flow }}">{{ row.flow_label }}</span></td>
+              {% endif %}
+              <td class="qty">{{ row.qty|floatformat:-2 }}</td>
+              <td class="uom">{{ row.uom }}{% if row.mixed_uom %} (mixed){% endif %}</td>
+            </tr>
+            {% empty %}
+            <tr>
+              <td colspan="4">
+                <div class="mat-act-empty" style="border:none;background:transparent;padding:2rem 1rem">
+                  <p class="mat-act-empty-title">No activity in this range</p>
+                  <p class="mat-act-empty-copy">Try a wider date range or different flows.</p>
+                </div>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% endif %}
+      </div>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

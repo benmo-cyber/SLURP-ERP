@@ -22,8 +22,12 @@ from django.views.decorators.http import require_http_methods
 
 
 
+from erp_core.formula_ingredient import (
+    build_parent_family_options,
+    ingredient_select_value,
+    resolve_ingredient_select_value,
+)
 from erp_core.models import (
-
     CriticalControlPoint,
 
     Formula,
@@ -1375,6 +1379,8 @@ def quality_create_finished_good(request: HttpRequest) -> HttpResponse:
 
         unique_ingredients.append(it)
 
+    parent_family_options = build_parent_family_options(unique_ingredients)
+
 
 
     ccps = CriticalControlPoint.objects.all().order_by("name")
@@ -1456,6 +1462,7 @@ def quality_create_finished_good(request: HttpRequest) -> HttpResponse:
             "finished-goods",
 
             ingredient_items=unique_ingredients,
+            parent_family_options=parent_family_options,
 
             ccps=ccps,
 
@@ -1565,17 +1572,41 @@ def quality_create_finished_good(request: HttpRequest) -> HttpResponse:
 
                     continue
 
+                try:
+
+
+                    resolved_id, match_by_parent = resolve_ingredient_select_value(str(item_id))
+
+
+                except (TypeError, ValueError) as exc:
+
+
+                    messages.error(request, f"Invalid ingredient selection: {exc}")
+
+
+                    continue
+
+
                 ingredients.append(
+
 
                     {
 
-                        "item_id": int(item_id),
+
+                        "item_id": resolved_id,
+
 
                         "percentage": pct,
 
+
                         "notes": (request.POST.get(f"ing_notes_{i}") or "").strip() or None,
 
+
+                        "match_by_parent": match_by_parent,
+
+
                     }
+
 
                 )
 
@@ -1729,6 +1760,8 @@ def quality_create_finished_good(request: HttpRequest) -> HttpResponse:
 
                                 notes=row["notes"],
 
+                                match_by_parent=bool(row.get("match_by_parent")),
+
                             )
 
                         if rd:
@@ -1873,11 +1906,12 @@ def quality_finished_good_detail(request: HttpRequest, pk: int) -> HttpResponse:
 
 
 
-    ingredient_items = Item.objects.filter(
-
-        item_type__in=["raw_material", "distributed_item"]
-
-    ).order_by("sku")[:500]
+    ingredient_items = list(
+        Item.objects.filter(
+            item_type__in=["raw_material", "distributed_item"]
+        ).order_by("sku")[:500]
+    )
+    parent_family_options = build_parent_family_options(ingredient_items)
 
     ccps = CriticalControlPoint.objects.all().order_by("name")
 
@@ -1979,17 +2013,41 @@ def quality_finished_good_detail(request: HttpRequest, pk: int) -> HttpResponse:
 
                 continue
 
+            try:
+
+
+                resolved_id, match_by_parent = resolve_ingredient_select_value(str(item_id))
+
+
+            except (TypeError, ValueError) as exc:
+
+
+                messages.error(request, f"Invalid ingredient selection: {exc}")
+
+
+                continue
+
+
             ingredients.append(
+
 
                 {
 
-                    "item_id": int(item_id),
+
+                    "item_id": resolved_id,
+
 
                     "percentage": pct,
 
+
                     "notes": (request.POST.get(f"ing_notes_{i}") or "").strip() or None,
 
+
+                    "match_by_parent": match_by_parent,
+
+
                 }
+
 
             )
 
@@ -2029,6 +2087,8 @@ def quality_finished_good_detail(request: HttpRequest, pk: int) -> HttpResponse:
 
                             notes=row["notes"],
 
+                            match_by_parent=bool(row.get("match_by_parent")),
+
                         )
 
                 messages.success(request, f"Saved formula for {item.sku}.")
@@ -2046,6 +2106,9 @@ def quality_finished_good_detail(request: HttpRequest, pk: int) -> HttpResponse:
 
 
     ingredients = list(formula.ingredients.select_related("item").all()) if formula else []
+    for _ing in ingredients:
+        _ing.select_value = ingredient_select_value(_ing)
+
 
     return render(
 
@@ -2064,6 +2127,8 @@ def quality_finished_good_detail(request: HttpRequest, pk: int) -> HttpResponse:
             ingredients=ingredients,
 
             ingredient_items=ingredient_items,
+
+            parent_family_options=parent_family_options,
 
             ccps=ccps,
 

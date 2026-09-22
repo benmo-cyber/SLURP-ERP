@@ -379,14 +379,28 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
       return
     }
 
-    // Filter lots to only show those that match formula ingredients by SKU (not vendor-specific item.id)
-    // This allows interchangeability of materials from different vendors
-    const ingredientSkus = formula.ingredients
-      .map(ing => ing.item?.sku)
-      .filter(Boolean)
-      .map(sku => sku?.trim().toUpperCase())
+    // Filter lots to formula ingredients: exact SKU, or entire parent family when match_by_parent
+    const lotMatchesAnyIngredient = (lot: Lot) => {
+      const lotSku = (lot.item?.sku || '').trim().toUpperCase()
+      const lotParent = ((lot.item as any)?.sku_parent_code || '').trim().toUpperCase()
+      return formula.ingredients.some((ing: any) => {
+        if (ing.match_by_parent) {
+          const parent = (
+            ing.parent_code ||
+            ing.item?.sku_parent_code ||
+            ''
+          )
+            .toString()
+            .trim()
+            .toUpperCase()
+          if (!parent) return lotSku === (ing.item?.sku || '').trim().toUpperCase()
+          return lotParent === parent || lotSku === parent
+        }
+        return lotSku === (ing.item?.sku || '').trim().toUpperCase()
+      })
+    }
     
-    if (ingredientSkus.length === 0) {
+    if (!formula.ingredients || formula.ingredients.length === 0) {
       console.warn('Formula ingredients have no SKUs:', formula.ingredients)
       setAvailableLots([])
       return
@@ -396,49 +410,25 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
       formulaId: formula.id,
       finishedGood: formula.finished_good?.sku,
       ingredientCount: formula.ingredients.length,
-      ingredientSkus,
-      ingredientDetails: formula.ingredients.map(ing => ({
+      ingredientDetails: formula.ingredients.map((ing: any) => ({
         id: ing.id,
         itemId: ing.item?.id,
         itemSku: ing.item?.sku,
-        itemName: ing.item?.name,
+        match_by_parent: !!ing.match_by_parent,
+        parent_code: ing.parent_code || ing.item?.sku_parent_code,
         percentage: ing.percentage
       })),
       totalLots: allLots.length,
-      allLotSkus: allLots.map(l => l.item?.sku).filter(Boolean),
-      allLotDetails: allLots.map(l => ({
-        lotId: l.id,
-        lotNumber: l.lot_number,
-        itemId: l.item?.id,
-        itemSku: l.item?.sku,
-        itemName: l.item?.name,
-        status: l.status,
-        quantityRemaining: lotNetAvailable(l)
-      }))
     })
     
     const filteredLots = allLots.filter((lot: Lot) => {
-      const lotSku = lot.item?.sku?.trim().toUpperCase()
-      const matchesSku = lotSku && ingredientSkus.includes(lotSku)
-      // Status might be undefined/null for older lots, so treat as accepted if not set
+      const matchesSku = lotMatchesAnyIngredient(lot)
       const isAccepted = !lot.status || lot.status === 'accepted'
       const hasQuantity = lotNetAvailable(lot) > 0
-      
-      if (matchesSku && !isAccepted) {
-        console.log('Lot matches SKU but not accepted:', lot.lot_number, lot.item.sku, 'status:', lot.status)
-      }
-      if (matchesSku && !hasQuantity) {
-        console.log('Lot matches SKU but no quantity:', lot.lot_number, lot.item.sku, 'remaining:', lotNetAvailable(lot))
-      }
-      if (!matchesSku && lot.item?.sku) {
-        console.log('Lot SKU does not match ingredients:', lot.lot_number, 'lot SKU:', lot.item.sku, 'ingredient SKUs:', ingredientSkus)
-      }
-      
       return matchesSku && isAccepted && hasQuantity
     })
     
     console.log('Available lots for formula:', {
-      ingredientSkus,
       totalLots: allLots.length,
       filteredLots: filteredLots.length,
       lots: filteredLots.map(l => ({ id: l.id, lot_number: l.lot_number, sku: l.item?.sku, qty: lotNetAvailable(l) }))
@@ -1076,7 +1066,23 @@ function CreateBatchTicket({ onClose, onSuccess }: CreateBatchTicketProps) {
                   // Lots for this row: formula ingredient (by SKU) or substitute item (by id)
                   const ingredientLots = useSubstitute
                     ? allLots.filter((lot: Lot) => lot.item.id === override!.substituteItemId)
-                    : availableLots.filter(lot => lot.item.sku === ingredient.item.sku)
+                    : availableLots.filter((lot: Lot) => {
+                        const lotSku = (lot.item?.sku || '').trim().toUpperCase()
+                        const lotParent = ((lot.item as any)?.sku_parent_code || '').trim().toUpperCase()
+                        if ((ingredient as any).match_by_parent) {
+                          const parent = (
+                            (ingredient as any).parent_code ||
+                            (ingredient.item as any)?.sku_parent_code ||
+                            ''
+                          )
+                            .toString()
+                            .trim()
+                            .toUpperCase()
+                          if (!parent) return lotSku === (ingredient.item?.sku || '').trim().toUpperCase()
+                          return lotParent === parent || lotSku === parent
+                        }
+                        return lot.item.sku === ingredient.item.sku
+                      })
                   const substituteItems = repackItems.filter(i => i.id !== ingredient.item.id)
                   // Total selected for this row only (from lots in ingredientLots)
                   let totalSelected = 0

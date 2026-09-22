@@ -10,6 +10,8 @@ from django.db.models import Exists, OuterRef, Sum
 from django.utils import timezone
 from django.utils.dateparse import parse_date
 
+from erp_core.mass_quantity import LBS_PER_KG
+
 
 class FinanceFormError(Exception):
     def __init__(self, message: str):
@@ -738,7 +740,7 @@ def margin_trend_rows(item_ids: list[int]) -> list[dict[str, Any]]:
         cost = None
         if cm:
             cost = cm.landed_cost_per_lb or (
-                (cm.landed_cost_per_kg / 2.2) if cm.landed_cost_per_kg else None
+                (cm.landed_cost_per_kg / LBS_PER_KG) if cm.landed_cost_per_kg else None
             )
         price = cp.unit_price if cp else None
         margin_pct = None

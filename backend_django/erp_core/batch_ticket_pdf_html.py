@@ -7,6 +7,7 @@ import logging
 import re
 
 from .html_pdf_common import html_string_to_pdf_bytes
+from .mass_quantity import LBS_PER_KG
 from .pdf_generator import get_logo_base64_cached
 
 logger = logging.getLogger(__name__)
@@ -20,7 +21,8 @@ CONFIDENTIALITY_FOOTER = (
 )
 BATCH_TICKET_UPDATED = "Batch Ticket – Updated 02/06/2026 (GDM) – Reviewed by GM – Effective Date 02/06/2026 (BP-13)"
 
-LB_PER_KG = 2.2  # plant standard; see mass_quantity.LBS_PER_KG
+# Alias kept for existing call sites in this module
+LB_PER_KG = LBS_PER_KG
 
 
 def _normalize_mass_unit_param(value):
@@ -179,8 +181,12 @@ def _build_batch_ticket_context(batch, mass_unit='native'):
         pass
 
     # Pick list: raw materials only (same as flowable)
+    from .pack_display import format_packs_partial_note, resolve_pack_size
+
     pick_rows = []
-    for batch_input in batch.inputs.select_related('lot__item').all():
+    for batch_input in batch.inputs.select_related('lot__item', 'lot__pack_size').prefetch_related(
+        'lot__item__pack_sizes'
+    ).all():
         lot = batch_input.lot
         item = lot.item
         if _is_indirect_material(item):
@@ -190,18 +196,26 @@ def _build_batch_ticket_context(batch, mass_unit='native'):
         uom = (getattr(item, 'unit_of_measure', None) or 'lbs').strip() or 'lbs'
         qty = batch_input.quantity_used  # stored in item's UoM
         qty_str, uom_out = _mass_line_display(qty, uom, mu)
+        # Packs + partial note uses the displayed qty/UoM so it matches the PDF line
+        try:
+            qty_display = float(qty_str.replace(',', ''))
+        except (TypeError, ValueError):
+            qty_display = float(qty)
+        pack_qty, pack_uom = resolve_pack_size(item=item, lot=lot)
+        packs_note = format_packs_partial_note(qty_display, uom_out, pack_qty, pack_uom)
         pick_rows.append({
             'sku': (item.sku or '')[:18],
             'vendor': vendor[:14],
             'vendor_lot': vendor_lot[:12],
             'qty': qty_str,
             'uom': uom_out[:10],
+            'packs_note': packs_note,
             'pick_init': '',
             'prod_init': '',
             'wildwood_lot': (lot.lot_number or '')[:14],
         })
     if not pick_rows:
-        pick_rows = [{'sku': '', 'vendor': '', 'vendor_lot': '', 'qty': '', 'uom': '', 'pick_init': '', 'prod_init': '', 'wildwood_lot': ''}]
+        pick_rows = [{'sku': '', 'vendor': '', 'vendor_lot': '', 'qty': '', 'uom': '', 'packs_note': '', 'pick_init': '', 'prod_init': '', 'wildwood_lot': ''}]
 
     # Pack off: indirect first, then outputs (same as flowable)
     pack_rows = []

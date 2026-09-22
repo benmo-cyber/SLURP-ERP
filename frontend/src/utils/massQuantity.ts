@@ -1,6 +1,8 @@
 import { formatNumber, formatNumberFlexible } from './formatNumber'
 
-/** Plant standard: 2.2 lb = 1 kg (must match backend erp_core.mass_quantity.LBS_PER_KG). */
+/** Plant standard: 2.2 lb = 1 kg (must match backend erp_core.mass_quantity.LBS_PER_KG).
+ *  Do not use NIST 2.2046226218 — inventory / batch tickets / costing all use 2.2.
+ */
 export const LBS_PER_KG = 2.2
 
 /** Same tolerance as backend erp_core.mass_quantity */

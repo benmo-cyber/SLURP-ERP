@@ -33,7 +33,10 @@ INVENTORY_NAV = [
     },
     {
         "label": "Activity",
-        "items": [{"id": "logs", "label": "Logs", "url_name": "slurp_ui:inventory_logs"}],
+        "items": [
+            {"id": "material-activity", "label": "Material activity", "url_name": "slurp_ui:inventory_material_activity"},
+            {"id": "logs", "label": "Logs", "url_name": "slurp_ui:inventory_logs"},
+        ],
     },
 ]
 

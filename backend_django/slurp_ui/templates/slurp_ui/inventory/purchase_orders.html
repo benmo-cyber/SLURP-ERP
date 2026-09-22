@@ -655,6 +655,28 @@
           <a class="hs-btn hs-btn-primary hs-btn-sm"
              href="{% url 'slurp_ui:inventory_check_in' %}?po={{ selected_po.id }}">Check-in</a>
           {% endif %}
+          {% if selected_po.can_accept_short %}
+          <details class="po-track-panel" style="display:inline-block;min-width:16rem;vertical-align:top">
+            <summary style="list-style:none;cursor:pointer">
+              <span class="po-track-toggle">Accept short</span>
+            </summary>
+            <form method="post" action="{% url 'slurp_ui:inventory_accept_short_po' selected_po.id %}"
+                  style="margin-top:0.5rem;padding:0.65rem;border:1px solid #bfdbfe;border-radius:8px;background:#eff6ff"
+                  onsubmit="return confirm('Accept short on {{ selected_po.po_number }}?\n\nThis closes remaining open qty and marks the PO received.\nIt does NOT revise the PO or email the vendor.');">
+              {% csrf_token %}
+              <input type="hidden" name="queue" value="{{ queue }}" />
+              <input type="hidden" name="layout" value="{{ layout }}" />
+              <label for="accept-short-reason" style="display:block;font-size:0.8rem;font-weight:600;margin-bottom:0.25rem">Short reason *</label>
+              <input id="accept-short-reason" name="short_reason" required
+                     placeholder="e.g. vendor short-shipped; accepting as complete"
+                     style="width:100%;margin-bottom:0.5rem" />
+              <p class="hs-muted" style="font-size:0.75rem;margin:0 0 0.5rem">
+                Clears leftover on-order only. Received lots and material AP stay as-is (received value).
+              </p>
+              <button type="submit" class="hs-btn hs-btn-sm hs-btn-primary">Close remaining</button>
+            </form>
+          </details>
+          {% endif %}
           {% if selected_po.status != 'completed' %}
           <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:inventory_revise_po' selected_po.id %}">Revise</a>
           <form method="post" action="{% url 'slurp_ui:inventory_cancel_po' selected_po.id %}">
@@ -870,6 +892,20 @@
         <a class="hs-btn hs-btn-primary" href="{% url 'slurp_ui:inventory_check_in' %}?po={{ po.id }}">Check in</a>
         {% endif %}
         <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:inventory_po_pdf' po.id %}" target="_blank">PDF</a>
+        {% if po.can_accept_short %}
+        <details class="po-track-panel" style="display:inline-block;min-width:14rem">
+          <summary style="list-style:none;cursor:pointer"><span class="po-track-toggle">Accept short</span></summary>
+          <form method="post" action="{% url 'slurp_ui:inventory_accept_short_po' po.id %}"
+                style="margin-top:0.45rem;padding:0.55rem;border:1px solid #bfdbfe;border-radius:8px;background:#eff6ff"
+                onsubmit="return confirm('Accept short on {{ po.po_number }}?\n\nCloses remaining open qty. Does NOT revise or email the vendor.');">
+            {% csrf_token %}
+            <input type="hidden" name="queue" value="{{ queue }}" />
+            <input type="hidden" name="layout" value="{{ layout }}" />
+            <input name="short_reason" required placeholder="Short reason *" style="width:100%;margin-bottom:0.4rem" />
+            <button type="submit" class="hs-btn hs-btn-sm hs-btn-primary">Close remaining</button>
+          </form>
+        </details>
+        {% endif %}
         {% if po.status != 'completed' and po.status != 'cancelled' and po.status != 'superseded' %}
         <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:inventory_revise_po' po.id %}">Revise</a>
         <form method="post" action="{% url 'slurp_ui:inventory_cancel_po' po.id %}">

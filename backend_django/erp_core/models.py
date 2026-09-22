@@ -411,6 +411,7 @@ class InventoryTransaction(models.Model):
         ('repack_output', 'Repack Output'),
         ('indirect_material_consumption', 'Indirect Material Consumption'),
         ('indirect_material_checkout', 'Indirect Material Checkout'),
+        ('return', 'Customer Return Restock'),
     ]
     
     transaction_type = models.CharField(max_length=30, choices=TRANSACTION_TYPE_CHOICES)
@@ -440,6 +441,7 @@ class LotTransactionLog(models.Model):
         ('reversal', 'Reversal/Cancellation'),
         ('indirect_material_consumption', 'Indirect Material Consumption'),
         ('indirect_material_checkout', 'Indirect Material Checkout'),
+        ('return', 'Customer Return Restock'),
     ]
     
     lot = models.ForeignKey(Lot, on_delete=models.CASCADE, related_name='transaction_logs')
@@ -535,6 +537,7 @@ class PurchaseOrderLog(models.Model):
         ('updated', 'Updated'),
         ('check_in', 'Check-In'),
         ('partial_check_in', 'Partial Check-In'),
+        ('short_closed', 'Accepted Short / Closed Remaining'),
         ('cancelled', 'Cancelled'),
         ('completed', 'Completed'),
     ]
@@ -917,7 +920,14 @@ class FormulaItem(models.Model):
     item = models.ForeignKey(Item, on_delete=models.CASCADE, related_name='formula_ingredients')
     percentage = models.FloatField()
     notes = models.TextField(blank=True, null=True)
-    
+    match_by_parent = models.BooleanField(
+        default=False,
+        help_text=(
+            "When True, batch tickets may use any pack-size SKU in this item's parent family "
+            "(sku_parent_code), including variants added later. When False, only this exact SKU."
+        ),
+    )
+
     class Meta:
         ordering = ['id']
         unique_together = [['formula', 'item']]
@@ -1556,16 +1566,18 @@ class CostMaster(models.Model):
     
     def calculate_landed_cost(self):
         """Calculate landed cost based on Excel formula: (Price per kg * (1 + Tariff)) + Freight per kg"""
+        from erp_core.mass_quantity import LBS_PER_KG
+
         if self.price_per_kg is not None:
             # Formula: (Price per kg * (1 + Tariff)) + Freight per kg
             self.landed_cost_per_kg = (self.price_per_kg * (1 + (self.tariff or 0))) + (self.freight_per_kg or 0)
-            # Convert to lb
-            self.landed_cost_per_lb = self.landed_cost_per_kg / 2.2
+            # Convert to lb (plant standard 2.2)
+            self.landed_cost_per_lb = self.landed_cost_per_kg / LBS_PER_KG
         elif self.price_per_lb is not None:
             # If only price_per_lb is available, convert to kg first
-            price_per_kg = self.price_per_lb * 2.2
+            price_per_kg = self.price_per_lb * LBS_PER_KG
             self.landed_cost_per_kg = (price_per_kg * (1 + (self.tariff or 0))) + (self.freight_per_kg or 0)
-            self.landed_cost_per_lb = self.landed_cost_per_kg / 2.2
+            self.landed_cost_per_lb = self.landed_cost_per_kg / LBS_PER_KG
         else:
             self.landed_cost_per_kg = None
             self.landed_cost_per_lb = None
@@ -1738,7 +1750,9 @@ class PricingWhatIfLine(models.Model):
 
     @property
     def freight_per_kg(self):
-        return float(self.freight_per_lb or 0) * 2.2
+        from erp_core.mass_quantity import LBS_PER_KG
+
+        return float(self.freight_per_lb or 0) * LBS_PER_KG
 
     @property
     def landed_whatif_per_lb(self):

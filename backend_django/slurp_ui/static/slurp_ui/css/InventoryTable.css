@@ -903,4 +903,58 @@
   border-top: 1px dashed #e5e7eb;
 }
 
+/* —— Django inventory table page: single vertical scroll in .inventory-main ——
+ * Important: do NOT pair overflow-x:auto with overflow-y:visible — CSS
+ * computes visible→auto and reintroduces a nested vertical scrollbar.
+ */
+.inventory-table-page {
+  display: block;
+  min-height: 0;
+  height: auto;
+  overflow: visible;
+}
+
+.inventory-table-page .inventory-table-controls {
+  margin-bottom: 1rem;
+}
+
+.inventory-table-page .inventory-table-container,
+.inventory-table-page .table-wrapper,
+.inventory-table-page .table-wrapper.inventory-table-container {
+  display: block;
+  flex: none;
+  height: auto !important;
+  max-height: none !important;
+  min-height: 0;
+  overflow: visible !important;
+}
+
+.inventory-table-page .inventory-table thead {
+  z-index: 4;
+}
+
+.inventory-table-page .lot-table-scroll {
+  max-height: none;
+  /* horizontal only; clip (not visible) avoids the auto/auto quirk */
+  overflow-x: auto;
+  overflow-y: clip;
+}
+
+.inventory-table-page.has-lot-open {
+  padding-bottom: min(48vh, 32rem);
+}
+
+.inventory-table-page .lot-breakdown-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 0.5rem;
+}
+
+.inventory-table-page .vendor-row.is-expanded,
+.inventory-table-page .sku-master-row.is-expanded {
+  scroll-margin-top: 4.5rem;
+}
+
 

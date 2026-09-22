@@ -11,6 +11,7 @@ from urllib.parse import urlencode
 
 from erp_core.buy_services import (
     BuyFlowError,
+    accept_short_close_po,
     assert_po_is_current_version,
     cancel_purchase_order,
     check_in_lot,
@@ -18,6 +19,8 @@ from erp_core.buy_services import (
     create_purchase_order,
     create_revision_purchase_order,
     issue_purchase_order,
+    po_has_any_received,
+    po_has_open_remaining,
     po_line_open_on_order_native,
     po_line_ordered_native,
     reverse_check_in,
@@ -38,6 +41,7 @@ from erp_core.inventory_table_data import (
     fetch_inventory_details,
     fetch_lots_by_sku_vendor,
     format_qty_for_display,
+    qty_label_uom,
 )
 from erp_core.lot_display_quantities import compute_lot_quantity_breakdown
 from erp_core.lot_services import (
@@ -249,7 +253,7 @@ def _maybe_create_default_pack_size(item, post):
 
 def _display_uom(request: HttpRequest) -> str:
     u = (request.GET.get("uom") or "lbs").lower()
-    return u if u in ("lbs", "kg") else "lbs"
+    return u if u in ("lbs", "kg", "native") else "lbs"
 
 
 def _inventory_tab(request: HttpRequest) -> str:
@@ -268,14 +272,18 @@ def inventory_table(request: HttpRequest) -> HttpResponse:
     expand_vendor = request.GET.get("vendor")  # may be '' meaning Unknown
     deeper = str(request.GET.get("deeper") or "").lower() in ("1", "true", "yes")
 
+    from erp_core.pack_display import format_pack_label
+
     raw_rows = fetch_inventory_details(request.user, tab)
     rows = []
     for master in raw_rows:
         uom = master.get("pack_size_unit") or "lbs"
+        qty_uom = qty_label_uom(uom, display_uom)
         sku = master.get("item_sku") or ""
         is_expanded = bool(expand_sku) and sku == expand_sku
         vendors_out = []
         vendor_names = []
+        vendor_pack_labels = []
         for v in master.get("vendors") or []:
             vname = v.get("vendor")
             item_type = v.get("item_type") or master.get("item_type")
@@ -290,6 +298,15 @@ def inventory_table(request: HttpRequest) -> HttpResponse:
                 key = "MFG" if item_type == "finished_good" else "Unknown"
             if key not in vendor_names:
                 vendor_names.append(key)
+            vu = v.get("pack_size_unit") or uom
+            v_pack_label = format_pack_label(
+                pack_size=v.get("pack_size"),
+                pack_sizes=v.get("pack_sizes") or [],
+                unit_of_measure=vu,
+                fallback_uom=vu,
+            )
+            if v_pack_label and v_pack_label not in vendor_pack_labels:
+                vendor_pack_labels.append(v_pack_label)
             if is_expanded:
                 v_expanded = expand_vendor is not None and (
                     (expand_vendor in ("Unknown", "MFG") and key == expand_vendor)
@@ -304,20 +321,36 @@ def inventory_table(request: HttpRequest) -> HttpResponse:
                         "product_category": v.get("product_category")
                         or master.get("product_category")
                         or "",
-                        "pack_size_unit": v.get("pack_size_unit") or uom,
-                        "available": format_qty_for_display(v.get("available"), uom, display_uom),
-                        "on_order": format_qty_for_display(v.get("on_order"), uom, display_uom),
+                        "pack_size_unit": vu,
+                        "pack_label": v_pack_label,
+                        "qty_uom": qty_label_uom(vu, display_uom),
+                        "available": format_qty_for_display(v.get("available"), vu, display_uom),
+                        "on_order": format_qty_for_display(v.get("on_order"), vu, display_uom),
                         "allocated_to_sales": format_qty_for_display(
-                            v.get("allocated_to_sales"), uom, display_uom
+                            v.get("allocated_to_sales"), vu, display_uom
                         ),
                         "allocated_to_production": format_qty_for_display(
-                            v.get("allocated_to_production"), uom, display_uom
+                            v.get("allocated_to_production"), vu, display_uom
                         ),
-                        "on_hold": format_qty_for_display(v.get("on_hold"), uom, display_uom),
+                        "on_hold": format_qty_for_display(v.get("on_hold"), vu, display_uom),
                         "lot_count": v.get("lot_count") or 0,
                         "expanded": v_expanded,
                     }
                 )
+
+        master_pack_label = format_pack_label(
+            pack_size=master.get("pack_size"),
+            pack_sizes=master.get("pack_sizes") or [],
+            unit_of_measure=uom,
+            fallback_uom=uom,
+        )
+        if len(vendor_pack_labels) > 1:
+            # SKU rollup spans vendors with different packs — show all unique
+            master_pack_label = ", ".join(vendor_pack_labels)
+        elif len(vendor_pack_labels) == 1:
+            master_pack_label = vendor_pack_labels[0]
+
+        sole_vendor = vendor_names[0] if len(vendor_names) == 1 else None
 
         rows.append(
             {
@@ -327,6 +360,8 @@ def inventory_table(request: HttpRequest) -> HttpResponse:
                 "product_category": master.get("product_category") or "",
                 "vendors_label": ", ".join(vendor_names) if vendor_names else "—",
                 "pack_size_unit": uom,
+                "pack_label": master_pack_label,
+                "qty_uom": qty_uom,
                 "available": format_qty_for_display(master.get("available"), uom, display_uom),
                 "on_order": format_qty_for_display(master.get("on_order"), uom, display_uom),
                 "allocated_to_sales": format_qty_for_display(
@@ -338,6 +373,7 @@ def inventory_table(request: HttpRequest) -> HttpResponse:
                 "on_hold": format_qty_for_display(master.get("on_hold"), uom, display_uom),
                 "lot_count": master.get("lot_count") or 0,
                 "vendor_count": master.get("vendor_count") or len(vendor_names),
+                "sole_vendor": sole_vendor,
                 "expanded": is_expanded,
                 "vendors": vendors_out,
                 "on_hold_flag": float(master.get("on_hold") or 0) > 0,
@@ -385,7 +421,7 @@ def inventory_table(request: HttpRequest) -> HttpResponse:
                     "committed_prod": format_qty_for_display(
                         lot.get("committed_to_production_qty") or 0, lu, display_uom
                     ),
-                    "uom": display_uom if (lu or "").lower() in ("lbs", "kg", "lb") else (lu or display_uom),
+                    "uom": qty_label_uom(lu, display_uom),
                     "avail_native": float(avail or 0),
                     "hold_native": float(lot.get("quantity_on_hold") or 0),
                     "remaining_native": float(lot.get("quantity_remaining") or 0),
@@ -469,6 +505,12 @@ def _enrich_po_rows(pos: list) -> list:
             po.line_summary = skus[0]
         else:
             po.line_summary = f"{skus[0]} +{len(skus) - 1} more"
+        po.can_accept_short = (
+            po.status == "issued"
+            and not bool(po.drop_ship)
+            and po_has_any_received(po)
+            and po_has_open_remaining(po)
+        )
     return pos
 
 
@@ -614,6 +656,31 @@ def inventory_cancel_po(request: HttpRequest, pk: int) -> HttpResponse:
     except Exception as e:
         messages.error(request, str(e))
     return redirect("slurp_ui:inventory_purchase_orders")
+
+
+@login_required
+@require_POST
+def inventory_accept_short_po(request: HttpRequest, pk: int) -> HttpResponse:
+    """Accept short ship: clear remaining on_order and mark PO received (no revise/email)."""
+    po = get_object_or_404(PurchaseOrder, pk=pk)
+    reason = (request.POST.get("short_reason") or "").strip()
+    queue = (request.POST.get("queue") or "open").strip()
+    layout = (request.POST.get("layout") or "split").strip()
+    try:
+        accept_short_close_po(request.user, po, reason)
+        messages.success(
+            request,
+            f"Accepted short on PO {po.po_number}: remaining open qty closed. "
+            "No revise and no vendor email were sent.",
+        )
+    except BuyFlowError as e:
+        messages.error(request, e.message)
+    except Exception as e:
+        messages.error(request, str(e))
+    return redirect(
+        reverse("slurp_ui:inventory_purchase_orders")
+        + f"?queue={queue}&layout={layout}&po={po.id}"
+    )
 
 
 @login_required
@@ -880,6 +947,163 @@ def inventory_logs(request: HttpRequest) -> HttpResponse:
     )
 
 
+@login_required
+@require_http_methods(["GET"])
+def inventory_material_activity(request: HttpRequest) -> HttpResponse:
+    """SKU / parent material activity summary with optional breakdown + CSV."""
+    import csv
+    from io import StringIO
+
+    from erp_core.material_activity import (
+        ALL_FLOWS,
+        BREAKDOWNS,
+        FLOW_LABELS,
+        default_date_range,
+        query_material_activity,
+    )
+
+    subject = (request.GET.get("subject") or request.GET.get("sku") or "").strip()
+    scope = (request.GET.get("scope") or "sku").strip().lower()
+    if scope not in ("sku", "parent"):
+        scope = "sku"
+    d0, d1 = default_date_range()
+    date_from = (request.GET.get("date_from") or "").strip() or d0.isoformat()
+    date_to = (request.GET.get("date_to") or "").strip() or d1.isoformat()
+    vendor = (request.GET.get("vendor") or "").strip()
+    breakdown = (request.GET.get("breakdown") or "none").strip().lower()
+    if breakdown not in BREAKDOWNS:
+        breakdown = "none"
+
+    # Flows: if none posted, all on; if form submitted use checked only
+    if "flows" in request.GET or any(k.startswith("flow_") for k in request.GET):
+        flows = [f for f in ALL_FLOWS if request.GET.get(f"flow_{f}") == "1" or f in request.GET.getlist("flows")]
+        if not flows:
+            flows = list(ALL_FLOWS)
+    else:
+        flows = list(ALL_FLOWS)
+
+    result = (
+        query_material_activity(
+            subject=subject,
+            scope=scope,
+            date_from=date_from,
+            date_to=date_to,
+            vendor=vendor,
+            flows=flows,
+            breakdown=breakdown,
+        )
+        if subject
+        else {
+            "subject": "",
+            "scope": scope,
+            "skus": [],
+            "date_from": date_from,
+            "date_to": date_to,
+            "vendor": vendor,
+            "flows_selected": flows,
+            "breakdown": breakdown,
+            "totals": {f: {"qty": 0.0, "uoms": {}, "primary_uom": "lbs"} for f in ALL_FLOWS},
+            "rows": [],
+            "mixed_uom": False,
+            "event_count": 0,
+            "has_subject": False,
+            "flow_labels": FLOW_LABELS,
+        }
+    )
+
+    if request.GET.get("export") == "csv" and subject:
+        buf = StringIO()
+        writer = csv.writer(buf)
+        writer.writerow(
+            ["label", "flow", "sku", "vendor", "month", "qty", "uom", "mixed_uom"]
+        )
+        if breakdown == "none":
+            for f in result["flows_selected"]:
+                t = result["totals"][f]
+                writer.writerow(
+                    [
+                        FLOW_LABELS.get(f, f),
+                        f,
+                        "",
+                        "",
+                        "",
+                        t.get("qty") or 0,
+                        t.get("primary_uom") or "",
+                        "yes" if len(t.get("uoms") or {}) > 1 else "no",
+                    ]
+                )
+        else:
+            for row in result["rows"]:
+                writer.writerow(
+                    [
+                        row.get("label"),
+                        row.get("flow_label") or row.get("flow"),
+                        row.get("sku"),
+                        row.get("vendor"),
+                        row.get("month"),
+                        row.get("qty"),
+                        row.get("uom"),
+                        "yes" if row.get("mixed_uom") else "no",
+                    ]
+                )
+        resp = HttpResponse(buf.getvalue(), content_type="text/csv")
+        fname = f"material-activity-{(subject or 'export').replace('/', '-')}.csv"
+        resp["Content-Disposition"] = f'attachment; filename="{fname}"'
+        return resp
+
+    # Drill link to Logs (transactions)
+    logs_q = {
+        "type": "transactions",
+        "date_from": date_from,
+        "date_to": date_to,
+    }
+    if scope == "sku" and subject:
+        logs_q["sku"] = subject
+    elif result.get("skus"):
+        logs_q["sku"] = result["skus"][0]
+    logs_url = reverse("slurp_ui:inventory_logs") + "?" + urlencode(logs_q)
+
+    tiles = []
+    for f in flows:
+        tot = result["totals"].get(f) or {}
+        tiles.append(
+            {
+                "flow": f,
+                "label": FLOW_LABELS.get(f, f),
+                "qty": tot.get("qty") or 0,
+                "uom": tot.get("primary_uom") or "lbs",
+                "mixed": len(tot.get("uoms") or {}) > 1,
+            }
+        )
+
+    return render(
+        request,
+        "slurp_ui/inventory/material_activity.html",
+        _inventory_ctx(
+            active_tab="material-activity",
+            result=result,
+            subject=subject,
+            scope=scope,
+            date_from=date_from,
+            date_to=date_to,
+            vendor=vendor,
+            breakdown=breakdown,
+            flows=flows,
+            tiles=tiles,
+            flow_meta=[(f, FLOW_LABELS[f]) for f in ALL_FLOWS],
+            breakdown_choices=[
+                ("none", "Totals only"),
+                ("month", "By month"),
+                ("vendor", "By vendor"),
+                ("sku", "By child SKU"),
+                ("flow", "By flow"),
+            ],
+            logs_url=logs_url,
+            port_status="full",
+        ),
+    )
+
+
 def _parse_check_in_lines(post) -> list[dict]:
     """Parse indexed check-in lines: line-0-item_id, line-1-quantity, …"""
     indices: set[int] = set()
@@ -965,7 +1189,30 @@ def inventory_check_in(request: HttpRequest) -> HttpResponse:
                         "notes": request.POST.get("line_notes") or "",
                     }
                 ]
+            close_short = request.POST.get("close_short") == "on"
+            if close_short and not (shared.get("short_reason") or "").strip():
+                raise BuyFlowError(
+                    "Short reason is required when closing remaining open qty (accept short)."
+                )
             lots = check_in_lots_batch(request.user, shared, lines)
+            if close_short:
+                po.refresh_from_db()
+                if po_has_open_remaining(po):
+                    accept_short_close_po(
+                        request.user,
+                        po,
+                        shared.get("short_reason") or "",
+                    )
+                    messages.success(
+                        request,
+                        f"Accepted short on PO {po.po_number}: remaining open qty closed "
+                        "(no revise, no vendor email).",
+                    )
+                else:
+                    messages.info(
+                        request,
+                        f"PO {po.po_number} is fully received; nothing left to short-close.",
+                    )
             if len(lots) == 1:
                 lot = lots[0]
                 messages.success(

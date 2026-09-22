@@ -915,8 +915,11 @@ def _fill_batch_ticket_template_pymupdf(
 
                 def _cell(s, max_len=24):
                     return (s or "").replace("\n", " ").replace("\r", "").strip()[:max_len]
-                qty_val = _cell(row.get("qty"), 8)
+                qty_val = _cell(row.get("qty"), 22)
                 qty_with_uom = f"{qty_val} {base_unit}".strip() if qty_val else ""
+                # Avoid double-appending UoM when qty already includes packs note / unit
+                if "(" in qty_val or any(u in qty_val.lower() for u in ("lb", "kg", "ea")):
+                    qty_with_uom = qty_val
                 cells = [
                     _cell(row.get("raw_material"), 48),
                     _cell(row.get("sku"), 16),
@@ -1306,6 +1309,8 @@ def build_batch_ticket_pdf(batch):
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.lib.enums import TA_CENTER, TA_LEFT
 
+    from .mass_quantity import LBS_PER_KG, convert_mass_uom
+
     fg = batch.finished_good_item
     base_unit = fg.unit_of_measure or 'lbs'
 
@@ -1313,7 +1318,7 @@ def build_batch_ticket_pdf(batch):
         if base_unit in ('lbs', 'ea'):
             return quantity_in_lbs
         if base_unit == 'kg':
-            return quantity_in_lbs / 2.2
+            return convert_mass_uom(quantity_in_lbs, 'lbs', 'kg')
         return quantity_in_lbs
 
     if batch.batch_type == 'repack':
@@ -1378,7 +1383,9 @@ def build_batch_ticket_pdf(batch):
             # Same relationship as pick list: one loop over batch.inputs. Raw -> pick list, indirect -> pack off.
             pick_rows = []
             indirect_materials_rows = []
-            for batch_input in batch.inputs.select_related('lot__item').all():
+            for batch_input in batch.inputs.select_related('lot__item', 'lot__pack_size').prefetch_related(
+                'lot__item__pack_sizes'
+            ).all():
                 lot = batch_input.lot
                 item = lot.item
                 if _is_indirect_material(item):
@@ -1394,17 +1401,27 @@ def build_batch_ticket_pdf(batch):
                 vendor_lot = (lot.vendor_lot_number or lot.lot_number or '—').strip()
                 qty = batch_input.quantity_used
                 if (item.unit_of_measure or 'lbs') == 'kg':
-                    qty = qty * 2.2
+                    qty = convert_mass_uom(qty, 'kg', 'lbs')
                 qty_base = convert_from_lbs_to_base(qty)
                 qty_str = f"{int(round(qty_base))}" if abs(qty_base - round(qty_base)) <= 0.01 else f"{qty_base:.2f}"
                 raw_material = (getattr(item, 'description', None) or item.name or item.sku or '').strip()
                 uom = (getattr(item, 'unit_of_measure', None) or 'lbs').strip() or 'lbs'
+                from .pack_display import format_packs_partial_note, resolve_pack_size
+                pack_qty, pack_uom = resolve_pack_size(item=item, lot=lot)
+                try:
+                    qty_num = float(qty_str)
+                except (TypeError, ValueError):
+                    qty_num = float(qty_base)
+                packs_note = format_packs_partial_note(qty_num, base_unit or uom, pack_qty, pack_uom)
+                qty_cell = qty_str
+                if packs_note:
+                    qty_cell = f"{qty_str} ({packs_note})"
                 pick_rows.append({
                     'raw_material': raw_material,
                     'sku': item.sku,
                     'vendor': vendor,
                     'vendor_lot': vendor_lot,
-                    'qty': qty_str,
+                    'qty': qty_cell,
                     'uom': uom,
                     'wildwood_lot': lot.lot_number or '',
                 })
@@ -1581,7 +1598,10 @@ def build_batch_ticket_pdf(batch):
     elements.append(Spacer(1, 0.06 * inch))
     pick_headers = ['Raw Material SKU', 'Vendor', 'Vendor Lot', 'Quantity', 'Pick Initials', 'Production Initials', 'Wildwood Lot']
     pick_rows = [pick_headers]
-    for batch_input in batch.inputs.select_related('lot__item').all():
+    from .pack_display import format_packs_partial_note, resolve_pack_size
+    for batch_input in batch.inputs.select_related('lot__item', 'lot__pack_size').prefetch_related(
+        'lot__item__pack_sizes'
+    ).all():
         lot = batch_input.lot
         item = lot.item
         if _is_indirect_material(item):
@@ -1590,9 +1610,17 @@ def build_batch_ticket_pdf(batch):
         vendor_lot = (lot.vendor_lot_number or lot.lot_number or '—').strip()
         qty = batch_input.quantity_used
         if (item.unit_of_measure or 'lbs') == 'kg':
-            qty = qty * 2.2
+            qty = convert_mass_uom(qty, 'kg', 'lbs')
         qty_base = convert_from_lbs_to_base(qty)
         qty_str = f"{int(round(qty_base))}" if abs(qty_base - round(qty_base)) <= 0.01 else f"{qty_base:.2f}"
+        pack_qty, pack_uom = resolve_pack_size(item=item, lot=lot)
+        try:
+            qty_num = float(qty_str)
+        except (TypeError, ValueError):
+            qty_num = float(qty_base)
+        packs_note = format_packs_partial_note(qty_num, base_unit or 'lbs', pack_qty, pack_uom)
+        if packs_note:
+            qty_str = f"{qty_str} ({packs_note})"
         pick_rows.append([item.sku or '', vendor[:14], vendor_lot[:12], qty_str, '', '', lot.lot_number or ''])
     if len(pick_rows) == 1:
         pick_rows.append(['', '', '', '', '', '', ''])

@@ -468,10 +468,17 @@ class ProductionBatchSerializer(serializers.ModelSerializer):
 class FormulaItemSerializer(serializers.ModelSerializer):
     item = ItemSerializer(read_only=True)
     item_id = serializers.PrimaryKeyRelatedField(queryset=Item.objects.all(), source='item', write_only=True)
+    parent_code = serializers.SerializerMethodField()
     
     class Meta:
         model = FormulaItem
         fields = '__all__'
+
+    def get_parent_code(self, obj):
+        from .formula_ingredient import parent_code_for_item
+        if getattr(obj, 'match_by_parent', False):
+            return parent_code_for_item(obj.item)
+        return None
 
 
 class CriticalControlPointSerializer(serializers.ModelSerializer):

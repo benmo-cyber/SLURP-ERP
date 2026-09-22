@@ -654,6 +654,85 @@ def cancel_purchase_order(purchase_order: PurchaseOrder) -> PurchaseOrder:
     return purchase_order
 
 
+def po_has_open_remaining(purchase_order: PurchaseOrder) -> bool:
+    """True if any line still has open on-order qty (ordered − received)."""
+    for po_item in purchase_order.items.all():
+        if po_line_open_on_order_native(po_item) > 0.01:
+            return True
+    return False
+
+
+def po_has_any_received(purchase_order: PurchaseOrder) -> bool:
+    """True if any line has been checked in (quantity_received > 0)."""
+    for po_item in purchase_order.items.all():
+        if float(po_item.quantity_received or 0) > 0.01:
+            return True
+    return False
+
+
+def accept_short_close_po(user, purchase_order: PurchaseOrder, short_reason: str) -> PurchaseOrder:
+    """
+    Accept a short ship: clear remaining Item.on_order and mark PO received.
+
+    Does not revise, cancel, email the vendor, invent received qty, or change lots.
+    Material AP stays at received value (refreshed via create_ap_entry_from_po).
+    """
+    from .views import create_ap_entry_from_po, log_purchase_order_action
+
+    reason = (short_reason or "").strip()
+    if not reason:
+        raise BuyFlowError("Short reason is required to accept a short and close remaining.")
+
+    if purchase_order.drop_ship:
+        raise BuyFlowError("Drop-ship POs are not checked into inventory; cancel instead.")
+
+    if purchase_order.status != "issued":
+        raise BuyFlowError(
+            f"Only issued POs can accept short / close remaining "
+            f"(current status: {purchase_order.status})."
+        )
+
+    if not po_has_any_received(purchase_order):
+        raise BuyFlowError(
+            "Nothing has been received on this PO yet. "
+            "Cancel the PO if it will never ship, or check in what arrived first."
+        )
+
+    if not po_has_open_remaining(purchase_order):
+        raise BuyFlowError("This PO has no remaining open quantity to close.")
+
+    closed_bits = []
+    for po_item in purchase_order.items.select_related("item"):
+        open_qty = po_line_open_on_order_native(po_item)
+        if open_qty <= 0.01:
+            continue
+        item = po_item.item
+        if item:
+            item.on_order = max(0.0, float(item.on_order or 0) - open_qty)
+            item.save(update_fields=["on_order"])
+            uom = (item.unit_of_measure or "").strip() or "units"
+            closed_bits.append(f"{item.sku}: {open_qty:g} {uom}")
+        # quantity_received stays as actual — do not inflate
+
+    purchase_order.status = "received"
+    purchase_order.save(update_fields=["status"])
+
+    who = getattr(user, "username", None) or "system"
+    notes = (
+        f"Accepted short / closed remaining by {who}. Reason: {reason}. "
+        f"Closed: {'; '.join(closed_bits) if closed_bits else 'n/a'}. "
+        "No revise, no vendor email."
+    )
+    log_purchase_order_action(purchase_order, "short_closed", notes=notes)
+
+    try:
+        create_ap_entry_from_po(purchase_order, source_tag="auto on short close")
+    except Exception as e:
+        logger.warning("create_ap_entry_from_po after short close: %s", e)
+
+    return purchase_order
+
+
 def _po_root_number(po: PurchaseOrder) -> str:
     """Business PO number without -R# revision suffix."""
     import re

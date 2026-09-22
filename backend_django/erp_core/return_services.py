@@ -225,7 +225,7 @@ def create_customer_credit_memo(
     if subtotal <= 0:
         raise SellFlowError("Credit amount must be greater than zero.")
 
-    from .views import generate_invoice_number, generate_lot_number
+    from .views import generate_invoice_number, generate_lot_number, log_lot_transaction
 
     today = timezone.localdate()
     actor = getattr(user, "username", None) or "system"
@@ -283,11 +283,22 @@ def create_customer_credit_memo(
                     status="accepted",
                     short_reason=f"Customer return {so.so_number} / {credit.invoice_number}"[:255],
                 )
-                InventoryTransaction.objects.create(
-                    transaction_type="receipt",
+                txn = InventoryTransaction.objects.create(
+                    transaction_type="return",
                     lot=lot,
                     quantity=qty,
                     reference_number=credit.invoice_number,
+                    notes=f"Restock from customer return ({so.so_number})",
+                )
+                log_lot_transaction(
+                    lot=lot,
+                    quantity_before=0.0,
+                    quantity_change=float(qty),
+                    transaction_type="return",
+                    reference_number=credit.invoice_number,
+                    reference_type="customer_return",
+                    transaction_id=txn.id,
+                    sales_order_id=so.id,
                     notes=f"Restock from customer return ({so.so_number})",
                 )
                 restock_lots.append(lot)

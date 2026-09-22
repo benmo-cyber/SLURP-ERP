@@ -57,15 +57,31 @@ def format_qty_for_display(
     storage_uom: str | None,
     display_uom: str,
 ) -> float:
-    """Convert stored qty into display lbs/kg (ea unchanged)."""
+    """Convert stored qty into display lbs/kg, or leave native when display_uom is native/other.
+
+    ``ea`` and other non-mass storage units are never mass-converted.
+    """
     if quantity is None:
         return 0.0
     u = (storage_uom or "lbs").lower()
     d = (display_uom or "lbs").lower()
-    if u == "ea" or d not in ("lbs", "kg"):
-        return float(normalize_aggregate_quantity_by_uom(quantity, u))
     if u in ("lb", "lbs"):
         u = "lbs"
+    if d == "native" or u == "ea" or d not in ("lbs", "kg"):
+        return float(normalize_aggregate_quantity_by_uom(quantity, u))
     if u == d or u not in ("lbs", "kg"):
         return float(normalize_aggregate_quantity_by_uom(quantity, u))
     return float(convert_mass_uom(quantity, u, d))
+
+
+def qty_label_uom(storage_uom: str | None, display_uom: str) -> str:
+    """Unit label for a quantity cell given storage UoM and display mode."""
+    s = (storage_uom or "lbs").strip().lower()
+    if s in ("lb", "lbs"):
+        s = "lbs"
+    d = (display_uom or "lbs").lower()
+    if d == "native":
+        return s
+    if s in ("lbs", "kg") and d in ("lbs", "kg"):
+        return d
+    return s

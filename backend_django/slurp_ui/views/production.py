@@ -18,6 +18,8 @@ from erp_core.make_services import (
 )
 from erp_core.mass_quantity import LBS_PER_KG, convert_mass_uom, normalize_mass_quantity
 from erp_core.models import Formula, Item, Lot, ProductionBatch
+from erp_core.pack_display import format_pack_label, is_partial_lot, resolve_pack_size
+from erp_core.formula_ingredient import lots_for_formula_ingredient, skus_for_formula_ingredient
 from erp_core.reversal_guard import build_batch_reversal_plan
 
 from ..nav import PRODUCTION_NAV
@@ -230,16 +232,39 @@ def production_create_batch(request: HttpRequest) -> HttpResponse:
 
     ingredient_lot_choices = []
     repack_lot_rows = []
+    work_in_partial_lots = []
     if selected_formula:
-        for ing in selected_formula.ingredients.all():
-            sku = ing.item.sku
-            native = (ing.item.unit_of_measure or "lbs").lower()
-            lots = (
-                Lot.objects.filter(item__sku=sku, quantity_remaining__gt=0)
-                .exclude(status="rejected")
-                .select_related("item")
-                .order_by("-received_date")[:40]
+        fg = selected_formula.finished_good
+        fg_lots = (
+            Lot.objects.filter(
+                item=fg,
+                status="accepted",
+                quantity_remaining__gt=0,
             )
+            .select_related("item", "pack_size")
+            .prefetch_related("item__pack_sizes")
+            .order_by("-received_date")
+        )
+        for lot in fg_lots:
+            if is_partial_lot(lot):
+                avail = float(compute_lot_quantity_breakdown(lot)["quantity_available_for_use"])
+                if avail <= 0:
+                    continue
+                pack_qty, pack_uom = resolve_pack_size(item=lot.item, lot=lot)
+                work_in_partial_lots.append(
+                    {
+                        "lot": lot,
+                        "available": avail,
+                        "uom": (lot.item.unit_of_measure or "lbs"),
+                        "pack_label": format_pack_label(item=lot.item, lot=lot),
+                        "pack_qty": pack_qty,
+                        "pack_uom": pack_uom,
+                    }
+                )
+
+        for ing in selected_formula.ingredients.all():
+            native = (ing.item.unit_of_measure or "lbs").lower()
+            lots = lots_for_formula_ingredient(ing, limit=80)
             lot_rows = []
             for lot in lots:
                 avail_native = float(
@@ -247,27 +272,35 @@ def production_create_batch(request: HttpRequest) -> HttpResponse:
                 )
                 if avail_native <= 0:
                     continue
+                lot_native = (lot.item.unit_of_measure or native or "lbs").lower()
                 try:
                     avail_display = (
-                        convert_mass_uom(avail_native, native, display_uom)
-                        if native in ("lbs", "kg") and display_uom in ("lbs", "kg")
+                        convert_mass_uom(avail_native, lot_native, display_uom)
+                        if lot_native in ("lbs", "kg") and display_uom in ("lbs", "kg")
                         else avail_native
                     )
                 except ValueError:
                     avail_display = avail_native
+                partial = is_partial_lot(lot)
                 lot_rows.append(
                     {
                         "lot": lot,
                         "available_native": avail_native,
                         "available_display": avail_display,
-                        "native_uom": native,
+                        "native_uom": lot_native,
+                        "is_partial": partial,
+                        "pack_label": format_pack_label(item=lot.item, lot=lot),
                     }
                 )
+            # Prefer opened/partial packs first so they get used up
+            lot_rows.sort(key=lambda r: (0 if r["is_partial"] else 1, -r["available_native"]))
             ingredient_lot_choices.append(
                 {
                     "ingredient": ing,
                     "percentage": float(ing.percentage or 0),
                     "native_uom": native,
+                    "match_by_parent": bool(getattr(ing, "match_by_parent", False)),
+                    "parent_code": (getattr(ing.item, "sku_parent_code", None) or "") if getattr(ing, "match_by_parent", False) else "",
                     "lots": lot_rows,
                 }
             )
@@ -333,61 +366,80 @@ def production_create_batch(request: HttpRequest) -> HttpResponse:
             qty_lbs = _to_lbs(qty_display, display_uom) if qty_display > 0 else 0.0
 
             inputs = []
-            for ing in selected_formula.ingredients.all():
-                lot_id = request.POST.get(f"lot_id_{ing.id}")
-                raw_qty = request.POST.get(f"qty_{ing.id}")
-                if not lot_id or not raw_qty:
+            # Parse multi-lot allocations: ing_qty_<ingredient_id>_<lot_id>
+            for key, raw_qty in request.POST.items():
+                if not key.startswith("ing_qty_") or not raw_qty:
+                    continue
+                parts = key.split("_")
+                # ing_qty_{ingId}_{lotId}
+                if len(parts) != 4:
                     continue
                 try:
+                    lot_id = int(parts[3])
                     q_display = float(raw_qty)
-                except ValueError:
+                except (TypeError, ValueError):
                     continue
                 if q_display <= 0:
                     continue
-                lot = Lot.objects.select_related("item").get(pk=int(lot_id))
+                try:
+                    lot = Lot.objects.select_related("item").get(pk=lot_id)
+                except Lot.DoesNotExist:
+                    continue
                 native = (lot.item.unit_of_measure or "lbs").lower()
                 q_native = _display_to_native(q_display, display_uom, native)
-                inputs.append({"lot_id": int(lot_id), "quantity_used": q_native})
+                inputs.append({"lot_id": lot_id, "quantity_used": q_native})
 
-            if qty_lbs <= 0 and inputs:
-                qty_lbs = 0.0
-                for row in inputs:
-                    lot = Lot.objects.select_related("item").get(pk=row["lot_id"])
-                    qty_lbs += _to_lbs(float(row["quantity_used"]), lot.item.unit_of_measure or "lbs")
-                qty_lbs = normalize_mass_quantity(qty_lbs)
+            if not inputs:
+                messages.error(request, "Allocate quantity on at least one lot.")
+            else:
+                if qty_lbs <= 0:
+                    qty_lbs = 0.0
+                    for row in inputs:
+                        lot = Lot.objects.select_related("item").get(pk=row["lot_id"])
+                        qty_lbs += _to_lbs(
+                            float(row["quantity_used"]), lot.item.unit_of_measure or "lbs"
+                        )
+                    qty_lbs = normalize_mass_quantity(qty_lbs)
 
-            prod_date = (request.POST.get("production_date") or "").strip()
-            status = "in_progress"
-            if prod_date:
+                prod_date = (request.POST.get("production_date") or "").strip()
+                status = "in_progress"
+                if prod_date:
+                    try:
+                        from datetime import date as date_cls
+
+                        d = date_cls.fromisoformat(prod_date)
+                        if d > timezone.localdate():
+                            status = "scheduled"
+                    except ValueError:
+                        pass
+
+                work_in_partials = []
+                for pid in request.POST.getlist("work_in_partial"):
+                    try:
+                        work_in_partials.append({"lot_id": int(pid)})
+                    except (TypeError, ValueError):
+                        continue
+
+                payload = {
+                    "batch_type": "production",
+                    "finished_good_item_id": selected_formula.finished_good_id,
+                    "quantity_produced": qty_lbs,
+                    "production_date": prod_date or timezone.localdate().isoformat(),
+                    "status": status,
+                    "batch_ticket_mass_unit": display_uom,
+                    "notes": request.POST.get("notes") or "",
+                    "inputs": inputs,
+                    "indirect_materials": [],
+                    "work_in_partials": work_in_partials,
+                }
                 try:
-                    from datetime import date as date_cls
-
-                    d = date_cls.fromisoformat(prod_date)
-                    if d > timezone.localdate():
-                        status = "scheduled"
-                except ValueError:
-                    pass
-
-            payload = {
-                "batch_type": "production",
-                "finished_good_item_id": selected_formula.finished_good_id,
-                "quantity_produced": qty_lbs,
-                "production_date": prod_date or timezone.localdate().isoformat(),
-                "status": status,
-                "batch_ticket_mass_unit": display_uom,
-                "notes": request.POST.get("notes") or "",
-                "inputs": inputs,
-                "indirect_materials": [],
-                "work_in_partials": [],
-            }
-            try:
-                batch = create_batch_ticket(request.user, payload)
-                messages.success(request, f"Created batch {batch.batch_number}.")
-                return redirect("slurp_ui:production_batch_detail", pk=batch.id)
-            except MakeFlowError as e:
-                messages.error(request, e.message)
-            except Exception as e:
-                messages.error(request, str(e))
+                    batch = create_batch_ticket(request.user, payload)
+                    messages.success(request, f"Created batch {batch.batch_number}.")
+                    return redirect("slurp_ui:production_batch_detail", pk=batch.id)
+                except MakeFlowError as e:
+                    messages.error(request, e.message)
+                except Exception as e:
+                    messages.error(request, str(e))
 
     today = timezone.localdate().isoformat()
     return render(
@@ -401,6 +453,7 @@ def production_create_batch(request: HttpRequest) -> HttpResponse:
             selected_repack_item=selected_repack_item,
             ingredient_lot_choices=ingredient_lot_choices,
             repack_lot_rows=repack_lot_rows,
+            work_in_partial_lots=work_in_partial_lots,
             display_uom=display_uom,
             lbs_per_kg=LBS_PER_KG,
             today=today,
@@ -462,7 +515,9 @@ def production_adjust_batch(request: HttpRequest, pk: int) -> HttpResponse:
                 }
             )
     elif formula:
-        required_skus = {ing.item.sku for ing in formula.ingredients.all()}
+        required_skus = set()
+        for ing in formula.ingredients.select_related("item").all():
+            required_skus.update(skus_for_formula_ingredient(ing))
         lots = (
             Lot.objects.filter(item__sku__in=required_skus, quantity_remaining__gt=0)
             .exclude(status="rejected")

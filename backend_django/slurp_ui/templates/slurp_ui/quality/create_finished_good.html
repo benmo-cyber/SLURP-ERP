@@ -97,7 +97,7 @@
     <div class="hs-card" style="margin-bottom:1rem">
       <div class="hs-card-header">
         <h3>Ingredients</h3>
-        <span class="hs-muted" style="font-size:0.8rem">Must total 100%</span>
+        <span class="hs-muted" style="font-size:0.8rem">Must total 100%. Choose a parent family to accept all pack sizes.</span>
       </div>
       <div class="hs-card-body">
         <input type="hidden" name="line_count" id="line_count" value="1" />
@@ -107,10 +107,7 @@
               <div class="form-row" style="margin:0">
                 <label>Item</label>
                 <select name="ing_item_0" required>
-                  <option value="">—</option>
-                  {% for it in ingredient_items %}
-                  <option value="{{ it.id }}">{{ it.sku }} — {{ it.name }}</option>
-                  {% endfor %}
+                  {% include "slurp_ui/quality/_formula_ingredient_options.html" with selected_value="" %}
                 </select>
               </div>
               <div class="form-row" style="margin:0"><label>%</label><input name="ing_pct_0" type="number" step="any" value="100" required /></div>

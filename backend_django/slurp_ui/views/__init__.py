@@ -43,6 +43,7 @@ from .finance import (
     finance_rm_lot_costs,
 )
 from .inventory import (
+    inventory_accept_short_po,
     inventory_cancel_po,
     inventory_check_in,
     inventory_count_detail,
@@ -61,6 +62,7 @@ from .inventory import (
     inventory_lot_hold_log,
     inventory_lot_reconcile,
     inventory_lot_release,
+    inventory_material_activity,
     inventory_po_pdf,
     inventory_purchase_orders,
     inventory_reverse_check_in,
@@ -136,10 +138,12 @@ __all__ = [
     "inventory_purchase_orders",
     "inventory_issue_po",
     "inventory_po_pdf",
+    "inventory_accept_short_po",
     "inventory_cancel_po",
     "inventory_revise_po",
     "inventory_update_po_tracking",
     "inventory_logs",
+    "inventory_material_activity",
     "inventory_check_in",
     "inventory_create_item",
     "inventory_edit_item",

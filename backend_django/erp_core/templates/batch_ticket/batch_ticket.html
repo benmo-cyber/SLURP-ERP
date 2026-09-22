@@ -22,10 +22,11 @@
     .pick-table .col-sku { width: 1.65in; }
     .pick-table .col-vendor { width: 1.2in; }
     .pick-table .col-vendor-lot { width: 1.2in; }
-    .pick-table .col-qty { width: 0.55in; text-align: right; }
-    .pick-table .col-pick { width: 0.75in; }
-    .pick-table .col-prod { width: 0.95in; }
-    .pick-table .col-ww { width: 1.2in; }
+    .pick-table .col-qty { width: 0.95in; text-align: right; }
+    .pick-table .col-pick { width: 0.65in; }
+    .pick-table .col-prod { width: 0.75in; }
+    .pick-table .col-ww { width: 1.1in; }
+    .pick-table .packs-note { display: block; font-size: 6.5pt; color: #333; font-weight: normal; line-height: 1.15; }
     .pick-table th { font-weight: bold; background: #e8e8e8; text-align: center; }
     .pack-table th { font-weight: bold; background: #1e3a5f; color: #fff; text-align: center; }
     .pack-table .col-packaging { width: 28%; }
@@ -103,7 +104,7 @@
         <td class="col-sku">{{ row.sku }}</td>
         <td class="col-vendor">{{ row.vendor }}</td>
         <td class="col-vendor-lot">{{ row.vendor_lot }}</td>
-        <td class="col-qty">{{ row.qty }}{% if row.uom %} {{ row.uom }}{% endif %}</td>
+        <td class="col-qty">{{ row.qty }}{% if row.uom %} {{ row.uom }}{% endif %}{% if row.packs_note %}<span class="packs-note">({{ row.packs_note }})</span>{% endif %}</td>
         <td class="col-pick">{{ row.pick_init }}</td>
         <td class="col-prod">{{ row.prod_init }}</td>
         <td class="col-ww">{{ row.wildwood_lot }}</td>

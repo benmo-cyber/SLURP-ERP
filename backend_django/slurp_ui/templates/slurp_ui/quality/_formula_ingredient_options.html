@@ -1,0 +1,13 @@
+<option value="">—</option>
+{% if parent_family_options %}
+<optgroup label="Parent families (all pack sizes)">
+  {% for p in parent_family_options %}
+  <option value="{{ p.value }}" {% if selected_value == p.value %}selected{% endif %}>{{ p.label }}</option>
+  {% endfor %}
+</optgroup>
+{% endif %}
+<optgroup label="Exact SKUs">
+  {% for it in ingredient_items %}
+  <option value="{{ it.id }}" {% if selected_value == it.id|stringformat:"s" %}selected{% endif %}>{{ it.sku }} — {{ it.name }}</option>
+  {% endfor %}
+</optgroup>

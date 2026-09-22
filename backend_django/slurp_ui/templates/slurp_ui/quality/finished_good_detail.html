@@ -86,7 +86,7 @@
     <div class="hs-card" style="margin-bottom:1rem">
       <div class="hs-card-header">
         <h3>Ingredients</h3>
-        <span class="hs-muted" style="font-size:0.8rem">Must total 100%</span>
+        <span class="hs-muted" style="font-size:0.8rem">Must total 100%. Prefer a parent family so new pack sizes stay valid.</span>
         <button type="button" class="hs-btn hs-btn-sm" id="add-ing">+ Add ingredient</button>
       </div>
       <div class="hs-card-body">
@@ -99,12 +99,7 @@
                 <div class="form-row" style="margin:0">
                   <label>Item</label>
                   <select name="ing_item_{{ forloop.counter0 }}">
-                    <option value="">—</option>
-                    {% for it in ingredient_items %}
-                    <option value="{{ it.id }}" {% if it.id == ing.item_id %}selected{% endif %}>
-                      {{ it.sku }} — {{ it.name }}
-                    </option>
-                    {% endfor %}
+                    {% include "slurp_ui/quality/_formula_ingredient_options.html" with selected_value=ing.select_value %}
                   </select>
                 </div>
                 <div class="form-row" style="margin:0">
@@ -124,10 +119,7 @@
                 <div class="form-row" style="margin:0">
                   <label>Item</label>
                   <select name="ing_item_0">
-                    <option value="">—</option>
-                    {% for it in ingredient_items %}
-                    <option value="{{ it.id }}">{{ it.sku }} — {{ it.name }}</option>
-                    {% endfor %}
+                    {% include "slurp_ui/quality/_formula_ingredient_options.html" with selected_value="" %}
                   </select>
                 </div>
                 <div class="form-row" style="margin:0">

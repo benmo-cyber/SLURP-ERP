@@ -675,3 +675,93 @@
   color: #7f8c8d;
 }
 
+/* Slurp create-batch: multi-lot remaining balance */
+.create-batch-page .ingredient-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.1rem;
+  align-items: center;
+  justify-content: flex-end;
+  text-align: right;
+}
+
+.create-batch-page .balance-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.3rem;
+  padding: 0.3rem 0.65rem;
+  border-radius: 999px;
+  font-size: 0.84rem;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  background: #f1f5f9;
+  color: #334155;
+}
+
+.create-batch-page .balance-chip .bal-label {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #64748b;
+}
+
+.create-batch-page .balance-chip.is-remaining {
+  background: #fff7ed;
+  color: #9a5c0f;
+}
+
+.create-batch-page .balance-chip.is-remaining.is-done {
+  background: #ecfdf5;
+  color: #047857;
+}
+
+.create-batch-page .balance-chip.is-remaining.is-over {
+  background: #fef2f2;
+  color: #b91c1c;
+}
+
+.create-batch-page .lot-row.is-partial {
+  background: #fffbeb;
+}
+
+.create-batch-page .lot-row.is-partial.selected {
+  background: #fef3c7;
+  box-shadow: inset 3px 0 0 #d97706;
+}
+
+.create-batch-page .partial-chip {
+  display: inline-flex;
+  padding: 0.12rem 0.45rem;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  background: #fde68a;
+  color: #92400e;
+}
+
+.create-batch-page .btn-fill-remaining {
+  border: 1px solid #cbd5e1;
+  background: #fff;
+  color: #1e40af;
+  border-radius: 6px;
+  padding: 0.25rem 0.55rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.create-batch-page .btn-fill-remaining:hover {
+  background: #eff6ff;
+  border-color: #93c5fd;
+}
+
+.create-batch-page .lot-number-badge {
+  font-weight: 700;
+  color: #1e293b;
+  font-variant-numeric: tabular-nums;
+}
+
+

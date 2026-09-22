@@ -8,6 +8,7 @@ interface FormulaIngredient {
   item_id: string
   percentage: string
   notes: string
+  match_by_parent?: boolean
 }
 
 interface EditFormulaProps {
@@ -109,6 +110,7 @@ function EditFormula({ finishedGoodId, finishedGoodSku, finishedGoodName, onClos
             item_id: String(ing.item?.id || ''),
             percentage: String(ing.percentage || ''),
             notes: ing.notes || '',
+            match_by_parent: !!ing.match_by_parent,
           })))
         }
       }
@@ -121,7 +123,7 @@ function EditFormula({ finishedGoodId, finishedGoodSku, finishedGoodName, onClos
   }
 
   const addIngredient = () => {
-    setIngredients([...ingredients, { item_id: '', percentage: '', notes: '' }])
+    setIngredients([...ingredients, { item_id: '', percentage: '', notes: '', match_by_parent: false }])
   }
 
   const removeIngredient = (index: number) => {
@@ -130,9 +132,9 @@ function EditFormula({ finishedGoodId, finishedGoodSku, finishedGoodName, onClos
     }
   }
 
-  const updateIngredient = (index: number, field: keyof FormulaIngredient, value: string) => {
+  const updateIngredient = (index: number, field: keyof FormulaIngredient, value: string | boolean) => {
     const newIngredients = [...ingredients]
-    newIngredients[index] = { ...newIngredients[index], [field]: value }
+    newIngredients[index] = { ...newIngredients[index], [field]: value } as FormulaIngredient
     setIngredients(newIngredients)
   }
 
@@ -190,6 +192,7 @@ function EditFormula({ finishedGoodId, finishedGoodSku, finishedGoodName, onClos
           item_id: parseInt(ing.item_id),
           percentage: parseFloat(ing.percentage),
           notes: ing.notes || null,
+          match_by_parent: !!ing.match_by_parent,
         }))
       })
       
@@ -321,9 +324,18 @@ function EditFormula({ finishedGoodId, finishedGoodSku, finishedGoodName, onClos
                     {items.map((item) => (
                       <option key={item.id} value={item.id}>
                         {item.sku} - {item.name}
+                        {item.sku_parent_code ? ` (family ${item.sku_parent_code})` : ''}
                       </option>
                     ))}
                   </select>
+                  <label className="match-parent-label" title="Allow any pack-size SKU under this item's parent family on batch tickets">
+                    <input
+                      type="checkbox"
+                      checked={!!ingredient.match_by_parent}
+                      onChange={(e) => updateIngredient(index, 'match_by_parent', e.target.checked)}
+                    />
+                    {' '}All pack sizes
+                  </label>
                   <input
                     type="number"
                     step="0.01"

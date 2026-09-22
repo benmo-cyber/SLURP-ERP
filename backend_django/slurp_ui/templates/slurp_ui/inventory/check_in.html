@@ -273,8 +273,8 @@
         <input id="carrier" name="carrier" value="{{ selected_po.carrier|default:'' }}" />
       </div>
       <div class="ci-field">
-        <label for="short_reason">Short reason (if under-received)</label>
-        <input id="short_reason" name="short_reason" placeholder="Optional note when closing short" />
+        <label for="short_reason">Short reason</label>
+        <input id="short_reason" name="short_reason" placeholder="Required if closing remaining (e.g. vendor short-shipped)" />
       </div>
     </div>
 
@@ -290,13 +290,26 @@
       </div>
     </fieldset>
 
+    <div class="ci-field" style="margin:0.75rem 0;padding:0.75rem;border:1px solid #bfdbfe;border-radius:6px;background:#eff6ff">
+      <label style="display:flex;gap:0.5rem;align-items:flex-start;margin:0;font-weight:600;color:#1e3a8a">
+        <input id="close_short" name="close_short" type="checkbox" style="margin-top:0.2rem" />
+        <span>
+          Close remaining open qty (accept short)
+          <span style="display:block;font-weight:500;font-size:0.85rem;color:#334155;margin-top:0.25rem">
+            Clears leftover on-order and marks this PO received. Does <strong>not</strong> revise the PO
+            or email the vendor. Requires a short reason above. Use Cancel only if nothing was received.
+          </span>
+        </span>
+      </label>
+    </div>
+
     <div class="form-row ci-field">
       <label for="notes">Receipt notes</label>
       <textarea id="notes" name="notes" rows="2"></textarea>
     </div>
 
     <div class="form-actions">
-      <button type="submit" class="btn btn-primary">Check in all lines</button>
+      <button type="submit" class="btn btn-primary" id="ci-submit">Check in all lines</button>
       <a class="btn btn-secondary" href="{% url 'slurp_ui:inventory_purchase_orders' %}">Back to POs</a>
     </div>
   </form>
@@ -395,6 +408,27 @@
 
   addBtn.addEventListener('click', addLine);
   addLine();
+
+  var form = host.closest('form');
+  var closeShort = document.getElementById('close_short');
+  var shortReason = document.getElementById('short_reason');
+  if (form && closeShort && shortReason) {
+    form.addEventListener('submit', function (ev) {
+      if (!closeShort.checked) return;
+      if (!(shortReason.value || '').trim()) {
+        ev.preventDefault();
+        shortReason.focus();
+        alert('Enter a short reason when closing remaining open qty (accept short).');
+        return;
+      }
+      if (!confirm(
+        'Accept short and close remaining open qty on this PO?\n\n' +
+        'This does NOT revise the PO or email the vendor.'
+      )) {
+        ev.preventDefault();
+      }
+    });
+  }
 })();
 </script>
 {% endif %}
