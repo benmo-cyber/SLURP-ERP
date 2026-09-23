@@ -118,6 +118,7 @@ PRODUCTION_NAV = [
         "label": "Production",
         "items": [
             {"id": "batches", "label": "Batch Tickets", "url_name": "slurp_ui:production"},
+            {"id": "archive", "label": "Archive", "url_name": "slurp_ui:production_archive"},
         ],
     },
 ]

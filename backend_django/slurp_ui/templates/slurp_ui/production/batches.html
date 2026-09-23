@@ -13,7 +13,7 @@
       <th>Type</th>
       <th>Finished good</th>
       <th>Status</th>
-      <th>Qty</th>
+      <th>Ticket / Actual</th>
       <th>Production date</th>
       <th>Actions</th>
     </tr>
@@ -25,12 +25,19 @@
       <td>{{ b.batch_type }}</td>
       <td>{{ b.finished_good_item.sku }}</td>
       <td>{{ b.status }}</td>
-      <td>
-        {{ b.quantity_produced|floatformat:2 }}
-        {% if b.batch_type == 'production' %}lbs{% else %}{{ b.finished_good_item.unit_of_measure|default:"lbs" }}{% endif %}
+      <td title="Ticket = planned size on the batch ticket. Actual = quantity posted to inventory on close.">
+        <span style="white-space:nowrap">
+          <span style="color:#64748b;font-size:0.75rem;font-weight:650;text-transform:uppercase;letter-spacing:0.04em">Ticket</span>
+          {{ b.quantity_produced|floatformat:2 }}
+          {% if b.batch_type == 'production' %}lbs{% else %}{{ b.finished_good_item.unit_of_measure|default:"lbs" }}{% endif %}
+        </span>
         {% if b.status == 'closed' and b.quantity_actual != None %}
-        / act {{ b.quantity_actual|floatformat:2 }}
-        {% if b.batch_type == 'production' %}lbs{% else %}{{ b.finished_good_item.unit_of_measure|default:"lbs" }}{% endif %}
+        <span style="color:#94a3b8"> · </span>
+        <span style="white-space:nowrap">
+          <span style="color:#64748b;font-size:0.75rem;font-weight:650;text-transform:uppercase;letter-spacing:0.04em">Actual</span>
+          {{ b.quantity_actual|floatformat:2 }}
+          {% if b.batch_type == 'production' %}lbs{% else %}{{ b.finished_good_item.unit_of_measure|default:"lbs" }}{% endif %}
+        </span>
         {% endif %}
       </td>
       <td>{{ b.production_date|date:"Y-m-d" }}</td>
@@ -44,6 +51,12 @@
            href="{% url 'slurp_ui:production_adjust_batch' b.id %}">Adjust</a>
         <a class="btn btn-primary" style="padding:0.35rem 0.7rem;font-size:0.85rem"
            href="{% url 'slurp_ui:production_close_batch' b.id %}">Close</a>
+        {% else %}
+        <form method="post" action="{% url 'slurp_ui:production_archive_batch' b.id %}" style="display:inline">
+          {% csrf_token %}
+          <button type="submit" class="btn btn-secondary" style="padding:0.35rem 0.7rem;font-size:0.85rem"
+                  onclick="return confirm('Archive {{ b.batch_number }}? It will leave this list and move to Production → Archive.');">Archive</button>
+        </form>
         {% endif %}
         <form method="post" action="{% url 'slurp_ui:production_reverse_batch' b.id %}" style="display:inline">
           {% csrf_token %}

@@ -610,6 +610,44 @@ def close_batch_ticket(batch: ProductionBatch, user, data: dict) -> ProductionBa
             quantity_produced=combined_output_quantity,
         )
 
+        try:
+            from .hold_services import ensure_open_hold_case, parse_batch_qc_notes, parse_qc_float
+
+            qc_param = (data.get("qc_parameter") or data.get("qc_parameters") or "").strip()
+            qc_actual = data.get("qc_actual")
+            qc_initials = (data.get("qc_initials") or "").strip()
+            if not qc_param and not qc_actual and not qc_initials:
+                parsed = parse_batch_qc_notes(batch.notes)
+                qc_param = parsed["parameter"]
+                qc_actual = parsed["actual_value"]
+                qc_initials = parsed["initials"]
+            qc_val = parse_qc_float(qc_actual)
+            summary = "Awaiting micro/QC results"
+            if qc_param and qc_val is not None:
+                summary = f"Awaiting micro/QC — {qc_param}: {qc_val:g}"
+            elif qc_param:
+                summary = f"Awaiting micro/QC — {qc_param}"
+
+            ensure_open_hold_case(
+                new_lot,
+                user=user,
+                kind="awaiting_micro",
+                summary=summary,
+                initial_note=(
+                    f"Manufactured lot from batch {batch.batch_number} "
+                    "placed on hold pending micro/QC release."
+                ),
+                qc_parameter_name=qc_param,
+                qc_result_value=qc_val,
+                qc_initials=qc_initials,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to open awaiting_micro hold case for lot %s (batch %s)",
+                new_lot.lot_number,
+                batch.batch_number,
+            )
+
         _uom = getattr(item, "unit_of_measure", None) or "lbs"
         doc_bits = []
         if (batch.wastes or 0) > 0:
@@ -700,6 +738,44 @@ def close_batch_ticket(batch: ProductionBatch, user, data: dict) -> ProductionBa
             lot=new_lot,
             quantity_produced=output_quantity,
         )
+
+        try:
+            from .hold_services import ensure_open_hold_case, parse_batch_qc_notes, parse_qc_float
+
+            qc_param = (data.get("qc_parameter") or data.get("qc_parameters") or "").strip()
+            qc_actual = data.get("qc_actual")
+            qc_initials = (data.get("qc_initials") or "").strip()
+            if not qc_param and not qc_actual and not qc_initials:
+                parsed = parse_batch_qc_notes(batch.notes)
+                qc_param = parsed["parameter"]
+                qc_actual = parsed["actual_value"]
+                qc_initials = parsed["initials"]
+            qc_val = parse_qc_float(qc_actual)
+            summary = "Awaiting micro/QC results"
+            if qc_param and qc_val is not None:
+                summary = f"Awaiting micro/QC — {qc_param}: {qc_val:g}"
+            elif qc_param:
+                summary = f"Awaiting micro/QC — {qc_param}"
+
+            ensure_open_hold_case(
+                new_lot,
+                user=user,
+                kind="awaiting_micro",
+                summary=summary,
+                initial_note=(
+                    f"Repack lot from batch {batch.batch_number} "
+                    "placed on hold pending micro/QC release."
+                ),
+                qc_parameter_name=qc_param,
+                qc_result_value=qc_val,
+                qc_initials=qc_initials,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to open awaiting_micro hold case for lot %s (batch %s)",
+                new_lot.lot_number,
+                batch.batch_number,
+            )
 
         txn = InventoryTransaction.objects.create(
             transaction_type="repack_output",

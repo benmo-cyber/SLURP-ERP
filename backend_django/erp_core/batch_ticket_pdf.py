@@ -1237,10 +1237,15 @@ def _draw_overlay_page2(c, fg, batch_number, quantity_produced_display, base_uni
     if waste_val:
         c.drawString(_P2_WASTE_X * inch, _P2_SPILL_WASTE_Y * inch, waste_val[:12])
     # QC data
+    qc_y = _P2_QC_Y
+    if qc_info.get('parameters'):
+        c.drawString(1.0 * inch, qc_y * inch, f"Param: {(qc_info['parameters'] or '')[:40]}")
+        qc_y -= 0.22
     if qc_info.get('actual'):
-        c.drawString(1.0 * inch, _P2_QC_Y * inch, (qc_info['actual'] or '')[:50])
+        c.drawString(1.0 * inch, qc_y * inch, (qc_info['actual'] or '')[:50])
+        qc_y -= 0.22
     if qc_info.get('initials'):
-        c.drawString(1.0 * inch, (_P2_QC_Y - 0.25) * inch, (qc_info['initials'] or '')[:20])
+        c.drawString(1.0 * inch, qc_y * inch, (qc_info['initials'] or '')[:20])
     c.setFont('Helvetica', 9)
     c.drawCentredString(_LETTER_W / 2, _P2_PAGE_NUM_Y * inch, '-- 2 of 2 --')
 
@@ -1350,11 +1355,14 @@ def build_batch_ticket_pdf(batch):
     # Load formula mixing steps (Steps 1-6) for the finished good
     mixing_steps = ['', '', '', '', '', '']
     try:
-        from .models import Formula
-        formula = getattr(fg, 'formula', None)
-        if formula is None:
-            formula = Formula.objects.filter(finished_good=fg).first()
+        from .formula_resolve import formula_for_batch
+
+        formula = formula_for_batch(batch)
         if formula:
+            if not qc_info.get('parameters'):
+                pname = (getattr(formula, 'qc_parameter_name', None) or '').strip()
+                if pname:
+                    qc_info['parameters'] = pname
             for i in range(1, 7):
                 step_text = (getattr(formula, f'mixing_step_{i}', None) or '').strip()
                 if step_text:
@@ -1816,10 +1824,12 @@ def build_batch_ticket_pdf(batch):
     # Line 27: Raw Materials added as an adjustment should be repicked and highlighted
     elements.append(Paragraph("Raw Materials added as an adjustment should be repicked and highlighted", small_style))
     qc_disposition = ''
+    if qc_info.get('parameters'):
+        qc_disposition = f"Parameter: {qc_info['parameters']}"
     if qc_info.get('actual'):
-        qc_disposition = qc_info['actual']
+        qc_disposition = (qc_disposition + f"  Actual: {qc_info['actual']}").strip()
     if qc_info.get('initials'):
-        qc_disposition = (qc_disposition + '  Initials: ' + qc_info['initials']).strip()
+        qc_disposition = (qc_disposition + f"  Initials: {qc_info['initials']}").strip()
     if qc_disposition:
         elements.append(Paragraph(f"QC Data: {qc_disposition}", normal_style))
     # Line 28: QC Disposition:

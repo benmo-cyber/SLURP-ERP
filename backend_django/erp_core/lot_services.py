@@ -131,14 +131,16 @@ def coa_release_preview(lot: Lot, release_qty: float) -> dict[str, Any]:
 
     formula_qc = None
     try:
-        f = Formula.objects.get(finished_good_id=lot.item_id)
-        if (f.qc_parameter_name or "").strip():
+        from .formula_resolve import formula_for_lot
+
+        f = formula_for_lot(lot)
+        if f and (f.qc_parameter_name or "").strip():
             formula_qc = {
                 "qc_parameter_name": f.qc_parameter_name,
                 "qc_spec_min": f.qc_spec_min,
                 "qc_spec_max": f.qc_spec_max,
             }
-    except Formula.DoesNotExist:
+    except Exception:
         pass
 
     return {
@@ -201,8 +203,10 @@ def release_from_hold(user, lot: Lot, quantity: float, coa_payload: dict | None 
             if line.id not in by_id:
                 raise LotFlowError(f"Missing micro/COA result for line: {line.test_name}")
         try:
-            formula = Formula.objects.get(finished_good_id=lot.item_id)
-        except Formula.DoesNotExist:
+            from .formula_resolve import formula_for_lot
+
+            formula = formula_for_lot(lot)
+        except Exception:
             formula = None
         has_qc = bool(formula and (formula.qc_parameter_name or "").strip())
         if has_qc:

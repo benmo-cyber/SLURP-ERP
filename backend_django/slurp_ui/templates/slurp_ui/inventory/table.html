@@ -170,8 +170,13 @@
                              href="{% url 'slurp_ui:inventory_lot_hold' lot.id %}?tab={{ tab }}&uom={{ display_uom }}&sku={{ row.sku|urlencode }}&vendor={{ v.vendor|urlencode }}{% if deeper %}&deeper=1{% endif %}">Hold</a>
                           {% endif %}
                           {% if lot.hold_native > 0 %}
+                          {% if lot.open_hold_case_id %}
                           <a class="btn btn-secondary" style="padding:0.2rem 0.45rem;font-size:0.75rem"
-                             href="{% url 'slurp_ui:inventory_lot_release' lot.id %}?tab={{ tab }}&uom={{ display_uom }}&sku={{ row.sku|urlencode }}&vendor={{ v.vendor|urlencode }}{% if deeper %}&deeper=1{% endif %}&quantity={{ lot.hold_native }}">Release</a>
+                             href="{% url 'slurp_ui:inventory_hold_case' lot.open_hold_case_id %}">Release</a>
+                          {% else %}
+                          <a class="btn btn-secondary" style="padding:0.2rem 0.45rem;font-size:0.75rem"
+                             href="{% url 'slurp_ui:inventory_lot_hold_log' lot.id %}">Release</a>
+                          {% endif %}
                           <a class="btn btn-secondary" style="padding:0.2rem 0.45rem;font-size:0.75rem"
                              href="{% url 'slurp_ui:inventory_lot_hold_log' lot.id %}">Hold log</a>
                           {% endif %}

@@ -24,16 +24,24 @@
 <div class="hs-bleed" style="padding:1.25rem 1.5rem 2rem;max-width:46rem">
   <div class="hs-card" style="margin-bottom:1rem">
     <div class="hs-card-header">
-      <h3>Case #{{ case.pk }} · {{ lot.lot_number }}</h3>
-      {% if case.status == 'open' %}
-      <span class="hs-badge warn">Open</span>
-      {% else %}
-      <span class="hs-badge ok">Resolved</span>
-      {% endif %}
+      <h3>Case #{{ case.pk }} · {% if batch_number %}{{ batch_number }} · {% endif %}{{ lot.lot_number }}</h3>
+      <div style="display:flex;gap:0.35rem;align-items:center;flex-wrap:wrap">
+        {% if case.kind == 'awaiting_micro' %}
+        <span class="hs-badge" style="background:#dbeafe;color:#1e40af">Awaiting micro</span>
+        {% else %}
+        <span class="hs-badge" style="background:#f1f5f9;color:#475569">Receiving</span>
+        {% endif %}
+        {% if case.status == 'open' %}
+        <span class="hs-badge warn">Open</span>
+        {% else %}
+        <span class="hs-badge ok">Resolved</span>
+        {% endif %}
+      </div>
     </div>
     <div class="hs-card-body">
       <p class="hs-section-note" style="margin-top:0">
         {{ lot.item.sku }} — {{ lot.item.name }}
+        {% if batch_number %} · Batch {{ batch_number }}{% endif %}
         {% if lot.item.vendor %} · {{ lot.item.vendor }}{% endif %}
         {% if lot.po_number %} · PO {{ lot.po_number }}{% endif %}
         · Vendor lot {{ lot.vendor_lot_number|default:"—" }}
@@ -42,6 +50,16 @@
         <div class="hs-prop"><span class="k">On hold</span><span class="v">{{ hold_qty|floatformat:-2 }} {{ lot.item.unit_of_measure }}</span></div>
         <div class="hs-prop"><span class="k">Opened</span><span class="v">{{ case.opened_at|date:"M j, Y H:i" }}{% if case.opened_by %} · {{ case.opened_by }}{% endif %}</span></div>
         <div class="hs-prop"><span class="k">Summary</span><span class="v">{{ case.summary|default:"—" }}</span></div>
+        {% if qc_prefill.qc_parameter_name or qc_prefill.qc_result_value != None %}
+        <div class="hs-prop">
+          <span class="k">Batch-close QC</span>
+          <span class="v">
+            {% if qc_prefill.qc_parameter_name %}{{ qc_prefill.qc_parameter_name }}{% endif %}
+            {% if qc_prefill.qc_result_value != None %} = {{ qc_prefill.qc_result_value }}{% endif %}
+            {% if qc_prefill.qc_initials %} · {{ qc_prefill.qc_initials }}{% endif %}
+          </span>
+        </div>
+        {% endif %}
         {% if case.status == 'resolved' %}
         <div class="hs-prop"><span class="k">Resolution</span><span class="v">{{ case.get_resolution_display }}{% if case.resolution_qty %} · {{ case.resolution_qty|floatformat:-2 }} {{ lot.item.unit_of_measure }}{% endif %}</span></div>
         <div class="hs-prop"><span class="k">Resolved</span><span class="v">{% if case.resolved_at %}{{ case.resolved_at|date:"M j, Y H:i" }}{% else %}—{% endif %}{% if case.resolved_by %} · {{ case.resolved_by }}{% endif %}</span></div>
@@ -90,12 +108,21 @@
   </div>
 
   <div class="hs-card">
-    <div class="hs-card-header"><h3>Resolve</h3></div>
+    <div class="hs-card-header">
+      <h3>{% if case.kind == 'awaiting_micro' %}Release after micro / QC{% else %}Resolve{% endif %}</h3>
+    </div>
     <div class="hs-card-body">
+      {% if case.kind == 'awaiting_micro' %}
+      <p class="hs-section-note" style="margin-top:0">
+        Manufactured lot pending micro/QC. Accept releases to available inventory
+        (COA / formula QC required when configured). Discard removes qty from on-hand.
+      </p>
+      {% else %}
       <p class="hs-section-note" style="margin-top:0">
         Accept releases to available. Return / discard remove qty from on-hand.
         Partial resolves leave remaining hold open.
       </p>
+      {% endif %}
       <form method="post">
         {% csrf_token %}
         <input type="hidden" name="action" value="resolve" />
@@ -107,9 +134,14 @@
         <div class="form-row">
           <label for="resolution">Outcome</label>
           <select id="resolution" name="resolution" required>
+            {% if case.kind == 'awaiting_micro' %}
+            <option value="accept">Release to available (micro/QC clear)</option>
+            <option value="discard">Discard / scrap</option>
+            {% else %}
             <option value="accept">Accept after investigation</option>
             <option value="return">Return material to vendor</option>
             <option value="discard">Discard / scrap</option>
+            {% endif %}
           </select>
         </div>
         <div class="form-row">
@@ -119,7 +151,9 @@
 
         {% if preview and preview.coa_required %}
         <div class="hs-card" style="margin:0.75rem 0;box-shadow:none">
-          <div class="hs-card-header"><h3>COA / micro required to accept</h3></div>
+          <div class="hs-card-header">
+            <h3>{% if case.kind == 'awaiting_micro' %}COA / micro required to release{% else %}COA / micro required to accept{% endif %}</h3>
+          </div>
           <div class="hs-card-body">
             {% for line in preview.template_lines %}
             <div class="form-row">
@@ -129,8 +163,35 @@
             {% endfor %}
             {% if preview.formula_qc %}
             <div class="form-row" style="margin-bottom:0">
-              <label>{{ preview.formula_qc.qc_parameter_name }}</label>
-              <input name="qc_result_value" type="number" step="any" required />
+              <label>
+                {{ preview.formula_qc.qc_parameter_name }}
+                {% if preview.formula_qc.qc_spec_min != None or preview.formula_qc.qc_spec_max != None %}
+                  <span class="hs-muted" style="font-weight:500">
+                    (spec
+                    {% if preview.formula_qc.qc_spec_min != None %}≥ {{ preview.formula_qc.qc_spec_min }}{% endif %}
+                    {% if preview.formula_qc.qc_spec_min != None and preview.formula_qc.qc_spec_max != None %} · {% endif %}
+                    {% if preview.formula_qc.qc_spec_max != None %}≤ {{ preview.formula_qc.qc_spec_max }}{% endif %})
+                  </span>
+                {% endif %}
+              </label>
+              <input name="qc_result_value" type="number" step="any" required
+                     value="{% if preview.formula_qc.prefill_value != None %}{{ preview.formula_qc.prefill_value }}{% elif qc_prefill.qc_result_value != None %}{{ qc_prefill.qc_result_value }}{% endif %}" />
+              {% if preview.formula_qc.prefill_value != None or qc_prefill.qc_result_value != None %}
+              <small class="hs-muted" style="display:block;margin-top:0.35rem">
+                Prefill from batch close
+                {% if qc_prefill.qc_initials %} · initials {{ qc_prefill.qc_initials }}{% endif %}
+                — confirm or edit before release.
+              </small>
+              {% endif %}
+            </div>
+            {% elif qc_prefill.qc_result_value != None or qc_prefill.qc_parameter_name %}
+            <div class="form-row" style="margin-bottom:0">
+              <label>{{ qc_prefill.qc_parameter_name|default:"QC result" }}</label>
+              <input name="qc_result_value" type="number" step="any"
+                     value="{% if qc_prefill.qc_result_value != None %}{{ qc_prefill.qc_result_value }}{% endif %}" />
+              <small class="hs-muted" style="display:block;margin-top:0.35rem">
+                From batch close{% if qc_prefill.qc_initials %} · initials {{ qc_prefill.qc_initials }}{% endif %}.
+              </small>
             </div>
             {% endif %}
           </div>
@@ -138,7 +199,9 @@
         {% endif %}
 
         <div class="hs-form-actions" style="margin-bottom:0">
-          <button type="submit" class="hs-btn hs-btn-primary">Resolve</button>
+          <button type="submit" class="hs-btn hs-btn-primary">
+            {% if case.kind == 'awaiting_micro' %}Release / resolve{% else %}Resolve{% endif %}
+          </button>
         </div>
       </form>
     </div>

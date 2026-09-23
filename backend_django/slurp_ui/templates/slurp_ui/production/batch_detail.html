@@ -7,7 +7,7 @@
       <h2>{{ batch.batch_number }}</h2>
       <p style="color:#64748b;margin:0.25rem 0 0">
         {{ batch.batch_type|title }} · {{ batch.finished_good_item.sku }} — {{ batch.finished_good_item.name }}
-        · <strong>{{ batch.status }}</strong>
+        · <strong>{{ batch.status }}</strong>{% if batch.is_archived %} · <strong>Archived</strong>{% endif %}
       </p>
     </div>
     <div style="display:flex;gap:0.5rem;flex-wrap:wrap">
@@ -17,12 +17,26 @@
       {% endif %}
       {% if batch.status != 'closed' %}
       <a class="btn btn-primary" href="{% url 'slurp_ui:production_close_batch' batch.id %}">Close</a>
+      {% elif not batch.is_archived %}
+      <form method="post" action="{% url 'slurp_ui:production_archive_batch' batch.id %}">{% csrf_token %}
+        <button class="btn btn-secondary" type="submit"
+                onclick="return confirm('Archive {{ batch.batch_number }}? It will leave the dash and move to Production → Archive.');">Archive</button>
+      </form>
+      {% else %}
+      <form method="post" action="{% url 'slurp_ui:production_unarchive_batch' batch.id %}">{% csrf_token %}
+        <button class="btn btn-primary" type="submit"
+                onclick="return confirm('Restore {{ batch.batch_number }} to the batch tickets dash?');">Restore to dash</button>
+      </form>
       {% endif %}
       <form method="post" action="{% url 'slurp_ui:production_reverse_batch' batch.id %}">{% csrf_token %}
         <button class="btn btn-danger" type="submit"
                 onclick="return confirm('Reverse batch {{ batch.batch_number }}?');">Reverse</button>
       </form>
+      {% if batch.is_archived %}
+      <a class="btn btn-secondary" href="{% url 'slurp_ui:production_archive' %}">Back to archive</a>
+      {% else %}
       <a class="btn btn-secondary" href="{% url 'slurp_ui:production' %}">Back</a>
+      {% endif %}
     </div>
   </div>
 
@@ -52,7 +66,7 @@
     <div><strong>Actual output:</strong> {{ batch.quantity_actual|floatformat:2 }}</div>
     {% endif %}
     {% if formula %}
-    <div><strong>Formula:</strong> v{{ formula.version }}</div>
+    <div><strong>Recipe:</strong> {{ recipe_label|default:formula.name }}</div>
     {% endif %}
   </div>
 

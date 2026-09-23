@@ -380,6 +380,11 @@ urlpatterns = [
     # Production
     path("production/", views.production_batches, name="production"),
     path(
+        "production/archive/",
+        views.production_archive,
+        name="production_archive",
+    ),
+    path(
         "production/create-batch/",
         views.production_create_batch,
         name="production_create_batch",
@@ -403,6 +408,16 @@ urlpatterns = [
         "production/<int:pk>/close/",
         views.production_close_batch,
         name="production_close_batch",
+    ),
+    path(
+        "production/<int:pk>/archive/",
+        views.production_archive_batch,
+        name="production_archive_batch",
+    ),
+    path(
+        "production/<int:pk>/unarchive/",
+        views.production_unarchive_batch,
+        name="production_unarchive_batch",
     ),
     path(
         "production/<int:pk>/reverse/",

@@ -70,16 +70,24 @@ def _build_fps_context(fps):
     formula_version = ""
     formula_rows = []
     try:
-        formula = Formula.objects.prefetch_related("ingredients__item").get(finished_good=item)
-        formula_version = _s(str(formula.version))
-        for ing in formula.ingredients.all():
-            iname = _s(getattr(ing.item, "name", "") or "") if ing.item else ""
-            try:
-                pct = ing.percentage
-                pct_s = f"{float(pct):g}" if pct is not None else ""
-            except (TypeError, ValueError):
-                pct_s = str(ing.percentage) if ing.percentage is not None else ""
-            formula_rows.append({"name": iname, "percent": _s(pct_s)})
+        from .formula_resolve import formula_for_item
+
+        formula = formula_for_item(item.id)
+        if formula is not None:
+            formula = (
+                Formula.objects.prefetch_related("ingredients__item").get(pk=formula.pk)
+            )
+            formula_version = _s(str(formula.version))
+            if getattr(formula, "name", None):
+                formula_version = _s(f"{formula.name} v{formula.version}")
+            for ing in formula.ingredients.all():
+                iname = _s(getattr(ing.item, "name", "") or "") if ing.item else ""
+                try:
+                    pct = ing.percentage
+                    pct_s = f"{float(pct):g}" if pct is not None else ""
+                except (TypeError, ValueError):
+                    pct_s = str(ing.percentage) if ing.percentage is not None else ""
+                formula_rows.append({"name": iname, "percent": _s(pct_s)})
     except Formula.DoesNotExist:
         pass
     except Exception:

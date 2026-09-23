@@ -15,6 +15,7 @@ from django.db.models import Q, Sum
 from django.http import FileResponse, Http404, HttpRequest, HttpResponse
 
 from django.shortcuts import get_object_or_404, redirect, render
+from django.urls import reverse
 
 from django.utils import timezone
 
@@ -22,6 +23,7 @@ from django.views.decorators.http import require_http_methods
 
 
 
+from erp_core.formula_resolve import formulas_for_fg, recipe_label
 from erp_core.formula_ingredient import (
     build_parent_family_options,
     ingredient_select_value,
@@ -1722,6 +1724,10 @@ def quality_create_finished_good(request: HttpRequest) -> HttpResponse:
 
                             finished_good=item,
 
+                            name="Standard",
+
+                            is_default=True,
+
                             version=(request.POST.get("formula_version") or "1.0").strip() or "1.0",
 
                             shelf_life_months=shelf_life,
@@ -1865,46 +1871,31 @@ def quality_unlink_finished_good(request: HttpRequest) -> HttpResponse:
 @require_http_methods(["GET", "POST"])
 
 def quality_finished_good_detail(request: HttpRequest, pk: int) -> HttpResponse:
-
     item = get_object_or_404(Item, pk=pk)
-
     if item.item_type not in ("finished_good", "distributed_item"):
-
         messages.error(request, "Not a finished good / distributed item.")
-
         return redirect("slurp_ui:quality_finished_goods")
 
-
-
-    formula = Formula.objects.filter(finished_good=item).prefetch_related("ingredients__item").first()
+    recipes = list(
+        Formula.objects.filter(finished_good=item)
+        .prefetch_related("ingredients__item")
+        .order_by("-is_default", "name", "id")
+    )
 
     if item.item_type != "finished_good":
-
         return render(
-
             request,
-
             "slurp_ui/quality/finished_good_detail.html",
-
             _quality_ctx(
-
                 "finished-goods",
-
                 item=item,
-
                 formula=None,
-
+                recipes=[],
                 ingredients=[],
-
                 can_edit_formula=False,
-
                 port_status="full",
-
             ),
-
         )
-
-
 
     ingredient_items = list(
         Item.objects.filter(
@@ -1912,241 +1903,203 @@ def quality_finished_good_detail(request: HttpRequest, pk: int) -> HttpResponse:
         ).order_by("sku")[:500]
     )
     parent_family_options = build_parent_family_options(ingredient_items)
-
     ccps = CriticalControlPoint.objects.all().order_by("name")
 
-
+    recipe_id = (request.GET.get("recipe") or request.POST.get("recipe_id") or "").strip()
+    formula = None
+    if recipe_id.isdigit():
+        formula = next((r for r in recipes if r.id == int(recipe_id)), None)
+    if formula is None and recipes:
+        formula = recipes[0]
 
     if request.method == "POST":
+        action = (request.POST.get("action") or "save").strip().lower()
+
+        if action == "add_recipe":
+            new_name = (request.POST.get("new_recipe_name") or "").strip() or "Alternate"
+            base = new_name
+            n = 2
+            while Formula.objects.filter(finished_good=item, name=new_name).exists():
+                new_name = f"{base} ({n})"
+                n += 1
+            clone_id = (request.POST.get("clone_from") or "").strip()
+            src = None
+            if clone_id.isdigit():
+                src = Formula.objects.filter(pk=int(clone_id), finished_good=item).first()
+            formula = Formula.objects.create(
+                finished_good=item,
+                name=new_name,
+                version=(src.version if src else "1.0") or "1.0",
+                is_default=not Formula.objects.filter(finished_good=item).exists(),
+                notes=src.notes if src else None,
+                qc_parameter_name=src.qc_parameter_name if src else None,
+                qc_spec_min=src.qc_spec_min if src else None,
+                qc_spec_max=src.qc_spec_max if src else None,
+                shelf_life_months=src.shelf_life_months if src else None,
+                critical_control_point_id=src.critical_control_point_id if src else None,
+                mixing_step_1=src.mixing_step_1 if src else None,
+                mixing_step_2=src.mixing_step_2 if src else None,
+                mixing_step_3=src.mixing_step_3 if src else None,
+                mixing_step_4=src.mixing_step_4 if src else None,
+                mixing_step_5=src.mixing_step_5 if src else None,
+                mixing_step_6=src.mixing_step_6 if src else None,
+            )
+            if src:
+                for ing in src.ingredients.all():
+                    FormulaItem.objects.create(
+                        formula=formula,
+                        item=ing.item,
+                        percentage=ing.percentage,
+                        notes=ing.notes,
+                        match_by_parent=bool(getattr(ing, "match_by_parent", False)),
+                    )
+            messages.success(request, f'Added recipe "{formula.name}".')
+            return redirect(
+                f"{reverse('slurp_ui:quality_finished_good_detail', kwargs={'pk': pk})}?recipe={formula.id}"
+            )
+
+        if action == "set_default" and formula is not None:
+            Formula.objects.filter(finished_good=item, is_default=True).update(is_default=False)
+            formula.is_default = True
+            formula.save(update_fields=["is_default", "updated_at"])
+            messages.success(request, f'"{formula.name}" is now the default recipe.')
+            return redirect(
+                f"{reverse('slurp_ui:quality_finished_good_detail', kwargs={'pk': pk})}?recipe={formula.id}"
+            )
 
         if formula is None:
+            formula = Formula.objects.create(
+                finished_good=item,
+                name="Standard",
+                version="1.0",
+                is_default=True,
+            )
 
-            formula = Formula.objects.create(finished_good=item, version="1.0")
-
-
+        formula.name = (request.POST.get("recipe_name") or formula.name or "Standard").strip() or "Standard"
+        if (
+            Formula.objects.filter(finished_good=item, name=formula.name)
+            .exclude(pk=formula.pk)
+            .exists()
+        ):
+            messages.error(request, f'A recipe named "{formula.name}" already exists on this product.')
+            return redirect(
+                f"{reverse('slurp_ui:quality_finished_good_detail', kwargs={'pk': pk})}?recipe={formula.id}"
+            )
 
         formula.version = (request.POST.get("version") or "1.0").strip() or "1.0"
-
         formula.notes = (request.POST.get("notes") or "").strip() or None
-
         formula.qc_parameter_name = (request.POST.get("qc_parameter_name") or "").strip() or None
-
-        for field in (
-
-            "qc_spec_min",
-
-            "qc_spec_max",
-
-            "shelf_life_months",
-
-        ):
-
+        make_default = (request.POST.get("is_default") or "") in ("1", "on", "true", "yes")
+        for field in ("qc_spec_min", "qc_spec_max", "shelf_life_months"):
             raw = (request.POST.get(field) or "").strip()
-
             if raw == "":
-
                 setattr(formula, field, None)
-
             else:
-
                 try:
-
-                    setattr(formula, field, float(raw) if field != "shelf_life_months" else int(raw))
-
+                    setattr(
+                        formula,
+                        field,
+                        float(raw) if field != "shelf_life_months" else int(raw),
+                    )
                 except ValueError:
-
                     messages.error(request, f"Invalid value for {field}.")
-
-                    return redirect("slurp_ui:quality_finished_good_detail", pk=pk)
-
+                    return redirect(
+                        f"{reverse('slurp_ui:quality_finished_good_detail', kwargs={'pk': pk})}?recipe={formula.id}"
+                    )
         for i in range(1, 7):
-
             setattr(
-
                 formula,
-
                 f"mixing_step_{i}",
-
                 (request.POST.get(f"mixing_step_{i}") or "").strip() or None,
-
             )
-
         ccp_id = (request.POST.get("critical_control_point") or "").strip()
-
-        formula.critical_control_point_id = int(ccp_id) if ccp_id else None
-
-
+        formula.critical_control_point_id = int(ccp_id) if ccp_id.isdigit() else None
 
         try:
+            with transaction.atomic():
+                if make_default:
+                    Formula.objects.filter(finished_good=item, is_default=True).exclude(
+                        pk=formula.pk
+                    ).update(is_default=False)
+                    formula.is_default = True
+                elif not Formula.objects.filter(finished_good=item, is_default=True).exists():
+                    formula.is_default = True
+                formula.save()
 
-            line_count = int(request.POST.get("line_count") or 0)
-
-        except ValueError:
-
-            line_count = 0
-
-
-
-        ingredients = []
-
-        total_pct = 0.0
-
-        for i in range(max(0, min(line_count, 40))):
-
-            item_id = request.POST.get(f"ing_item_{i}")
-
-            pct_raw = request.POST.get(f"ing_pct_{i}")
-
-            if not item_id:
-
-                continue
-
-            try:
-
-                pct = float(pct_raw or 0)
-
-            except ValueError:
-
-                continue
-
-            if pct <= 0:
-
-                continue
-
-            try:
-
-
-                resolved_id, match_by_parent = resolve_ingredient_select_value(str(item_id))
-
-
-            except (TypeError, ValueError) as exc:
-
-
-                messages.error(request, f"Invalid ingredient selection: {exc}")
-
-
-                continue
-
-
-            ingredients.append(
-
-
-                {
-
-
-                    "item_id": resolved_id,
-
-
-                    "percentage": pct,
-
-
-                    "notes": (request.POST.get(f"ing_notes_{i}") or "").strip() or None,
-
-
-                    "match_by_parent": match_by_parent,
-
-
-                }
-
-
+                line_count = int(request.POST.get("line_count") or 0)
+                rows = []
+                for i in range(line_count):
+                    select_val = (request.POST.get(f"ing_item_{i}") or "").strip()
+                    pct_raw = (request.POST.get(f"ing_pct_{i}") or "").strip()
+                    notes = (request.POST.get(f"ing_notes_{i}") or "").strip() or None
+                    if not select_val and not pct_raw:
+                        continue
+                    resolved_id, match_by_parent = resolve_ingredient_select_value(select_val)
+                    if not resolved_id:
+                        raise ValueError(f"Ingredient row {i + 1}: select an item.")
+                    try:
+                        pct = float(pct_raw)
+                    except ValueError:
+                        raise ValueError(f"Ingredient row {i + 1}: invalid %.")
+                    rows.append(
+                        {
+                            "item_id": resolved_id,
+                            "percentage": pct,
+                            "notes": notes,
+                            "match_by_parent": match_by_parent,
+                        }
+                    )
+                total_pct = sum(r["percentage"] for r in rows)
+                if rows and abs(total_pct - 100.0) > _PCT_TOLERANCE:
+                    raise ValueError(f"Ingredients must total 100% (currently {total_pct:g}%).")
+                FormulaItem.objects.filter(formula=formula).delete()
+                for row in rows:
+                    FormulaItem.objects.create(
+                        formula=formula,
+                        item_id=row["item_id"],
+                        percentage=row["percentage"],
+                        notes=row["notes"],
+                        match_by_parent=bool(row.get("match_by_parent")),
+                    )
+            messages.success(request, f'Saved recipe "{formula.name}" for {item.sku}.')
+            return redirect(
+                f"{reverse('slurp_ui:quality_finished_good_detail', kwargs={'pk': pk})}?recipe={formula.id}"
             )
-
-            total_pct += pct
-
-
-
-        if ingredients and abs(total_pct - 100.0) > _PCT_TOLERANCE:
-
-            messages.error(
-
-                request,
-
-                f"Ingredient percentages must total 100% (±{_PCT_TOLERANCE}). Got {total_pct:.2f}%.",
-
-            )
-
-        else:
-
-            try:
-
-                with transaction.atomic():
-
-                    formula.save()
-
-                    FormulaItem.objects.filter(formula=formula).delete()
-
-                    for row in ingredients:
-
-                        FormulaItem.objects.create(
-
-                            formula=formula,
-
-                            item_id=row["item_id"],
-
-                            percentage=row["percentage"],
-
-                            notes=row["notes"],
-
-                            match_by_parent=bool(row.get("match_by_parent")),
-
-                        )
-
-                messages.success(request, f"Saved formula for {item.sku}.")
-
-                return redirect("slurp_ui:quality_finished_good_detail", pk=pk)
-
-            except Exception as e:
-
-                messages.error(request, str(e))
-
-
+        except Exception as e:
+            messages.error(request, str(e))
 
         formula.refresh_from_db()
 
-
+    recipes = list(
+        Formula.objects.filter(finished_good=item)
+        .prefetch_related("ingredients__item")
+        .order_by("-is_default", "name", "id")
+    )
+    if formula is not None:
+        formula = next((r for r in recipes if r.id == formula.id), formula)
 
     ingredients = list(formula.ingredients.select_related("item").all()) if formula else []
     for _ing in ingredients:
         _ing.select_value = ingredient_select_value(_ing)
 
-
     return render(
-
         request,
-
         "slurp_ui/quality/finished_good_detail.html",
-
         _quality_ctx(
-
             "finished-goods",
-
             item=item,
-
             formula=formula,
-
+            recipes=recipes,
             ingredients=ingredients,
-
             ingredient_items=ingredient_items,
-
             parent_family_options=parent_family_options,
-
             ccps=ccps,
-
             can_edit_formula=True,
-
+            recipe_label=recipe_label(formula),
             port_status="full",
-
         ),
-
     )
 
-
-
-
-
-@login_required
-
-@require_http_methods(["GET", "POST"])
 
 def quality_item_coa_test_lines(request: HttpRequest, pk: int) -> HttpResponse:
 

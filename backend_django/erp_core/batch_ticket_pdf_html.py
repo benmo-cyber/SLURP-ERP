@@ -166,9 +166,19 @@ def _build_batch_ticket_context(batch, mass_unit='native'):
     mixing_steps = ['', '', '', '', '', '']
     ccp_question = 'Has 20 mesh screen been inspected and installed properly?'  # default
     try:
-        from .models import Formula
-        formula = getattr(fg, 'formula', None) or Formula.objects.select_related('critical_control_point').filter(finished_good=fg).first()
+        from .formula_resolve import formula_for_batch
+
+        formula = formula_for_batch(batch)
+        if formula is not None and getattr(formula, "critical_control_point_id", None):
+            formula = (
+                type(formula).objects.select_related("critical_control_point").get(pk=formula.pk)
+            )
         if formula:
+            # Prefer stored close notes; fall back to formula QC parameter name.
+            if not qc_info.get('parameters'):
+                pname = (getattr(formula, 'qc_parameter_name', None) or '').strip()
+                if pname:
+                    qc_info['parameters'] = pname
             for i in range(1, 7):
                 step_text = (getattr(formula, f'mixing_step_{i}', None) or '').strip()
                 if step_text:

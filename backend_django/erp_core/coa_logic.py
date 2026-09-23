@@ -65,13 +65,10 @@ def lot_needs_coa_template(item) -> bool:
 
 
 def lot_has_formula_qc(item) -> bool:
-    from .models import Formula
+    from .formula_resolve import formula_for_item
 
-    try:
-        f = Formula.objects.get(finished_good_id=item.id)
-    except Formula.DoesNotExist:
-        return False
-    return bool((f.qc_parameter_name or "").strip())
+    f = formula_for_item(getattr(item, "id", None))
+    return bool(f and (f.qc_parameter_name or "").strip())
 
 
 def coa_required_for_full_release(lot) -> bool:

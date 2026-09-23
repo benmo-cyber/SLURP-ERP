@@ -72,12 +72,15 @@ from .inventory import (
 )
 from .production import (
     production_adjust_batch,
+    production_archive,
+    production_archive_batch,
     production_batch_detail,
     production_batch_pdf,
     production_batches,
     production_close_batch,
     production_create_batch,
     production_reverse_batch,
+    production_unarchive_batch,
 )
 from .quality import (
     quality_ccps,
@@ -226,11 +229,14 @@ __all__ = [
     "finance_pl_actual",
     "finance_pl_proforma",
     "production_batches",
+    "production_archive",
     "production_batch_detail",
     "production_batch_pdf",
     "production_adjust_batch",
     "production_create_batch",
     "production_close_batch",
+    "production_archive_batch",
+    "production_unarchive_batch",
     "production_reverse_batch",
     "quality_vendors",
     "quality_create_vendor",

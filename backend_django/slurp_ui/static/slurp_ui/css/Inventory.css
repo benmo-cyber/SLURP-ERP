@@ -178,6 +178,21 @@ html:has(.inventory-page) body {
   padding-bottom: min(42vh, 28rem);
 }
 
+/*
+ * Bleed pages (hold log, material activity, etc.): same flex trap as the table —
+ * flex:1 1 0 + min-height:0 locks height to the viewport and clips list content
+ * because the child has no overflow-y. Let content define height; main scrolls.
+ */
+.inventory-main > .hold-log,
+.inventory-main > .mat-act,
+.inventory-main > .hs-bleed {
+  flex: 0 0 auto;
+  min-height: auto;
+  height: auto;
+  max-height: none;
+  overflow: visible;
+}
+
 @media (max-width: 768px) {
   .inventory-layout {
     flex-direction: column;

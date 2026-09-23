@@ -1,14 +1,49 @@
 {% extends "slurp_ui/base.html" %}
 {% block title %}Close Batch — SLURP{% endblock %}
 {% block content %}
-<div class="modal-page" style="max-width:720px">
+<div class="modal-page" style="max-width:800px">
   <h2>Close Batch {{ batch.batch_number }}</h2>
   <p style="margin-bottom:1rem;color:#64748b">
     {{ batch.finished_good_item.sku }} · ticket target
     <strong>{{ batch.quantity_produced|floatformat:2 }}</strong>
-    {% if batch.batch_type == 'production' %} lbs{% endif %}
+    {% if batch.batch_type == 'production' %} {{ display_uom|default:"lbs" }}{% endif %}
     · status {{ batch.status }}
   </p>
+
+  {% if has_adjustments %}
+  <div style="margin-bottom:1rem;padding:0.85rem 1rem;border:1px solid #fecaca;background:#fef2f2;border-radius:8px">
+    <strong style="color:#991b1b">Batch adjustments vs original formula</strong>
+    <p style="margin:0.35rem 0 0.65rem;color:#7f1d1d;font-size:0.9rem">
+      Original ticket {{ baseline_qty_display|floatformat:2 }} {{ display_uom }}
+      → current {{ current_qty_display|floatformat:2 }} {{ display_uom }}.
+      Extra / reduced ingredient mass is already on the input lots and will post to inventory on close.
+    </p>
+    <table class="data-table" style="margin:0;background:#fff">
+      <thead>
+        <tr>
+          <th>Ingredient</th>
+          <th>Formula target</th>
+          <th>Actual used</th>
+          <th>Delta</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in adjustment_rows %}
+        {% if row.has_delta %}
+        <tr>
+          <td>{{ row.sku }} — {{ row.name }}</td>
+          <td>{{ row.target|floatformat:2 }} {{ display_uom }}</td>
+          <td>{{ row.actual|floatformat:2 }} {{ display_uom }}</td>
+          <td style="font-weight:600;color:{% if row.delta > 0 %}#b91c1c{% else %}#b45309{% endif %}">
+            {% if row.delta > 0 %}+{% endif %}{{ row.delta|floatformat:2 }} {{ display_uom }}
+          </td>
+        </tr>
+        {% endif %}
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
 
   <h3 style="margin-bottom:0.5rem">Inputs</h3>
   <ul style="margin-bottom:1rem">
@@ -43,17 +78,44 @@
     {% endif %}
 
     <h3 style="margin:1rem 0 0.5rem">QC</h3>
+    {% if formula_has_qc %}
+    <div style="margin-bottom:0.85rem;padding:0.85rem 1rem;border:1px solid #bfdbfe;background:#eff6ff;border-radius:8px">
+      <div style="font-size:0.72rem;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:#1e40af;margin-bottom:0.35rem">
+        From finished-good formula
+      </div>
+      <div style="font-size:1.02rem;font-weight:700;color:#0f172a">
+        {{ formula_qc_label }}
+      </div>
+      <div style="margin-top:0.35rem;font-size:0.88rem;color:#334155">
+        {% if formula_qc_min != None or formula_qc_max != None %}
+          Spec
+          {% if formula_qc_min != None %}≥ {{ formula_qc_min|floatformat:-4 }}{% endif %}
+          {% if formula_qc_min != None and formula_qc_max != None %} · {% endif %}
+          {% if formula_qc_max != None %}≤ {{ formula_qc_max|floatformat:-4 }}{% endif %}
+        {% else %}
+          No min/max on formula — enter the measured result below.
+        {% endif %}
+      </div>
+      <input type="hidden" name="qc_parameter" value="{{ formula_qc_label }}" />
+    </div>
+    {% else %}
     <div class="form-row">
       <label for="qc_parameter">QC parameters</label>
-      <input id="qc_parameter" name="qc_parameter" />
+      <input id="qc_parameter" name="qc_parameter" value="{{ qc_parameter_value|default:'' }}"
+             placeholder="No formula QC set — enter parameter name" />
+      <small class="form-hint">Tip: set Parameter / Min / Max on the finished-good formula sheet so this pre-fills.</small>
     </div>
+    {% endif %}
     <div class="form-row">
-      <label for="qc_actual">QC actual</label>
-      <input id="qc_actual" name="qc_actual" />
+      <label for="qc_actual">QC actual (measured){% if formula_has_qc %} *{% endif %}</label>
+      <input id="qc_actual" name="qc_actual" value="{{ qc_actual_value|default:'' }}"
+             {% if formula_has_qc %}required{% endif %}
+             placeholder="{% if formula_qc_parameter %}Measured {{ formula_qc_parameter }}{% else %}Measured value{% endif %}" />
     </div>
     <div class="form-row">
       <label for="qc_initials">QC initials</label>
-      <input id="qc_initials" name="qc_initials" maxlength="20" style="max-width:8rem" />
+      <input id="qc_initials" name="qc_initials" maxlength="20" style="max-width:8rem"
+             value="{{ qc_initials_value|default:'' }}" />
     </div>
     <div class="form-row">
       <label for="notes">Additional notes</label>

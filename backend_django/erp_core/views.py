@@ -87,7 +87,9 @@ def _expiration_datetime_for_fg_output(item, base_dt):
     """If the finished good has a formula with shelf_life_months, return expiration datetime from base_dt."""
     if not item or getattr(item, 'item_type', None) != 'finished_good' or not base_dt:
         return None
-    formula = Formula.objects.filter(finished_good=item).only('shelf_life_months').first()
+    from .formula_resolve import formula_for_item
+
+    formula = formula_for_item(item.id)
     if not formula or not formula.shelf_life_months:
         return None
     from .lot_date_utils import add_calendar_months_to_datetime

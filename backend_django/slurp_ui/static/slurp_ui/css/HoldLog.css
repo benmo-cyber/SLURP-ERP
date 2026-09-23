@@ -21,6 +21,15 @@
   animation: hold-log-fade 0.45s ease-out;
 }
 
+/* Escape inventory-main flex height trap (see Inventory.css) */
+.inventory-main > .hold-log {
+  flex: 0 0 auto !important;
+  min-height: auto !important;
+  height: auto !important;
+  max-height: none !important;
+  overflow: visible !important;
+}
+
 @keyframes hold-log-fade {
   from { opacity: 0; }
   to { opacity: 1; }
@@ -245,6 +254,14 @@
 .hold-log-vendor {
   font-size: 0.82rem;
   color: var(--hl-muted);
+}
+
+.hold-log-item-name {
+  margin: 0 0 0.4rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #33475b;
+  line-height: 1.3;
 }
 
 .hold-log-chip {

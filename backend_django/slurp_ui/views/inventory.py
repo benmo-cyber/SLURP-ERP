@@ -390,6 +390,16 @@ def inventory_table(request: HttpRequest) -> HttpResponse:
             inventory_table=tab,
             deeper=deeper,
         )
+        hold_case_by_lot: dict[int, int] = {}
+        lot_ids = [lot.get("id") for lot in raw_lots if lot.get("id")]
+        if lot_ids:
+            for case in (
+                LotHoldCase.objects.filter(lot_id__in=lot_ids, status="open")
+                .order_by("-opened_at")
+                .only("id", "lot_id")
+            ):
+                if case.lot_id not in hold_case_by_lot:
+                    hold_case_by_lot[case.lot_id] = case.id
         for lot in raw_lots:
             lu = (lot.get("item") or {}).get("unit_of_measure") if isinstance(lot.get("item"), dict) else None
             if not lu:
@@ -399,9 +409,10 @@ def inventory_table(request: HttpRequest) -> HttpResponse:
             avail = lot.get("quantity_available_for_use")
             if avail is None:
                 avail = lot.get("quantity_remaining")
+            lot_id = lot.get("id")
             lot_rows.append(
                 {
-                    "id": lot.get("id"),
+                    "id": lot_id,
                     "lot_number": lot.get("lot_number") or "—",
                     "vendor_lot_number": lot.get("vendor_lot_number") or "—",
                     "po_number": lot.get("po_number") or "—",
@@ -425,6 +436,7 @@ def inventory_table(request: HttpRequest) -> HttpResponse:
                     "avail_native": float(avail or 0),
                     "hold_native": float(lot.get("quantity_on_hold") or 0),
                     "remaining_native": float(lot.get("quantity_remaining") or 0),
+                    "open_hold_case_id": hold_case_by_lot.get(lot_id),
                 }
             )
 
@@ -2006,16 +2018,35 @@ def inventory_lot_release(request: HttpRequest, pk: int) -> HttpResponse:
 def inventory_holds(request: HttpRequest) -> HttpResponse:
     """Open (and optionally recent resolved) hold investigation cases."""
     show = (request.GET.get("show") or "open").strip().lower()
+    kind = (request.GET.get("kind") or "all").strip().lower()
+    if kind not in ("all", "receiving", "awaiting_micro"):
+        kind = "all"
     qs = LotHoldCase.objects.select_related("lot", "lot__item").prefetch_related("notes")
     open_count = qs.filter(status="open").count()
     resolved_count = qs.filter(status="resolved").count()
+    receiving_open = qs.filter(status="open", kind="receiving").count()
+    micro_open = qs.filter(status="open", kind="awaiting_micro").count()
+    if kind in ("receiving", "awaiting_micro"):
+        qs = qs.filter(kind=kind)
     if show == "resolved":
-        cases = qs.filter(status="resolved").order_by("-resolved_at", "-opened_at")[:100]
+        cases = list(qs.filter(status="resolved").order_by("-resolved_at", "-opened_at")[:100])
     elif show == "all":
-        cases = qs.order_by("-opened_at")[:150]
+        cases = list(qs.order_by("-opened_at")[:150])
     else:
-        cases = qs.filter(status="open").order_by("-opened_at")[:100]
+        cases = list(qs.filter(status="open").order_by("-opened_at")[:100])
         show = "open"
+
+    batch_by_lot: dict[int, str] = {}
+    if cases:
+        from erp_core.models import ProductionBatchOutput
+
+        for o in (
+            ProductionBatchOutput.objects.filter(lot_id__in=[c.lot_id for c in cases])
+            .select_related("batch")
+            .order_by("-id")
+        ):
+            if o.lot_id not in batch_by_lot and o.batch_id:
+                batch_by_lot[o.lot_id] = o.batch.batch_number
 
     rows = []
     for case in cases:
@@ -2026,6 +2057,7 @@ def inventory_holds(request: HttpRequest) -> HttpResponse:
             {
                 "case": case,
                 "lot": lot,
+                "batch_number": batch_by_lot.get(lot.id),
                 "hold_qty": hold_qty,
                 "note_count": case.notes.count(),
                 "last_note": last_note,
@@ -2045,8 +2077,11 @@ def inventory_holds(request: HttpRequest) -> HttpResponse:
             active_tab="holds",
             rows=rows,
             show=show,
+            kind=kind,
             open_count=open_count,
             resolved_count=resolved_count,
+            receiving_open=receiving_open,
+            micro_open=micro_open,
             page_css=[
                 "Inventory.css",
                 "SalesWorkspace.css",
@@ -2061,7 +2096,7 @@ def inventory_holds(request: HttpRequest) -> HttpResponse:
 @require_http_methods(["GET", "POST"])
 def inventory_hold_case(request: HttpRequest, pk: int) -> HttpResponse:
     """Hold log detail: notes/photos + resolve accept / return / discard."""
-    from erp_core.hold_services import add_hold_note, open_hold_qty, resolve_hold_case
+    from erp_core.hold_services import add_hold_note, open_hold_qty, qc_prefill_for_hold_case, resolve_hold_case
     from erp_core.lot_services import coa_release_preview
 
     case = get_object_or_404(
@@ -2070,12 +2105,31 @@ def inventory_hold_case(request: HttpRequest, pk: int) -> HttpResponse:
     )
     lot = case.lot
     hold_qty = open_hold_qty(lot)
+    from erp_core.models import ProductionBatchOutput
+
+    batch_number = (
+        ProductionBatchOutput.objects.filter(lot=lot)
+        .select_related("batch")
+        .order_by("-id")
+        .values_list("batch__batch_number", flat=True)
+        .first()
+    )
+    qc_prefill = qc_prefill_for_hold_case(case)
     preview = None
     if case.status == "open" and hold_qty > 0:
         try:
             preview = coa_release_preview(lot, hold_qty)
         except LotFlowError:
             preview = None
+        if preview and preview.get("formula_qc") and qc_prefill.get("qc_result_value") is not None:
+            preview = {
+                **preview,
+                "formula_qc": {
+                    **preview["formula_qc"],
+                    "prefill_value": qc_prefill["qc_result_value"],
+                    "prefill_initials": qc_prefill.get("qc_initials") or "",
+                },
+            }
 
     if request.method == "POST":
         action = (request.POST.get("action") or "").strip().lower()
@@ -2140,9 +2194,11 @@ def inventory_hold_case(request: HttpRequest, pk: int) -> HttpResponse:
             active_tab="holds",
             case=case,
             lot=lot,
+            batch_number=batch_number,
             hold_qty=hold_qty,
             notes=list(case.notes.all()),
             preview=preview,
+            qc_prefill=qc_prefill,
             next_url=_inventory_return_url(request),
             port_status="full",
         ),
@@ -2164,10 +2220,17 @@ def inventory_lot_hold_log(request: HttpRequest, pk: int) -> HttpResponse:
         or LotHoldCase.objects.filter(lot=lot).order_by("-opened_at").first()
     )
     if case is None:
+        item_type = (getattr(lot.item, "item_type", None) or "").strip()
+        kind = (
+            "awaiting_micro"
+            if item_type in ("finished_good", "distributed_item") and not (lot.po_number or "").strip()
+            else "receiving"
+        )
         case = ensure_open_hold_case(
             lot,
             user=request.user,
-            summary="On hold",
+            kind=kind,
+            summary="Awaiting micro/QC results" if kind == "awaiting_micro" else "On hold",
             initial_note="Hold log opened from inventory.",
         )
     return redirect("slurp_ui:inventory_hold_case", pk=case.pk)

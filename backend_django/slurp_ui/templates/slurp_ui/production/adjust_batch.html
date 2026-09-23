@@ -1,57 +1,330 @@
-{% extends "slurp_ui/base.html" %}
-{% block title %}Adjust {{ batch.batch_number }} — SLURP{% endblock %}
-{% block content %}
-<div class="modal-page adjust-batch-modal" style="max-width:960px">
-  <h2>Adjust Batch — {{ batch.batch_number }}</h2>
-  <p style="color:#64748b;margin-bottom:1rem">
-    {{ batch.finished_good_item.sku }} · {{ batch.batch_type|title }} · status {{ batch.status }}
-    · total input must equal quantity to produce.
-  </p>
-
-  {% if formula %}
-  <h3 style="margin-bottom:0.5rem">Formula (read-only)</h3>
-  <table class="data-table" style="margin-bottom:1rem">
-    <thead><tr><th>Ingredient</th><th>%</th></tr></thead>
-    <tbody>
-      {% for ing in formula.ingredients.all %}
-      <tr><td>{{ ing.item.sku }} — {{ ing.item.name }}</td><td>{{ ing.percentage }}%</td></tr>
-      {% endfor %}
-    </tbody>
-  </table>
-  {% endif %}
-
-  <form method="post" class="adjust-batch-form">
-    {% csrf_token %}
-    <div class="form-row">
-      <label for="quantity_produced">Quantity to produce ({{ display_uom }}) *</label>
-      <input id="quantity_produced" name="quantity_produced" type="number" step="any" min="0"
-             value="{{ qty_display|floatformat:2 }}" required />
-      <small class="form-hint">Original: {{ batch.quantity_produced|floatformat:2 }}</small>
-    </div>
-
-    <h3 style="margin:1rem 0 0.5rem">Input lots</h3>
-    {% for row in available_lots %}
-    <div class="lot-selection-card" style="border:1px solid #e5e7eb;border-radius:6px;padding:0.75rem;margin-bottom:0.5rem">
-      <div style="display:flex;justify-content:space-between;gap:1rem;flex-wrap:wrap">
-        <div>
-          <strong>{{ row.lot.lot_number }}</strong> — {{ row.lot.item.sku }} ({{ row.lot.item.name }})
-          <div style="color:#64748b;font-size:0.9rem">Available: {{ row.available|floatformat:2 }} {{ row.lot.item.unit_of_measure }}</div>
-        </div>
-        <div class="form-row" style="margin:0;min-width:10rem">
-          <label>Qty to use ({{ display_uom }})</label>
-          <input name="qty_{{ row.lot.id }}" type="number" step="any" min="0"
-                 value="{% if row.selected_qty %}{{ row.selected_qty|floatformat:2 }}{% endif %}" />
-        </div>
-      </div>
-    </div>
-    {% empty %}
-    <p>No available lots.</p>
-    {% endfor %}
-
-    <div class="form-actions" style="margin-top:1rem">
-      <button type="submit" class="btn btn-primary">Save adjustments</button>
-      <a class="btn btn-secondary" href="{% url 'slurp_ui:production_batch_detail' batch.id %}">Cancel</a>
-    </div>
-  </form>
-</div>
-{% endblock %}
+{% extends "slurp_ui/base.html" %}
+{% block title %}Adjust {{ batch.batch_number }} — SLURP{% endblock %}
+{% block content %}
+<div class="modal-page adjust-batch-modal create-batch-page" style="max-width:960px"
+     data-baseline-qty="{{ baseline_qty_display }}">
+  <h2>Adjust Batch — {{ batch.batch_number }}</h2>
+  <p style="color:#64748b;margin-bottom:1rem">
+    {{ batch.finished_good_item.sku }} · {{ batch.batch_type|title }} · status {{ batch.status }}.
+    Formula <strong>targets stay fixed</strong> at the original ticket
+    ({{ baseline_qty_display|floatformat:2 }} {{ display_uom }}).
+    Add or remove mass on one ingredient for QC — selected / remaining update live;
+    quantity to produce follows the selected total so inventory reflects the delta on close.
+    Conversion: <strong>1 kg = {{ lbs_per_kg }} lbs</strong>.
+  </p>
+
+  <form method="post" class="adjust-batch-form" id="adjust-batch-form">
+    {% csrf_token %}
+    <div class="form-row">
+      <label for="quantity_produced">Quantity to produce (<span class="uom-label">{{ display_uom }}</span>) *</label>
+      <input id="quantity_produced" name="quantity_produced" type="number" step="any" min="0"
+             value="{{ qty_display|floatformat:2 }}" required />
+      <small class="form-hint">
+        Original ticket: {{ baseline_qty_display|floatformat:2 }} {{ display_uom }}
+        · Live total selected: <strong id="live-total-selected">0</strong> <span class="uom-label">{{ display_uom }}</span>
+        · Delta vs original: <strong id="live-total-delta">0</strong> <span class="uom-label">{{ display_uom }}</span>
+      </small>
+    </div>
+
+    {% if ingredient_lot_choices %}
+    <h3 style="margin:1.25rem 0 0.35rem">Ingredients — adjust lots</h3>
+    <p style="margin:0 0 0.85rem;color:#64748b;font-size:0.9rem">
+      Target = original formula amount (does not move when you adjust).
+      Remaining = target − selected (negative / red = overage allowed for QC strengthen).
+    </p>
+
+    {% for row in ingredient_lot_choices %}
+    <div class="ingredient-group ingredient-row"
+         data-ing-id="{% if row.ingredient %}{{ row.ingredient.id }}{% else %}orphan{% endif %}"
+         data-pct="{{ row.percentage }}"
+         data-orphan="{% if row.orphan %}1{% else %}0{% endif %}"
+         data-native-uom="{{ row.native_uom }}">
+      <div class="ingredient-header">
+        <div class="ingredient-title">
+          {% if row.ingredient %}
+          <span class="ingredient-name">{{ row.ingredient.item.sku }} — {{ row.ingredient.item.name }}</span>
+          <span class="ingredient-percentage">Formula: {{ row.percentage }}%</span>
+          {% if row.match_by_parent %}
+          <span class="partial-chip" style="background:#dbeafe;color:#1e40af;margin-left:0.35rem"
+                title="Lots from any pack size under this parent are allowed">
+            Parent {{ row.parent_code|default:row.ingredient.item.sku_parent_code }}
+          </span>
+          {% endif %}
+          {% else %}
+          <span class="ingredient-name">{{ row.ingredient_label|default:"Other lots" }}</span>
+          {% endif %}
+        </div>
+        <div class="ingredient-summary" aria-live="polite">
+          {% if not row.orphan %}
+          <span class="balance-chip">
+            <span class="bal-label">Target</span>
+            <span class="req-val">0</span>
+            <span class="uom-label">{{ display_uom }}</span>
+          </span>
+          {% endif %}
+          <span class="balance-chip selected-qty">
+            <span class="bal-label">Selected</span>
+            <span class="sel-val">0</span>
+            <span class="uom-label">{{ display_uom }}</span>
+          </span>
+          {% if not row.orphan %}
+          <span class="balance-chip is-remaining rem-chip">
+            <span class="bal-label">Remaining</span>
+            <span class="rem-val">0</span>
+            <span class="uom-label">{{ display_uom }}</span>
+          </span>
+          {% endif %}
+        </div>
+      </div>
+
+      {% if row.lots %}
+      <div class="lots-list">
+        {% for lr in row.lots %}
+        <div class="lot-row{% if lr.is_partial %} is-partial{% endif %}{% if lr.selected_qty_display %} selected{% endif %}"
+             data-lot-id="{{ lr.lot.id }}"
+             data-avail="{{ lr.available_display }}">
+          <div class="lot-row-ident">
+            {% if lr.is_partial %}<span class="partial-chip">Partial</span>{% endif %}
+            <span class="lot-number-badge">{{ lr.lot.lot_number }}</span>
+            {% if lr.lot.vendor_lot_number %}
+            <span class="lot-available-inline">Vendor: {{ lr.lot.vendor_lot_number }}</span>
+            {% endif %}
+            <span class="lot-available-inline">
+              {{ lr.lot.item.sku }}
+              · avail {{ lr.available_display|floatformat:2 }} {{ display_uom }}
+              ({{ lr.available_native|floatformat:2 }} {{ lr.native_uom }})
+              {% if lr.pack_label %} · pack {{ lr.pack_label }}{% endif %}
+            </span>
+          </div>
+          <div class="lot-row-qty">
+            <label for="ing_qty_{% if row.ingredient %}{{ row.ingredient.id }}{% else %}orphan{% endif %}_{{ lr.lot.id }}">
+              Qty to use (<span class="uom-label">{{ display_uom }}</span>)
+            </label>
+            <div style="display:flex;flex-wrap:wrap;gap:0.4rem;align-items:center">
+              <input id="ing_qty_{% if row.ingredient %}{{ row.ingredient.id }}{% else %}orphan{% endif %}_{{ lr.lot.id }}"
+                     name="ing_qty_{% if row.ingredient %}{{ row.ingredient.id }}{% else %}orphan{% endif %}_{{ lr.lot.id }}"
+                     type="number"
+                     step="any"
+                     min="0"
+                     max="{{ lr.available_display }}"
+                     class="quantity-input lot-qty-input"
+                     value="{% if lr.selected_qty_display %}{{ lr.selected_qty_display }}{% endif %}"
+                     placeholder="0" />
+              {% if not row.orphan %}
+              <button type="button" class="btn-fill-remaining" title="Fill up to formula target, capped by available">
+                Fill remaining
+              </button>
+              {% endif %}
+            </div>
+            <small class="lot-remain-hint" style="color:#64748b;font-size:0.8rem">
+              Lot remaining: <span class="lot-rem-val">{{ lr.available_display|floatformat:2 }}</span> {{ display_uom }}
+            </small>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+      {% else %}
+      <div class="no-lots-available" style="padding:0.75rem;background:#fff7ed;border:1px solid #fde68a;border-radius:6px;color:#92400e">
+        No available lots for this ingredient.
+      </div>
+      {% endif %}
+    </div>
+    {% endfor %}
+
+    {% elif available_lots %}
+    <h3 style="margin:1rem 0 0.5rem">Input lots</h3>
+    <p style="margin:0 0 0.85rem;color:#64748b;font-size:0.9rem">
+      Adjust quantities below. Quantity to produce follows the selected total.
+    </p>
+    {% for row in available_lots %}
+    <div class="lot-row{% if row.selected_qty_display %} selected{% endif %}"
+         data-lot-id="{{ row.lot.id }}"
+         data-avail="{{ row.available_display|default:row.available }}"
+         style="border:1px solid #e5e7eb;border-radius:6px;padding:0.75rem;margin-bottom:0.5rem;display:flex;justify-content:space-between;gap:1rem;flex-wrap:wrap">
+      <div class="lot-row-ident">
+        <strong>{{ row.lot.lot_number }}</strong> — {{ row.lot.item.sku }} ({{ row.lot.item.name }})
+        <div style="color:#64748b;font-size:0.9rem">
+          Available: {{ row.available_display|default:row.available|floatformat:2 }} {{ display_uom }}
+        </div>
+      </div>
+      <div class="form-row" style="margin:0;min-width:10rem">
+        <label>Qty to use ({{ display_uom }})</label>
+        <input name="qty_{{ row.lot.id }}" type="number" step="any" min="0"
+               class="lot-qty-input quantity-input"
+               max="{{ row.available_display|default:row.available }}"
+               value="{% if row.selected_qty_display %}{{ row.selected_qty_display }}{% elif row.selected_qty %}{{ row.selected_qty|floatformat:2 }}{% endif %}" />
+        <small class="lot-remain-hint" style="color:#64748b;font-size:0.8rem">
+          Lot remaining: <span class="lot-rem-val">—</span> {{ display_uom }}
+        </small>
+      </div>
+    </div>
+    {% endfor %}
+    {% else %}
+    <p>No available lots.</p>
+    {% endif %}
+
+    <div class="form-actions" style="margin-top:1rem">
+      <button type="submit" class="btn btn-primary" id="adjust-batch-submit">Save adjustments</button>
+      <a class="btn btn-secondary" href="{% url 'slurp_ui:production_batch_detail' batch.id %}">Cancel</a>
+    </div>
+  </form>
+</div>
+
+<script>
+(function () {
+  var displayUom = '{{ display_uom }}';
+  var page = document.querySelector('.adjust-batch-modal');
+  var baselineQty = parseFloat((page && page.getAttribute('data-baseline-qty')) || '0');
+  if (!isFinite(baselineQty)) baselineQty = 0;
+  var qtyInput = document.getElementById('quantity_produced');
+  var liveTotal = document.getElementById('live-total-selected');
+  var liveDelta = document.getElementById('live-total-delta');
+  var form = document.getElementById('adjust-batch-form');
+
+  function round2(n) { return Math.round(n * 100) / 100; }
+  function normalize(n) {
+    var v = round2(n);
+    var i = Math.round(v);
+    if (Math.abs(v - i) <= 0.01) return i;
+    return v;
+  }
+  function parseQty(el) {
+    var v = parseFloat(el && el.value ? el.value : '0');
+    return isFinite(v) && v > 0 ? v : 0;
+  }
+
+  function updateLotRemain(lotRow) {
+    var inp = lotRow.querySelector('.lot-qty-input');
+    var remEl = lotRow.querySelector('.lot-rem-val');
+    if (!inp || !remEl) return;
+    var avail = parseFloat(lotRow.getAttribute('data-avail') || '0');
+    if (!isFinite(avail)) avail = 0;
+    var rem = normalize(avail - parseQty(inp));
+    remEl.textContent = String(rem);
+    remEl.style.color = rem < -0.01 ? '#b91c1c' : '';
+  }
+
+  function updateIngredientBalance(row) {
+    var orphan = row.getAttribute('data-orphan') === '1';
+    var pct = parseFloat(row.getAttribute('data-pct') || '0');
+    /* Targets are frozen to the original ticket — not the live quantity_produced. */
+    var required = orphan ? 0 : normalize(baselineQty * (pct / 100));
+    var selected = 0;
+    row.querySelectorAll('.lot-qty-input').forEach(function (inp) {
+      var q = parseQty(inp);
+      selected += q;
+      var lotRow = inp.closest('.lot-row');
+      if (lotRow) {
+        lotRow.classList.toggle('selected', q > 0);
+        updateLotRemain(lotRow);
+      }
+    });
+    selected = normalize(selected);
+    var remaining = normalize(required - selected);
+    var over = remaining < -0.01;
+    var under = remaining > 0.01;
+
+    var reqEl = row.querySelector('.req-val');
+    var selEl = row.querySelector('.sel-val');
+    var remEl = row.querySelector('.rem-val');
+    if (reqEl) reqEl.textContent = String(required);
+    if (selEl) selEl.textContent = String(selected);
+    if (remEl) remEl.textContent = String(remaining);
+
+    var remChip = row.querySelector('.rem-chip');
+    var selChip = row.querySelector('.selected-qty');
+    if (remChip) {
+      remChip.classList.toggle('is-done', required > 0 && Math.abs(remaining) <= 0.01);
+      remChip.classList.toggle('is-over', over);
+      remChip.classList.toggle('is-under', under);
+    }
+    if (selChip) {
+      selChip.classList.toggle('has-selection', selected > 0);
+      selChip.classList.toggle('is-over', over);
+    }
+  }
+
+  function totalSelected() {
+    var total = 0;
+    document.querySelectorAll('.lot-qty-input').forEach(function (inp) {
+      total += parseQty(inp);
+    });
+    return normalize(total);
+  }
+
+  function syncQtyFromInputs() {
+    var total = totalSelected();
+    var delta = normalize(total - baselineQty);
+    if (liveTotal) liveTotal.textContent = String(total);
+    if (liveDelta) {
+      liveDelta.textContent = (delta > 0 ? '+' : '') + String(delta);
+      liveDelta.style.color = Math.abs(delta) > 0.01 ? (delta > 0 ? '#b91c1c' : '#b45309') : '';
+    }
+    if (qtyInput) {
+      qtyInput.value = total > 0 ? String(total) : '';
+    }
+    document.querySelectorAll('.ingredient-row').forEach(updateIngredientBalance);
+  }
+
+  document.querySelectorAll('.lot-qty-input').forEach(function (inp) {
+    inp.addEventListener('input', syncQtyFromInputs);
+  });
+
+  document.querySelectorAll('.btn-fill-remaining').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var lotRow = btn.closest('.lot-row');
+      var ingRow = btn.closest('.ingredient-row');
+      var inp = lotRow && lotRow.querySelector('.lot-qty-input');
+      if (!lotRow || !ingRow || !inp) return;
+      updateIngredientBalance(ingRow);
+      var remEl = ingRow.querySelector('.rem-val');
+      var remaining = remEl ? parseFloat(remEl.textContent || '0') : 0;
+      var current = parseQty(inp);
+      var need = normalize(remaining + current);
+      if (need <= 0) {
+        inp.value = '';
+        syncQtyFromInputs();
+        return;
+      }
+      var avail = parseFloat(lotRow.getAttribute('data-avail') || '0');
+      if (!isFinite(avail)) avail = 0;
+      var fill = normalize(Math.min(need, avail));
+      inp.value = fill > 0 ? String(fill) : '';
+      syncQtyFromInputs();
+      inp.focus();
+    });
+  });
+
+  if (form) {
+    form.addEventListener('submit', function (e) {
+      var total = totalSelected();
+      if (total <= 0) {
+        e.preventDefault();
+        alert('Select at least one lot with quantity.');
+        return;
+      }
+      if (qtyInput) qtyInput.value = String(total);
+
+      var overAvail = [];
+      document.querySelectorAll('.lot-row').forEach(function (lotRow) {
+        var inp = lotRow.querySelector('.lot-qty-input');
+        if (!inp) return;
+        var q = parseQty(inp);
+        if (q <= 0) return;
+        var avail = parseFloat(lotRow.getAttribute('data-avail') || '0');
+        if (isFinite(avail) && q > avail + 0.01) {
+          var label = (lotRow.querySelector('.lot-number-badge') || lotRow.querySelector('strong') || {}).textContent || 'lot';
+          overAvail.push(label.trim() + ': ' + q + ' > avail ' + avail);
+        }
+      });
+      if (overAvail.length) {
+        e.preventDefault();
+        alert('Quantity exceeds available on:\n\n• ' + overAvail.join('\n• '));
+      }
+    });
+  }
+
+  syncQtyFromInputs();
+})();
+</script>
+{% endblock %}

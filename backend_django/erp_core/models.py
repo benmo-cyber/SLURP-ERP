@@ -641,6 +641,14 @@ class ProductionBatch(models.Model):
     batch_number = models.CharField(max_length=100, unique=True, db_index=True)
     batch_type = models.CharField(max_length=20, choices=BATCH_TYPE_CHOICES, default='production')
     finished_good_item = models.ForeignKey(Item, on_delete=models.CASCADE, related_name='production_batches')
+    formula = models.ForeignKey(
+        'Formula',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='batches',
+        help_text='Recipe used for this batch (when FG has alternate make paths).',
+    )
     quantity_produced = models.FloatField()
     quantity_actual = models.FloatField(default=0.0)
     production_date = models.DateTimeField(default=timezone.now)
@@ -671,6 +679,12 @@ class ProductionBatch(models.Model):
         related_name='batches',
         help_text='Optional campaign lot (YYWW+product). Batch lot remains primary for traceability.',
     )
+    is_archived = models.BooleanField(
+        default=False,
+        db_index=True,
+        help_text='Archived closed batches are hidden from the production dash; searchable in Archive.',
+    )
+    archived_at = models.DateTimeField(blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     
@@ -856,11 +870,21 @@ class CriticalControlPoint(models.Model):
 
 
 class Formula(models.Model):
-    finished_good = models.OneToOneField(
+    finished_good = models.ForeignKey(
         Item,
         on_delete=models.CASCADE,
-        related_name='formula',
-        limit_choices_to={'item_type': 'finished_good'}
+        related_name='formulas',
+        limit_choices_to={'item_type': 'finished_good'},
+    )
+    name = models.CharField(
+        max_length=120,
+        default='Standard',
+        help_text='Recipe name for this FG (e.g. "From G3403 3%%", "From G3405 5%%").',
+    )
+    is_default = models.BooleanField(
+        default=False,
+        db_index=True,
+        help_text='Default recipe used when no batch-specific recipe is set (QC release, shelf life).',
     )
     version = models.CharField(max_length=50, default='1.0')
     notes = models.TextField(blank=True, null=True)
@@ -909,10 +933,16 @@ class Formula(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
     
     class Meta:
-        ordering = ['-created_at']
+        ordering = ['-is_default', 'name', 'id']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['finished_good', 'name'],
+                name='uniq_formula_fg_name',
+            ),
+        ]
     
     def __str__(self):
-        return f"{self.finished_good.name} - v{self.version}"
+        return f"{self.finished_good.name} — {self.name} v{self.version}"
 
 
 class FormulaItem(models.Model):
@@ -2895,11 +2925,16 @@ class InventoryCountLine(models.Model):
 class LotHoldCase(models.Model):
     """
     Investigation case for material on hold (damage, QC, etc.).
-    Notes/photos live on LotHoldNote; resolve via accept / return / discard.
+    Notes/photos live on LotHoldNote; resolve via accept / return / discard
+    (receiving) or COA/micro release (awaiting_micro manufactured lots).
     """
     STATUS_CHOICES = [
         ("open", "Open"),
         ("resolved", "Resolved"),
+    ]
+    KIND_CHOICES = [
+        ("receiving", "Receiving / investigation"),
+        ("awaiting_micro", "Awaiting micro / QC"),
     ]
     RESOLUTION_CHOICES = [
         ("accept", "Accept (release to available)"),
@@ -2909,6 +2944,13 @@ class LotHoldCase(models.Model):
 
     lot = models.ForeignKey(Lot, on_delete=models.CASCADE, related_name="hold_cases")
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="open", db_index=True)
+    kind = models.CharField(
+        max_length=20,
+        choices=KIND_CHOICES,
+        default="receiving",
+        db_index=True,
+        help_text="receiving = inbound issue; awaiting_micro = manufactured lot pending QC release.",
+    )
     summary = models.CharField(
         max_length=255,
         blank=True,
@@ -2928,16 +2970,25 @@ class LotHoldCase(models.Model):
         help_text="Quantity resolved in the closing action (native UoM).",
     )
     resolution_notes = models.TextField(blank=True, default="")
+    # QC measured at batch close — ported onto awaiting_micro cases for COA release.
+    qc_parameter_name = models.CharField(max_length=255, blank=True, default="")
+    qc_result_value = models.FloatField(blank=True, null=True)
+    qc_initials = models.CharField(max_length=40, blank=True, default="")
 
     class Meta:
         ordering = ["-opened_at"]
         indexes = [
             models.Index(fields=["status", "-opened_at"]),
             models.Index(fields=["lot", "status"]),
+            models.Index(fields=["kind", "status", "-opened_at"]),
         ]
 
     def __str__(self):
-        return f"Hold case {self.pk} · lot {self.lot_id} · {self.status}"
+        return f"Hold case {self.pk} · lot {self.lot_id} · {self.kind} · {self.status}"
+
+    @property
+    def is_awaiting_micro(self) -> bool:
+        return (self.kind or "") == "awaiting_micro"
 
 
 class LotHoldNote(models.Model):

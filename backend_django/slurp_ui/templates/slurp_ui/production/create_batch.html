@@ -90,12 +90,14 @@
     <input type="hidden" name="batch_type" value="production" />
     <input type="hidden" name="uom" value="{{ display_uom }}" />
     <div class="form-row">
-      <label for="formula">Finished good / formula *</label>
+      <label for="formula">Finished good / recipe *</label>
       <select id="formula" name="formula" onchange="this.form.submit()">
-        <option value="">— Select formula —</option>
+        <option value="">— Select recipe —</option>
         {% for f in formulas %}
         <option value="{{ f.id }}" {% if selected_formula and selected_formula.id == f.id %}selected{% endif %}>
           {{ f.finished_good.sku }} — {{ f.finished_good.name }}
+          · {{ f.name }}{% if f.is_default %} (default){% endif %}
+          {% if f.version %} · v{{ f.version }}{% endif %}
         </option>
         {% endfor %}
       </select>

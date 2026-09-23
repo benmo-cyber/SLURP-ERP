@@ -1,43 +1,96 @@
 {% extends "slurp_ui/base_module.html" %}
+{% load static %}
 {% block title %}{{ item.sku }} — SLURP{% endblock %}
 {% block module_title %}Finished Good{% endblock %}
+{% block extra_css %}
+<link rel="stylesheet" href="{% static 'slurp_ui/css/FinishedGoodDetail.css' %}?v=20260922b" />
+{% endblock %}
 {% block header_actions %}
   <a href="{% url 'slurp_ui:quality_finished_goods' %}" class="hs-btn">All finished goods</a>
   <a href="{% url 'slurp_ui:quality_item_coa_test_lines' item.id %}" class="hs-btn">COA test lines</a>
 {% endblock %}
 {% block main %}
-<div class="hs-bleed" style="padding:1.25rem 1.5rem 2rem">
-  <div class="hs-card" style="margin-bottom:1rem">
-    <div class="hs-card-header" style="align-items:flex-start">
-      <div>
-        <h3 class="hs-entity-name" style="font-size:1.2rem">{{ item.sku }} — {{ item.name }}</h3>
-        <div class="hs-record-meta" style="margin-top:0.35rem">
-          <span class="hs-badge info">{{ item.get_item_type_display }}</span>
-          <span class="hs-muted">{{ item.unit_of_measure }}</span>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  {% if not can_edit_formula %}
-  <div class="hs-card">
-    <div class="hs-card-body">
-      <p class="hs-section-note" style="margin:0">
-        Formula editor applies to finished goods only. Distributed items use repack lots, not production formulas.
+<div class="fg-sheet hs-bleed">
+  <section class="fg-sheet-hero">
+    <div class="fg-sheet-hero-copy">
+      <p class="fg-sheet-kicker">Product recipes</p>
+      <h2>{{ item.sku }} — {{ item.name }}</h2>
+      <p class="fg-sheet-lede">
+        {% if can_edit_formula %}
+          One finished-good spec can have alternate make paths (e.g. from 3% vs 5% concentrate).
+          Pick a recipe on create batch.
+        {% else %}
+          Distributed items use repack lots — no production formula on this sheet.
+        {% endif %}
       </p>
     </div>
-  </div>
+    <div class="fg-sheet-meta" aria-label="Product meta">
+      <span class="fg-sheet-chip">{{ item.get_item_type_display }}</span>
+      <span class="fg-sheet-chip is-muted">{{ item.unit_of_measure }}</span>
+      {% if formula %}
+      <span class="fg-sheet-chip is-muted">{{ recipe_label|default:formula.name }}</span>
+      {% endif %}
+      <span class="fg-sheet-chip is-muted">{{ recipes|length }} recipe{{ recipes|length|pluralize }}</span>
+    </div>
+  </section>
+
+  <div class="fg-sheet-body">
+  {% if not can_edit_formula %}
+    <div class="fg-sheet-card">
+      <div class="fg-sheet-empty">
+        Formula editor applies to finished goods only. Distributed items use repack lots, not production formulas.
+      </div>
+    </div>
   {% else %}
+
+  <div class="fg-sheet-card" style="margin-bottom:0">
+    <div class="fg-sheet-card-head">
+      <h3>Recipes</h3>
+      <span class="hint">Same FG / QC destination — different ingredient paths</span>
+    </div>
+    <div class="fg-sheet-card-body">
+      <div class="fg-recipe-tabs" role="tablist">
+        {% for r in recipes %}
+        <a class="fg-recipe-tab {% if formula and formula.id == r.id %}is-active{% endif %}"
+           href="?recipe={{ r.id }}" role="tab">
+          {{ r.name }}{% if r.is_default %} · default{% endif %}
+        </a>
+        {% empty %}
+        <span class="hs-muted">No recipes yet — save below to create Standard.</span>
+        {% endfor %}
+      </div>
+      <form method="post" class="fg-recipe-add" style="margin-top:0.85rem;display:flex;flex-wrap:wrap;gap:0.55rem;align-items:end">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="add_recipe" />
+        {% if formula %}<input type="hidden" name="clone_from" value="{{ formula.id }}" />{% endif %}
+        <div class="form-row" style="margin:0;min-width:14rem;flex:1">
+          <label for="new_recipe_name">Add recipe</label>
+          <input id="new_recipe_name" name="new_recipe_name" placeholder="e.g. From G3405 5%" />
+        </div>
+        <button type="submit" class="hs-btn">+ Add{% if formula %} (clone current){% endif %}</button>
+      </form>
+    </div>
+  </div>
 
   <form method="post" id="formula-form">
     {% csrf_token %}
+    <input type="hidden" name="action" value="save" />
+    {% if formula %}<input type="hidden" name="recipe_id" value="{{ formula.id }}" />{% endif %}
 
-    <div class="hs-card" style="margin-bottom:1rem">
-      <div class="hs-card-header">
-        <h3>Formula {% if formula %}v{{ formula.version }}{% else %}(new){% endif %}</h3>
+    <div class="fg-sheet-card">
+      <div class="fg-sheet-card-head">
+        <h3>{% if formula %}{{ formula.name }}{% else %}New recipe{% endif %}</h3>
+        {% if formula and not formula.is_default %}
+        <button type="submit" name="action" value="set_default" class="hs-btn hs-btn-sm"
+                formaction="" formmethod="post">Make default</button>
+        {% endif %}
       </div>
-      <div class="hs-card-body">
-        <div class="hs-form-grid-3">
+      <div class="fg-sheet-card-body">
+        <div class="fg-sheet-grid-3">
+          <div class="form-row">
+            <label for="recipe_name">Recipe name</label>
+            <input id="recipe_name" name="recipe_name" value="{{ formula.name|default:'Standard' }}" required />
+          </div>
           <div class="form-row">
             <label for="version">Version</label>
             <input id="version" name="version" value="{{ formula.version|default:'1.0' }}" />
@@ -59,54 +112,68 @@
               {% endfor %}
             </select>
           </div>
-        </div>
-      </div>
-    </div>
-
-    <div class="hs-card" style="margin-bottom:1rem">
-      <div class="hs-card-header"><h3>QC</h3></div>
-      <div class="hs-card-body">
-        <div class="hs-form-grid-3">
-          <div class="form-row">
-            <label>Parameter</label>
-            <input name="qc_parameter_name" value="{{ formula.qc_parameter_name|default:'' }}" />
-          </div>
-          <div class="form-row">
-            <label>Min</label>
-            <input name="qc_spec_min" type="number" step="any" value="{{ formula.qc_spec_min|default_if_none:'' }}" />
-          </div>
-          <div class="form-row">
-            <label>Max</label>
-            <input name="qc_spec_max" type="number" step="any" value="{{ formula.qc_spec_max|default_if_none:'' }}" />
+          <div class="form-row" style="display:flex;align-items:center;gap:0.5rem;padding-top:1.4rem">
+            <input type="checkbox" id="is_default" name="is_default" value="1"
+                   {% if formula.is_default or not recipes %}checked{% endif %} />
+            <label for="is_default" style="margin:0;text-transform:none;letter-spacing:0;font-size:0.9rem;color:#1e2a3a">
+              Default recipe (shelf life / QC when batch has no recipe)
+            </label>
           </div>
         </div>
       </div>
     </div>
 
-    <div class="hs-card" style="margin-bottom:1rem">
-      <div class="hs-card-header">
+    <div class="fg-sheet-card">
+      <div class="fg-sheet-card-head">
+        <h3>QC specification</h3>
+        <span class="hint">Ports to batch close and release-from-hold for this recipe</span>
+      </div>
+      <div class="fg-sheet-card-body">
+        <div class="fg-sheet-grid-3">
+          <div class="form-row">
+            <label for="qc_parameter_name">Parameter</label>
+            <input id="qc_parameter_name" name="qc_parameter_name"
+                   value="{{ formula.qc_parameter_name|default:'' }}"
+                   placeholder="e.g. Betanin" />
+          </div>
+          <div class="form-row">
+            <label for="qc_spec_min">Min</label>
+            <input id="qc_spec_min" name="qc_spec_min" type="number" step="any"
+                   value="{{ formula.qc_spec_min|default_if_none:'' }}" />
+          </div>
+          <div class="form-row">
+            <label for="qc_spec_max">Max</label>
+            <input id="qc_spec_max" name="qc_spec_max" type="number" step="any"
+                   value="{{ formula.qc_spec_max|default_if_none:'' }}" />
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="fg-sheet-card">
+      <div class="fg-sheet-card-head">
         <h3>Ingredients</h3>
-        <span class="hs-muted" style="font-size:0.8rem">Must total 100%. Prefer a parent family so new pack sizes stay valid.</span>
+        <span class="hint">Must total 100%. Prefer a parent family so new pack sizes stay valid.</span>
         <button type="button" class="hs-btn hs-btn-sm" id="add-ing">+ Add ingredient</button>
       </div>
-      <div class="hs-card-body">
+      <div class="fg-sheet-card-body">
         <input type="hidden" name="line_count" id="line_count" value="{{ ingredients|length|default:1 }}" />
-        <div id="ing-lines">
+        <div id="ing-lines" class="fg-sheet-ing">
           {% if ingredients %}
             {% for ing in ingredients %}
-            <div class="ing-line hs-line-card">
-              <div class="hs-form-grid-3">
-                <div class="form-row" style="margin:0">
+            <div class="ing-line fg-sheet-ing-line">
+              <div class="fg-sheet-grid-3">
+                <div class="form-row">
                   <label>Item</label>
                   <select name="ing_item_{{ forloop.counter0 }}">
                     {% include "slurp_ui/quality/_formula_ingredient_options.html" with selected_value=ing.select_value %}
                   </select>
                 </div>
-                <div class="form-row" style="margin:0">
+                <div class="form-row">
                   <label>%</label>
                   <input name="ing_pct_{{ forloop.counter0 }}" type="number" step="any" value="{{ ing.percentage }}" />
                 </div>
-                <div class="form-row" style="margin:0">
+                <div class="form-row">
                   <label>Notes</label>
                   <input name="ing_notes_{{ forloop.counter0 }}" value="{{ ing.notes|default:'' }}" />
                 </div>
@@ -114,19 +181,19 @@
             </div>
             {% endfor %}
           {% else %}
-            <div class="ing-line hs-line-card">
-              <div class="hs-form-grid-3">
-                <div class="form-row" style="margin:0">
+            <div class="ing-line fg-sheet-ing-line">
+              <div class="fg-sheet-grid-3">
+                <div class="form-row">
                   <label>Item</label>
                   <select name="ing_item_0">
                     {% include "slurp_ui/quality/_formula_ingredient_options.html" with selected_value="" %}
                   </select>
                 </div>
-                <div class="form-row" style="margin:0">
+                <div class="form-row">
                   <label>%</label>
                   <input name="ing_pct_0" type="number" step="any" value="100" />
                 </div>
-                <div class="form-row" style="margin:0">
+                <div class="form-row">
                   <label>Notes</label>
                   <input name="ing_notes_0" />
                 </div>
@@ -137,24 +204,24 @@
       </div>
     </div>
 
-    <div class="hs-card" style="margin-bottom:1rem">
-      <div class="hs-card-header"><h3>Mixing steps</h3></div>
-      <div class="hs-card-body">
+    <div class="fg-sheet-card">
+      <div class="fg-sheet-card-head"><h3>Mixing steps</h3></div>
+      <div class="fg-sheet-card-body">
         {% for i in "123456" %}
-        <div class="form-row">
+        <div class="form-row" style="margin-bottom:0.75rem">
           <label>Step {{ forloop.counter }}</label>
           <textarea name="mixing_step_{{ forloop.counter }}" rows="2">{% if formula %}{% if forloop.counter == 1 %}{{ formula.mixing_step_1|default:'' }}{% elif forloop.counter == 2 %}{{ formula.mixing_step_2|default:'' }}{% elif forloop.counter == 3 %}{{ formula.mixing_step_3|default:'' }}{% elif forloop.counter == 4 %}{{ formula.mixing_step_4|default:'' }}{% elif forloop.counter == 5 %}{{ formula.mixing_step_5|default:'' }}{% else %}{{ formula.mixing_step_6|default:'' }}{% endif %}{% endif %}</textarea>
         </div>
         {% endfor %}
-        <div class="form-row" style="margin-bottom:0">
+        <div class="form-row">
           <label for="notes">Notes</label>
           <textarea id="notes" name="notes" rows="2">{{ formula.notes|default:'' }}</textarea>
         </div>
       </div>
     </div>
 
-    <div class="hs-form-actions">
-      <button type="submit" class="hs-btn hs-btn-primary">Save formula</button>
+    <div class="fg-sheet-actions">
+      <button type="submit" class="hs-btn hs-btn-primary">Save recipe</button>
     </div>
   </form>
 
@@ -170,12 +237,12 @@
       var n = parseInt(countInput.value || '0', 10) || 0;
       if (n >= 40) return;
       var div = document.createElement('div');
-      div.className = 'ing-line hs-line-card';
+      div.className = 'ing-line fg-sheet-ing-line';
       div.innerHTML =
-        '<div class="hs-form-grid-3">' +
-        '<div class="form-row" style="margin:0"><label>Item</label><select name="ing_item_' + n + '">' + optionHtml + '</select></div>' +
-        '<div class="form-row" style="margin:0"><label>%</label><input name="ing_pct_' + n + '" type="number" step="any" /></div>' +
-        '<div class="form-row" style="margin:0"><label>Notes</label><input name="ing_notes_' + n + '" /></div>' +
+        '<div class="fg-sheet-grid-3">' +
+        '<div class="form-row"><label>Item</label><select name="ing_item_' + n + '">' + optionHtml + '</select></div>' +
+        '<div class="form-row"><label>%</label><input name="ing_pct_' + n + '" type="number" step="any" /></div>' +
+        '<div class="form-row"><label>Notes</label><input name="ing_notes_' + n + '" /></div>' +
         '</div>';
       wrap.appendChild(div);
       countInput.value = String(n + 1);
@@ -184,5 +251,6 @@
   })();
   </script>
   {% endif %}
+  </div>
 </div>
 {% endblock %}

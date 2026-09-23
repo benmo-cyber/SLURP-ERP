@@ -721,6 +721,16 @@
   color: #b91c1c;
 }
 
+.create-batch-page .balance-chip.selected-qty.is-over {
+  background: #fef2f2;
+  color: #b91c1c;
+}
+
+.create-batch-page .balance-chip.is-remaining.is-under {
+  background: #fffbeb;
+  color: #92400e;
+}
+
 .create-batch-page .lot-row.is-partial {
   background: #fffbeb;
 }

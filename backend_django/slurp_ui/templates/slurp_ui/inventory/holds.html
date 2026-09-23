@@ -3,7 +3,7 @@
 {% block title %}On-hold log — SLURP{% endblock %}
 {% block module_title %}On-hold log{% endblock %}
 {% block extra_css %}
-<link rel="stylesheet" href="{% static 'slurp_ui/css/HoldLog.css' %}?v=20260921a" />
+<link rel="stylesheet" href="{% static 'slurp_ui/css/HoldLog.css' %}?v=20260922a" />
 {% endblock %}
 {% block header_actions %}
   <a class="hs-btn" href="{% url 'slurp_ui:inventory' %}?tab=raw_material">Inventory table</a>
@@ -16,33 +16,37 @@
       <p class="hold-log-kicker">Receiving &amp; QC</p>
       <h2>Investigation queue</h2>
       <p class="hold-log-lede">
-        Lots parked on hold until someone documents the issue and decides:
-        accept into inventory, return to vendor, or discard.
+        Receiving issues and manufactured batches awaiting micro/QC — document, then
+        accept into inventory, return to vendor, discard, or release after COA.
       </p>
     </div>
     <div class="hold-log-stats" aria-label="Hold case counts">
-      <a class="hold-log-stat {% if show == 'open' %}is-active{% endif %}" href="?show=open">
+      <a class="hold-log-stat {% if show == 'open' and kind == 'all' %}is-active{% endif %}" href="?show=open&kind=all">
         <span class="hold-log-stat-n">{{ open_count }}</span>
         <span class="hold-log-stat-l">Open</span>
       </a>
-      <a class="hold-log-stat {% if show == 'resolved' %}is-active{% endif %}" href="?show=resolved">
+      <a class="hold-log-stat {% if kind == 'receiving' and show == 'open' %}is-active{% endif %}" href="?show=open&kind=receiving">
+        <span class="hold-log-stat-n">{{ receiving_open }}</span>
+        <span class="hold-log-stat-l">Receiving</span>
+      </a>
+      <a class="hold-log-stat {% if kind == 'awaiting_micro' and show == 'open' %}is-active{% endif %}" href="?show=open&kind=awaiting_micro">
+        <span class="hold-log-stat-n">{{ micro_open }}</span>
+        <span class="hold-log-stat-l">Awaiting micro</span>
+      </a>
+      <a class="hold-log-stat {% if show == 'resolved' %}is-active{% endif %}" href="?show=resolved&kind={{ kind }}">
         <span class="hold-log-stat-n">{{ resolved_count }}</span>
         <span class="hold-log-stat-l">Resolved</span>
-      </a>
-      <a class="hold-log-stat {% if show == 'all' %}is-active{% endif %}" href="?show=all">
-        <span class="hold-log-stat-n">{{ open_count|add:resolved_count }}</span>
-        <span class="hold-log-stat-l">All</span>
       </a>
     </div>
   </section>
 
   <div class="hold-log-toolbar">
     <div class="hold-log-seg" role="tablist" aria-label="Filter holds">
-      <a class="hold-log-seg-btn {% if show == 'open' %}is-active{% endif %}" href="?show=open" role="tab" aria-selected="{% if show == 'open' %}true{% else %}false{% endif %}">Open</a>
-      <a class="hold-log-seg-btn {% if show == 'resolved' %}is-active{% endif %}" href="?show=resolved" role="tab" aria-selected="{% if show == 'resolved' %}true{% else %}false{% endif %}">Resolved</a>
-      <a class="hold-log-seg-btn {% if show == 'all' %}is-active{% endif %}" href="?show=all" role="tab" aria-selected="{% if show == 'all' %}true{% else %}false{% endif %}">All</a>
+      <a class="hold-log-seg-btn {% if show == 'open' %}is-active{% endif %}" href="?show=open&kind={{ kind }}" role="tab" aria-selected="{% if show == 'open' %}true{% else %}false{% endif %}">Open</a>
+      <a class="hold-log-seg-btn {% if show == 'resolved' %}is-active{% endif %}" href="?show=resolved&kind={{ kind }}" role="tab" aria-selected="{% if show == 'resolved' %}true{% else %}false{% endif %}">Resolved</a>
+      <a class="hold-log-seg-btn {% if show == 'all' %}is-active{% endif %}" href="?show=all&kind={{ kind }}" role="tab" aria-selected="{% if show == 'all' %}true{% else %}false{% endif %}">All</a>
     </div>
-    <p class="hold-log-toolbar-hint">Showing {{ rows|length }} case{{ rows|length|pluralize }}</p>
+    <p class="hold-log-toolbar-hint">Showing {{ rows|length }} case{{ rows|length|pluralize }}{% if kind != 'all' %} · {{ kind|cut:"_"|title }}{% endif %}</p>
   </div>
 
   <div class="hold-log-list" role="list">
@@ -54,13 +58,23 @@
       <div class="hold-log-case-body">
         <div class="hold-log-case-top">
           <div class="hold-log-case-identity">
+            {% if row.batch_number %}
+            <span class="hold-log-lot">{{ row.batch_number }}</span>
+            <span class="hold-log-sku">Lot {{ row.lot.lot_number }}</span>
+            {% else %}
             <span class="hold-log-lot">{{ row.lot.lot_number }}</span>
+            {% endif %}
             <span class="hold-log-sku">{{ row.lot.item.sku }}</span>
             {% if row.lot.item.vendor %}
             <span class="hold-log-vendor">{{ row.lot.item.vendor }}</span>
             {% endif %}
           </div>
           <div class="hold-log-case-flags">
+            {% if row.case.kind == 'awaiting_micro' %}
+            <span class="hold-log-chip" style="background:#dbeafe;color:#1e40af">Awaiting micro</span>
+            {% else %}
+            <span class="hold-log-chip" style="background:#f1f5f9;color:#475569">Receiving</span>
+            {% endif %}
             {% if row.case.status == 'open' %}
             <span class="hold-log-chip is-open">Open</span>
             {% elif row.case.resolution == 'accept' %}
@@ -74,6 +88,8 @@
             {% endif %}
           </div>
         </div>
+
+        <p class="hold-log-item-name">{{ row.lot.item.name }}</p>
 
         <p class="hold-log-summary">
           {% if row.case.summary %}
@@ -113,7 +129,7 @@
       </p>
       <p class="hold-log-empty-copy">
         {% if show == 'open' %}
-          When check-in puts quantity on hold, it shows up here for investigation.
+          Receiving holds from check-in and manufactured batches closed awaiting micro/QC appear here.
         {% else %}
           Resolved accepts, returns, and discards will appear in this list.
         {% endif %}
