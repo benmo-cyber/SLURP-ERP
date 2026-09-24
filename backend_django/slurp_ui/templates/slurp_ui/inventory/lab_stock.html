@@ -1,0 +1,118 @@
+{% extends "slurp_ui/base.html" %}
+{% block title %}To lab stock — SLURP{% endblock %}
+{% block content %}
+<div class="modal-page" style="max-width:580px;margin:2rem auto">
+  <h2>Move to lab stock</h2>
+  <p style="color:#64748b;font-size:0.9rem;line-height:1.45;margin:0 0 1rem">
+    Removes quantity from tracked inventory for project / R&amp;D use.
+    Lab stock is <strong>not tracked</strong> afterward — there is no destination lot.
+  </p>
+
+  <div style="padding:0.75rem 0.9rem;background:#fffbeb;border:1px solid #fcd34d;border-radius:8px;color:#92400e;font-size:0.9rem;line-height:1.45;margin-bottom:1.1rem">
+    <strong>Prefer Partials first.</strong>
+    Pull lab material from remnant lots when you can.
+    Opening a full pack (or taking a slice from one) is allowed — any leftover stays on the same lot and will show under Inventory → <strong>Partials</strong>.
+  </div>
+
+  {% if preselect %}
+  <p style="margin:0 0 0.85rem;font-size:0.92rem">
+    Lot <strong>{{ preselect.lot_number }}</strong> —
+    {{ preselect.item.sku }} · {{ preselect.item.name }}
+    <br />
+    Available {{ preselect_avail|floatformat:2 }} {{ preselect.item.unit_of_measure }}
+    {% if preselect_breakout %}
+    · Pack {{ preselect_breakout }}
+    {% endif %}
+    {% if preselect_partial %}
+    <span style="color:#9a3412;font-weight:650"> · Partial</span>
+    {% else %}
+    <span style="color:#64748b"> · Full pack(s)</span>
+    {% endif %}
+  </p>
+  {% endif %}
+
+  <form method="post">
+    {% csrf_token %}
+    {% for key, val in request.GET.items %}
+    <input type="hidden" name="{{ key }}" value="{{ val }}" />
+    {% endfor %}
+
+    {% if preselect %}
+    <input type="hidden" name="lot_id" value="{{ preselect.id }}" />
+    {% else %}
+    <div class="form-group" style="margin-bottom:0.85rem">
+      <label for="lot_id">Lot *</label>
+      <select id="lot_id" name="lot_id" required style="width:100%;padding:0.45rem 0.55rem">
+        <option value="">Select lot…</option>
+        {% if partial_choices %}
+        <optgroup label="Partials (prefer these)">
+          {% for row in partial_choices %}
+          <option value="{{ row.lot.id }}">
+            {{ row.lot.item.sku }} — {{ row.lot.lot_number }}
+            · avail {{ row.available|floatformat:2 }} {{ row.uom }}
+            {% if row.pack_breakout %}· {{ row.pack_breakout }}{% endif %}
+          </option>
+          {% endfor %}
+        </optgroup>
+        {% endif %}
+        {% if full_choices %}
+        <optgroup label="Full packs">
+          {% for row in full_choices %}
+          <option value="{{ row.lot.id }}">
+            {{ row.lot.item.sku }} — {{ row.lot.lot_number }}
+            · avail {{ row.available|floatformat:2 }} {{ row.uom }}
+            {% if row.pack_breakout %}· {{ row.pack_breakout }}{% endif %}
+          </option>
+          {% endfor %}
+        </optgroup>
+        {% endif %}
+      </select>
+    </div>
+    {% endif %}
+
+    <div class="form-group" style="margin-bottom:0.85rem">
+      <label for="quantity">Quantity (item UoM) *</label>
+      <input id="quantity" name="quantity" type="number" step="0.01" min="0.01" required
+             {% if preselect_avail %}max="{{ preselect_avail }}"{% endif %}
+             style="width:100%;max-width:12rem;padding:0.45rem 0.55rem" />
+      {% if preselect %}
+      <div style="font-size:0.82rem;color:#64748b;margin-top:0.25rem">
+        Max {{ preselect_avail|floatformat:2 }} {{ preselect.item.unit_of_measure }}
+      </div>
+      {% endif %}
+    </div>
+
+    <div class="form-group" style="margin-bottom:0.85rem">
+      <label for="project">Project / purpose</label>
+      <input id="project" name="project" maxlength="120"
+             placeholder="e.g. customer trial, R&amp;D code"
+             style="width:100%;padding:0.45rem 0.55rem;box-sizing:border-box" />
+    </div>
+
+    <div class="form-group" style="margin-bottom:0.85rem">
+      <label for="reference_number">Reference #</label>
+      <input id="reference_number" name="reference_number" maxlength="100"
+             style="width:100%;padding:0.45rem 0.55rem;box-sizing:border-box" />
+    </div>
+
+    <div class="form-group" style="margin-bottom:0.85rem">
+      <label for="notes">Notes</label>
+      <textarea id="notes" name="notes" rows="2"
+                style="width:100%;padding:0.45rem 0.55rem;box-sizing:border-box"></textarea>
+    </div>
+
+    <div class="form-actions" style="display:flex;gap:0.5rem;flex-wrap:wrap">
+      <button type="submit" class="btn btn-primary">Move to lab stock</button>
+      <a class="btn btn-secondary" href="{{ next_url }}">Cancel</a>
+      {% if not preselect %}
+      <a class="btn btn-secondary" href="{% url 'slurp_ui:inventory' %}?remainder=1&amp;tab=finished_good"
+         title="Browse remnant lots">Browse Partials</a>
+      {% endif %}
+    </div>
+  </form>
+
+  {% if not preselect and not partial_choices and not full_choices %}
+  <p style="margin-top:1rem;color:#64748b">No FG / distributed / RM lots with available quantity.</p>
+  {% endif %}
+</div>
+{% endblock %}

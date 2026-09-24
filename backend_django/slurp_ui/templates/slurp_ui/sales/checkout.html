@@ -1,8 +1,9 @@
 {% extends "slurp_ui/base_module.html" %}
-{% block title %}Stage / Mark Ready — SLURP{% endblock %}
-{% block module_title %}Stage / Mark Ready{% endblock %}
+{% block title %}Mark Ready — SLURP{% endblock %}
+{% block module_title %}Mark Ready{% endblock %}
 {% block header_actions %}
-  <a href="{% url 'slurp_ui:sales_combined_checkout' %}" class="hs-btn">Combined ready</a>
+  <a href="{% url 'slurp_ui:sales_combined_checkout' %}" class="hs-btn"
+     title="Same customer + ship-to — one packing list">Combine for pickup</a>
   <a href="{% url 'slurp_ui:sales_orders' %}" class="hs-btn">Workqueue</a>
 {% endblock %}
 {% block main %}
@@ -11,12 +12,12 @@
   <div class="hs-card">
     <div class="hs-card-header">
       <h3>Eligible orders</h3>
-      <span class="hs-muted" style="font-size:0.8rem">Issued / allocated — stage with pieces &amp; dims</span>
+      <span class="hs-muted" style="font-size:0.8rem">Allocate → <strong>Mark Ready</strong> → Mark picked up → Issue invoice (Finance)</span>
     </div>
     <div class="hs-card-body">
       <p class="hs-section-note">
         Mark Ready locks packing list dimensions. Inventory and draft invoice wait until
-        <strong>Picked up</strong> on the workqueue.
+        <strong>Mark picked up</strong> on the workqueue.
       </p>
       <div class="hs-card-body tight" style="border:1px solid var(--hs-border);border-radius:var(--hs-radius);overflow:hidden">
         {% for o in orders %}
@@ -32,7 +33,7 @@
           </div>
         </a>
         {% empty %}
-        <div class="hs-empty">No orders ready to stage.</div>
+        <div class="hs-empty">No orders ready for Mark Ready.</div>
         {% endfor %}
       </div>
     </div>
@@ -56,10 +57,10 @@
       </div>
 
       <div class="hs-card">
-        <div class="hs-card-header"><h3>Lines to stage</h3></div>
+        <div class="hs-card-header"><h3>Lines for Mark Ready</h3></div>
         <div class="hs-card-body tight">
           <table class="hs-table">
-            <thead><tr><th>SKU</th><th>Ordered</th><th>Allocated</th><th>Stage qty</th><th>Lots</th></tr></thead>
+            <thead><tr><th>SKU</th><th>Ordered</th><th>Allocated</th><th>Ship qty</th><th>Lots</th></tr></thead>
             <tbody>
               {% for line in selected.items.all %}
               <tr>
@@ -75,13 +76,13 @@
                          max="{{ line.quantity_ordered }}"
                          value="{{ line.quantity_ordered }}"
                          style="width:6.5rem"
-                         title="Qty to stage for this shipment" />
+                         title="Qty for this Mark Ready shipment" />
                   {% else %}
                   <input form="checkout-form" name="ship_qty_{{ line.id }}" type="number" step="any" min="0"
                          max="{{ line.quantity_allocated }}"
                          value="{{ line.quantity_allocated }}"
                          style="width:6.5rem"
-                         title="Qty to stage for this shipment" />
+                         title="Qty for this Mark Ready shipment" />
                   {% endif %}
                   <span class="hs-muted">{{ line.item.unit_of_measure }}</span>
                 </td>
@@ -113,7 +114,7 @@
             <input type="hidden" name="so_id" value="{{ selected.id }}" />
             <div class="hs-form-grid">
               <div class="form-row">
-                <label for="ship_date">Stage date *</label>
+                <label for="ship_date">Ship date *</label>
                 <input id="ship_date" name="ship_date" type="date" value="{{ today }}" required />
               </div>
               <div class="form-row">

@@ -1,8 +1,7 @@
 {% extends "slurp_ui/base_module.html" %}
-{% block title %}Combined Check Out — SLURP{% endblock %}
-{% block module_title %}Combined Check Out{% endblock %}
+{% block title %}Combine for pickup — SLURP{% endblock %}
+{% block module_title %}Combine for pickup{% endblock %}
 {% block header_actions %}
-  <a href="{% url 'slurp_ui:sales_checkout' %}" class="hs-btn">Single check out</a>
   <a href="{% url 'slurp_ui:sales_orders' %}" class="hs-btn">Workqueue</a>
 {% endblock %}
 {% block main %}
@@ -12,12 +11,12 @@
       <div class="hs-card">
         <div class="hs-card-header">
           <h3>Select orders &amp; ship qtys</h3>
-          <span class="hs-muted" style="font-size:0.8rem">Same customer + ship-to</span>
+          <span class="hs-muted" style="font-size:0.8rem">Same customer + ship-to · Mark Ready together</span>
         </div>
         <div class="hs-card-body">
           <p class="hs-section-note">
             Choose at least two eligible orders. Set ship qty per line (defaults to full allocation).
-            Freight applies to the first order only; one combined packing list opens after checkout.
+            Freight applies to the first order only; one combined packing list opens after Mark Ready.
           </p>
           <div class="hs-order-pick-list">
             {% for o in orders %}

@@ -1,0 +1,84 @@
+{% extends "slurp_ui/base_module.html" %}
+{% block title %}RMA {{ rma.rma_number }} — SLURP{% endblock %}
+{% block module_title %}RMA {{ rma.rma_number }}{% endblock %}
+{% block header_actions %}
+  <a href="{% url 'slurp_ui:sales_rma_list' %}" class="hs-btn">All RMAs</a>
+  <a href="{% url 'slurp_ui:sales_order_detail' rma.sales_order_id %}" class="hs-btn">SO {{ rma.sales_order.so_number }}</a>
+  {% if rma.status == 'open' or rma.status == 'partially_received' %}
+  <a href="{% url 'slurp_ui:inventory_check_in' %}?mode=rma&amp;rma={{ rma.id }}" class="hs-btn hs-btn-primary">Check in RMA</a>
+  {% endif %}
+{% endblock %}
+{% block main %}
+<div class="hs-bleed" style="padding:1.25rem 1.5rem 2rem">
+  <div class="hs-card" style="margin-bottom:1rem">
+    <div class="hs-card-header"><h3>RMA</h3></div>
+    <div class="hs-card-body">
+      <div class="hs-form-grid">
+        <div><span class="hs-muted">Status</span><div class="hs-list-title">{{ rma.get_status_display }}</div></div>
+        <div><span class="hs-muted">Customer</span><div class="hs-list-title">{% if rma.customer %}{{ rma.customer.name }}{% else %}{{ rma.sales_order.customer_name }}{% endif %}</div></div>
+        <div><span class="hs-muted">Opened</span><div class="hs-list-title">{{ rma.opened_at|date:"M j, Y g:i A" }} · {{ rma.opened_by|default:"—" }}</div></div>
+        <div>
+          <span class="hs-muted">Credit memo</span>
+          <div class="hs-list-title">
+            {% if rma.credit_invoice %}
+            <a href="{% url 'slurp_ui:finance_invoice_detail' rma.credit_invoice_id %}">{{ rma.credit_invoice.invoice_number }}</a>
+            ({{ rma.credit_invoice.grand_total|floatformat:2 }})
+            {% else %}—{% endif %}
+          </div>
+        </div>
+      </div>
+      {% if rma.reason %}<p style="margin:0.75rem 0 0"><strong>Reason:</strong> {{ rma.reason }}</p>{% endif %}
+      {% if rma.notes %}<p style="margin:0.35rem 0 0;color:#64748b">{{ rma.notes }}</p>{% endif %}
+    </div>
+  </div>
+
+  <div class="hs-card" style="margin-bottom:1rem">
+    <div class="hs-card-header"><h3>Lines</h3></div>
+    <div class="hs-card-body tight">
+      <table class="hs-table">
+        <thead>
+          <tr><th>SKU</th><th>Source lot</th><th>Requested</th><th>Received</th><th>Staging</th></tr>
+        </thead>
+        <tbody>
+          {% for ln in rma.lines.all %}
+          <tr>
+            <td>{{ ln.sales_order_item.item.sku }}</td>
+            <td>{{ ln.source_lot.lot_number }}</td>
+            <td>{{ ln.quantity_requested|floatformat:2 }}</td>
+            <td>{{ ln.quantity_received|floatformat:2 }}</td>
+            <td>
+              {% if ln.staging_lot %}
+              <a href="{% url 'slurp_ui:inventory_lot_detail' ln.staging_lot_id %}">{{ ln.staging_lot.lot_number }}</a>
+              {% else %}—{% endif %}
+            </td>
+          </tr>
+          {% empty %}
+          <tr><td colspan="5"><div class="hs-empty">No lines.</div></td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  {% if hold_cases %}
+  <div class="hs-card">
+    <div class="hs-card-header"><h3>Hold investigations</h3></div>
+    <div class="hs-card-body tight">
+      <table class="hs-table">
+        <thead><tr><th>Lot</th><th>Status</th><th>Opened</th><th></th></tr></thead>
+        <tbody>
+          {% for c in hold_cases %}
+          <tr>
+            <td>{{ c.lot.lot_number }}</td>
+            <td>{{ c.get_status_display }}</td>
+            <td>{{ c.opened_at|date:"M j, Y" }}</td>
+            <td><a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:inventory_hold_case' c.id %}">Open case</a></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

@@ -117,7 +117,7 @@ def ensure_open_hold_case(
 ) -> LotHoldCase:
     """Get or create the open hold case for a lot; optionally append an opening note."""
     kind = (kind or "receiving").strip().lower()
-    if kind not in ("receiving", "awaiting_micro"):
+    if kind not in ("receiving", "awaiting_micro", "customer_return"):
         kind = "receiving"
 
     qc_name = (qc_parameter_name or "").strip()[:255]
@@ -279,7 +279,7 @@ def resolve_hold_case(
     if case.status != "open":
         raise LotFlowError("This hold case is already resolved.")
 
-    lot = Lot.objects.select_related("item").get(pk=case.lot_id)
+    lot = Lot.objects.select_related("item", "source_lot").get(pk=case.lot_id)
     try:
         qty = round(float(quantity), 2)
     except (TypeError, ValueError) as e:
@@ -298,13 +298,39 @@ def resolve_hold_case(
         "return": "Returned to vendor",
         "discard": "Discarded / scrapped",
     }[resolution]
-    note_body = f"{note_prefix}: {qty} {(lot.item.unit_of_measure or '').strip()}."
-    if (notes or "").strip():
-        note_body = f"{note_body}\n{(notes or '').strip()}"
+    if resolution == "accept" and (case.kind or "") == "customer_return":
+        src_label = (
+            lot.source_lot.lot_number
+            if lot.source_lot_id
+            else str(lot.source_lot_id)
+        )
+        note_body = (
+            f"Accepted after RMA investigation — merged {qty} "
+            f"{(lot.item.unit_of_measure or '').strip()} into source lot {src_label}."
+        )
+        if (notes or "").strip():
+            note_body = f"{note_body}\n{(notes or '').strip()}"
+    else:
+        note_body = f"{note_prefix}: {qty} {(lot.item.unit_of_measure or '').strip()}."
+        if (notes or "").strip():
+            note_body = f"{note_body}\n{(notes or '').strip()}"
 
     with transaction.atomic():
         if resolution == "accept":
-            release_from_hold(user, lot, qty, coa_payload=coa_payload)
+            if (case.kind or "") == "customer_return" and getattr(
+                lot, "source_lot_id", None
+            ):
+                from .rma_services import merge_rma_staging_into_source
+                from .sell_services import SellFlowError as _SellFlowError
+
+                try:
+                    merge_rma_staging_into_source(
+                        lot, qty=qty, user=user, notes=notes or ""
+                    )
+                except _SellFlowError as e:
+                    raise LotFlowError(e.message) from e
+            else:
+                release_from_hold(user, lot, qty, coa_payload=coa_payload)
         else:
             label = "Return to vendor" if resolution == "return" else "Discard from hold"
             _remove_held_quantity(
@@ -345,4 +371,28 @@ def resolve_hold_case(
                     "resolved_by",
                 ]
             )
+            # Close RMA when all staging for its lines is resolved and fully received.
+            if (case.kind or "") == "customer_return" and lot.rma_number:
+                from .models import CustomerRma
+                from .rma_services import refresh_rma_receive_status
+
+                rma = (
+                    CustomerRma.objects.filter(rma_number=lot.rma_number)
+                    .exclude(status="cancelled")
+                    .first()
+                )
+                if rma is not None:
+                    refresh_rma_receive_status(rma)
+                    rma.refresh_from_db()
+                    if rma.status == "received":
+                        # Any open customer_return holds still open for this RMA?
+                        open_holds = LotHoldCase.objects.filter(
+                            lot__rma_number=rma.rma_number,
+                            kind="customer_return",
+                            status="open",
+                        ).exists()
+                        if not open_holds:
+                            rma.status = "closed"
+                            rma.closed_at = timezone.now()
+                            rma.save(update_fields=["status", "closed_at", "updated_at"])
     return case

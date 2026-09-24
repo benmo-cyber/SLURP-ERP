@@ -1,0 +1,109 @@
+{% extends "slurp_ui/base_module.html" %}
+{% block title %}Rework — SLURP{% endblock %}
+{% block module_title %}Rework / blend partials{% endblock %}
+{% block header_actions %}
+  <a href="{% url 'slurp_ui:production' %}" class="hs-btn">Batch tickets</a>
+{% endblock %}
+{% block main %}
+<div class="hs-bleed" style="padding:1.25rem 1.5rem 2rem;max-width:720px">
+  <p class="hs-section-note">
+    Blend finished-good <strong>partials</strong> from the same parent family into a chosen pack SKU.
+    Optionally add raw-material qty to adjust strength. Output lot goes on hold for micro/QC
+    (same as a closed production batch). Formula tickets are unchanged — this is a separate rework path.
+  </p>
+
+  <form method="get" class="hs-toolbar" style="margin-bottom:1rem">
+    <div class="form-row" style="margin:0;min-width:16rem;flex:1">
+      <label for="item">Target pack SKU</label>
+      <select id="item" name="item" onchange="this.form.submit()">
+        <option value="">Select finished good…</option>
+        {% for it in fg_choices %}
+        <option value="{{ it.id }}" {% if target and target.id == it.id %}selected{% endif %}>
+          {{ it.sku }} — {{ it.name }}
+        </option>
+        {% endfor %}
+      </select>
+    </div>
+  </form>
+
+  {% if target %}
+  <p style="margin:0 0 1rem;font-size:0.9rem;color:#64748b">
+    Parent family: <strong>{{ parent|default:"—" }}</strong>
+  </p>
+  <form method="post">
+    {% csrf_token %}
+    <input type="hidden" name="target_item_id" value="{{ target.id }}" />
+
+    <div class="hs-card" style="margin-bottom:1rem">
+      <div class="hs-card-header"><h3>Partials to blend</h3></div>
+      <div class="hs-card-body tight">
+        {% if partial_rows %}
+        <table class="hs-table">
+          <thead>
+            <tr><th></th><th>Lot</th><th>SKU</th><th>Available</th><th>Use qty</th></tr>
+          </thead>
+          <tbody>
+            {% for row in partial_rows %}
+            <tr>
+              <td><input type="checkbox" name="use_partial_{{ row.lot.id }}" value="1" checked /></td>
+              <td>{{ row.lot.lot_number }}</td>
+              <td>{{ row.lot.item.sku }}{% if not row.same_sku %} <span class="hs-badge">pack variant</span>{% endif %}</td>
+              <td>{{ row.available|floatformat:2 }} {{ row.uom }}</td>
+              <td>
+                <input name="partial_qty_{{ row.lot.id }}" type="number" step="any" min="0.01"
+                       max="{{ row.available }}" value="{{ row.available }}"
+                       style="max-width:7rem" />
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% else %}
+        <div class="hs-empty">No accepted partials under this parent family.</div>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="hs-card" style="margin-bottom:1rem">
+      <div class="hs-card-header"><h3>Strength adjust (optional)</h3></div>
+      <div class="hs-card-body">
+        <p class="hs-section-note" style="margin-top:0">
+          Add raw-material qty (concentrate / diluent). Leave blank to blend partials only.
+        </p>
+        {% if adjust_lots %}
+        <table class="hs-table">
+          <thead><tr><th>Lot</th><th>RM</th><th>Available</th><th>Add qty</th></tr></thead>
+          <tbody>
+            {% for row in adjust_lots %}
+            <tr>
+              <td>{{ row.lot.lot_number }}</td>
+              <td>{{ row.lot.item.sku }}</td>
+              <td>{{ row.available|floatformat:2 }}</td>
+              <td>
+                <input name="adjust_qty_{{ row.lot.id }}" type="number" step="any" min="0"
+                       max="{{ row.available }}" placeholder="0" style="max-width:7rem" />
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% else %}
+        <div class="hs-empty">No raw-material lots on hand.</div>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="form-row">
+      <label for="notes">Notes</label>
+      <textarea id="notes" name="notes" rows="2"></textarea>
+    </div>
+    <div class="hs-form-actions">
+      <button type="submit" class="hs-btn hs-btn-primary"
+              onclick="return confirm('Blend selected material into {{ target.sku }} and place on hold?');">
+        Run rework
+      </button>
+    </div>
+  </form>
+  {% endif %}
+</div>
+{% endblock %}

@@ -2,8 +2,8 @@
 {% block title %}Order Workqueue — SLURP{% endblock %}
 {% block module_title %}Order Workqueue{% endblock %}
 {% block header_actions %}
-  <a href="{% url 'slurp_ui:sales_combined_checkout' %}" class="hs-btn">Combined ready</a>
-  <a href="{% url 'slurp_ui:sales_checkout' %}" class="hs-btn">Stage / Mark Ready</a>
+  <a href="{% url 'slurp_ui:sales_combined_checkout' %}" class="hs-btn"
+     title="Same customer + ship-to — one packing list">Combine for pickup</a>
   <a href="{% url 'slurp_ui:sales_create_order' %}" class="hs-btn hs-btn-primary">+ Create SO</a>
 {% endblock %}
 {% block main %}
@@ -35,6 +35,27 @@
   .wq-sort a { color: #64748b; text-decoration: none; }
   .wq-sort a.is-on { color: #0f172a; font-weight: 700; }
   .wq-docs { display: flex; flex-wrap: wrap; gap: 0.25rem; margin-top: 0.25rem; }
+  .wq-flow {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 0.15rem 0.2rem;
+    max-width: 16rem; line-height: 1.2;
+  }
+  .wq-flow-step {
+    font-size: 0.68rem; font-weight: 600; padding: 0.12rem 0.35rem; border-radius: 4px;
+    color: #94a3b8; background: transparent; white-space: nowrap;
+  }
+  .wq-flow-step.done { color: #64748b; }
+  .wq-flow-step.current {
+    color: #0f172a; background: #e0e7ff; font-weight: 750;
+    box-shadow: 0 0 0 1px #a5b4fc;
+  }
+  .wq-flow-step.todo { color: #cbd5e1; font-weight: 500; }
+  .wq-flow-sep { color: #cbd5e1; font-size: 0.65rem; user-select: none; }
+  .wq-flow-note {
+    display: block; margin-top: 0.2rem; font-size: 0.72rem; font-weight: 650; color: #334155;
+  }
+  .wq-flow-note.is-draft { color: #92400e; }
+  .wq-flow-note.is-cancelled { color: #b91c1c; }
+  .wq-flow-note.is-ok { color: #047857; }
 </style>
 <div class="hs-bleed" style="padding:1.25rem 1.5rem 2rem">
   <div class="wq-kpis">
@@ -91,7 +112,7 @@
   <div class="hs-card">
     <div class="hs-card-header">
       <h3>Fulfillment queue</h3>
-      <span class="hs-muted" style="font-size:0.8rem">Allocate → Mark Ready → Picked up → Issue invoice</span>
+      <span class="hs-muted" style="font-size:0.8rem">Allocate → Pick / Mark Ready → Mark picked up → Issue invoice (Finance)</span>
     </div>
     <div class="hs-card-body tight">
       <table class="hs-table">
@@ -102,7 +123,7 @@
             <th>Customer</th>
             <th>Exp. ship</th>
             <th>Cust. req.</th>
-            <th>Status</th>
+            <th>Process</th>
             <th>Cust. PO</th>
             <th>Actions</th>
           </tr>
@@ -160,14 +181,23 @@
               {% endif %}
             </td>
             <td>
-              {% if o.status == 'draft' %}<span class="hs-badge">Draft</span>
-              {% elif o.ready_shipment %}<span class="hs-badge ok">Awaiting pickup</span>
-              {% elif o.status == 'allocated' %}<span class="hs-badge info">Allocated</span>
-              {% elif o.status == 'issued' %}<span class="hs-badge info">Issued</span>
-              {% elif o.status == 'ready_for_shipment' %}<span class="hs-badge info">Allocated</span>
-              {% elif o.status == 'completed' or o.status == 'shipped' %}<span class="hs-badge ok">{{ o.status }}</span>
-              {% elif o.status == 'cancelled' %}<span class="hs-badge danger">Cancelled</span>
-              {% else %}<span class="hs-badge">{{ o.status }}</span>{% endif %}
+              {% with flow=o.fulfill_flow %}
+              <div class="wq-flow" title="{{ flow.label }}">
+                {% for step in flow.steps %}
+                <span class="wq-flow-step {{ step.state }}">{{ step.label }}</span>
+                {% if not forloop.last %}<span class="wq-flow-sep">→</span>{% endif %}
+                {% endfor %}
+              </div>
+              {% if flow.mode == 'draft' %}
+              <span class="wq-flow-note is-draft">{{ flow.label }}</span>
+              {% elif flow.mode == 'cancelled' %}
+              <span class="wq-flow-note is-cancelled">{{ flow.label }}</span>
+              {% elif flow.label == 'Complete' %}
+              <span class="wq-flow-note is-ok">{{ flow.label }}</span>
+              {% else %}
+              <span class="wq-flow-note">{{ flow.label }}</span>
+              {% endif %}
+              {% endwith %}
             </td>
             <td>{{ o.customer_reference_number|default:"—" }}</td>
             <td>
@@ -179,22 +209,20 @@
                   <input type="date" name="issue_date" value="{{ o.order_date|date:'Y-m-d' }}" style="max-width:9rem" />
                   {% endif %}
                   <button type="submit" class="hs-btn hs-btn-primary hs-btn-sm"
-                          onclick="return confirm('Issue {{ o.so_number }}?');">Issue</button>
+                          onclick="return confirm('Issue {{ o.so_number }}?');">Issue order</button>
                 </form>
                 {% endif %}
 
-                {% if not o.ready_shipment and o.status != 'draft' and o.status != 'completed' and o.status != 'shipped' and o.status != 'cancelled' and o.status != 'received' %}
-                {% if o.status == 'issued' or o.status == 'allocated' or o.status == 'ready_for_shipment' %}
-                <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:sales_allocate_order' o.id %}">Allocate</a>
-                {% if o.drop_ship or o.total_allocated %}
+                {% if o.show_allocate %}
+                <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:sales_allocate_order' o.id %}">{% if o.is_reallocate %}Re-allocate{% else %}Allocate{% endif %}</a>
+                {% endif %}
+                {% if o.show_mark_ready %}
                 <a class="hs-btn hs-btn-primary hs-btn-sm" href="{% url 'slurp_ui:sales_checkout' %}?so={{ o.id }}">Mark Ready</a>
                 {% endif %}
-                {% endif %}
-                {% endif %}
 
-                {% if o.ready_shipment %}
+                {% if o.show_mark_picked_up %}
                 <div class="wq-docs">
-                  <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:sales_packing_list_pdf' o.id %}" target="_blank">Pack</a>
+                  <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:sales_packing_list_pdf' o.id %}" target="_blank">Pack list</a>
                   {% for copy in o.coa_copies %}
                   <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:quality_coa_customer_pdf' copy.id %}" target="_blank"
                      title="COA {{ copy.sales_order_lot.lot.lot_number }}">COA</a>
@@ -214,20 +242,26 @@
                 </div>
                 <form method="post" action="{% url 'slurp_ui:sales_mark_picked_up' o.id %}" style="display:inline">
                   {% csrf_token %}
-                  <input type="hidden" name="next" value="?focus=need_invoice" />
+                  <input type="hidden" name="next" value="?focus=awaiting_pickup" />
                   <button type="submit" class="hs-btn hs-btn-primary hs-btn-sm"
-                          onclick="return confirm('Mark {{ o.so_number }} picked up? Creates draft invoice.');">
-                    Picked up
+                          onclick="return confirm('Mark {{ o.so_number }} picked up? Creates draft invoice for Finance.');">
+                    Mark picked up
                   </button>
                 </form>
                 {% endif %}
 
-                {% if o.draft_invoice %}
-                <a class="hs-btn hs-btn-primary hs-btn-sm" href="{% url 'slurp_ui:finance_invoice_detail' o.draft_invoice.id %}">Draft invoice</a>
+                {% if o.show_cancel %}
+                <form method="post" action="{% url 'slurp_ui:sales_cancel_order' o.id %}" style="display:inline">
+                  {% csrf_token %}
+                  <button type="submit" class="hs-btn hs-btn-sm hs-btn-danger"
+                          onclick="return confirm('Cancel {{ o.so_number }}? Releases lot holds back to inventory{% if o.ready_shipment %}; clears Mark Ready{% endif %}.');">
+                    Cancel
+                  </button>
+                </form>
                 {% endif %}
 
-                {% if o.status != 'draft' %}
-                <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:sales_pick_list_pdf' o.id %}" target="_blank">Pick</a>
+                {% if o.total_allocated %}
+                <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:sales_pick_list_pdf' o.id %}" target="_blank">Pick list</a>
                 {% endif %}
               </div>
             </td>

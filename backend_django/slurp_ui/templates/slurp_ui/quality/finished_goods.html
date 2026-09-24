@@ -9,6 +9,25 @@
 {% block main %}
 <style>
   .fps-list-wrap { padding: 1rem 1.25rem 1.75rem; }
+  .fps-toolbar {
+    display: flex; flex-wrap: wrap; gap: 0.55rem 0.75rem; align-items: end;
+    margin-bottom: 0.85rem;
+  }
+  .fps-toolbar .form-row { margin: 0; min-width: 8rem; }
+  .fps-toolbar .form-row.search { flex: 1; min-width: 14rem; }
+  .fps-toolbar label {
+    display: block; font-size: 0.7rem; font-weight: 600; color: #64748b;
+    text-transform: uppercase; letter-spacing: 0.03em; margin-bottom: 0.2rem;
+  }
+  .fps-toolbar input, .fps-toolbar select {
+    width: 100%; box-sizing: border-box; padding: 0.4rem 0.5rem; font-size: 0.88rem;
+    border: 1px solid #cbd5e1; border-radius: 6px; background: #fff;
+  }
+  .fps-meta {
+    display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; align-items: center;
+    margin: 0 0 0.65rem; font-size: 0.82rem; color: #64748b;
+  }
+  .fps-meta strong { color: #334155; }
   .fps-list-card { background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; overflow: hidden; }
   .fps-list-table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
   .fps-list-table th {
@@ -16,38 +35,101 @@
     text-transform: uppercase; color: #64748b; padding: 0.55rem 0.75rem; border-bottom: 1px solid #e2e8f0;
     background: #f8fafc; white-space: nowrap;
   }
-  .fps-list-table td { padding: 0.5rem 0.75rem; border-bottom: 1px solid #f1f5f9; vertical-align: middle; }
-  .fps-list-table tr:hover td { background: #f8fafc; }
+  .fps-list-table td { padding: 0.55rem 0.75rem; border-bottom: 1px solid #f1f5f9; vertical-align: middle; }
+  .fps-list-table tbody tr:nth-child(even) td { background: #fafbfc; }
+  .fps-list-table tr:hover td { background: #f1f5f9; }
   .fps-list-table .sku a { font-weight: 650; color: #0f172a; text-decoration: none; }
   .fps-list-table .sku a:hover { color: #0f8a72; }
+  .fps-list-table .name { color: #334155; }
   .fps-list-table .muted { color: #94a3b8; }
-  .fps-list-table .col-type { width: 3.5rem; }
-  .fps-list-table .col-cat { width: 8rem; }
-  .fps-list-table .col-form { width: 4.5rem; text-align: center; }
+  .fps-list-table .col-type { width: 3.75rem; }
+  .fps-list-table .col-cat { width: 9.5rem; }
+  .fps-list-table .col-pack { width: 4.5rem; text-align: center; }
+  .fps-list-table .col-form { width: 4.75rem; text-align: center; }
+  .fps-list-table .col-coa { width: 4.25rem; text-align: center; }
+  .fps-badge {
+    display: inline-block; font-size: 0.72rem; font-weight: 700; letter-spacing: 0.02em;
+    padding: 0.12rem 0.4rem; border-radius: 4px; background: #e2e8f0; color: #475569;
+  }
+  .fps-badge.is-fg { background: #dbeafe; color: #1e40af; }
+  .fps-badge.is-di { background: #fef3c7; color: #92400e; }
+  .fps-pill {
+    display: inline-block; font-size: 0.75rem; font-weight: 600;
+    padding: 0.1rem 0.45rem; border-radius: 999px; background: #ecfdf5; color: #047857;
+  }
+  .fps-pill.is-no { background: #f1f5f9; color: #94a3b8; font-weight: 500; }
 </style>
 <div class="hs-bleed fps-list-wrap">
+  <form method="get" class="fps-toolbar">
+    <div class="form-row search">
+      <label for="fps_q">Search</label>
+      <input id="fps_q" name="q" value="{{ q }}" placeholder="Parent SKU, full SKU, or name…" />
+    </div>
+    <div class="form-row">
+      <label for="fps_type">Type</label>
+      <select id="fps_type" name="type">
+        <option value="">All</option>
+        <option value="finished_good" {% if type_f == 'finished_good' %}selected{% endif %}>Finished good</option>
+        <option value="distributed_item" {% if type_f == 'distributed_item' %}selected{% endif %}>Distributed</option>
+      </select>
+    </div>
+    <div class="form-row">
+      <label for="fps_cat">Category</label>
+      <select id="fps_cat" name="category">
+        <option value="">All</option>
+        {% for val, lab in categories %}
+        <option value="{{ val }}" {% if cat_f == val %}selected{% endif %}>{{ lab }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <button type="submit" class="hs-btn hs-btn-primary">Filter</button>
+    {% if q or type_f or cat_f %}
+    <a class="hs-btn" href="{% url 'slurp_ui:quality_finished_goods' %}">Clear</a>
+    {% endif %}
+  </form>
+
+  <div class="fps-meta">
+    <span><strong>{{ result_count }}</strong> parent SKU{{ result_count|pluralize }}</span>
+    <span>Open a parent to see pack / full SKUs</span>
+  </div>
+
   <div class="fps-list-card">
     <table class="fps-list-table">
       <thead>
         <tr>
-          <th>SKU</th>
+          <th>Parent SKU</th>
           <th>Name</th>
           <th class="col-type">Type</th>
           <th class="col-cat">Category</th>
+          <th class="col-pack">Packs</th>
           <th class="col-form">Formula</th>
+          <th class="col-coa">COA</th>
         </tr>
       </thead>
       <tbody>
         {% for row in rows %}
         <tr>
-          <td class="sku"><a href="{% url 'slurp_ui:quality_finished_good_detail' row.item.id %}">{{ row.item.sku }}</a></td>
-          <td>{{ row.item.name }}</td>
-          <td class="col-type">{% if row.item.item_type == 'finished_good' %}FG{% elif row.item.item_type == 'distributed_item' %}DI{% else %}{{ row.item.item_type }}{% endif %}</td>
-          <td class="col-cat">{% if row.item.product_category %}{{ row.item.product_category }}{% else %}<span class="muted">—</span>{% endif %}</td>
-          <td class="col-form">{% if row.has_formula %}Yes{% elif row.item.item_type == 'finished_good' %}<span class="muted">—</span>{% else %}<span class="muted">n/a</span>{% endif %}</td>
+          <td class="sku"><a href="{% url 'slurp_ui:quality_fps_family' row.parent_code %}">{{ row.parent_code }}</a></td>
+          <td class="name">{{ row.name }}</td>
+          <td class="col-type">
+            <span class="fps-badge {% if 'FG' in row.type_label %}is-fg{% elif row.type_label == 'DI' %}is-di{% endif %}">{{ row.type_label }}</span>
+          </td>
+          <td class="col-cat">{% if row.category_label %}{{ row.category_label }}{% else %}<span class="muted">—</span>{% endif %}</td>
+          <td class="col-pack">
+            {% if row.variant_count > 1 %}<span class="fps-pill">{{ row.variant_count }}</span>
+            {% else %}<span class="muted">1</span>{% endif %}
+          </td>
+          <td class="col-form">
+            {% if row.has_formula %}<span class="fps-pill">Yes</span>
+            {% else %}<span class="fps-pill is-no">—</span>{% endif %}
+          </td>
+          <td class="col-coa">
+            {% if row.coa_lines %}<span class="fps-pill">{{ row.coa_lines }}</span>
+            {% else %}<span class="fps-pill is-no">—</span>{% endif %}
+          </td>
         </tr>
         {% empty %}
-        <tr><td colspan="5"><div class="hs-empty" style="padding:1.25rem">No FPS products yet.</div></td></tr>
+        <tr><td colspan="7"><div class="hs-empty" style="padding:1.25rem">No FPS products match.</div></td></tr>
         {% endfor %}
       </tbody>
     </table>

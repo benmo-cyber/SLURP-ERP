@@ -79,6 +79,17 @@ class Item(models.Model):
         related_name='sku_variant_items',
         help_text='Optional link to the master item row for this family (same vendor when possible).',
     )
+    coa_template_item = models.ForeignKey(
+        'self',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='coa_template_dependents',
+        help_text=(
+            'Item whose ItemCoaTestLine rows define this family\'s FPS COA. '
+            'Null = resolve by family default (master/parent pack).'
+        ),
+    )
     product_family = models.ForeignKey(
         'RDFormulaFamily',
         on_delete=models.SET_NULL,
@@ -208,6 +219,17 @@ class InvoiceNumberSequence(models.Model):
     class Meta:
         ordering = ['-year_prefix', '-sequence_number']
 
+
+class RmaNumberSequence(models.Model):
+    """Sequence tracking for customer RMA numbers (format: 5yy0000)."""
+    year_prefix = models.CharField(max_length=2, unique=True)  # yy
+    sequence_number = models.IntegerField(default=0)
+    last_updated = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-year_prefix', '-sequence_number']
+
+
 class CustomerNumberSequence(models.Model):
     """Sequence tracking for customer IDs (format: 001, 002, etc.)"""
     sequence_number = models.IntegerField(default=0)
@@ -251,6 +273,21 @@ class Lot(models.Model):
     quantity_on_hold = models.FloatField(default=0.0, help_text='Amount of this lot on hold (not available). Use for partial holds.')
     freight_actual = models.FloatField(blank=True, null=True, help_text='Actual freight cost for this lot')
     po_number = models.CharField(max_length=100, blank=True, null=True, help_text='Purchase order number associated with this lot')
+    rma_number = models.CharField(
+        max_length=100,
+        blank=True,
+        null=True,
+        db_index=True,
+        help_text='Customer RMA number when this lot was created by RMA check-in (staging -R lot).',
+    )
+    source_lot = models.ForeignKey(
+        'self',
+        on_delete=models.SET_NULL,
+        blank=True,
+        null=True,
+        related_name='return_staging_lots',
+        help_text='Original shipped lot this RMA staging lot will merge into on accept.',
+    )
     short_reason = models.CharField(max_length=255, blank=True, null=True, help_text='Reason for short shipment (damage, short shipped, etc.)')
     created_at = models.DateTimeField(auto_now_add=True)
     depleted_at = models.DateTimeField(blank=True, null=True, help_text='When quantity_remaining reached 0; lots are hidden from inventory table 24h after this.')
@@ -546,6 +583,7 @@ class InventoryTransaction(models.Model):
         ('repack_output', 'Repack Output'),
         ('indirect_material_consumption', 'Indirect Material Consumption'),
         ('indirect_material_checkout', 'Indirect Material Checkout'),
+        ('lab_stock', 'Lab Stock (untracked)'),
         ('return', 'Customer Return Restock'),
     ]
     
@@ -576,6 +614,7 @@ class LotTransactionLog(models.Model):
         ('reversal', 'Reversal/Cancellation'),
         ('indirect_material_consumption', 'Indirect Material Consumption'),
         ('indirect_material_checkout', 'Indirect Material Checkout'),
+        ('lab_stock', 'Lab Stock (untracked)'),
         ('return', 'Customer Return Restock'),
     ]
     
@@ -789,6 +828,7 @@ class ProductionBatch(models.Model):
     BATCH_TYPE_CHOICES = [
         ('production', 'Production'),
         ('repack', 'Repack'),
+        ('rework', 'Rework'),
     ]
     
     batch_number = models.CharField(max_length=100, unique=True, db_index=True)
@@ -1040,6 +1080,52 @@ class LotAttributeChangeLog(models.Model):
         return f"Lot {self.lot_id} {self.field_name} @ {self.changed_at}"
 
 
+class LotShelfLifeExtension(models.Model):
+    """
+    Record of a shelf-life extension: re-QC date + months → new lot expiration.
+    Master COA keeps prior micro results; PDF notes color/QC extension as of qc_date.
+    """
+    lot = models.ForeignKey(
+        Lot, on_delete=models.CASCADE, related_name='shelf_life_extensions'
+    )
+    qc_date = models.DateField(help_text='Date QC was run for this extension')
+    extension_months = models.PositiveSmallIntegerField(
+        help_text='Shelf life extension length in months from qc_date'
+    )
+    previous_expiration = models.DateTimeField(blank=True, null=True)
+    new_expiration = models.DateTimeField()
+    qc_parameter_name = models.CharField(max_length=255, blank=True, default='')
+    qc_spec_min = models.FloatField(blank=True, null=True)
+    qc_spec_max = models.FloatField(blank=True, null=True)
+    qc_result_value = models.FloatField(
+        blank=True,
+        null=True,
+        help_text='Optional new color/QC result from re-test',
+    )
+    notes = models.TextField(blank=True, default='')
+    certificate = models.ForeignKey(
+        'LotCoaCertificate',
+        on_delete=models.SET_NULL,
+        blank=True,
+        null=True,
+        related_name='shelf_life_extensions',
+        help_text='Master COA refreshed (or created) for this extension',
+    )
+    recorded_by = models.CharField(max_length=255, blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = 'Lot shelf life extension'
+        verbose_name_plural = 'Lot shelf life extensions'
+
+    def __str__(self):
+        return (
+            f"SLE lot {self.lot_id} +{self.extension_months}mo "
+            f"from {self.qc_date}"
+        )
+
+
 class CriticalControlPoint(models.Model):
     """Critical control point (CCP) for pre-production checks on batch tickets (e.g. 20 mesh screen)."""
     name = models.CharField(max_length=255, help_text='e.g. 20 mesh screen, 40 mesh screen')
@@ -1147,6 +1233,54 @@ class FormulaItem(models.Model):
     
     def __str__(self):
         return f"{self.formula.finished_good.name} - {self.item.name} ({self.percentage}%)"
+
+
+class ItemPreferredPackaging(models.Model):
+    """
+    Soft preferred packaging (indirect material) for a full-pack FPS SKU.
+
+    Used to seed the Create Batch packaging pick list. Never a rigid BOM —
+    operators can change qty, skip, or add other packaging lots.
+    """
+    finished_good = models.ForeignKey(
+        Item,
+        on_delete=models.CASCADE,
+        related_name='preferred_packaging',
+        limit_choices_to={'item_type__in': ['finished_good', 'distributed_item']},
+    )
+    packaging_item = models.ForeignKey(
+        Item,
+        on_delete=models.CASCADE,
+        related_name='preferred_for_fps',
+        limit_choices_to={'item_type': 'indirect_material'},
+    )
+    sort_order = models.PositiveSmallIntegerField(default=0)
+    label = models.CharField(
+        max_length=64,
+        blank=True,
+        default='',
+        help_text='Optional role label, e.g. Container, Liner, Other.',
+    )
+    suggest_qty = models.BooleanField(
+        default=False,
+        help_text=(
+            'When True, Create Batch prefills suggested EA count from pack math '
+            '(full packs + one for partial).'
+        ),
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['finished_good', 'sort_order', 'id']
+        unique_together = [['finished_good', 'packaging_item']]
+        verbose_name = 'Preferred packaging'
+        verbose_name_plural = 'Preferred packaging'
+
+    def __str__(self):
+        lab = (self.label or '').strip()
+        base = f"{self.finished_good.sku} → {self.packaging_item.sku}"
+        return f"{base} ({lab})" if lab else base
 
 
 class RDFormulaCodeSequence(models.Model):
@@ -2248,6 +2382,75 @@ class CustomerPricing(models.Model):
         return f"{self.customer.name} - {self.item.sku} - ${self.unit_price}/{self.unit_of_measure}"
 
 
+class CustomerCoaRequirement(models.Model):
+    """
+    Standing customer COA overrides for one FPS (SKU) × test.
+
+    Plant Spec / include / display stay on ItemCoaTestLine. When set here, the
+    customer PDF uses these values for that customer + item + test match.
+    Hold-release still judges against the FPS Spec.
+    """
+    DISPLAY_CHOICES = [
+        ('', 'Use FPS default'),
+        ('actual', 'Show actual'),
+        ('pass_fail', 'Show Pass/Fail'),
+    ]
+
+    customer = models.ForeignKey(
+        Customer, on_delete=models.CASCADE, related_name='coa_requirements'
+    )
+    item = models.ForeignKey(
+        Item,
+        on_delete=models.CASCADE,
+        related_name='customer_coa_requirements',
+        limit_choices_to={'item_type__in': ['finished_good', 'distributed_item']},
+    )
+    catalog_test = models.ForeignKey(
+        'CoaTestCatalog',
+        on_delete=models.SET_NULL,
+        blank=True,
+        null=True,
+        related_name='customer_requirements',
+    )
+    test_name = models.CharField(
+        max_length=255,
+        help_text='Match FPS / lot COA line by name when catalog_test is empty.',
+    )
+    specification_text = models.TextField(
+        blank=True,
+        null=True,
+        help_text='Printed Spec on this customer’s COA. Blank = use FPS Spec.',
+    )
+    include_on_customer_coa = models.BooleanField(
+        blank=True,
+        null=True,
+        help_text='Null = use FPS On COA default.',
+    )
+    customer_result_display = models.CharField(
+        max_length=16,
+        choices=DISPLAY_CHOICES,
+        blank=True,
+        default='',
+        help_text='Blank = use FPS Show as default.',
+    )
+    notes = models.CharField(max_length=255, blank=True, default='')
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['customer', 'item__sku', 'test_name']
+        unique_together = [['customer', 'item', 'test_name']]
+        indexes = [
+            models.Index(fields=['customer', 'item', 'is_active']),
+        ]
+        verbose_name = 'Customer COA requirement'
+        verbose_name_plural = 'Customer COA requirements'
+
+    def __str__(self):
+        return f"{self.customer.name} — {self.item.sku} — {self.test_name}"
+
+
 class QuoteNumberSequence(models.Model):
     """Sequence for customer quotes (format: Q-yy####)."""
     year_prefix = models.CharField(max_length=2, unique=True)
@@ -2358,6 +2561,97 @@ class SalesOrderLot(models.Model):
     
     def __str__(self):
         return f"{self.sales_order_item.sales_order.so_number} - {self.lot.lot_number} - {self.quantity_allocated}"
+
+
+class CustomerRma(models.Model):
+    """Customer return authorization — credit at open; material checked in later against RMA #."""
+    STATUS_CHOICES = [
+        ("open", "Open"),
+        ("partially_received", "Partially received"),
+        ("received", "Received"),
+        ("closed", "Closed"),
+        ("cancelled", "Cancelled"),
+    ]
+
+    rma_number = models.CharField(max_length=32, unique=True, db_index=True)
+    sales_order = models.ForeignKey(
+        "SalesOrder", on_delete=models.CASCADE, related_name="rmas"
+    )
+    customer = models.ForeignKey(
+        "Customer",
+        on_delete=models.SET_NULL,
+        blank=True,
+        null=True,
+        related_name="rmas",
+    )
+    status = models.CharField(
+        max_length=32, choices=STATUS_CHOICES, default="open", db_index=True
+    )
+    credit_invoice = models.ForeignKey(
+        "Invoice",
+        on_delete=models.SET_NULL,
+        blank=True,
+        null=True,
+        related_name="rma_credits",
+        help_text="Credit memo issued when this RMA was opened.",
+    )
+    reason = models.TextField(blank=True, default="")
+    notes = models.TextField(blank=True, default="")
+    opened_by = models.CharField(max_length=150, blank=True, default="")
+    opened_at = models.DateTimeField(auto_now_add=True)
+    closed_at = models.DateTimeField(blank=True, null=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-opened_at"]
+        verbose_name = "Customer RMA"
+        verbose_name_plural = "Customer RMAs"
+
+    def __str__(self):
+        return f"RMA {self.rma_number} ({self.status})"
+
+
+class CustomerRmaLine(models.Model):
+    """One returned lot qty authorized on an RMA."""
+    rma = models.ForeignKey(CustomerRma, on_delete=models.CASCADE, related_name="lines")
+    sales_order_item = models.ForeignKey(
+        SalesOrderItem, on_delete=models.CASCADE, related_name="rma_lines"
+    )
+    source_lot = models.ForeignKey(
+        Lot,
+        on_delete=models.PROTECT,
+        related_name="rma_source_lines",
+        help_text="Original lot that was shipped to the customer.",
+    )
+    quantity_requested = models.FloatField()
+    quantity_received = models.FloatField(default=0.0)
+    unit_price = models.FloatField(
+        help_text="Unit price used for the credit memo line."
+    )
+    staging_lot = models.ForeignKey(
+        Lot,
+        on_delete=models.SET_NULL,
+        blank=True,
+        null=True,
+        related_name="rma_staging_for_lines",
+        help_text="Current/last RMA staging (-R) lot created at check-in.",
+    )
+
+    class Meta:
+        ordering = ["id"]
+
+    def __str__(self):
+        return (
+            f"{self.rma.rma_number} · lot {self.source_lot_id} · "
+            f"{self.quantity_requested}"
+        )
+
+    @property
+    def quantity_open(self) -> float:
+        return max(
+            0.0,
+            float(self.quantity_requested or 0) - float(self.quantity_received or 0),
+        )
 
 
 class ShipIdempotency(models.Model):
@@ -3151,6 +3445,7 @@ class LotHoldCase(models.Model):
     KIND_CHOICES = [
         ("receiving", "Receiving / investigation"),
         ("awaiting_micro", "Awaiting micro / QC"),
+        ("customer_return", "Customer return / RMA"),
     ]
     RESOLUTION_CHOICES = [
         ("accept", "Accept (release to available)"),
@@ -3165,7 +3460,10 @@ class LotHoldCase(models.Model):
         choices=KIND_CHOICES,
         default="receiving",
         db_index=True,
-        help_text="receiving = inbound issue; awaiting_micro = manufactured lot pending QC release.",
+        help_text=(
+            "receiving = inbound issue; awaiting_micro = manufactured lot pending QC release; "
+            "customer_return = RMA staging lot pending investigation."
+        ),
     )
     summary = models.CharField(
         max_length=255,

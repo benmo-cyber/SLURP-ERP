@@ -358,7 +358,7 @@ def test_production_batch_with_spillage(results, raw_item, finished_good, formul
         
         tracker.snapshot(f"after_batch_creation_{raw_item.id}", raw_item.id)
         
-        # Close batch: 610 lbs total produced (inventory); spills documented separately
+        # Close batch: ticket/actual 610 with 7 lb spill → net inventory 603
         batch.quantity_actual = 610.0
         batch.spills = 7.0
         batch.wastes = 0.0
@@ -366,11 +366,13 @@ def test_production_batch_with_spillage(results, raw_item, finished_good, formul
         batch.status = 'closed'
         batch.closed_date = timezone.now()
         batch.save()
-        
-        # Output lot quantity = total produced (wastes/spills do not reduce inventory)
-        output_quantity = round(max(0.0, float(batch.quantity_actual)), 2)
-        assert output_quantity == 610.0, f"Expected output 610 lbs, got {output_quantity}"
-        
+
+        from erp_core.make_services import net_yield_native
+
+        # Output lot quantity = net yield after spill/waste
+        output_quantity = round(max(0.0, float(net_yield_native(batch))), 2)
+        assert output_quantity == 603.0, f"Expected net output 603 lbs, got {output_quantity}"
+
         # Create output lot
         fg_pack_size = ItemPackSize.objects.filter(item=finished_good, is_default=True).first()
         if not fg_pack_size:
@@ -425,7 +427,10 @@ def test_production_batch_with_spillage(results, raw_item, finished_good, formul
         else:
             results.add_fail("Finished good in inventory", f"Expected {output_quantity}, got {fg_total}")
         
-        results.add_pass("Close batch with spillage", f"Output: {output_quantity} lbs (total produced; spills documented on batch)")
+        results.add_pass(
+            "Close batch with spillage",
+            f"Output: {output_quantity} lbs (net after spills on batch)",
+        )
         return batch, output_lot
     except Exception as e:
         results.add_fail("Production batch with spillage", str(e))

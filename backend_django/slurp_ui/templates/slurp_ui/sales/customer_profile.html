@@ -260,11 +260,11 @@
               <td>{{ o.total_shipped|default_if_none:0|floatformat:2 }}</td>
               <td>
                 <div class="hs-queue-actions">
-                  {% if o.status != 'completed' and o.status != 'cancelled' and o.status != 'shipped' %}
-                  <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:sales_allocate_order' o.id %}">Allocate</a>
+                  {% if o.status == 'issued' or o.status == 'allocated' or o.status == 'ready_for_shipment' %}
+                  <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:sales_allocate_order' o.id %}">{% if o.total_allocated %}Re-allocate{% else %}Allocate{% endif %}</a>
                   {% endif %}
-                  {% if o.status == 'issued' or o.status == 'ready_for_shipment' or o.status == 'allocated' %}
-                  <a class="hs-btn hs-btn-sm hs-btn-primary" href="{% url 'slurp_ui:sales_checkout' %}?so={{ o.id }}">Check out</a>
+                  {% if o.status == 'issued' or o.status == 'allocated' %}
+                  <a class="hs-btn hs-btn-sm hs-btn-primary" href="{% url 'slurp_ui:sales_checkout' %}?so={{ o.id }}">Mark Ready</a>
                   {% endif %}
                 </div>
               </td>
@@ -275,7 +275,9 @@
       </div>
     </div>
     <div class="hs-card">
-      <div class="hs-card-header"><h3>Shipped / completed</h3></div>
+      <div class="hs-card-header"><h3>Shipped / fulfilled</h3>
+        <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:sales_order_archive' %}?q={{ customer.name|urlencode }}">Order archive</a>
+      </div>
       <div class="hs-card-body tight">
         <table class="hs-table">
           <thead><tr><th>SO #</th><th>Status</th><th>Ship date</th><th>PO</th><th>Shipped qty</th><th></th></tr></thead>
@@ -287,7 +289,10 @@
               <td>{% if o.actual_ship_date %}{{ o.actual_ship_date|date:"Y-m-d" }}{% else %}{{ o.order_date|date:"Y-m-d" }}{% endif %}</td>
               <td>{{ o.customer_reference_number|default:"—" }}</td>
               <td>{{ o.total_shipped|default_if_none:0|floatformat:2 }}</td>
-              <td><a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:sales_order_detail' o.id %}">Open</a></td>
+              <td>
+                <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:sales_order_detail' o.id %}">Open</a>
+                <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:sales_order_detail' o.id %}#rma">RMA</a>
+              </td>
             </tr>
             {% empty %}<tr><td colspan="6"><div class="hs-empty">No shipped orders.</div></td></tr>{% endfor %}
           </tbody>
@@ -401,6 +406,123 @@
         </table>
       </div>
     </div>
+
+    {% elif tab == "coa" %}
+    <div class="hs-card" style="margin-bottom:1rem">
+      <div class="hs-card-header"><h3>COA requirements</h3></div>
+      <div class="hs-card-body">
+        <p class="hs-section-note" style="margin-top:0">
+          Plant FPS Spec (parent / COA master) applies unless overridden here.
+          Overrides print on <strong>this customer’s</strong> certificates for every pack in that family
+          (hold-release still uses FPS Spec).
+        </p>
+        <form method="get" style="display:flex;flex-wrap:wrap;gap:0.65rem;align-items:end;margin-top:0.75rem">
+          <input type="hidden" name="tab" value="coa" />
+          <div class="form-row" style="margin:0;min-width:16rem;flex:1">
+            <label for="coa_item">FPS (COA master)</label>
+            <select id="coa_item" name="item" onchange="this.form.submit()">
+              <option value="">— Select product —</option>
+              {% for it in coa_fps_items %}
+              <option value="{{ it.id }}" {% if coa_selected_item and coa_selected_item.id == it.id %}selected{% endif %}>
+                {{ it.sku }} — {{ it.name }}
+              </option>
+              {% endfor %}
+            </select>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    {% if coa_selected_item %}
+    <div class="hs-card" style="margin-bottom:1rem">
+      <div class="hs-card-header">
+        <h3>{{ coa_selected_item.sku }} tests</h3>
+        <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:quality_item_coa_test_lines' coa_selected_item.id %}" target="_blank">Open FPS COA</a>
+      </div>
+      <div class="hs-card-body">
+        {% for row in coa_fps_line_rows %}
+        {% with line=row.line req=row.req %}
+        <form method="post" style="border-bottom:1px solid #e8eaed;padding:0.85rem 0">
+          {% csrf_token %}
+          <input type="hidden" name="tab" value="coa" />
+          <input type="hidden" name="action" value="save_coa_req" />
+          <input type="hidden" name="item_id" value="{{ coa_selected_item.id }}" />
+          <input type="hidden" name="test_name" value="{{ line.test_name }}" />
+          <div style="display:flex;flex-wrap:wrap;gap:0.65rem 1rem;align-items:end">
+            <div style="min-width:10rem;flex:1">
+              <div style="font-weight:600">{{ line.test_name }}</div>
+              <div class="hs-muted" style="font-size:0.8rem;margin-top:0.2rem">FPS Spec: {{ line.specification_text }}</div>
+            </div>
+            <div class="form-row" style="margin:0;min-width:14rem;flex:1.2">
+              <label>Customer Spec</label>
+              <input name="specification_text" type="text"
+                     value="{% if req and req.specification_text %}{{ req.specification_text }}{% endif %}"
+                     placeholder="Blank = use FPS Spec" />
+            </div>
+            <div class="form-row" style="margin:0;min-width:7.5rem">
+              <label>On COA</label>
+              <select name="include_on_customer_coa">
+                <option value="" {% if not req or req.include_on_customer_coa is None %}selected{% endif %}>FPS default</option>
+                <option value="1" {% if req and req.include_on_customer_coa == True %}selected{% endif %}>Yes</option>
+                <option value="0" {% if req and req.include_on_customer_coa == False %}selected{% endif %}>No</option>
+              </select>
+            </div>
+            <div class="form-row" style="margin:0;min-width:8rem">
+              <label>Show as</label>
+              <select name="customer_result_display">
+                <option value="" {% if not req or not req.customer_result_display %}selected{% endif %}>FPS default</option>
+                <option value="actual" {% if req and req.customer_result_display == 'actual' %}selected{% endif %}>Show actual</option>
+                <option value="pass_fail" {% if req and req.customer_result_display == 'pass_fail' %}selected{% endif %}>Show Pass/Fail</option>
+              </select>
+            </div>
+            <button type="submit" class="hs-btn hs-btn-primary hs-btn-sm">Save</button>
+          </div>
+        </form>
+        {% endwith %}
+        {% empty %}
+        <div class="hs-empty">This FPS has no COA / micro tests yet.</div>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+
+    {% if coa_all_reqs %}
+    <div class="hs-card">
+      <div class="hs-card-header"><h3>Saved overrides</h3></div>
+      <div class="hs-card-body tight">
+        <table class="hs-table">
+          <thead><tr><th>SKU</th><th>Test</th><th>Customer Spec</th><th>On COA</th><th>Show as</th><th></th></tr></thead>
+          <tbody>
+            {% for req in coa_all_reqs %}
+            <tr>
+              <td><a href="?tab=coa&amp;item={{ req.item_id }}">{{ req.item.sku }}</a></td>
+              <td>{{ req.test_name }}</td>
+              <td>{% if req.specification_text %}{{ req.specification_text }}{% else %}<span class="hs-muted">FPS Spec</span>{% endif %}</td>
+              <td>{% if req.include_on_customer_coa is None %}<span class="hs-muted">Default</span>{% elif req.include_on_customer_coa %}Yes{% else %}No{% endif %}</td>
+              <td>{% if req.customer_result_display %}{{ req.get_customer_result_display_display }}{% else %}<span class="hs-muted">Default</span>{% endif %}</td>
+              <td>
+                <form method="post" style="display:inline">{% csrf_token %}
+                  <input type="hidden" name="tab" value="coa" />
+                  <input type="hidden" name="action" value="delete_coa_req" />
+                  <input type="hidden" name="req_id" value="{{ req.id }}" />
+                  <input type="hidden" name="item_id" value="{{ req.item_id }}" />
+                  <button type="submit" class="hs-btn hs-btn-sm hs-btn-danger"
+                          onclick="return confirm('Remove this COA override?');">Remove</button>
+                </form>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    {% elif not coa_selected_item %}
+    <div class="hs-card">
+      <div class="hs-card-body">
+        <div class="hs-empty">No customer COA overrides yet — pick an FPS SKU above to set Spec / On COA / Show as.</div>
+      </div>
+    </div>
+    {% endif %}
 
     {% elif tab == "ship-to" %}
     <div class="hs-card">

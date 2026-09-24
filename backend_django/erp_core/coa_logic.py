@@ -59,9 +59,9 @@ def manufactured_item_types():
 
 
 def lot_needs_coa_template(item) -> bool:
-    from .models import ItemCoaTestLine
+    from .coa_template import item_has_coa_template_lines
 
-    return ItemCoaTestLine.objects.filter(item_id=item.id).exists()
+    return item_has_coa_template_lines(item)
 
 
 def lot_has_formula_qc(item) -> bool:

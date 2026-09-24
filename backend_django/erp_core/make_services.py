@@ -788,15 +788,26 @@ def close_batch_ticket(batch: ProductionBatch, user, data: dict) -> ProductionBa
         return batch
 
     if batch.batch_type == "production":
-        base_quantity = (
-            batch.quantity_actual
-            if batch.quantity_actual and batch.quantity_actual > 0
-            else batch.quantity_produced
-        )
-        main_output_qty = round(max(0.0, float(base_quantity)), 2)
+        # Inventory = net yield after spill/waste (same as PDF / batch detail).
+        # When quantity_actual is left at ticket and losses are recorded separately,
+        # net_yield_native subtracts them; when actual is already net, it leaves it.
+        net = net_yield_native(batch)
+        if net is not None:
+            main_output_qty = round(max(0.0, float(net)), 2)
+        else:
+            base_quantity = (
+                batch.quantity_actual
+                if batch.quantity_actual and batch.quantity_actual > 0
+                else batch.quantity_produced
+            )
+            main_output_qty = round(max(0.0, float(base_quantity)), 2)
         item = batch.finished_good_item
         closed_dt = batch.closed_date or timezone.now()
-        output_expiration = _expiration_datetime_for_fg_output(item, closed_dt)
+        from .formula_resolve import formula_for_batch
+
+        output_expiration = _expiration_datetime_for_fg_output(
+            item, closed_dt, formula=formula_for_batch(batch)
+        )
 
         partial_quantities = []
         partial_lots_to_delete = []
@@ -805,9 +816,19 @@ def close_batch_ticket(batch: ProductionBatch, user, data: dict) -> ProductionBa
                 partial_lot_id = partial_data.get("lot_id")
                 if partial_lot_id:
                     try:
-                        partial_lot = Lot.objects.get(
-                            id=partial_lot_id, item=item, status="accepted"
+                        from .formula_ingredient import parent_code_for_item
+
+                        partial_lot = Lot.objects.select_related("item").get(
+                            id=partial_lot_id, status="accepted"
                         )
+                        same_item = partial_lot.item_id == item.id
+                        same_parent = (
+                            parent_code_for_item(partial_lot.item)
+                            == parent_code_for_item(item)
+                            and parent_code_for_item(item)
+                        )
+                        if not same_item and not same_parent:
+                            continue
                         if partial_lot.quantity_remaining > 0:
                             partial_qty = partial_lot.quantity_remaining
                             partial_quantities.append(partial_qty)
@@ -830,6 +851,7 @@ def close_batch_ticket(batch: ProductionBatch, user, data: dict) -> ProductionBa
             quantity_remaining=combined_output_quantity,
             quantity_on_hold=combined_output_quantity,
             received_date=closed_dt,
+            manufacture_date=closed_dt,
             expiration_date=output_expiration,
             status="on_hold",
             on_hold=True,
@@ -955,7 +977,11 @@ def close_batch_ticket(batch: ProductionBatch, user, data: dict) -> ProductionBa
             output_quantity = input_converted
         item = target_item
         closed_dt = batch.closed_date or timezone.now()
-        output_expiration = _expiration_datetime_for_fg_output(item, closed_dt)
+        from .formula_resolve import formula_for_batch
+
+        output_expiration = _expiration_datetime_for_fg_output(
+            item, closed_dt, formula=formula_for_batch(batch)
+        )
 
         # Prefer target SKU pack size (e.g. 8 lb jug), not source drum pack
         pack_size = ItemPackSize.objects.filter(
@@ -982,6 +1008,9 @@ def close_batch_ticket(batch: ProductionBatch, user, data: dict) -> ProductionBa
                 on_hold=False,
             )
             _copy_inbound_traceability(new_lot, src_lot)
+            if new_lot.manufacture_date is None:
+                new_lot.manufacture_date = closed_dt
+                new_lot.save(update_fields=["manufacture_date"])
             # Supplier COA on inbound lot follows through to WWI/relabel lot
             try:
                 from .coa_supplier import clone_lot_coa_certificate
@@ -1003,6 +1032,7 @@ def close_batch_ticket(batch: ProductionBatch, user, data: dict) -> ProductionBa
                 quantity_remaining=output_quantity,
                 quantity_on_hold=output_quantity,
                 received_date=closed_dt,
+                manufacture_date=closed_dt,
                 expiration_date=output_expiration,
                 status="on_hold",
                 on_hold=True,

@@ -117,6 +117,11 @@
         Manufactured lot pending micro/QC. Accept releases to available inventory
         (COA / formula QC required when configured). Discard removes qty from on-hand.
       </p>
+      {% elif case.kind == 'customer_return' %}
+      <p class="hs-section-note" style="margin-top:0">
+        Customer RMA return. <strong>Accept</strong> merges qty back into the original source lot.
+        <strong>Discard</strong> scraps the staging lot only. Use notes/photos above for the investigation.
+      </p>
       {% else %}
       <p class="hs-section-note" style="margin-top:0">
         Accept releases to available. Return / discard remove qty from on-hand.
@@ -137,6 +142,9 @@
             {% if case.kind == 'awaiting_micro' %}
             <option value="accept">Release to available (micro/QC clear)</option>
             <option value="discard">Discard / scrap</option>
+            {% elif case.kind == 'customer_return' %}
+            <option value="accept">Accept — merge into source lot</option>
+            <option value="discard">Discard / scrap staging lot</option>
             {% else %}
             <option value="accept">Accept after investigation</option>
             <option value="return">Return material to vendor</option>

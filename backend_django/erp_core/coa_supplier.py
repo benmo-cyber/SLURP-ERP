@@ -18,20 +18,23 @@ class SupplierCoaError(Exception):
 
 
 def item_has_supplier_coa_profile(item) -> bool:
-    """True when the item has COA / typical micro lines (FG or distributed)."""
+    """True when the item (or its family COA template) has COA / typical micro lines."""
     if not item or not getattr(item, "id", None):
         return False
-    from .models import ItemCoaTestLine
+    from .coa_template import item_has_coa_template_lines
 
-    return ItemCoaTestLine.objects.filter(item_id=item.id).exists()
+    return item_has_coa_template_lines(item)
 
 
 def coa_lines_for_item(item_id: int):
-    from .models import ItemCoaTestLine
+    from .coa_template import coa_test_lines_for_item, resolve_coa_template_item
+    from .models import Item
 
-    return list(
-        ItemCoaTestLine.objects.filter(item_id=item_id).order_by("sort_order", "id")
-    )
+    item = Item.objects.filter(pk=item_id).first()
+    if not item:
+        return []
+    template = resolve_coa_template_item(item)
+    return list(coa_test_lines_for_item(template, select_related=None))
 
 
 def issue_supplier_coa_for_lot(

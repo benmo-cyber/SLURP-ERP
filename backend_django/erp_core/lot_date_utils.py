@@ -18,13 +18,23 @@ def add_calendar_months_to_date(d: date, months: int) -> date:
     return date(y, m, min(d.day, last))
 
 
-def add_calendar_months_to_datetime(dt: datetime, months: int) -> datetime:
-    """Preserve time-of-day; use business timezone for naive datetimes."""
-    if not isinstance(dt, datetime):
-        raise TypeError("expected datetime")
-    d = add_calendar_months_to_date(dt.date(), months)
-    t = dt.time()
+def add_calendar_months_to_datetime(dt: datetime | date, months: int) -> datetime:
+    """Preserve time-of-day; use business timezone for naive datetimes.
+
+    Accepts ``date`` (treated as midnight in the current timezone) so callers
+    that only have a calendar manufacture date still compute expiration.
+    """
+    if isinstance(dt, datetime):
+        base = dt
+    elif isinstance(dt, date):
+        base = timezone.make_aware(
+            datetime.combine(dt, time.min), timezone.get_current_timezone()
+        )
+    else:
+        raise TypeError("expected datetime or date")
+    d = add_calendar_months_to_date(base.date(), months)
+    t = base.time()
     out = datetime.combine(d, t)
-    if timezone.is_aware(dt):
+    if timezone.is_aware(base):
         return timezone.make_aware(out, timezone.get_current_timezone())
     return out

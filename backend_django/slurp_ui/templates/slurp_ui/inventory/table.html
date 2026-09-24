@@ -3,6 +3,8 @@
 {% block module_title %}Inventory{% endblock %}
 {% block header_actions %}
   <a href="{% url 'slurp_ui:inventory_check_in' %}" class="btn btn-primary">Check-In</a>
+  <a href="{% url 'slurp_ui:inventory_lab_stock' %}" class="btn btn-primary"
+     title="Move FG/RM inventory to untracked lab stock for project work">To lab stock</a>
   <a href="{% url 'slurp_ui:inventory_holds' %}" class="btn btn-primary">On-hold log</a>
   <a href="{% url 'slurp_ui:inventory_counts' %}" class="btn btn-primary">Physical count</a>
   <a href="{% url 'slurp_ui:inventory_indirect_checkout' %}" class="btn btn-primary">Checkout Indirect Material</a>
@@ -20,11 +22,11 @@
       <a class="btn {% if tab == 'indirect_material' %}btn-primary{% else %}btn-secondary{% endif %}"
          href="?tab=indirect_material&uom={{ display_uom }}{% if remainder_only %}&remainder=1{% endif %}">Indirect</a>
       {% if remainder_only %}
-      <a class="btn btn-primary" title="Showing SKUs/lots with a pack remainder only"
-         href="?tab={{ tab }}&uom={{ display_uom }}{% if expand_sku %}&sku={{ expand_sku|urlencode }}{% endif %}{% if expand_vendor != None %}&vendor={{ expand_vendor|urlencode }}{% endif %}{% if deeper %}&deeper=1{% endif %}">Has remainder ✓</a>
+      <a class="btn btn-primary" title="Exit Partials — show all on-hand lots again"
+         href="?tab={{ tab }}&uom={{ display_uom }}">Partials ✓</a>
       {% else %}
-      <a class="btn btn-secondary" title="Filter to lots with a partial pack remnant (e.g. 49×20 + 15 lb)"
-         href="?tab={{ tab }}&uom={{ display_uom }}&remainder=1{% if expand_sku %}&sku={{ expand_sku|urlencode }}{% endif %}{% if expand_vendor != None %}&vendor={{ expand_vendor|urlencode }}{% endif %}{% if deeper %}&deeper=1{% endif %}">Has remainder</a>
+      <a class="btn btn-secondary" title="Remnant / opened packs only (full packs stay on FG / RM)"
+         href="?tab={{ tab }}&uom={{ display_uom }}&remainder=1">Partials</a>
       {% endif %}
     </div>
     <div class="unit-toggle" style="display:inline-flex;border:1px solid #cbd5e1;border-radius:6px;overflow:hidden">
@@ -43,8 +45,12 @@
 
   {% if remainder_only %}
   <p style="margin:0 0 0.85rem;color:#9a3412;font-size:0.9rem">
-    Showing SKUs with at least one lot that has a pack remainder (full packs + partial remnant).
-    Expand a row to see the breakout.
+    Partials — remnant / opened packs only (typical leftover from a production run).
+    Full packs stay under Finished Goods / Raw Materials. Selling from here is uncommon but allowed.
+  </p>
+  {% else %}
+  <p style="margin:0 0 0.85rem;color:#64748b;font-size:0.88rem">
+    Full packs only. Remnants from production live under <strong>Partials</strong>.
   </p>
   {% endif %}
 
@@ -83,6 +89,7 @@
               {% endif %}
               <span class="sku-master-label">{{ row.sku }}</span>
               {% if row.vendor_count > 1 %}<span class="vendor-count-badge">{{ row.vendor_count }}</span>{% endif %}
+              {% if row.has_partials and not remainder_only %}<span class="inv-partial-chip" title="Also has remnant packs under Partials">Partial</span>{% endif %}
             </div>
           </td>
           <td>{{ row.description }}</td>
@@ -130,7 +137,7 @@
 
           {% if v.expanded %}
           <tr class="lot-details-row">
-            <td colspan="{% if show_on_order %}13{% else %}12{% endif %}" class="lot-details-cell">
+            <td colspan="{% if show_on_order %}12{% else %}11{% endif %}" class="lot-details-cell">
               <div class="lot-breakdown">
                 <div class="lot-breakdown-head">
                   <strong>Lots — {{ row.sku }} / {{ v.vendor }}</strong>
@@ -146,52 +153,76 @@
                   </a>
                   {% endif %}
                 </div>
+
+                <div class="lot-sum-bar{% if lot_panel.mismatch %} lot-sum-bar--warn{% endif %}">
+                  {{ lot_panel.count }} lot{{ lot_panel.count|pluralize }}
+                  {% if remainder_only %}
+                  · Remnant sum <strong>{{ lot_panel.available_sum|floatformat:2 }} {{ lot_panel.qty_uom }}</strong>
+                  {% else %}
+                  {% if lot_panel.partial_count %} · {{ lot_panel.partial_count }} also have remnant in Partials{% endif %}
+                  · Full-pack sum <strong>{{ lot_panel.available_sum|floatformat:2 }} {{ lot_panel.qty_uom }}</strong>
+                  {% endif %}
+                  {% if lot_panel.row_available != None and not deeper %}
+                  · Row {{ lot_panel.row_available|floatformat:2 }} {{ lot_panel.qty_uom }}
+                  {% if lot_panel.mismatch %}— mismatch{% else %}— matches{% endif %}
+                  {% endif %}
+                </div>
+
                 <div class="lot-table-scroll">
                   <table class="lot-table{% if deeper %} lot-table-depleted{% endif %}">
                     <thead>
                       <tr>
-                        <th>Vendor Lot #</th>
-                        <th>Internal Lot #</th>
-                        <th>PO</th>
-                        <th>Tracking</th>
-                        <th>Received</th>
-                        <th>Qty</th>
-                        <th>Pack breakout</th>
+                        <th>Lot</th>
+                        <th>Pack</th>
                         <th>Available</th>
                         <th>On Hold</th>
                         <th>Status</th>
+                        <th>Exp</th>
+                        <th>Received</th>
+                        <th>Vendor lot / PO</th>
                         <th>Committed</th>
                         <th>Actions</th>
                       </tr>
                     </thead>
                     <tbody>
                       {% for lot in lot_rows %}
-                      <tr {% if deeper %}class="lot-row-depleted"{% endif %}{% if lot.has_remainder %} style="background:#fff7ed"{% endif %}>
-                        <td>{{ lot.vendor_lot_number }}</td>
+                      <tr class="{% if deeper %}lot-row-depleted{% endif %}{% if lot.has_remainder %} lot-row-partial{% endif %}">
                         <td>
                           <a href="{% url 'slurp_ui:inventory_lot_detail' lot.id %}?tab={{ tab }}&uom={{ display_uom }}{% if remainder_only %}&remainder=1{% endif %}&sku={{ row.sku|urlencode }}&vendor={{ v.vendor|urlencode }}{% if deeper %}&deeper=1{% endif %}"
                              style="font-weight:650;{% if not lot.manufacture_date or not lot.expiration_date %}color:#b45309{% endif %}"
                              title="{% if not lot.manufacture_date or not lot.expiration_date %}Open lot — mfg/exp missing{% else %}Open lot detail{% endif %}">
                             {{ lot.lot_number }}
                           </a>
+                          {% if lot.has_remainder %}<span class="inv-partial-chip">Partial</span>{% endif %}
                         </td>
-                        <td>{{ lot.po_number }}</td>
-                        <td>{{ lot.tracking }}</td>
-                        <td>{% if lot.received_date %}{{ lot.received_date|slice:":10" }}{% else %}—{% endif %}</td>
-                        <td class="lot-table-col-qty">{{ lot.quantity|floatformat:2 }} {{ lot.uom }}</td>
                         <td style="font-size:0.85rem;{% if lot.has_remainder %}color:#9a3412;font-weight:600{% else %}color:#64748b{% endif %}">
-                          {{ lot.pack_breakout|default:"—" }}
+                          {% if lot.pack_breakout %}{{ lot.pack_breakout }}{% else %}{{ lot.quantity|floatformat:2 }} {{ lot.uom }}{% endif %}
                         </td>
                         <td class="lot-table-col-qty">{{ lot.available|floatformat:2 }} {{ lot.uom }}</td>
                         <td class="lot-table-col-qty">{{ lot.on_hold|floatformat:2 }} {{ lot.uom }}</td>
                         <td><span class="status-badge status-{{ lot.status }}">{{ lot.status }}</span></td>
-                        <td class="lot-table-col-committed">
-                          S {{ lot.committed_sales|floatformat:2 }} · P {{ lot.committed_prod|floatformat:2 }}
+                        <td style="{% if not lot.expiration_date %}color:#b45309;font-weight:600{% endif %}">
+                          {% if lot.expiration_date %}{{ lot.expiration_date }}{% else %}—{% endif %}
                         </td>
-                        <td style="white-space:nowrap">
+                        <td>{% if lot.received_date %}{{ lot.received_date|slice:":10" }}{% else %}—{% endif %}</td>
+                        <td style="font-size:0.82rem;color:#64748b">
+                          {{ lot.vendor_lot_number }}
+                          {% if lot.po_number and lot.po_number != "—" %} · PO {{ lot.po_number }}{% endif %}
+                        </td>
+                        <td class="lot-table-col-committed">
+                          {% if lot.sales_allocs %}
+                          <button type="button"
+                                  class="lot-commit-sales-toggle"
+                                  aria-expanded="false"
+                                  title="Show sales orders for this allocation">S {{ lot.committed_sales|floatformat:2 }}</button>{% else %}S {{ lot.committed_sales|floatformat:2 }}{% endif %} · P {{ lot.committed_prod|floatformat:2 }}
+                        </td>
+                        <td class="lot-table-col-actions" style="white-space:nowrap">
                           {% if lot.avail_native > 0 %}
                           <a class="btn btn-secondary" style="padding:0.2rem 0.45rem;font-size:0.75rem"
                              href="{% url 'slurp_ui:inventory_lot_hold' lot.id %}?tab={{ tab }}&uom={{ display_uom }}{% if remainder_only %}&remainder=1{% endif %}&sku={{ row.sku|urlencode }}&vendor={{ v.vendor|urlencode }}{% if deeper %}&deeper=1{% endif %}">Hold</a>
+                          <a class="btn btn-secondary" style="padding:0.2rem 0.45rem;font-size:0.75rem"
+                             href="{% url 'slurp_ui:inventory_lot_lab_stock' lot.id %}?tab={{ tab }}&uom={{ display_uom }}{% if remainder_only %}&remainder=1{% endif %}&sku={{ row.sku|urlencode }}&vendor={{ v.vendor|urlencode }}{% if deeper %}&deeper=1{% endif %}"
+                             title="Move qty to untracked lab stock">Lab</a>
                           {% endif %}
                           {% if lot.hold_native > 0 %}
                           {% if lot.open_hold_case_id %}
@@ -207,7 +238,7 @@
                           {% if lot.show_supplier_coa %}
                           <a class="btn btn-secondary" style="padding:0.2rem 0.45rem;font-size:0.75rem"
                              href="{% url 'slurp_ui:inventory_lot_supplier_coa' lot.id %}?tab={{ tab }}&uom={{ display_uom }}{% if remainder_only %}&remainder=1{% endif %}&sku={{ row.sku|urlencode }}&vendor={{ v.vendor|urlencode }}{% if deeper %}&deeper=1{% endif %}"
-                             title="{% if lot.has_coa_profile %}Enter supplier COA results{% else %}FPS has no COA profile yet — set up or enter after{% endif %}">Supplier COA</a>
+                             title="{% if lot.has_coa_profile %}Enter supplier COA results{% else %}FPS has no COA profile yet{% endif %}">Supplier COA</a>
                           {% endif %}
                           {% if request.user.is_staff %}
                           <a class="btn btn-secondary" style="padding:0.2rem 0.45rem;font-size:0.75rem"
@@ -215,8 +246,39 @@
                           {% endif %}
                         </td>
                       </tr>
+                      {% if lot.sales_allocs %}
+                      <tr class="lot-sales-alloc-row" hidden>
+                        <td colspan="10">
+                          <div class="lot-commit-sales-panel">
+                            <table>
+                              <thead>
+                                <tr>
+                                  <th>SO</th>
+                                  <th>Customer</th>
+                                  <th>Qty</th>
+                                  <th>Status</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {% for a in lot.sales_allocs %}
+                                <tr>
+                                  <td>
+                                    <a href="{% url 'slurp_ui:sales_order_detail' a.so_id %}">{{ a.so_number }}</a>
+                                    {% if a.customer_po %}<div class="lot-commit-po">PO {{ a.customer_po }}</div>{% endif %}
+                                  </td>
+                                  <td>{{ a.customer }}</td>
+                                  <td>{{ a.qty|floatformat:2 }} {{ lot.uom }}</td>
+                                  <td>{{ a.status }}</td>
+                                </tr>
+                                {% endfor %}
+                              </tbody>
+                            </table>
+                          </div>
+                        </td>
+                      </tr>
+                      {% endif %}
                       {% empty %}
-                      <tr><td colspan="12">{% if deeper %}No depleted lots.{% elif remainder_only %}No lots with a pack remainder.{% else %}No on-hand lots.{% endif %}</td></tr>
+                      <tr><td colspan="10">{% if deeper %}No depleted lots.{% elif remainder_only %}No partial lots.{% else %}No on-hand lots.{% endif %}</td></tr>
                       {% endfor %}
                     </tbody>
                   </table>
@@ -247,7 +309,6 @@
   var scrollKey = 'inv_table_scroll_y';
   var saved = null;
 
-  /* Drop any leftover hash so the browser does not fight our scroll container. */
   if (location.hash) {
     try {
       history.replaceState(null, '', location.pathname + location.search);
@@ -267,6 +328,25 @@
     '.inventory-table-page a.expand-btn, .inventory-table-page .unit-toggle a, .inventory-table-page .lot-breakdown a.btn'
   ).forEach(function (a) {
     a.addEventListener('click', saveScroll);
+  });
+
+  document.querySelectorAll('.lot-commit-sales-toggle').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var lotRow = btn.closest('tr');
+      if (!lotRow) return;
+      var panelRow = lotRow.nextElementSibling;
+      if (!panelRow || !panelRow.classList.contains('lot-sales-alloc-row')) return;
+      var open = panelRow.hasAttribute('hidden');
+      if (open) {
+        panelRow.removeAttribute('hidden');
+        btn.setAttribute('aria-expanded', 'true');
+        btn.classList.add('is-open');
+      } else {
+        panelRow.setAttribute('hidden', '');
+        btn.setAttribute('aria-expanded', 'false');
+        btn.classList.remove('is-open');
+      }
+    });
   });
 
   function restore() {

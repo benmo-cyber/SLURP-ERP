@@ -28,7 +28,7 @@ INVENTORY_NAV = [
                 "id": "purchase-orders",
                 "label": "Purchase Orders",
                 "url_name": "slurp_ui:inventory_purchase_orders",
-            }
+            },
         ],
     },
     {
@@ -52,12 +52,8 @@ SALES_NAV = [
         "label": "Fulfillment",
         "items": [
             {"id": "orders", "label": "Order Workqueue", "url_name": "slurp_ui:sales_orders"},
-            {"id": "checkout", "label": "Check Out", "url_name": "slurp_ui:sales_checkout"},
-            {
-                "id": "combined-checkout",
-                "label": "Combined Check Out",
-                "url_name": "slurp_ui:sales_combined_checkout",
-            },
+            {"id": "order-archive", "label": "Order Archive", "url_name": "slurp_ui:sales_order_archive"},
+            {"id": "rmas", "label": "RMAs", "url_name": "slurp_ui:sales_rma_list"},
         ],
     },
     {
@@ -118,6 +114,7 @@ PRODUCTION_NAV = [
         "label": "Production",
         "items": [
             {"id": "batches", "label": "Batch Tickets", "url_name": "slurp_ui:production"},
+            {"id": "rework", "label": "Rework", "url_name": "slurp_ui:production_rework"},
             {"id": "archive", "label": "Batch Archive", "url_name": "slurp_ui:production_archive"},
             {"id": "repacks", "label": "Repacks", "url_name": "slurp_ui:production_repacks"},
             {

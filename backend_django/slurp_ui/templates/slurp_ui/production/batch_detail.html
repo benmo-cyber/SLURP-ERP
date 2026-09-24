@@ -22,6 +22,10 @@
       <span class="btn btn-secondary" style="opacity:0.55;cursor:not-allowed"
             title="{{ close_blocked_reason }}">Close</span>
       {% endif %}
+      {% if not batch.is_archived %}
+      <button type="button" class="btn btn-secondary"
+              onclick="alert('You must close the batch ticket before archiving.');">Archive</button>
+      {% endif %}
       {% elif not batch.is_archived %}
       <form method="post" action="{% url 'slurp_ui:production_archive_batch' batch.id %}">{% csrf_token %}
         <button class="btn btn-secondary" type="submit"

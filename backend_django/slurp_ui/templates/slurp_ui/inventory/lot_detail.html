@@ -74,6 +74,36 @@
       <span class="k">Committed</span>
       <span class="v">Sales {{ committed_sales|floatformat:2 }} · Prod {{ committed_prod|floatformat:2 }}</span>
     </div>
+    {% if sales_allocs %}
+    <div style="margin-top:0.85rem">
+      <div style="font-size:0.72rem;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;color:#64748b;margin-bottom:0.4rem">
+        Sales allocations
+      </div>
+      <table style="width:100%;border-collapse:collapse;font-size:0.85rem">
+        <thead>
+          <tr style="color:#64748b;text-align:left">
+            <th style="padding:0.25rem 0.35rem;border-bottom:1px solid #e2e8f0">SO</th>
+            <th style="padding:0.25rem 0.35rem;border-bottom:1px solid #e2e8f0">Customer</th>
+            <th style="padding:0.25rem 0.35rem;border-bottom:1px solid #e2e8f0">Qty</th>
+            <th style="padding:0.25rem 0.35rem;border-bottom:1px solid #e2e8f0">Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for a in sales_allocs %}
+          <tr>
+            <td style="padding:0.3rem 0.35rem;border-bottom:1px solid #f1f5f9">
+              <a href="{% url 'slurp_ui:sales_order_detail' a.so_id %}">{{ a.so_number }}</a>
+              {% if a.customer_po %}<div style="color:#64748b;font-size:0.75rem">PO {{ a.customer_po }}</div>{% endif %}
+            </td>
+            <td style="padding:0.3rem 0.35rem;border-bottom:1px solid #f1f5f9">{{ a.customer }}</td>
+            <td style="padding:0.3rem 0.35rem;border-bottom:1px solid #f1f5f9">{{ a.qty|floatformat:2 }} {{ lot.item.unit_of_measure }}</td>
+            <td style="padding:0.3rem 0.35rem;border-bottom:1px solid #f1f5f9">{{ a.status }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
   </div>
 
   <div class="card">
@@ -126,6 +156,7 @@
     <div class="actions">
       {% if avail > 0 %}
       <a class="btn btn-secondary" href="{% url 'slurp_ui:inventory_lot_hold' lot.id %}?{{ request.GET.urlencode }}">Hold</a>
+      <a class="btn btn-secondary" href="{% url 'slurp_ui:inventory_lot_lab_stock' lot.id %}?{{ request.GET.urlencode }}">To lab stock</a>
       {% endif %}
       {% if hold > 0 %}
       {% if open_hold_case %}

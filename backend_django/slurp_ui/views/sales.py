@@ -20,6 +20,7 @@ from erp_core.models import (
     AccountsReceivable,
     Customer,
     CustomerContact,
+    CustomerCoaRequirement,
     CustomerForecast,
     CustomerPricing,
     CustomerQuote,
@@ -35,8 +36,9 @@ from erp_core.models import (
     SalesOrderItem,
     ShipToLocation,
     Shipment,
+    CustomerRma,
 )
-from erp_core.return_services import create_customer_credit_memo
+from erp_core.rma_services import open_customer_rma, shipped_lot_quantities_for_so
 from erp_core.sell_services import (
     SellFlowError,
     allocate_sales_order,
@@ -81,6 +83,20 @@ def _sales_ctx(**extra):
 
 IN_HOUSE_SO_STATUSES = ("draft", "issued", "allocated", "ready_for_shipment")
 SHIPPED_SO_STATUSES = ("shipped", "completed", "received")
+
+
+def fulfilled_sales_orders_qs(base=None):
+    """
+    Fulfilled SOs for Order Archive + customer history.
+
+    Status shipped/completed/received, or actual_ship_date set (pickup done even
+    if status lagged, e.g. partial / drop-ship).
+    """
+    qs = base if base is not None else SalesOrder.objects.all()
+    return qs.filter(
+        models.Q(status__in=SHIPPED_SO_STATUSES)
+        | models.Q(actual_ship_date__isnull=False)
+    ).distinct()
 
 
 def _customer_queryset(active_filter=None):
@@ -532,6 +548,104 @@ def sales_crm(request: HttpRequest) -> HttpResponse:
     )
 
 
+def _order_fulfillment_flow(order) -> dict:
+    """
+    Compact process strip for the workqueue Process column.
+
+    Mirrors page hint: Allocate → Pick / Mark Ready → Mark picked up → Issue invoice.
+    Current step = next handoff (shipping users stop before Issue invoice).
+    """
+    steps_meta = (
+        ("allocate", "Allocate"),
+        ("ready", "Mark Ready"),
+        ("pickup", "Mark picked up"),
+        ("invoice", "Issue invoice"),
+    )
+    status = (order.status or "").strip()
+    if status == "cancelled":
+        return {
+            "mode": "cancelled",
+            "label": "Cancelled",
+            "current": None,
+            "steps": [
+                {"key": k, "label": lab, "state": "todo"} for k, lab in steps_meta
+            ],
+        }
+    if status == "draft":
+        return {
+            "mode": "draft",
+            "label": "Draft — issue order first",
+            "current": None,
+            "steps": [
+                {"key": k, "label": lab, "state": "todo"} for k, lab in steps_meta
+            ],
+        }
+
+    ready_sh = getattr(order, "ready_shipment", None)
+    picked_up = bool(getattr(order, "has_picked_up_shipment", False))
+    draft_inv = getattr(order, "draft_invoice", None)
+    total_alloc = float(getattr(order, "total_allocated", 0) or 0)
+    drop_ship = bool(getattr(order, "drop_ship", False))
+    terminal = status in ("shipped", "completed", "received")
+
+    # Shipping complete once picked up (or terminal / draft invoice exists from pickup).
+    shipping_done = bool(picked_up or terminal or draft_inv)
+
+    if shipping_done and terminal and not draft_inv:
+        current = "invoice"
+        all_done = True
+    elif shipping_done:
+        current = "invoice"
+        all_done = False
+    elif ready_sh:
+        current = "pickup"
+        all_done = False
+    elif drop_ship or total_alloc > 0 or status in ("allocated", "ready_for_shipment"):
+        current = "ready"
+        all_done = False
+    else:
+        current = "allocate"
+        all_done = False
+
+    order_keys = [k for k, _ in steps_meta]
+    cur_i = order_keys.index(current)
+    steps = []
+    for i, (key, lab) in enumerate(steps_meta):
+        if all_done or i < cur_i:
+            state = "done"
+        elif i == cur_i:
+            state = "current"
+        else:
+            state = "todo"
+        # After allocate: bold the pick + stage handoff (not for drop-ship).
+        display = lab
+        if key == "ready" and state == "current" and not drop_ship:
+            display = "Pick, then Mark Ready"
+        steps.append({"key": key, "label": display, "state": state})
+
+    if all_done:
+        label = "Complete"
+    elif current == "invoice":
+        label = "Shipping done — invoice in Finance"
+    elif current == "pickup":
+        label = "Awaiting pickup"
+    elif current == "ready":
+        label = (
+            "Next: Mark Ready"
+            if drop_ship
+            else "Next: Pick, then Mark Ready"
+        )
+    else:
+        label = "Next: Allocate"
+
+    return {
+        "mode": "flow",
+        "label": label,
+        "current": current,
+        "steps": steps,
+    }
+
+
 @login_required
 def sales_orders(request: HttpRequest) -> HttpResponse:
     from erp_core.models import Invoice, SalesOrderLot, Shipment
@@ -660,13 +774,16 @@ def sales_orders(request: HttpRequest) -> HttpResponse:
         )
 
     orders = list(qs[:200])
-    # Annotate ready shipment + draft invoice + COA docs for actions
+    # Annotate ready / picked-up shipments + draft invoice + COA docs for actions
     for o in orders:
         ready_sh = next(
             (s for s in o.shipments.all() if s.fulfillment_status == "ready"),
             None,
         )
         o.ready_shipment = ready_sh
+        o.has_picked_up_shipment = any(
+            (s.fulfillment_status or "") == "picked_up" for s in o.shipments.all()
+        )
         o.draft_invoice = None
         o.coa_copies = []
         o.coa_master_certs = []
@@ -697,6 +814,34 @@ def sales_orders(request: HttpRequest) -> HttpResponse:
     }
     for o in orders:
         o.draft_invoice = draft_by_so.get(o.id)
+        o.fulfill_flow = _order_fulfillment_flow(o)
+        # Allocate / Re-allocate until Mark picked up; Mark Ready only before Ready lock
+        o.show_allocate = (
+            not o.has_picked_up_shipment
+            and not o.draft_invoice
+            and o.status in ("issued", "allocated", "ready_for_shipment")
+        )
+        o.is_reallocate = bool(
+            o.show_allocate
+            and (
+                float(o.total_allocated or 0) > 0
+                or o.status in ("allocated", "ready_for_shipment")
+                or o.ready_shipment
+            )
+        )
+        o.show_mark_ready = bool(
+            not o.ready_shipment
+            and not o.has_picked_up_shipment
+            and not o.draft_invoice
+            and o.status in ("issued", "allocated", "ready_for_shipment")
+            and (o.drop_ship or float(o.total_allocated or 0) > 0)
+        )
+        o.show_mark_picked_up = bool(o.ready_shipment and not o.has_picked_up_shipment)
+        o.show_cancel = bool(
+            o.status in ("draft", "issued", "allocated", "ready_for_shipment")
+            and not o.has_picked_up_shipment
+            and not o.draft_invoice
+        )
 
     counts = {
         "open": SalesOrder.objects.filter(status__in=IN_HOUSE_SO_STATUSES).count(),
@@ -721,6 +866,127 @@ def sales_orders(request: HttpRequest) -> HttpResponse:
             today=today,
             port_status="full",
             god_mode=bool(request.session.get("god_mode")) and request.user.is_staff,
+        ),
+    )
+
+
+@login_required
+def sales_order_archive(request: HttpRequest) -> HttpResponse:
+    """Fulfilled sales orders: search + year/month folders (by ship date)."""
+    from calendar import month_name
+    from django.db.models import Count
+    from django.db.models.functions import Coalesce, TruncMonth, TruncYear
+
+    q = (request.GET.get("q") or "").strip()
+    year_raw = (request.GET.get("year") or "").strip()
+    month_raw = (request.GET.get("month") or "").strip()
+    year = int(year_raw) if year_raw.isdigit() else None
+    month = int(month_raw) if month_raw.isdigit() and 1 <= int(month_raw) <= 12 else None
+
+    base = fulfilled_sales_orders_qs().select_related("customer")
+    if q:
+        base = base.filter(
+            models.Q(so_number__icontains=q)
+            | models.Q(customer_name__icontains=q)
+            | models.Q(customer__name__icontains=q)
+            | models.Q(customer_reference_number__icontains=q)
+            | models.Q(notes__icontains=q)
+        )
+
+    dated = base.annotate(folder_date=Coalesce("actual_ship_date", "order_date"))
+
+    folders = []
+    orders = []
+    folder_level = "years"
+    crumbs = [{"label": "Order archive", "url_params": {}}]
+
+    def _qp(**extra):
+        params = {}
+        if q:
+            params["q"] = q
+        params.update({k: v for k, v in extra.items() if v not in (None, "")})
+        return params
+
+    if q and not year and not month:
+        orders = list(
+            dated.annotate(
+                total_shipped=Sum("items__quantity_shipped"),
+                total_ordered=Sum("items__quantity_ordered"),
+            ).order_by("-folder_date", "-id")[:300]
+        )
+        folder_level = "list"
+        crumbs.append({"label": f'Search “{q}”', "url_params": None})
+    elif year and month:
+        crumbs.append({"label": str(year), "url_params": _qp(year=year)})
+        crumbs.append({"label": month_name[month], "url_params": None})
+        orders = list(
+            dated.filter(folder_date__year=year, folder_date__month=month)
+            .annotate(
+                total_shipped=Sum("items__quantity_shipped"),
+                total_ordered=Sum("items__quantity_ordered"),
+            )
+            .order_by("-folder_date", "-id")[:300]
+        )
+        folder_level = "list"
+    elif year:
+        crumbs.append({"label": str(year), "url_params": None})
+        folder_level = "months"
+        rows = (
+            dated.filter(folder_date__year=year)
+            .annotate(m=TruncMonth("folder_date"))
+            .values("m")
+            .annotate(count=Count("id", distinct=True))
+            .order_by("-m")
+        )
+        for row in rows:
+            m = row["m"]
+            if not m:
+                continue
+            folders.append(
+                {
+                    "kind": "month",
+                    "label": month_name[m.month],
+                    "sublabel": str(m.year),
+                    "count": row["count"],
+                    "url_params": _qp(year=m.year, month=m.month),
+                }
+            )
+    else:
+        folder_level = "years"
+        rows = (
+            dated.annotate(y=TruncYear("folder_date"))
+            .values("y")
+            .annotate(count=Count("id", distinct=True))
+            .order_by("-y")
+        )
+        for row in rows:
+            y = row["y"]
+            if not y:
+                continue
+            folders.append(
+                {
+                    "kind": "year",
+                    "label": str(y.year),
+                    "sublabel": None,
+                    "count": row["count"],
+                    "url_params": _qp(year=y.year),
+                }
+            )
+
+    return render(
+        request,
+        "slurp_ui/sales/order_archive.html",
+        _sales_ctx(
+            active_tab="order-archive",
+            q=q,
+            year=year,
+            month=month,
+            folders=folders,
+            orders=orders,
+            folder_level=folder_level,
+            crumbs=crumbs,
+            result_count=len(orders),
+            port_status="full",
         ),
     )
 
@@ -915,7 +1181,7 @@ def sales_customers(request: HttpRequest) -> HttpResponse:
 @require_http_methods(["GET", "POST"])
 def sales_customer_profile(request: HttpRequest, pk: int) -> HttpResponse:
     customer = get_object_or_404(Customer, pk=pk)
-    tab = request.GET.get("tab") or "glance"
+    tab = request.GET.get("tab") or request.POST.get("tab") or "glance"
     if request.method == "POST" and request.POST.get("action") == "save_profile":
         data, errors = _customer_from_post(request.POST, customer=customer)
         if errors:
@@ -927,6 +1193,79 @@ def sales_customer_profile(request: HttpRequest, pk: int) -> HttpResponse:
             customer.save()
             messages.success(request, "Profile updated.")
             return redirect(f"{reverse('slurp_ui:sales_customer_profile', kwargs={'pk': pk})}?tab={tab}")
+
+    if request.method == "POST" and tab == "coa":
+        action = (request.POST.get("action") or "").strip()
+        if action == "delete_coa_req":
+            req_id = request.POST.get("req_id")
+            CustomerCoaRequirement.objects.filter(pk=req_id, customer=customer).delete()
+            messages.success(request, "COA requirement removed.")
+            item_q = (request.POST.get("item_id") or "").strip()
+            q = f"?tab=coa&item={item_q}" if item_q.isdigit() else "?tab=coa"
+            return redirect(f"{reverse('slurp_ui:sales_customer_profile', kwargs={'pk': pk})}{q}")
+        if action == "save_coa_req":
+            item_id = (request.POST.get("item_id") or "").strip()
+            test_name = (request.POST.get("test_name") or "").strip()
+            raw_item = Item.objects.filter(
+                pk=item_id, item_type__in=("finished_good", "distributed_item")
+            ).first()
+            from erp_core.coa_template import (
+                coa_test_lines_for_item,
+                resolve_coa_template_item,
+            )
+
+            item = resolve_coa_template_item(raw_item) if raw_item else None
+            if not item or not test_name:
+                messages.error(request, "Select an FPS SKU and test.")
+            else:
+                fps_line = (
+                    coa_test_lines_for_item(item, select_related=("catalog_test",))
+                    .filter(test_name__iexact=test_name)
+                    .first()
+                )
+                spec_raw = (request.POST.get("specification_text") or "").strip()
+                include_raw = (request.POST.get("include_on_customer_coa") or "").strip()
+                # tri-state: "" = FPS default, "1" = yes, "0" = no
+                if include_raw == "1":
+                    include_val = True
+                elif include_raw == "0":
+                    include_val = False
+                else:
+                    include_val = None
+                disp = (request.POST.get("customer_result_display") or "").strip()
+                if disp not in ("actual", "pass_fail"):
+                    disp = ""
+                notes = (request.POST.get("notes") or "").strip()[:255]
+                # Empty Spec + all defaults → delete existing override
+                if not spec_raw and include_val is None and not disp:
+                    CustomerCoaRequirement.objects.filter(
+                        customer=customer, item=item, test_name__iexact=test_name
+                    ).delete()
+                    messages.success(request, f"Cleared override for {test_name} (FPS default).")
+                else:
+                    req, _created = CustomerCoaRequirement.objects.update_or_create(
+                        customer=customer,
+                        item=item,
+                        test_name=fps_line.test_name if fps_line else test_name,
+                        defaults={
+                            "catalog_test_id": (
+                                fps_line.catalog_test_id if fps_line else None
+                            ),
+                            "specification_text": spec_raw or None,
+                            "include_on_customer_coa": include_val,
+                            "customer_result_display": disp,
+                            "notes": notes,
+                            "is_active": True,
+                        },
+                    )
+                    messages.success(
+                        request,
+                        f"Saved COA requirement for {item.sku} — {req.test_name}.",
+                    )
+            return redirect(
+                f"{reverse('slurp_ui:sales_customer_profile', kwargs={'pk': pk})}"
+                f"?tab=coa&item={item.id if item else item_id}"
+            )
 
     pricing = (
         CustomerPricing.objects.filter(customer=customer)
@@ -959,7 +1298,7 @@ def sales_customer_profile(request: HttpRequest, pk: int) -> HttpResponse:
         .order_by("-order_date")[:50]
     )
     recent_shipped = list(
-        SalesOrder.objects.filter(customer=customer, status__in=SHIPPED_SO_STATUSES)
+        fulfilled_sales_orders_qs(SalesOrder.objects.filter(customer=customer))
         .annotate(
             total_allocated=Sum("items__quantity_allocated"),
             total_ordered=Sum("items__quantity_ordered"),
@@ -1001,6 +1340,7 @@ def sales_customer_profile(request: HttpRequest, pk: int) -> HttpResponse:
         ("payments", "Payments"),
         ("contacts", "Contacts"),
         ("pricing", "Pricing"),
+        ("coa", "COA"),
         ("quotes", "Quotes"),
         ("forecast", "Forecast"),
         ("usage", "Usage"),
@@ -1008,6 +1348,59 @@ def sales_customer_profile(request: HttpRequest, pk: int) -> HttpResponse:
         ("overview", "Account edit"),
     ]
     from ..finance_helpers import customer_payment_timeliness
+
+    # COA requirements tab context — one row per family COA template
+    from erp_core.coa_template import (
+        coa_test_lines_for_item,
+        fps_parent_code,
+        resolve_coa_template_item,
+    )
+
+    coa_candidates = list(
+        Item.objects.filter(item_type__in=("finished_good", "distributed_item"))
+        .filter(coa_test_lines__isnull=False)
+        .distinct()
+        .order_by("sku")[:400]
+    )
+    # Deduplicate to template items (and include templates even if lines live only there)
+    coa_by_parent: dict[str, Item] = {}
+    for it in coa_candidates:
+        tmpl = resolve_coa_template_item(it) or it
+        key = fps_parent_code(tmpl) or (tmpl.sku or str(tmpl.id))
+        prev = coa_by_parent.get(key)
+        if prev is None or tmpl.id < prev.id:
+            coa_by_parent[key] = tmpl
+    coa_fps_items = sorted(coa_by_parent.values(), key=lambda x: (x.sku or "").upper())
+
+    coa_item_id = (request.GET.get("item") or "").strip()
+    coa_selected_item = None
+    coa_fps_lines = []
+    coa_req_by_name = {}
+    if coa_item_id.isdigit():
+        raw = Item.objects.filter(
+            pk=int(coa_item_id), item_type__in=("finished_good", "distributed_item")
+        ).first()
+        if raw:
+            coa_selected_item = resolve_coa_template_item(raw) or raw
+    if coa_selected_item:
+        coa_fps_lines = list(coa_test_lines_for_item(coa_selected_item))
+        for req in CustomerCoaRequirement.objects.filter(
+            customer=customer, item=coa_selected_item, is_active=True
+        ):
+            coa_req_by_name[(req.test_name or "").strip().casefold()] = req
+    coa_fps_line_rows = []
+    for line in coa_fps_lines:
+        coa_fps_line_rows.append(
+            {
+                "line": line,
+                "req": coa_req_by_name.get((line.test_name or "").strip().casefold()),
+            }
+        )
+    coa_all_reqs = list(
+        CustomerCoaRequirement.objects.filter(customer=customer, is_active=True)
+        .select_related("item", "catalog_test")
+        .order_by("item__sku", "test_name")[:200]
+    )
 
     pay_hist = customer_payment_timeliness(customer)
     return render(
@@ -1028,6 +1421,12 @@ def sales_customer_profile(request: HttpRequest, pk: int) -> HttpResponse:
             open_orders=open_orders,
             recent_shipped=recent_shipped,
             all_customer_orders=all_customer_orders,
+            coa_fps_items=coa_fps_items,
+            coa_selected_item=coa_selected_item,
+            coa_fps_lines=coa_fps_lines,
+            coa_fps_line_rows=coa_fps_line_rows,
+            coa_req_by_name=coa_req_by_name,
+            coa_all_reqs=coa_all_reqs,
             glance_contacts=glance_contacts,
             ytd_shipped_total=ytd_shipped_total,
             in_house_total=in_house_total,
@@ -1697,23 +2096,68 @@ def sales_order_update_dates(request: HttpRequest, pk: int) -> HttpResponse:
 @require_http_methods(["GET", "POST"])
 def sales_allocate_order(request: HttpRequest, pk: int) -> HttpResponse:
     so = get_object_or_404(
-        SalesOrder.objects.select_related("customer").prefetch_related("items__item"),
+        SalesOrder.objects.select_related("customer").prefetch_related(
+            "items__item",
+            "items__allocated_lots__lot",
+            "shipments",
+        ),
         pk=pk,
     )
-    if so.status in ("completed", "cancelled", "shipped"):
+    if so.status in ("completed", "cancelled", "shipped", "received"):
         messages.warning(request, f"{so.so_number} cannot be allocated ({so.status}).")
         return redirect("slurp_ui:sales_orders")
+    if so.shipments.filter(fulfillment_status="picked_up").exists():
+        messages.warning(
+            request,
+            f"{so.so_number} already picked up — reverse the shipment before changing lots.",
+        )
+        return redirect("slurp_ui:sales_order_detail", pk=so.id)
+    if any(float(i.quantity_shipped or 0) > 1e-6 for i in so.items.all()):
+        messages.warning(
+            request,
+            f"{so.so_number} has shipped qty — reverse the shipment before changing lots.",
+        )
+        return redirect("slurp_ui:sales_order_detail", pk=so.id)
+
+    ready_shipment = so.shipments.filter(fulfillment_status="ready").order_by("-id").first()
+    is_reallocate = (
+        float(
+            sum(float(i.quantity_allocated or 0) for i in so.items.all())
+        )
+        > 0
+        or so.status in ("allocated", "ready_for_shipment")
+        or bool(ready_shipment)
+    )
 
     line_lot_choices = []
     for line in so.items.all():
         item_type = getattr(line.item, "item_type", "") or ""
+        own_by_lot = {
+            al.lot_id: float(al.quantity_allocated or 0)
+            for al in line.allocated_lots.all()
+            if al.lot_id
+        }
+        picks = [
+            {"lot_id": al.lot_id, "qty": float(al.quantity_allocated or 0)}
+            for al in line.allocated_lots.all()[:3]
+            if al.lot_id
+        ]
+        while len(picks) < 3:
+            picks.append(None)
+
         qs = Lot.objects.filter(quantity_remaining__gt=0).exclude(status="rejected")
         # Same-SKU lots; for distributed, include raw_material lots sharing the SKU
         if item_type == "distributed_item":
             qs = qs.filter(item__sku=line.item.sku)
         else:
             qs = qs.filter(item_id=line.item_id)
-        lots = qs.select_related("item").order_by("-received_date")[:60]
+        lot_ids = set(qs.values_list("pk", flat=True)) | set(own_by_lot.keys())
+        lots = list(
+            Lot.objects.filter(pk__in=lot_ids)
+            .exclude(status="rejected")
+            .select_related("item")
+            .order_by("-received_date")[:60]
+        )
         sellable_rows = []
         raw_rows = []
         if item_type == "distributed_item":
@@ -1728,6 +2172,7 @@ def sales_allocate_order(request: HttpRequest, pk: int) -> HttpResponse:
             repack_out_ids = None
         for lot in lots:
             avail = float(compute_lot_quantity_breakdown(lot)["quantity_available_for_use"])
+            avail += own_by_lot.get(lot.id, 0.0)
             if avail <= 0:
                 continue
             row = {"lot": lot, "available": avail}
@@ -1743,13 +2188,17 @@ def sales_allocate_order(request: HttpRequest, pk: int) -> HttpResponse:
                 "line": line,
                 "lots": sellable_rows,
                 "raw_lots": raw_rows,
+                "picks": picks,
             }
         )
     if request.method == "POST":
         if so.drop_ship:
             try:
                 allocate_sales_order(so, {"items": []})
-                messages.success(request, f"Drop-ship {so.so_number} marked ready (virtual allocation).")
+                msg = f"Drop-ship {so.so_number} marked allocated (virtual)."
+                if ready_shipment:
+                    msg += " Mark Ready was cleared — Mark Ready again when packing dims are set."
+                messages.success(request, msg)
                 return redirect("slurp_ui:sales_orders")
             except SellFlowError as e:
                 messages.error(request, e.message)
@@ -1793,7 +2242,10 @@ def sales_allocate_order(request: HttpRequest, pk: int) -> HttpResponse:
                         "allow_prerepack_allocation": allow_prerepack,
                     },
                 )
-                messages.success(request, f"Allocations saved for {so.so_number}.")
+                msg = f"Allocations saved for {so.so_number}."
+                if ready_shipment:
+                    msg += " Mark Ready was cleared — Mark Ready again when packing dims are set."
+                messages.success(request, msg)
                 return redirect("slurp_ui:sales_orders")
             except SellFlowError as e:
                 messages.error(request, e.message)
@@ -1807,6 +2259,8 @@ def sales_allocate_order(request: HttpRequest, pk: int) -> HttpResponse:
             active_tab="orders",
             order=so,
             line_lot_choices=line_lot_choices,
+            is_reallocate=is_reallocate,
+            clears_ready=bool(ready_shipment),
             port_status="full",
         ),
     )
@@ -1815,7 +2269,7 @@ def sales_allocate_order(request: HttpRequest, pk: int) -> HttpResponse:
 @login_required
 @require_http_methods(["GET", "POST"])
 def sales_checkout(request: HttpRequest) -> HttpResponse:
-    """List stage-eligible orders, or Mark Ready (pieces/dims) when ?so=<id>."""
+    """Mark Ready form (pieces/dims) when ?so=<id>; else list eligible orders."""
     so_id = request.GET.get("so") or request.POST.get("so_id")
     selected = None
     if so_id:
@@ -1915,7 +2369,7 @@ def sales_checkout(request: HttpRequest) -> HttpResponse:
         request,
         "slurp_ui/sales/checkout.html",
         _sales_ctx(
-            active_tab="checkout",
+            active_tab="orders",
             orders=eligible,
             selected=selected,
             today=today,
@@ -1973,7 +2427,7 @@ def sales_mark_picked_up(request: HttpRequest, pk: int) -> HttpResponse:
 @login_required
 @require_http_methods(["GET", "POST"])
 def sales_combined_checkout(request: HttpRequest) -> HttpResponse:
-    """Select 2+ issued/allocated SOs (same customer + ship-to) and ship together."""
+    """Select 2+ issued/allocated SOs (same customer + ship-to) and Mark Ready together."""
     ready = (
         SalesOrder.objects.filter(status__in=["issued", "allocated"])
         .annotate(total_allocated=Sum("items__quantity_allocated"))
@@ -1993,7 +2447,7 @@ def sales_combined_checkout(request: HttpRequest) -> HttpResponse:
         except ValueError:
             order_ids = []
         if len(order_ids) < 2:
-            messages.error(request, "Select at least two orders for combined checkout.")
+            messages.error(request, "Select at least two orders to Mark Ready together.")
         else:
             try:
                 pieces = int(request.POST.get("pieces") or 1)
@@ -2079,7 +2533,7 @@ def sales_combined_checkout(request: HttpRequest) -> HttpResponse:
         request,
         "slurp_ui/sales/combined_checkout.html",
         _sales_ctx(
-            active_tab="combined-checkout",
+            active_tab="orders",
             orders=eligible,
             today=today,
             port_status="full",
@@ -2192,9 +2646,35 @@ def sales_order_detail(request: HttpRequest, pk: int) -> HttpResponse:
         so.save(update_fields=["status"])
 
     is_staff = bool(request.user.is_staff)
-    can_revert = is_staff and so.status in ("issued", "allocated", "ready_for_shipment")
-    can_cancel = so.status in ("draft", "issued", "allocated", "ready_for_shipment")
-    can_return = any(float(i.quantity_shipped or 0) > 1e-6 for i in so.items.all())
+    has_picked_up = so.shipments.filter(fulfillment_status="picked_up").exists()
+    has_shipped_qty = any(float(i.quantity_shipped or 0) > 1e-6 for i in so.items.all())
+    can_revert = (
+        is_staff
+        and so.status in ("issued", "allocated", "ready_for_shipment")
+        and not has_picked_up
+        and not has_shipped_qty
+    )
+    can_cancel = (
+        so.status in ("draft", "issued", "allocated", "ready_for_shipment")
+        and not has_picked_up
+        and not has_shipped_qty
+    )
+    total_allocated = sum(float(i.quantity_allocated or 0) for i in so.items.all())
+    show_allocate = (
+        so.status in ("issued", "allocated", "ready_for_shipment")
+        and not has_picked_up
+        and not has_shipped_qty
+    )
+    is_reallocate = bool(
+        show_allocate
+        and (total_allocated > 0 or so.status in ("allocated", "ready_for_shipment") or ready_sh)
+    )
+    show_mark_ready = bool(
+        show_allocate
+        and not ready_sh
+        and (so.drop_ship or total_allocated > 0)
+    )
+    can_return = has_shipped_qty
     returnable_invoices = list(
         so.invoices.filter(invoice_type="customer")
         .exclude(status="cancelled")
@@ -2202,6 +2682,13 @@ def sales_order_detail(request: HttpRequest, pk: int) -> HttpResponse:
     )
     credit_memos = list(
         so.invoices.filter(invoice_type="credit").order_by("-invoice_date", "-id")
+    )
+    rma_lot_rows = shipped_lot_quantities_for_so(so) if can_return else []
+    order_rmas = list(
+        CustomerRma.objects.filter(sales_order=so)
+        .select_related("credit_invoice")
+        .prefetch_related("lines__source_lot", "lines__staging_lot")
+        .order_by("-opened_at")
     )
     coa_copies = []
     coa_master_certs = []
@@ -2227,8 +2714,14 @@ def sales_order_detail(request: HttpRequest, pk: int) -> HttpResponse:
             can_revert=can_revert,
             can_cancel=can_cancel,
             can_return=can_return,
+            show_allocate=show_allocate,
+            is_reallocate=is_reallocate,
+            show_mark_ready=show_mark_ready,
+            has_allocation=total_allocated > 0,
             returnable_invoices=returnable_invoices,
             credit_memos=credit_memos,
+            rma_lot_rows=rma_lot_rows,
+            order_rmas=order_rmas,
             coa_copies=coa_copies,
             coa_master_certs=coa_master_certs,
             port_status="full",
@@ -2239,20 +2732,49 @@ def sales_order_detail(request: HttpRequest, pk: int) -> HttpResponse:
 @login_required
 @require_POST
 def sales_create_return(request: HttpRequest, pk: int) -> HttpResponse:
+    """Open customer RMA + credit memo (no restock). Inventory returns via Check-In → Customer return (RMA)."""
     so = get_object_or_404(SalesOrder.objects.prefetch_related("items__item"), pk=pk)
     lines = []
-    for line in so.items.all():
-        raw = (request.POST.get(f"return_qty_{line.id}") or "").strip()
+    for key, val in request.POST.items():
+        if not key.startswith("return_qty_"):
+            continue
+        raw = (val or "").strip()
         if not raw:
             continue
+        # return_qty_{soi_id}_{lot_id}
+        parts = key[len("return_qty_") :].split("_", 1)
+        if len(parts) != 2:
+            messages.error(request, f"Invalid return field {key}.")
+            return redirect("slurp_ui:sales_order_detail", pk=so.id)
         try:
+            soi_id = int(parts[0])
+            lot_id = int(parts[1])
             qty = float(raw)
         except ValueError:
-            messages.error(request, f"Invalid return qty for {line.item.sku}.")
+            messages.error(request, "Invalid return quantity.")
             return redirect("slurp_ui:sales_order_detail", pk=so.id)
         if qty <= 0:
             continue
-        lines.append({"sales_order_item_id": line.id, "quantity": qty})
+        lines.append(
+            {
+                "sales_order_item_id": soi_id,
+                "lot_id": lot_id,
+                "quantity": qty,
+            }
+        )
+    # Whole-SO shortcut: return_all=1 fills available on every lot
+    if not lines and request.POST.get("return_all"):
+        for row in shipped_lot_quantities_for_so(so):
+            avail = float(row["available_qty"] or 0)
+            if avail <= 1e-6:
+                continue
+            lines.append(
+                {
+                    "sales_order_item_id": row["sales_order_item"].id,
+                    "lot_id": row["lot"].id,
+                    "quantity": avail,
+                }
+            )
     source_invoice = None
     inv_id = (request.POST.get("source_invoice_id") or "").strip()
     if inv_id:
@@ -2260,26 +2782,26 @@ def sales_create_return(request: HttpRequest, pk: int) -> HttpResponse:
             so.invoices.filter(invoice_type="customer").exclude(status="cancelled"),
             pk=int(inv_id),
         )
-    restock = bool(request.POST.get("restock"))
     try:
-        result = create_customer_credit_memo(
+        result = open_customer_rma(
             so,
             lines,
             source_invoice=source_invoice,
-            restock=restock,
+            reason=(request.POST.get("reason") or "").strip(),
             notes=(request.POST.get("notes") or "").strip(),
             user=request.user,
         )
+        rma = result["rma"]
         credit = result["credit_invoice"]
         msg = (
-            f"Credit memo {credit.invoice_number} for ${credit.grand_total:,.2f}. "
-            f"Applied ${result['applied_amount']:,.2f} to AR"
+            f"RMA {rma.rma_number} opened. Credit memo {credit.invoice_number} "
+            f"for ${credit.grand_total:,.2f}. Applied ${result['applied_amount']:,.2f} to AR"
         )
         if result["unapplied_amount"] > 0.01:
             msg += f"; ${result['unapplied_amount']:,.2f} unapplied credit on file"
-        if result["restock_lots"]:
-            msg += f"; restocked {len(result['restock_lots'])} lot(s)"
-        messages.success(request, msg + ".")
+        msg += ". Check in returned material under Inventory → Check-in (RMA)."
+        messages.success(request, msg)
+        return redirect("slurp_ui:sales_rma_detail", pk=rma.id)
     except SellFlowError as e:
         messages.error(request, e.message)
     except Exception as e:
@@ -2288,12 +2810,69 @@ def sales_create_return(request: HttpRequest, pk: int) -> HttpResponse:
 
 
 @login_required
+def sales_rma_detail(request: HttpRequest, pk: int) -> HttpResponse:
+    rma = get_object_or_404(
+        CustomerRma.objects.select_related(
+            "sales_order", "customer", "credit_invoice"
+        ).prefetch_related(
+            "lines__source_lot__item",
+            "lines__staging_lot",
+            "lines__sales_order_item__item",
+        ),
+        pk=pk,
+    )
+    from erp_core.models import LotHoldCase
+
+    staging_ids = [
+        ln.staging_lot_id for ln in rma.lines.all() if ln.staging_lot_id
+    ]
+    hold_cases = list(
+        LotHoldCase.objects.filter(lot_id__in=staging_ids)
+        .select_related("lot")
+        .order_by("-opened_at")
+    ) if staging_ids else []
+    return render(
+        request,
+        "slurp_ui/sales/rma_detail.html",
+        _sales_ctx(
+            active_tab="orders",
+            rma=rma,
+            hold_cases=hold_cases,
+            port_status="full",
+        ),
+    )
+
+
+@login_required
+def sales_rma_list(request: HttpRequest) -> HttpResponse:
+    status = (request.GET.get("status") or "").strip()
+    qs = CustomerRma.objects.select_related(
+        "sales_order", "customer", "credit_invoice"
+    ).order_by("-opened_at")
+    if status:
+        qs = qs.filter(status=status)
+    return render(
+        request,
+        "slurp_ui/sales/rma_list.html",
+        _sales_ctx(
+            active_tab="orders",
+            rmas=list(qs[:200]),
+            status_filter=status,
+            port_status="full",
+        ),
+    )
+
+
+@login_required
 @require_POST
 def sales_cancel_order(request: HttpRequest, pk: int) -> HttpResponse:
     so = get_object_or_404(SalesOrder, pk=pk)
     try:
         cancel_sales_order(so, request.user)
-        messages.success(request, f"Cancelled {so.so_number}.")
+        messages.success(
+            request,
+            f"Cancelled {so.so_number}. Lot holds released back to inventory.",
+        )
     except SellFlowError as e:
         messages.error(request, e.message)
     except Exception as e:

@@ -1,0 +1,77 @@
+{% extends "slurp_ui/base.html" %}
+{% block title %}RMA check-in — SLURP{% endblock %}
+{% block content %}
+<div class="modal-page" style="max-width:720px;margin:2rem auto">
+  <h2>RMA check-in</h2>
+  <p style="color:#64748b;font-size:0.9rem;line-height:1.45;margin:0 0 1rem">
+    Receive returned material against an open RMA. Creates a staging lot
+    (<code>lot-R</code>) forced on hold until investigation resolves.
+    Freight is optional (stored on the lot; post to Finance AP/JE separately if needed).
+  </p>
+  <p style="margin:0 0 1rem">
+    <a href="{% url 'slurp_ui:inventory_check_in' %}">PO check-in</a>
+    · <a href="{% url 'slurp_ui:sales_rma_list' %}">RMA list</a>
+  </p>
+
+  <form method="get" style="margin-bottom:1.25rem">
+    <label for="rma">Open RMA</label>
+    <select id="rma" name="rma" onchange="this.form.submit()"
+            style="width:100%;max-width:28rem;padding:0.45rem 0.55rem;display:block;margin-top:0.35rem">
+      <option value="">Select RMA…</option>
+      {% for r in open_rmas %}
+      <option value="{{ r.id }}" {% if selected_rma and selected_rma.id == r.id %}selected{% endif %}>
+        {{ r.rma_number }} — SO {{ r.sales_order.so_number }}
+        ({% if r.customer %}{{ r.customer.name }}{% else %}{{ r.sales_order.customer_name }}{% endif %})
+      </option>
+      {% endfor %}
+    </select>
+  </form>
+
+  {% if selected_rma %}
+  <form method="post">
+    {% csrf_token %}
+    <input type="hidden" name="rma_id" value="{{ selected_rma.id }}" />
+    <table class="data-table" style="margin-bottom:1rem">
+      <thead>
+        <tr><th>SKU</th><th>Source lot</th><th>Open to receive</th><th>Qty this check-in</th></tr>
+      </thead>
+      <tbody>
+        {% for ln in open_lines %}
+        <tr>
+          <td>{{ ln.sales_order_item.item.sku }}</td>
+          <td>{{ ln.source_lot.lot_number }}</td>
+          <td>{{ ln.quantity_open|floatformat:2 }} {{ ln.sales_order_item.item.unit_of_measure }}</td>
+          <td>
+            <input name="qty_{{ ln.id }}" type="number" step="any" min="0"
+                   max="{{ ln.quantity_open }}" value="{{ ln.quantity_open }}"
+                   style="max-width:8rem;padding:0.35rem 0.45rem" />
+          </td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="4">Nothing left to receive on this RMA.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% if open_lines %}
+    <div class="form-group" style="margin-bottom:0.85rem">
+      <label for="freight_actual">Freight (optional)</label>
+      <input id="freight_actual" name="freight_actual" type="number" step="any" min="0"
+             style="width:100%;max-width:10rem;padding:0.45rem 0.55rem" />
+    </div>
+    <div class="form-group" style="margin-bottom:1rem">
+      <label for="notes">Notes</label>
+      <textarea id="notes" name="notes" rows="2" style="width:100%;padding:0.45rem 0.55rem"></textarea>
+    </div>
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">Check in to hold</button>
+      <a class="btn btn-secondary" href="{% url 'slurp_ui:sales_rma_detail' selected_rma.id %}">Cancel</a>
+    </div>
+    {% endif %}
+  </form>
+  {% elif open_rmas %}
+  <p style="color:#64748b">Select an RMA above to continue.</p>
+  {% else %}
+  <p style="color:#64748b">No open RMAs awaiting check-in.</p>
+  {% endif %}
+</div>
+{% endblock %}

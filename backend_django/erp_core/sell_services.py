@@ -237,17 +237,57 @@ def create_sales_order(user, data: dict) -> SalesOrder:
     return sales_order
 
 
+def _assert_so_open_for_allocation_changes(sales_order: SalesOrder) -> None:
+    """Block lot changes after Mark picked up (inventory already depleted)."""
+    if sales_order.status in ("cancelled", "completed", "shipped", "received"):
+        raise SellFlowError(
+            f"Cannot change allocations on a {sales_order.status} order."
+        )
+    if sales_order.shipments.filter(fulfillment_status="picked_up").exists():
+        raise SellFlowError(
+            "Cannot change allocations after Mark picked up. "
+            "Reverse the shipment in order detail if inventory must return."
+        )
+    for item in sales_order.items.all():
+        if float(item.quantity_shipped or 0) > 1e-6:
+            raise SellFlowError(
+                "Cannot change allocations after quantities have shipped. "
+                "Reverse the shipment first."
+            )
+
+
+def clear_ready_shipments(sales_order: SalesOrder) -> int:
+    """
+    Drop Mark Ready packing locks (no inventory depleted yet).
+    Returns how many Ready shipments were removed.
+    """
+    from .shipment_reversal import reverse_shipment
+
+    ready_ids = list(
+        sales_order.shipments.filter(fulfillment_status="ready")
+        .order_by("id")
+        .values_list("id", flat=True)
+    )
+    for sid in ready_ids:
+        reverse_shipment(sid)
+    return len(ready_ids)
+
+
 def allocate_sales_order(sales_order: SalesOrder, data: dict) -> SalesOrder:
     """
     Allocate lots to sales order items.
 
     Creates distributed item lots when raw materials are supplied. Drop-ship orders get a
     virtual (lot-free) allocation and go to ``allocated`` (Mark Ready still required for dims).
+
+    Re-allocate is supported until Mark picked up: clears any Ready packing lock, properly
+    releases prior holds (including distributed create-from-RM), then writes new picks.
     """
     from .inventory_fg_visibility import (
         GATED_PRODUCT_CATEGORIES,
         lot_allowed_for_gated_fg_allocation,
     )
+    from .sales_order_allocation_release import release_sales_order_item_allocations
     from .views import generate_lot_number, log_lot_depletion, log_lot_transaction
 
     payload = _payload_copy(data)
@@ -260,10 +300,13 @@ def allocate_sales_order(sales_order: SalesOrder, data: dict) -> SalesOrder:
         )
     )
 
+    _assert_so_open_for_allocation_changes(sales_order)
+
     if sales_order.drop_ship:
         with transaction.atomic():
+            clear_ready_shipments(sales_order)
             for so_item in sales_order.items.all():
-                SalesOrderLot.objects.filter(sales_order_item=so_item).delete()
+                release_sales_order_item_allocations(so_item)
                 so_item.quantity_allocated = float(so_item.quantity_ordered or 0)
                 so_item.save(update_fields=["quantity_allocated"])
             sales_order.status = "allocated"
@@ -271,6 +314,7 @@ def allocate_sales_order(sales_order: SalesOrder, data: dict) -> SalesOrder:
         return sales_order
 
     with transaction.atomic():
+        clear_ready_shipments(sales_order)
         for item_data in items_data:
             item_id = item_data.get("item_id")
             is_distributed = item_data.get("is_distributed", False)
@@ -284,7 +328,7 @@ def allocate_sales_order(sales_order: SalesOrder, data: dict) -> SalesOrder:
                     f"Sales order item for item {item_id} not found", status_code=404
                 ) from e
 
-            SalesOrderLot.objects.filter(sales_order_item=so_item).delete()
+            release_sales_order_item_allocations(so_item)
             so_item.quantity_allocated = 0.0
 
             if is_distributed and raw_materials:
@@ -1406,10 +1450,14 @@ def revert_sales_order_to_draft(sales_order: SalesOrder, user) -> SalesOrder:
             f"Current status: {sales_order.status}"
         )
 
-    if sales_order.shipments.exists():
+    if sales_order.shipments.filter(fulfillment_status="picked_up").exists():
         raise SellFlowError(
-            "This order has checkout shipments. Reverse each shipment first, then revert to draft."
+            "This order has been picked up. Reverse the shipment first, then revert to draft."
         )
+
+    if sales_order.shipments.filter(fulfillment_status="ready").exists():
+        # Packing lock only — clear so revert can release lots.
+        pass  # cleared in atomic below
 
     for item in sales_order.items.all():
         if float(item.quantity_shipped or 0) > 1e-6:
@@ -1428,6 +1476,7 @@ def revert_sales_order_to_draft(sales_order: SalesOrder, user) -> SalesOrder:
         )
 
     with transaction.atomic():
+        clear_ready_shipments(sales_order)
         release_sales_order_allocations(sales_order)
         Invoice.objects.filter(sales_order=sales_order, status="draft").update(status="cancelled")
         sales_order.status = "draft"
@@ -1439,21 +1488,25 @@ def revert_sales_order_to_draft(sales_order: SalesOrder, user) -> SalesOrder:
 
 def cancel_sales_order(sales_order: SalesOrder, user) -> SalesOrder:
     """
-    Cancel a sales order that has not been completed.
-    Releases allocations; cancels draft invoices. Blocked if shipments / shipped qty /
-    issued invoices remain.
+    Cancel an open sales order any time before Mark picked up.
+
+    Clears Mark Ready packing locks if present, releases lot holds (inventory soft-holds
+    and distributed create-from-RM reverse back to stock), and cancels draft invoices.
+    Blocked after pickup / completed ship, or when a non-draft invoice remains.
     """
     from .sales_order_allocation_release import release_sales_order_allocations
 
     if sales_order.status in ("cancelled",):
         raise SellFlowError("Sales order is already cancelled.")
-    if sales_order.status in ("completed", "shipped"):
+    if sales_order.status in ("completed", "shipped", "received"):
         raise SellFlowError(
-            f"Cannot cancel a {sales_order.status} order. Reverse shipments first if applicable."
+            f"Cannot cancel a {sales_order.status} order. "
+            "After Mark picked up, void the invoice in Finance and Reverse shipment if needed."
         )
-    if sales_order.shipments.exists():
+    if sales_order.shipments.filter(fulfillment_status="picked_up").exists():
         raise SellFlowError(
-            "This order has checkout shipments. Reverse each shipment first, then cancel."
+            "Cannot cancel after Mark picked up. "
+            "Void the invoice in Finance and Reverse shipment to return inventory."
         )
     for item in sales_order.items.all():
         if float(item.quantity_shipped or 0) > 1e-6:
@@ -1470,6 +1523,7 @@ def cancel_sales_order(sales_order: SalesOrder, user) -> SalesOrder:
         )
 
     with transaction.atomic():
+        clear_ready_shipments(sales_order)
         release_sales_order_allocations(sales_order)
         Invoice.objects.filter(sales_order=sales_order, status="draft").update(status="cancelled")
         sales_order.status = "cancelled"

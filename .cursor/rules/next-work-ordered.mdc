@@ -1,0 +1,36 @@
+---
+description: Ordered next work after inventory pack/SO fixes
+alwaysApply: true
+---
+
+# Next work (ordered)
+
+Work **top item first**. After each ships or is confirmed, mark done / remove from this list.
+
+## 1. Test multi-recipe path (verify — do before new Production/Quality work)
+Finished goods alternate recipes (e.g. G3401 from G3403 3% vs G3405 5%). Confirm end-to-end:
+
+1. Quality → FG sheet → add a second named recipe (clone), change ingredient %, save; set default if needed.
+2. Production → Create batch → both recipes appear in the picker; create a ticket from the non-default recipe.
+3. Adjust / close / PDF / batch detail show the **selected recipe**.
+4. Closed lot’s awaiting-micro hold / COA release uses QC from that batch’s recipe when relevant.
+5. Pack variants still work via **match by parent** on a single recipe line (unchanged path).
+
+**Done when:** User confirms for a real dual-strength case (or files bugs). Then cancel `test-variable-formula-next.mdc` too.
+
+## 2. Smoke-test shipped ops features
+One pass each (file bugs if anything fails):
+
+1. **Shelf life extension** — Quality → COA library → Master → Extend shelf life; badge; soft warn on second extension.
+2. **RMA** — open RMA → Inventory Check-In → Customer return (RMA) → hold investigate → accept/scrap.
+3. **Rework** — Production → Rework blend partials → `RW-…` output on hold awaiting micro.
+4. **Lot mass-balance** — Quality → Lot Tracking search → production/SO/PO/RMA/lab/ledger; green/red balance.
+
+## 3. Redesign Cost Master
+Finance → Costing → Cost Master UX/structure redesign (separate from what-if freight/tariff scrubbers unless scoped together).
+
+Touch points to discover at start: Cost Master models/UI under `slurp_ui` finance/costing and `erp_core` cost master fields.
+
+## After / parallel (do not jump ahead of 1–3)
+- What-if freight & tariff adjusters (see `whatif-freight-tariff-next.mdc`) — before other new Finance/what-if work once Cost Master redesign allows it, or immediately after #3 if redesign unblocks it.
+- Training manual: COA / micro catalog section with screenshots (`training-manual-coa-catalog.mdc`).

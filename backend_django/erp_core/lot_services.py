@@ -64,6 +64,115 @@ def checkout_indirect_material(user, lot: Lot, quantity: float, notes: str = "",
     return lot
 
 
+def transfer_to_lab_stock(
+    user,
+    lot: Lot,
+    quantity: float,
+    *,
+    project: str = "",
+    notes: str = "",
+    reference_number: str = "",
+) -> dict:
+    """
+    Move quantity off a tracked lot into untracked lab stock (project / R&D use).
+
+    No destination lot is created. Remaining quantity stays on the same lot; if an
+    even full-pack lot is opened, the leftover naturally appears under Partials via
+    pack breakout.
+    """
+    from .pack_display import lot_pack_breakdown
+    from .views import log_lot_depletion, log_lot_transaction
+
+    if not lot or not getattr(lot, "item_id", None):
+        raise LotFlowError("Lot is required")
+
+    item_type = (getattr(lot.item, "item_type", "") or "").strip()
+    if item_type not in ("finished_good", "distributed_item", "raw_material"):
+        raise LotFlowError(
+            "Lab stock transfers are for finished goods, distributed items, or raw materials. "
+            "Use Indirect Checkout for indirect materials."
+        )
+
+    try:
+        quantity = round(float(quantity), 2)
+    except (TypeError, ValueError):
+        raise LotFlowError("Valid quantity is required")
+    if quantity <= 0:
+        raise LotFlowError("Quantity must be greater than 0")
+
+    max_use = float(compute_lot_quantity_breakdown(lot)["quantity_available_for_use"])
+    if quantity > max_use + 1e-6:
+        raise LotFlowError(
+            f"Insufficient available quantity. Available: {max_use}, Requested: {quantity}"
+        )
+
+    project = (project or "").strip()[:120]
+    notes = (notes or "").strip()
+    reference_number = (reference_number or "").strip()[:100]
+    was_partial = False
+    brk_before = lot_pack_breakdown(lot)
+    if brk_before and brk_before.get("has_remainder"):
+        was_partial = True
+
+    uom = getattr(lot.item, "unit_of_measure", None) or "lbs"
+    note_bits = [f"Lab stock (untracked) — {quantity:g} {uom} from lot {lot.lot_number}"]
+    if project:
+        note_bits.append(f"project: {project}")
+    if notes:
+        note_bits.append(notes)
+    full_notes = " — ".join(note_bits)
+
+    with transaction.atomic():
+        quantity_before = float(lot.quantity_remaining or 0)
+        txn = InventoryTransaction.objects.create(
+            transaction_type="lab_stock",
+            lot=lot,
+            quantity=round(-quantity, 2),
+            notes=full_notes,
+            reference_number=reference_number or (project or None),
+        )
+        log_lot_transaction(
+            lot=lot,
+            quantity_before=quantity_before,
+            quantity_change=-quantity,
+            transaction_type="lab_stock",
+            reference_number=reference_number or project or None,
+            reference_type="lab_stock",
+            transaction_id=txn.id,
+            notes=full_notes,
+        )
+        lot.quantity_remaining = round(quantity_before - quantity, 2)
+        lot.save()
+        if lot.quantity_remaining <= 0:
+            try:
+                log_lot_depletion(
+                    lot=lot,
+                    quantity_before=quantity_before,
+                    quantity_used=quantity,
+                    depletion_method="adjustment",
+                    reference_number=reference_number or project or None,
+                    reference_type="lab_stock",
+                    transaction_id=txn.id,
+                    notes=full_notes,
+                )
+            except Exception:
+                logger.exception("log_lot_depletion failed for lab stock lot %s", lot.lot_number)
+
+    rem = float(lot.quantity_remaining or 0)
+    brk_after = lot_pack_breakdown(lot) if rem > 0 else None
+    now_partial = bool(brk_after and brk_after.get("has_remainder"))
+    return {
+        "lot": lot,
+        "quantity": quantity,
+        "remaining": rem,
+        "was_partial": was_partial,
+        "now_partial": now_partial,
+        "became_partial": (not was_partial) and now_partial and rem > 0,
+        "pack_breakout": (brk_after or {}).get("display") or "",
+        "uom": uom,
+    }
+
+
 def put_on_hold(lot: Lot, quantity: float, *, user=None, reason: str = "") -> Lot:
     try:
         quantity = round(float(quantity), 2)
@@ -103,7 +212,8 @@ def put_on_hold(lot: Lot, quantity: float, *, user=None, reason: str = "") -> Lo
 
 def coa_release_preview(lot: Lot, release_qty: float) -> dict[str, Any]:
     from .coa_logic import coa_required_for_full_release, manufactured_item_types
-    from .models import Formula, ItemCoaTestLine, LotCoaCertificate
+    from .coa_template import coa_test_lines_for_item
+    from .models import LotCoaCertificate
     from .serializers import ItemCoaTestLineSerializer
 
     try:
@@ -125,7 +235,7 @@ def coa_release_preview(lot: Lot, release_qty: float) -> dict[str, Any]:
     lines = []
     if getattr(lot.item, "item_type", None) in manufactured_item_types():
         lines = ItemCoaTestLineSerializer(
-            ItemCoaTestLine.objects.filter(item=lot.item).order_by("sort_order", "id"),
+            coa_test_lines_for_item(lot.item, select_related=None),
             many=True,
         ).data
 
@@ -159,6 +269,7 @@ def release_from_hold(user, lot: Lot, quantity: float, coa_payload: dict | None 
         evaluate_qc_numeric_pass,
     )
     from .coa_pdf_html import save_coa_pdf_to_certificate
+    from .coa_template import coa_test_lines_for_item
     from .models import Formula, ItemCoaTestLine, LotCoaCertificate, LotCoaLineResult
 
     try:
@@ -192,7 +303,7 @@ def release_from_hold(user, lot: Lot, quantity: float, coa_payload: dict | None 
                 "This release clears hold on a manufactured lot. Enter micro/QC results. "
                 "Use the release form with COA fields (coa_required)."
             )
-        lines_qs = list(ItemCoaTestLine.objects.filter(item=lot.item).order_by("sort_order", "id"))
+        lines_qs = list(coa_test_lines_for_item(lot.item, select_related=None))
         for row in coa_payload.get("line_results") or []:
             try:
                 lid = int(row.get("item_line_id"))

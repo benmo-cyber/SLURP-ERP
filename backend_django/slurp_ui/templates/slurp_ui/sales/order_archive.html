@@ -1,0 +1,111 @@
+{% extends "slurp_ui/base_module.html" %}
+{% load static %}
+{% block title %}Order archive — SLURP{% endblock %}
+{% block module_title %}Order archive{% endblock %}
+{% block extra_css %}
+<link rel="stylesheet" href="{% static 'slurp_ui/css/ProductionArchive.css' %}?v=20260922a" />
+{% endblock %}
+{% block header_actions %}
+  <a href="{% url 'slurp_ui:sales_orders' %}" class="hs-btn">Order Workqueue</a>
+{% endblock %}
+{% block main %}
+<div class="prod-arch">
+  <div class="prod-arch-toolbar">
+    <form method="get" class="prod-arch-search">
+      {% if year %}<input type="hidden" name="year" value="{{ year }}" />{% endif %}
+      {% if month %}<input type="hidden" name="month" value="{{ month }}" />{% endif %}
+      <div class="form-row" style="min-width:14rem;flex:1">
+        <label for="q">Search</label>
+        <input id="q" name="q" value="{{ q }}" placeholder="SO #, customer, PO, notes…" />
+      </div>
+      <button type="submit" class="btn btn-primary">Search</button>
+      {% if q or year or month %}
+      <a class="btn btn-secondary" href="{% url 'slurp_ui:sales_order_archive' %}">Clear</a>
+      {% endif %}
+    </form>
+  </div>
+
+  <nav class="prod-arch-crumbs" aria-label="Archive path">
+    {% for c in crumbs %}
+      {% if not forloop.first %}<span class="sep">/</span>{% endif %}
+      {% if c.url_params is not None %}
+        <a href="?{% for k,v in c.url_params.items %}{{ k }}={{ v|urlencode }}{% if not forloop.last %}&amp;{% endif %}{% endfor %}">{{ c.label }}</a>
+      {% else %}
+        <span>{{ c.label }}</span>
+      {% endif %}
+    {% endfor %}
+  </nav>
+
+  <p class="prod-arch-hint">
+    {% if folder_level == 'years' %}
+      Open a year, then a month. Filed by actual ship / pickup date (else order date).
+    {% elif folder_level == 'months' %}
+      Open a month to see fulfilled sales orders.
+    {% elif q %}
+      {{ result_count }} result{{ result_count|pluralize }} for “{{ q }}”.
+    {% else %}
+      {{ result_count }} order{{ result_count|pluralize }} in this folder.
+    {% endif %}
+  </p>
+
+  {% if folders %}
+  <div class="prod-arch-folders" role="list">
+    {% for f in folders %}
+    <a class="prod-arch-folder" role="listitem"
+       href="?{% for k,v in f.url_params.items %}{{ k }}={{ v|urlencode }}{% if not forloop.last %}&amp;{% endif %}{% endfor %}">
+      <span class="prod-arch-folder-icon" aria-hidden="true"></span>
+      <span class="prod-arch-folder-label">{{ f.label }}</span>
+      {% if f.sublabel %}<span class="prod-arch-folder-sub">{{ f.sublabel }}</span>{% endif %}
+      <span class="prod-arch-folder-count">{{ f.count }} order{{ f.count|pluralize }}</span>
+    </a>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  {% if folder_level == 'list' %}
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>SO #</th>
+        <th>Customer</th>
+        <th>Status</th>
+        <th>Ship / pickup</th>
+        <th>Cust. PO</th>
+        <th>Shipped</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for o in orders %}
+      <tr>
+        <td>
+          <a class="hs-entity-name" href="{% url 'slurp_ui:sales_order_detail' o.id %}">{{ o.so_number }}</a>
+          {% if o.drop_ship %}<span class="hs-badge warn">DS</span>{% endif %}
+        </td>
+        <td>
+          {% if o.customer_id %}
+          <a href="{% url 'slurp_ui:sales_customer_profile' o.customer_id %}?tab=orders">{{ o.customer_name }}</a>
+          {% else %}
+          {{ o.customer_name }}
+          {% endif %}
+        </td>
+        <td>{{ o.status }}</td>
+        <td>
+          {% if o.actual_ship_date %}{{ o.actual_ship_date|date:"Y-m-d" }}
+          {% else %}{{ o.order_date|date:"Y-m-d" }}{% endif %}
+        </td>
+        <td>{{ o.customer_reference_number|default:"—" }}</td>
+        <td>{{ o.total_shipped|default_if_none:0|floatformat:2 }}</td>
+        <td>
+          <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:sales_order_detail' o.id %}">Open</a>
+          <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:sales_order_detail' o.id %}#rma">RMA</a>
+        </td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="7"><div class="hs-empty">No fulfilled orders in this folder.</div></td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</div>
+{% endblock %}

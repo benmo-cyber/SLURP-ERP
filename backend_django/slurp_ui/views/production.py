@@ -21,9 +21,21 @@ from erp_core.make_services import (
     reverse_batch_ticket,
 )
 from erp_core.mass_quantity import LBS_PER_KG, convert_mass_uom, normalize_mass_quantity
-from erp_core.models import CriticalControlPoint, Formula, Item, Lot, ProductionBatch
+from erp_core.models import (
+    CriticalControlPoint,
+    Formula,
+    Item,
+    ItemPreferredPackaging,
+    Lot,
+    ProductionBatch,
+)
 from erp_core.pack_display import format_pack_label, is_partial_lot, resolve_pack_size
-from erp_core.formula_ingredient import lots_for_formula_ingredient, skus_for_formula_ingredient
+from erp_core.packaging_suggest import suggested_containers_for_item
+from erp_core.formula_ingredient import (
+    lots_for_formula_ingredient,
+    skus_for_formula_ingredient,
+    skus_for_parent_code,
+)
 from erp_core.formula_resolve import formula_for_batch, formulas_for_fg, recipe_label
 from erp_core.reversal_guard import build_batch_reversal_plan
 from erp_core.sku_family import parse_sku_family
@@ -272,6 +284,93 @@ def _packaging_lot_rows(limit: int = 80) -> list[dict]:
             }
         )
     return rows
+
+
+def _lots_for_packaging_item(packaging_item: Item, limit: int = 40) -> list[dict]:
+    """Open lots for one preferred packaging SKU."""
+    lots = (
+        Lot.objects.filter(
+            item=packaging_item,
+            quantity_remaining__gt=0,
+        )
+        .exclude(status="rejected")
+        .select_related("item")
+        .order_by("-received_date")[:limit]
+    )
+    rows = []
+    for lot in lots:
+        avail = float(compute_lot_quantity_breakdown(lot)["quantity_available_for_use"])
+        if avail <= 0:
+            continue
+        rows.append(
+            {
+                "lot": lot,
+                "available": avail,
+                "uom": (lot.item.unit_of_measure or "ea"),
+            }
+        )
+    return rows
+
+
+def _preferred_packaging_rows(fg: Item, display_uom: str, batch_qty: float = 0.0) -> list[dict]:
+    """Preferred packaging lines with lots and optional suggested EA qty."""
+    suggest = suggested_containers_for_item(fg, batch_qty, display_uom)
+    suggested_n = suggest.get("suggested") if suggest.get("ok") else None
+    prefs = list(
+        ItemPreferredPackaging.objects.filter(finished_good=fg)
+        .select_related("packaging_item")
+        .order_by("sort_order", "id")
+    )
+    rows = []
+    for pref in prefs:
+        lots = _lots_for_packaging_item(pref.packaging_item)
+        prefill = int(suggested_n) if pref.suggest_qty and suggested_n else None
+        rows.append(
+            {
+                "pref": pref,
+                "packaging_item": pref.packaging_item,
+                "label": (pref.label or "").strip() or "Packaging",
+                "suggest_qty": bool(pref.suggest_qty),
+                "suggested": prefill,
+                "lots": lots,
+            }
+        )
+    return rows
+
+
+def _parse_production_packaging_post(request: HttpRequest) -> list[dict]:
+    """Build indirect_materials list from pkg_qty_* / pkg_other_qty_* fields."""
+    out: list[dict] = []
+    for key, raw_qty in request.POST.items():
+        if not raw_qty:
+            continue
+        lot_id = None
+        if key.startswith("pkg_qty_"):
+            # pkg_qty_{prefId}_{lotId}
+            parts = key.split("_")
+            if len(parts) != 4:
+                continue
+            try:
+                lot_id = int(parts[3])
+                q = float(raw_qty)
+            except (TypeError, ValueError):
+                continue
+        elif key.startswith("pkg_other_qty_"):
+            # pkg_other_qty_{lotId}
+            parts = key.split("_")
+            if len(parts) != 4:
+                continue
+            try:
+                lot_id = int(parts[3])
+                q = float(raw_qty)
+            except (TypeError, ValueError):
+                continue
+        else:
+            continue
+        if q <= 0 or lot_id is None:
+            continue
+        out.append({"lot_id": lot_id, "quantity_used": q})
+    return out
 
 
 def _repack_lot_rows(item: Item, display_uom: str):
@@ -724,7 +823,10 @@ def production_archive_batch(request: HttpRequest, pk: int) -> HttpResponse:
         "Repack Archive" if batch.batch_type == "repack" else "Batch Archive"
     )
     if batch.status != "closed":
-        messages.error(request, "Only closed batches can be archived.")
+        messages.error(
+            request,
+            "You must close the batch ticket before archiving.",
+        )
         return redirect(next_url) if next_url else redirect(
             "slurp_ui:production_batch_detail", pk=pk
         )
@@ -967,13 +1069,26 @@ def production_create_batch(request: HttpRequest) -> HttpResponse:
                 selected_fg_id = ""
 
         if selected_fg:
-            formula_choices = list(formulas_for_fg(selected_fg.id))
+            from django.db.models import Count
+
+            formula_choices = list(
+                formulas_for_fg(selected_fg.id)
+                .annotate(_ing_n=Count("ingredients"))
+                .filter(_ing_n__gt=0)
+            )
             if formula_id:
                 selected_formula = next(
                     (f for f in formula_choices if str(f.id) == str(formula_id)), None
                 )
-            elif len(formula_choices) == 1:
+            # Single usable formula: always lock it (no alternate picker)
+            if len(formula_choices) == 1:
                 selected_formula = formula_choices[0]
+            elif selected_formula is None and len(formula_choices) > 1:
+                # Prefer default among usable formulas
+                selected_formula = next(
+                    (f for f in formula_choices if f.is_default),
+                    formula_choices[0],
+                )
             if selected_formula is not None:
                 selected_formula = (
                     Formula.objects.filter(pk=selected_formula.id)
@@ -1094,9 +1209,14 @@ def production_create_batch(request: HttpRequest) -> HttpResponse:
     work_in_partial_lots = []
     if selected_formula:
         fg = selected_formula.finished_good
+        parent = _item_parent_code(fg)
+        family_skus = skus_for_parent_code(parent) if parent else []
+        if not family_skus and fg:
+            family_skus = [(fg.sku or "").strip()]
+        family_skus = [s for s in family_skus if s]
         fg_lots = (
             Lot.objects.filter(
-                item=fg,
+                item__sku__in=family_skus,
                 status="accepted",
                 quantity_remaining__gt=0,
             )
@@ -1118,6 +1238,7 @@ def production_create_batch(request: HttpRequest) -> HttpResponse:
                         "pack_label": format_pack_label(item=lot.item, lot=lot),
                         "pack_qty": pack_qty,
                         "pack_uom": pack_uom,
+                        "same_sku": bool(fg and lot.item_id == fg.id),
                     }
                 )
 
@@ -1170,6 +1291,8 @@ def production_create_batch(request: HttpRequest) -> HttpResponse:
         repack_lot_rows = _repack_lot_rows(selected_repack_item, display_uom)
 
     packaging_lot_rows = []
+    preferred_packaging_rows = []
+    packaging_suggest = None
     target_pack_qty = None
     target_pack_uom = None
     target_pack_label = ""
@@ -1177,11 +1300,22 @@ def production_create_batch(request: HttpRequest) -> HttpResponse:
     if batch_type == "repack" and selected_repack_item and selected_repack_target:
         if not is_relabel:
             packaging_lot_rows = _packaging_lot_rows()
+            # Seed preferred packaging from target FPS when available
+            preferred_packaging_rows = _preferred_packaging_rows(
+                selected_repack_target, display_uom, batch_qty=0.0
+            )
             ccp_choices = list(CriticalControlPoint.objects.all())
         target_pack_qty, target_pack_uom = resolve_pack_size(item=selected_repack_target)
         target_pack_label = format_pack_label(item=selected_repack_target)
+    elif batch_type == "production" and selected_fg:
+        packaging_lot_rows = _packaging_lot_rows()
+        preferred_packaging_rows = _preferred_packaging_rows(
+            selected_fg, display_uom, batch_qty=0.0
+        )
+        packaging_suggest = suggested_containers_for_item(selected_fg, 0.0, display_uom)
 
     if request.method == "POST":
+        packaging_needs_confirm = False
         if batch_type == "repack" and selected_repack_item:
             target_item = selected_repack_target or selected_repack_item
             is_relabel_post = bool(
@@ -1400,48 +1534,82 @@ def production_create_batch(request: HttpRequest) -> HttpResponse:
                         qty_lbs += _to_lbs(float(row["quantity_used"]), uom)
                     qty_lbs = normalize_mass_quantity(qty_lbs)
 
-                prod_date = (request.POST.get("production_date") or "").strip()
-                status = "in_progress"
-                if prod_date:
+                indirect_materials = _parse_production_packaging_post(request)
+                packaging_warned = (request.POST.get("packaging_warned") or "").strip() == "1"
+                if not indirect_materials and not packaging_warned:
+                    messages.warning(
+                        request,
+                        "No packaging selected. Add packaging lots, or create again to confirm "
+                        "a batch with no packaging.",
+                    )
+                    # Re-build preferred rows with suggest qty from this batch size
+                    preferred_packaging_rows = _preferred_packaging_rows(
+                        selected_formula.finished_good,
+                        display_uom,
+                        batch_qty=float(
+                            convert_mass_uom(qty_lbs, "lbs", display_uom)
+                            if display_uom in ("lbs", "kg")
+                            else qty_lbs
+                        ),
+                    )
+                    packaging_suggest = suggested_containers_for_item(
+                        selected_formula.finished_good,
+                        float(
+                            convert_mass_uom(qty_lbs, "lbs", display_uom)
+                            if display_uom in ("lbs", "kg")
+                            else qty_lbs
+                        ),
+                        display_uom,
+                    )
+                    packaging_lot_rows = _packaging_lot_rows()
+                    # Fall through to re-render with packaging_needs_confirm
+                    packaging_needs_confirm = True
+                else:
+                    packaging_needs_confirm = False
+                    prod_date = (request.POST.get("production_date") or "").strip()
+                    status = "in_progress"
+                    if prod_date:
+                        try:
+                            from datetime import date as date_cls
+
+                            d = date_cls.fromisoformat(prod_date)
+                            if d > timezone.localdate():
+                                status = "scheduled"
+                        except ValueError:
+                            pass
+
+                    work_in_partials = []
+                    for pid in request.POST.getlist("work_in_partial"):
+                        try:
+                            work_in_partials.append({"lot_id": int(pid)})
+                        except (TypeError, ValueError):
+                            continue
+
+                    payload = {
+                        "batch_type": "production",
+                        "finished_good_item_id": selected_formula.finished_good_id,
+                        "formula_id": selected_formula.id,
+                        "quantity_produced": qty_lbs,
+                        "production_date": prod_date or timezone.localdate().isoformat(),
+                        "status": status,
+                        "batch_ticket_mass_unit": display_uom,
+                        "notes": request.POST.get("notes") or "",
+                        "inputs": inputs,
+                        "indirect_materials": indirect_materials,
+                        "work_in_partials": work_in_partials,
+                    }
                     try:
-                        from datetime import date as date_cls
-
-                        d = date_cls.fromisoformat(prod_date)
-                        if d > timezone.localdate():
-                            status = "scheduled"
-                    except ValueError:
-                        pass
-
-                work_in_partials = []
-                for pid in request.POST.getlist("work_in_partial"):
-                    try:
-                        work_in_partials.append({"lot_id": int(pid)})
-                    except (TypeError, ValueError):
-                        continue
-
-                payload = {
-                    "batch_type": "production",
-                    "finished_good_item_id": selected_formula.finished_good_id,
-                    "formula_id": selected_formula.id,
-                    "quantity_produced": qty_lbs,
-                    "production_date": prod_date or timezone.localdate().isoformat(),
-                    "status": status,
-                    "batch_ticket_mass_unit": display_uom,
-                    "notes": request.POST.get("notes") or "",
-                    "inputs": inputs,
-                    "indirect_materials": [],
-                    "work_in_partials": work_in_partials,
-                }
-                try:
-                    batch = create_batch_ticket(request.user, payload)
-                    messages.success(request, f"Created batch {batch.batch_number}.")
-                    return redirect("slurp_ui:production_batch_detail", pk=batch.id)
-                except MakeFlowError as e:
-                    messages.error(request, e.message)
-                except Exception as e:
-                    messages.error(request, str(e))
+                        batch = create_batch_ticket(request.user, payload)
+                        messages.success(request, f"Created batch {batch.batch_number}.")
+                        return redirect("slurp_ui:production_batch_detail", pk=batch.id)
+                    except MakeFlowError as e:
+                        messages.error(request, e.message)
+                    except Exception as e:
+                        messages.error(request, str(e))
 
     today = timezone.localdate().isoformat()
+    if "packaging_needs_confirm" not in locals():
+        packaging_needs_confirm = False
     return render(
         request,
         "slurp_ui/production/create_batch.html",
@@ -1456,6 +1624,9 @@ def production_create_batch(request: HttpRequest) -> HttpResponse:
             selected_fg=selected_fg,
             selected_repack_target=selected_repack_target,
             packaging_lot_rows=packaging_lot_rows,
+            preferred_packaging_rows=preferred_packaging_rows,
+            packaging_suggest=packaging_suggest,
+            packaging_needs_confirm=packaging_needs_confirm,
             target_pack_qty=target_pack_qty,
             target_pack_uom=target_pack_uom,
             target_pack_label=target_pack_label,
@@ -2094,3 +2265,119 @@ def production_reverse_batch(request: HttpRequest, pk: int) -> HttpResponse:
     except Exception as e:
         messages.error(request, str(e))
     return redirect(_dash_url_name(batch.batch_type))
+
+
+@login_required
+@require_http_methods(["GET", "POST"])
+def production_rework(request: HttpRequest) -> HttpResponse:
+    """Blend parent-family FG partials (+ optional RM strength adjust) into a new on-hold lot."""
+    from erp_core.formula_ingredient import parent_code_for_item
+    from erp_core.pack_display import format_pack_label, resolve_pack_size
+    from erp_core.rework_services import (
+        ReworkError,
+        execute_rework,
+        partial_lots_for_parent,
+    )
+
+    fg_choices = list(
+        Item.objects.filter(item_type="finished_good").order_by("sku")[:500]
+    )
+    target_id = request.GET.get("item") or request.POST.get("target_item_id")
+    target = None
+    if target_id:
+        target = Item.objects.filter(
+            pk=target_id, item_type__in=("finished_good", "distributed_item")
+        ).first()
+
+    parent = parent_code_for_item(target) if target else ""
+    partial_rows = []
+    if parent:
+        for lot in partial_lots_for_parent(parent):
+            avail = float(compute_lot_quantity_breakdown(lot)["quantity_available_for_use"])
+            partial_rows.append(
+                {
+                    "lot": lot,
+                    "available": avail,
+                    "uom": lot.item.unit_of_measure or "lbs",
+                    "pack_label": format_pack_label(item=lot.item, lot=lot),
+                    "same_sku": bool(target and lot.item_id == target.id),
+                }
+            )
+
+    adjust_lots = []
+    if target:
+        rms = (
+            Lot.objects.filter(
+                item__item_type="raw_material",
+                status="accepted",
+                quantity_remaining__gt=0,
+            )
+            .select_related("item")
+            .order_by("item__sku", "-received_date")[:80]
+        )
+        for lot in rms:
+            avail = float(compute_lot_quantity_breakdown(lot)["quantity_available_for_use"])
+            if avail > 1e-6:
+                adjust_lots.append({"lot": lot, "available": avail})
+
+    if request.method == "POST" and target:
+        try:
+            partial_lines = []
+            for row in partial_rows:
+                lid = row["lot"].id
+                if request.POST.get(f"use_partial_{lid}"):
+                    raw_qty = (request.POST.get(f"partial_qty_{lid}") or "").strip()
+                    partial_lines.append(
+                        {
+                            "lot_id": lid,
+                            "quantity": float(raw_qty) if raw_qty else row["available"],
+                        }
+                    )
+            adjust_lines = []
+            for key, val in request.POST.items():
+                if not key.startswith("adjust_qty_"):
+                    continue
+                raw = (val or "").strip()
+                if not raw:
+                    continue
+                try:
+                    lid = int(key[len("adjust_qty_") :])
+                    qty = float(raw)
+                except ValueError:
+                    continue
+                if qty > 0:
+                    adjust_lines.append({"lot_id": lid, "quantity": qty})
+            result = execute_rework(
+                target_item=target,
+                partial_lines=partial_lines,
+                adjust_lines=adjust_lines,
+                notes=(request.POST.get("notes") or "").strip(),
+                user=request.user,
+            )
+            out = result["output_lot"]
+            messages.success(
+                request,
+                f"Rework {result['batch'].batch_number}: {result['quantity']:.2f} "
+                f"→ lot {out.lot_number} on hold awaiting micro.",
+            )
+            return redirect("slurp_ui:inventory_lot_detail", pk=out.id)
+        except ReworkError as e:
+            messages.error(request, e.message)
+        except Exception as e:
+            messages.error(request, str(e))
+
+    return render(
+        request,
+        "slurp_ui/production/rework.html",
+        {
+            "module": "production",
+            "sidebar_nav": PRODUCTION_NAV,
+            "active_tab": "rework",
+            "fg_choices": fg_choices,
+            "target": target,
+            "parent": parent,
+            "partial_rows": partial_rows,
+            "adjust_lots": adjust_lots,
+            "port_status": "full",
+        },
+    )

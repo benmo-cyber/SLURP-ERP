@@ -1,0 +1,44 @@
+{% extends "slurp_ui/base_module.html" %}
+{% block title %}RMAs — SLURP{% endblock %}
+{% block module_title %}Customer RMAs{% endblock %}
+{% block header_actions %}
+  <a href="{% url 'slurp_ui:sales_order_archive' %}" class="hs-btn">Order archive</a>
+{% endblock %}
+{% block main %}
+<div class="hs-bleed" style="padding:1.25rem 1.5rem 2rem">
+  <form method="get" class="hs-toolbar" style="margin-bottom:1rem">
+    <select name="status" onchange="this.form.submit()">
+      <option value="">All statuses</option>
+      <option value="open" {% if status_filter == 'open' %}selected{% endif %}>Open</option>
+      <option value="partially_received" {% if status_filter == 'partially_received' %}selected{% endif %}>Partially received</option>
+      <option value="received" {% if status_filter == 'received' %}selected{% endif %}>Received</option>
+      <option value="closed" {% if status_filter == 'closed' %}selected{% endif %}>Closed</option>
+      <option value="cancelled" {% if status_filter == 'cancelled' %}selected{% endif %}>Cancelled</option>
+    </select>
+  </form>
+  <div class="hs-card">
+    <div class="hs-card-body tight">
+      <table class="hs-table">
+        <thead>
+          <tr><th>RMA</th><th>SO</th><th>Customer</th><th>Status</th><th>Opened</th><th>Credit</th><th></th></tr>
+        </thead>
+        <tbody>
+          {% for r in rmas %}
+          <tr>
+            <td>{{ r.rma_number }}</td>
+            <td><a href="{% url 'slurp_ui:sales_order_detail' r.sales_order_id %}">{{ r.sales_order.so_number }}</a></td>
+            <td>{% if r.customer %}{{ r.customer.name }}{% else %}{{ r.sales_order.customer_name }}{% endif %}</td>
+            <td>{{ r.get_status_display }}</td>
+            <td>{{ r.opened_at|date:"Y-m-d" }}</td>
+            <td>{% if r.credit_invoice %}{{ r.credit_invoice.invoice_number }}{% else %}—{% endif %}</td>
+            <td><a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:sales_rma_detail' r.id %}">Open</a></td>
+          </tr>
+          {% empty %}
+          <tr><td colspan="7"><div class="hs-empty">No RMAs yet.</div></td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}

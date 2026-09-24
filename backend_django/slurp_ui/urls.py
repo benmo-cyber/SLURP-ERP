@@ -57,6 +57,11 @@ urlpatterns = [
     path("inventory/logs/", views.inventory_logs, name="inventory_logs"),
     path("inventory/check-in/", views.inventory_check_in, name="inventory_check_in"),
     path(
+        "inventory/rma-check-in/",
+        views.inventory_rma_check_in,
+        name="inventory_rma_check_in",
+    ),
+    path(
         "inventory/material-activity/",
         views.inventory_material_activity,
         name="inventory_material_activity",
@@ -108,6 +113,16 @@ urlpatterns = [
         name="inventory_hold_case",
     ),
     path(
+        "inventory/lab-stock/",
+        views.inventory_lab_stock,
+        name="inventory_lab_stock",
+    ),
+    path(
+        "inventory/lots/<int:pk>/lab-stock/",
+        views.inventory_lab_stock,
+        name="inventory_lot_lab_stock",
+    ),
+    path(
         "inventory/lots/<int:pk>/",
         views.inventory_lot_detail,
         name="inventory_lot_detail",
@@ -116,6 +131,11 @@ urlpatterns = [
         "inventory/lots/<int:pk>/dates/",
         views.inventory_lot_update_dates,
         name="inventory_lot_update_dates",
+    ),
+    path(
+        "inventory/lots/<int:pk>/extend-shelf-life/",
+        views.inventory_lot_extend_shelf_life,
+        name="inventory_lot_extend_shelf_life",
     ),
     path(
         "inventory/lots/<int:pk>/supplier-coa/",
@@ -145,6 +165,7 @@ urlpatterns = [
     # Sales
     path("sales/", views.sales_crm, name="sales"),
     path("sales/orders/", views.sales_orders, name="sales_orders"),
+    path("sales/orders/archive/", views.sales_order_archive, name="sales_order_archive"),
     path("sales/calendar/", views.sales_calendar, name="sales_calendar"),
     path("sales/kpis/", views.sales_kpis, name="sales_kpis"),
     path("sales/customers/", views.sales_customers, name="sales_customers"),
@@ -275,6 +296,8 @@ urlpatterns = [
         views.sales_create_return,
         name="sales_create_return",
     ),
+    path("sales/rmas/", views.sales_rma_list, name="sales_rma_list"),
+    path("sales/rmas/<int:pk>/", views.sales_rma_detail, name="sales_rma_detail"),
     path(
         "sales/shipments/<int:pk>/reverse/",
         views.sales_reverse_shipment,
@@ -437,6 +460,11 @@ urlpatterns = [
         name="production_create_batch",
     ),
     path(
+        "production/rework/",
+        views.production_rework,
+        name="production_rework",
+    ),
+    path(
         "production/<int:pk>/",
         views.production_batch_detail,
         name="production_batch_detail",
@@ -540,9 +568,19 @@ urlpatterns = [
         name="quality_unlink_finished_good",
     ),
     path(
+        "quality/finished-goods/family/<str:parent_code>/",
+        views.quality_fps_family,
+        name="quality_fps_family",
+    ),
+    path(
         "quality/finished-goods/<int:pk>/coa-tests/",
         views.quality_item_coa_test_lines,
         name="quality_item_coa_test_lines",
+    ),
+    path(
+        "quality/finished-goods/<int:pk>/example-coa/",
+        views.quality_item_example_coa_pdf,
+        name="quality_item_example_coa_pdf",
     ),
     path(
         "quality/finished-goods/<int:pk>/",

@@ -94,6 +94,8 @@
         <span class="btn btn-secondary" style="padding:0.35rem 0.7rem;font-size:0.85rem;opacity:0.55;cursor:not-allowed"
               title="{{ row.close_blocked_reason }}">Close</span>
         {% endif %}
+        <button type="button" class="btn btn-secondary" style="padding:0.35rem 0.7rem;font-size:0.85rem"
+                onclick="alert('You must close the batch ticket before archiving.');">Archive</button>
         {% else %}
         <form method="post" action="{% url 'slurp_ui:production_archive_batch' b.id %}" style="display:inline">
           {% csrf_token %}

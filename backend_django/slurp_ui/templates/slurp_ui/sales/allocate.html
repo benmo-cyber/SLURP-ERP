@@ -1,6 +1,6 @@
 {% extends "slurp_ui/base_module.html" %}
-{% block title %}Allocate {{ order.so_number }} — SLURP{% endblock %}
-{% block module_title %}Allocate{% endblock %}
+{% block title %}{% if is_reallocate %}Re-allocate{% else %}Allocate{% endif %} {{ order.so_number }} — SLURP{% endblock %}
+{% block module_title %}{% if is_reallocate %}Re-allocate{% else %}Allocate{% endif %}{% endblock %}
 {% block header_actions %}
   <a href="{% url 'slurp_ui:sales_order_detail' order.id %}" class="hs-btn">Order detail</a>
   <a href="{% url 'slurp_ui:sales_orders' %}" class="hs-btn">Workqueue</a>
@@ -18,6 +18,15 @@
         {% if order.drop_ship %}<div class="hs-prop"><span class="k">Type</span><span class="v">Drop ship</span></div>{% endif %}
         {% if order.customer_reference_number %}<div class="hs-prop"><span class="k">Customer PO</span><span class="v">{{ order.customer_reference_number }}</span></div>{% endif %}
       </div>
+      {% if clears_ready %}
+      <p class="hs-section-note" style="margin-top:0.75rem">
+        This order is Mark Ready. Saving allocations clears packing lock — Mark Ready again after lot changes.
+      </p>
+      {% elif is_reallocate %}
+      <p class="hs-section-note" style="margin-top:0.75rem">
+        Re-allocate replaces current lot holds. Soft holds return to available inventory for any lots you drop.
+      </p>
+      {% endif %}
     </div>
   </div>
 
@@ -29,8 +38,8 @@
       <form method="post">
         {% csrf_token %}
         <div class="hs-form-actions">
-          <button type="submit" class="hs-btn hs-btn-primary">Confirm drop-ship allocation</button>
-          <a class="hs-btn" href="{% url 'slurp_ui:sales_orders' %}">Cancel</a>
+          <button type="submit" class="hs-btn hs-btn-primary">{% if is_reallocate %}Save drop-ship allocation{% else %}Confirm drop-ship allocation{% endif %}</button>
+          <a class="hs-btn" href="{% url 'slurp_ui:sales_orders' %}">Back</a>
         </div>
       </form>
     </div>
@@ -69,10 +78,10 @@
           Showing closed-repack (sellable) lots only. Check above or “Allow raw / pre-repack” to use vendor stock.
         </p>
         {% endif %}
-        {% for slot in "012" %}
+        {% for pick in row.picks %}
         <div class="hs-form-grid" style="margin-top:0.5rem">
           <div class="form-row" style="margin:0">
-            <label>Lot {% if forloop.counter0 %}#{{ forloop.counter }}{% endif %}</label>
+            <label>Lot {% if not forloop.first %}#{{ forloop.counter }}{% endif %}</label>
             <select name="lot_{{ row.line.id }}_{{ forloop.counter0 }}"
                     class="alloc-lot-select"
                     data-line="{{ row.line.id }}"
@@ -80,7 +89,7 @@
                     data-raw='[{% for lr in row.raw_lots %}{"id":{{ lr.lot.id }},"label":"{{ lr.lot.lot_number|escapejs }} — avail {{ lr.available|floatformat:2 }} {{ row.line.item.unit_of_measure|escapejs }} ({{ lr.lot.status|escapejs }})"}{% if not forloop.last %},{% endif %}{% endfor %}]'>
               <option value="">— {% if forloop.first %}Select lot{% else %}Optional{% endif %} —</option>
               {% for lr in row.lots %}
-              <option value="{{ lr.lot.id }}">
+              <option value="{{ lr.lot.id }}"{% if pick and pick.lot_id == lr.lot.id %} selected{% endif %}>
                 {{ lr.lot.lot_number }} — avail {{ lr.available|floatformat:2 }} {{ row.line.item.unit_of_measure }} ({{ lr.lot.status }})
               </option>
               {% empty %}
@@ -95,7 +104,7 @@
           <div class="form-row" style="margin:0">
             <label>Qty</label>
             <input name="qty_{{ row.line.id }}_{{ forloop.counter0 }}" type="number" step="any" min="0"
-                   {% if forloop.first %}value="{{ row.line.quantity_ordered|floatformat:2 }}"{% endif %} />
+                   value="{% if pick %}{{ pick.qty|floatformat:2 }}{% elif forloop.first %}{{ row.line.quantity_ordered|floatformat:2 }}{% endif %}" />
           </div>
         </div>
         {% endfor %}
@@ -106,8 +115,8 @@
     {% endfor %}
 
     <div class="hs-form-actions">
-      <button type="submit" class="hs-btn hs-btn-primary">Save allocations</button>
-      <a class="hs-btn" href="{% url 'slurp_ui:sales_orders' %}">Cancel</a>
+      <button type="submit" class="hs-btn hs-btn-primary">{% if is_reallocate %}Save re-allocation{% else %}Save allocations{% endif %}</button>
+      <a class="hs-btn" href="{% url 'slurp_ui:sales_orders' %}">Back</a>
     </div>
   </form>
   <script>

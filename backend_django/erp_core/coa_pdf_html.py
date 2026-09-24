@@ -14,7 +14,15 @@ logger = logging.getLogger(__name__)
 def _s(val):
     if val is None:
         return ""
-    return str(val)
+    text = str(val)
+    # xhtml2pdf/Helvetica cannot draw these; keep COA cells readable
+    return (
+        text.replace("\u2264", "<=")  # ≤
+        .replace("\u2265", ">=")  # ≥
+        .replace("\u00b1", "+/-")  # ±
+        .replace("\u2013", "-")  # –
+        .replace("\u2014", "-")  # —
+    )
 
 
 def _format_qty_display(qty, uom: str) -> str:
@@ -33,19 +41,22 @@ def _test_rows_from_certificate(
     include_qc: bool = True,
     display_mode: str = "actual",
     line_overrides: dict | None = None,
+    spec_overrides: dict | None = None,
 ):
     """
     Build Test | Specification | Result rows for a COA PDF.
 
     Master path: include_ids=None, include_qc=True, display_mode='actual'.
     Customer path: filter by include_ids / include_qc; display_mode may be
-    actual | pass_fail | per_line (with line_overrides).
+    actual | pass_fail | per_line (with line_overrides); spec_overrides may
+    replace printed Spec per line id (customer requirements).
     """
     from .coa_customer_options import _pass_fail_label
     from .coa_logic import qc_spec_display
 
     mode = (display_mode or "actual").strip().lower()
     overrides = line_overrides or {}
+    specs = {str(k): v for k, v in (spec_overrides or {}).items()}
     test_rows = []
 
     qname = (certificate.qc_parameter_name_snapshot or "").strip()
@@ -78,13 +89,23 @@ def _test_rows_from_certificate(
         if mode == "per_line":
             line_mode = overrides.get(str(lr.id), "actual")
         if line_mode == "pass_fail":
-            res = _pass_fail_label(lr.passes)
+            # text_only / unevaluated lines store passes=None — show the recorded result
+            # instead of a blank "—" on the customer COA.
+            if lr.passes is None:
+                res = _s(lr.result_text) or _pass_fail_label(None)
+            else:
+                res = _pass_fail_label(lr.passes)
         else:
             res = _s(lr.result_text)
+        printed_spec = specs.get(str(lr.id))
+        if printed_spec is not None and str(printed_spec).strip():
+            spec_text = _s(printed_spec)
+        else:
+            spec_text = _s(lr.specification_text)
         test_rows.append(
             {
                 "test": _s(lr.test_name),
-                "specification": _s(lr.specification_text),
+                "specification": spec_text,
                 "result": res,
             }
         )
@@ -92,7 +113,15 @@ def _test_rows_from_certificate(
 
 
 def _dates_from_lot(lot):
-    """Manuf. / exp from the lot row (same fields as inventory). Calendar only; shows — when unset."""
+    """Manuf. / exp from the lot row (same fields as inventory). Calendar only; shows — when unset.
+
+    Manuf. falls back to the producing batch close date, then lot received_date, so COAs
+    stay correct when manufacture_date was not written at close.
+
+    Exp falls back to manufacture + formula.shelf_life_months when lot.expiration_date
+    is unset (Master COA must still print a date). Shelf-life extensions write
+    expiration_date explicitly, so those take precedence.
+    """
 
     def _to_display_date(val):
         if val is None:
@@ -106,12 +135,45 @@ def _dates_from_lot(lot):
         return val
 
     md = getattr(lot, "manufacture_date", None)
+    if md is None and lot is not None:
+        try:
+            from .models import ProductionBatchOutput
+
+            closed = (
+                ProductionBatchOutput.objects.filter(lot_id=lot.pk)
+                .exclude(batch__closed_date__isnull=True)
+                .order_by("-batch__closed_date")
+                .values_list("batch__closed_date", flat=True)
+                .first()
+            )
+            md = closed or getattr(lot, "received_date", None)
+        except Exception:
+            md = getattr(lot, "received_date", None)
     d = _to_display_date(md)
     manufacture_date = d.strftime("%B %d, %Y") if d else "—"
 
     ed = getattr(lot, "expiration_date", None)
-    d = _to_display_date(ed)
-    expiration_date = d.strftime("%B %d, %Y") if d else "—"
+    if ed is None and d is not None and lot is not None:
+        try:
+            from .formula_resolve import formula_for_lot
+            from .lot_date_utils import add_calendar_months_to_datetime
+            from .views import _expiration_datetime_for_fg_output
+
+            base_dt = getattr(lot, "manufacture_date", None) or md
+            # Batch-locked formula first (multi-recipe FGs), then item default.
+            formula = formula_for_lot(lot)
+            computed = _expiration_datetime_for_fg_output(
+                lot.item, base_dt, formula=formula
+            )
+            if computed is None and formula and formula.shelf_life_months:
+                computed = add_calendar_months_to_datetime(
+                    base_dt, int(formula.shelf_life_months)
+                )
+            ed = computed
+        except Exception:
+            ed = None
+    d_exp = _to_display_date(ed)
+    expiration_date = d_exp.strftime("%B %d, %Y") if d_exp else "—"
 
     return manufacture_date, expiration_date
 
@@ -127,8 +189,32 @@ def build_coa_template_context(
     expiration_date: str,
     issue_date: str,
     test_rows: list,
+    is_example: bool = False,
+    shelf_life_extension=None,
 ):
     logo_base64 = get_batch_ticket_logo_base64_cached()
+    sle = None
+    if shelf_life_extension is not None:
+        qc_d = getattr(shelf_life_extension, "qc_date", None)
+        months = getattr(shelf_life_extension, "extension_months", None)
+        qname = (getattr(shelf_life_extension, "qc_parameter_name", None) or "").strip()
+        qres = getattr(shelf_life_extension, "qc_result_value", None)
+        qc_d_s = qc_d.strftime("%B %d, %Y") if qc_d else "—"
+        parts = [
+            f"Shelf life extension: color / QC value only, as of {qc_d_s}",
+            f"(+{months} months)." if months else "",
+        ]
+        if qname:
+            parts.append(f"Parameter: {qname}.")
+        if qres is not None:
+            parts.append(f"QC result: {float(qres):g}.")
+        else:
+            parts.append("Prior QC / color value retained; new result not recorded.")
+        sle = {
+            "banner": " ".join(p for p in parts if p).strip(),
+            "qc_date": qc_d_s,
+            "months": months,
+        }
     return {
         "logo_base64": logo_base64,
         "product_name": _s(product_name),
@@ -140,6 +226,8 @@ def build_coa_template_context(
         "expiration_date": expiration_date,
         "issue_date": issue_date,
         "test_rows": test_rows,
+        "is_example": bool(is_example),
+        "shelf_life_extension": sle,
     }
 
 
@@ -157,9 +245,16 @@ def build_master_coa_context(certificate):
             qty = 0.0
     quantity_display = _format_qty_display(qty, uom)
     manufacture_date, expiration_date = _dates_from_lot(lot)
-    issue_dt = certificate.issued_at or timezone.now()
+    issue_dt = certificate.updated_at or certificate.issued_at or timezone.now()
     issue_date = issue_dt.strftime("%B %d, %Y") if issue_dt else ""
     test_rows = _test_rows_from_certificate(certificate)
+    latest_sle = None
+    try:
+        latest_sle = (
+            lot.shelf_life_extensions.order_by("-created_at").first()
+        )
+    except Exception:
+        latest_sle = None
     return build_coa_template_context(
         product_name=item.name,
         lot_number=lot.lot_number or lot.vendor_lot_number or "",
@@ -170,6 +265,7 @@ def build_master_coa_context(certificate):
         expiration_date=expiration_date,
         issue_date=issue_date,
         test_rows=test_rows,
+        shelf_life_extension=latest_sle,
     )
 
 
@@ -191,6 +287,7 @@ def build_customer_copy_coa_context(certificate, copy):
         include_qc=opts["include_qc"],
         display_mode=opts["display_mode"],
         line_overrides=opts["line_overrides"],
+        spec_overrides=opts.get("spec_overrides") or {},
     )
     return build_coa_template_context(
         product_name=item.name,
@@ -261,9 +358,130 @@ def generate_customer_copy_coa_pdf_bytes(copy):
     return _render_coa_pdf_bytes(context, log_label=f"COA customer {ln} {so}")
 
 
+def build_example_fps_coa_context(item):
+    """
+    Sample customer-style COA from FPS ItemCoaTestLine rows (no lot).
+
+    Includes tests marked for customer COA (falls back to all lines if none flagged).
+    Result column uses Typical so customers see a representative sheet.
+    Uses the family COA template item when packs share one master.
+    Prepends formula QC parameter (from default formula on this pack / family).
+    """
+    from .coa_logic import qc_spec_display
+    from .coa_template import coa_test_lines_for_item, family_items, resolve_coa_template_item
+    from .formula_resolve import default_formula_for_fg
+
+    template = resolve_coa_template_item(item) or item
+    test_rows = []
+
+    # QC from commercial formula (prefer template pack, then requested item, then siblings)
+    formula = None
+    seen_ids: set[int] = set()
+    for candidate in [template, item, *family_items(template or item)]:
+        if candidate is None or candidate.id in seen_ids:
+            continue
+        seen_ids.add(candidate.id)
+        f = default_formula_for_fg(candidate.id)
+        if f and (f.qc_parameter_name or "").strip():
+            formula = f
+            break
+    if formula is not None:
+        qname = (formula.qc_parameter_name or "").strip()
+        spec = qc_spec_display(qname, formula.qc_spec_min, formula.qc_spec_max)
+        # Spec text already embeds the name for NLT/NMT; keep Test column as parameter name
+        test_rows.append(
+            {
+                "test": _s(qname),
+                "specification": _s(spec),
+                "result": "—",
+            }
+        )
+
+    lines = list(coa_test_lines_for_item(template, select_related=None))
+    on_coa = [ln for ln in lines if ln.include_on_customer_coa]
+    use = on_coa or lines
+    for ln in use:
+        typical = (ln.typical_result or "").strip()
+        test_rows.append(
+            {
+                "test": _s(ln.test_name),
+                "specification": _s(ln.specification_text),
+                "result": _s(typical) or "—",
+            }
+        )
+    uom = _s(getattr(template, "unit_of_measure", "") or "lbs")
+    issue_date = timezone.localdate().strftime("%B %d, %Y")
+    return build_coa_template_context(
+        product_name=template.name or template.sku or "Product",
+        lot_number="EXAMPLE",
+        quantity_display=f"— {uom}".strip(),
+        customer_name="(Sample customer)",
+        customer_po="EXAMPLE",
+        manufacture_date="—",
+        expiration_date="—",
+        issue_date=issue_date,
+        test_rows=test_rows,
+        is_example=True,
+    )
+
+
+def generate_example_fps_coa_pdf_bytes(item):
+    """Example / typical COA PDF for an FPS (sellable SKU) — for customer requests."""
+    context = build_example_fps_coa_context(item)
+    sku = getattr(item, "sku", None) or str(item.pk)
+    return _render_coa_pdf_bytes(context, log_label=f"COA example {sku}")
+
+
+def backfill_lot_expiration_from_shelf_life(lot) -> bool:
+    """When lot.expiration_date is unset, set it to manufacture + formula shelf life.
+
+    Returns True if the lot was updated. Safe no-op when dates or shelf life missing.
+    """
+    if lot is None or getattr(lot, "expiration_date", None) is not None:
+        return False
+    from .formula_resolve import formula_for_lot
+    from .views import _expiration_datetime_for_fg_output
+
+    base = getattr(lot, "manufacture_date", None)
+    if base is None:
+        try:
+            from .models import ProductionBatchOutput
+
+            base = (
+                ProductionBatchOutput.objects.filter(lot_id=lot.pk)
+                .exclude(batch__closed_date__isnull=True)
+                .order_by("-batch__closed_date")
+                .values_list("batch__closed_date", flat=True)
+                .first()
+            ) or getattr(lot, "received_date", None)
+        except Exception:
+            base = getattr(lot, "received_date", None)
+    if base is None:
+        return False
+    formula = formula_for_lot(lot)
+    computed = _expiration_datetime_for_fg_output(lot.item, base, formula=formula)
+    if computed is None:
+        return False
+    lot.expiration_date = computed
+    if getattr(lot, "manufacture_date", None) is None:
+        lot.manufacture_date = base
+        lot.save(update_fields=["manufacture_date", "expiration_date"])
+    else:
+        lot.save(update_fields=["expiration_date"])
+    return True
+
+
 def save_coa_pdf_to_certificate(certificate) -> bool:
     """Generate master PDF and save to certificate.coa_pdf."""
     from django.core.files.base import ContentFile
+
+    lot = certificate.lot
+    try:
+        backfill_lot_expiration_from_shelf_life(lot)
+        if lot is not None:
+            lot.refresh_from_db()
+    except Exception:
+        logger.exception("backfill_lot_expiration_from_shelf_life failed for lot %s", getattr(lot, "pk", None))
 
     pdf = generate_lot_coa_pdf_bytes(certificate)
     if not pdf:

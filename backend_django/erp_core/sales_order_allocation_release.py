@@ -1,11 +1,57 @@
 """
 Release SalesOrderLot allocations and reverse distributed lots created for an SO.
 
-Used when cancelling an order or reverting an issued order to draft.
+Used when cancelling an order, reverting to draft, or re-allocating lines.
 """
 from __future__ import annotations
 
 from .models import InventoryTransaction, SalesOrderLot
+
+
+def release_sales_order_item_allocations(so_item) -> None:
+    """
+    Delete SalesOrderLot rows for one line, reverse distributed-item lots / RM use
+    where applicable, and zero quantity_allocated on the line.
+    """
+    sales_order = so_item.sales_order
+    allocations = list(SalesOrderLot.objects.filter(sales_order_item=so_item).select_related("lot"))
+
+    for allocation in allocations:
+        lot = allocation.lot
+        if lot is None:
+            continue
+
+        is_distributed_lot = InventoryTransaction.objects.filter(
+            lot=lot,
+            reference_number=sales_order.so_number,
+            notes__icontains="distributed",
+        ).exists()
+
+        if is_distributed_lot:
+            raw_material_transactions = InventoryTransaction.objects.filter(
+                reference_number=sales_order.so_number,
+                quantity__lt=0,
+                notes__icontains=lot.lot_number,
+            )
+
+            for trans in raw_material_transactions:
+                raw_lot = trans.lot
+                raw_lot.quantity_remaining += abs(trans.quantity)
+                raw_lot.save()
+
+                InventoryTransaction.objects.create(
+                    transaction_type="adjustment",
+                    lot=raw_lot,
+                    quantity=abs(trans.quantity),
+                    reference_number=sales_order.so_number,
+                    notes=f"Reversed allocation from order {sales_order.so_number}",
+                )
+
+            lot.delete()
+
+    SalesOrderLot.objects.filter(sales_order_item=so_item).delete()
+    so_item.quantity_allocated = 0.0
+    so_item.save(update_fields=["quantity_allocated"])
 
 
 def release_sales_order_allocations(sales_order) -> None:
@@ -15,39 +61,4 @@ def release_sales_order_allocations(sales_order) -> None:
     Does not change sales_order.status.
     """
     for so_item in sales_order.items.all():
-        allocations = SalesOrderLot.objects.filter(sales_order_item=so_item)
-
-        for allocation in allocations:
-            lot = allocation.lot
-
-            is_distributed_lot = InventoryTransaction.objects.filter(
-                lot=lot,
-                reference_number=sales_order.so_number,
-                notes__icontains='distributed',
-            ).exists()
-
-            if is_distributed_lot:
-                raw_material_transactions = InventoryTransaction.objects.filter(
-                    reference_number=sales_order.so_number,
-                    quantity__lt=0,
-                    notes__icontains=lot.lot_number,
-                )
-
-                for trans in raw_material_transactions:
-                    raw_lot = trans.lot
-                    raw_lot.quantity_remaining += abs(trans.quantity)
-                    raw_lot.save()
-
-                    InventoryTransaction.objects.create(
-                        transaction_type='adjustment',
-                        lot=raw_lot,
-                        quantity=abs(trans.quantity),
-                        reference_number=sales_order.so_number,
-                        notes=f'Reversed allocation from order {sales_order.so_number}',
-                    )
-
-                lot.delete()
-
-        allocations.delete()
-        so_item.quantity_allocated = 0.0
-        so_item.save()
+        release_sales_order_item_allocations(so_item)

@@ -308,6 +308,19 @@
     {% if selected_fg %}
     <div class="form-row">
       <label for="formula">Formula *</label>
+      {% if formula_choices|length <= 1 %}
+        {% with f=selected_formula|default:formula_choices.0 %}
+        {% if f %}
+        <input type="hidden" name="formula" value="{{ f.id }}" />
+        <div style="padding:0.45rem 0.55rem;border:1px solid #e2e8f0;border-radius:6px;background:#f8fafc;font-size:0.92rem">
+          {{ f.name }}{% if f.is_default %} (default){% endif %}
+          {% if f.version %} · v{{ f.version }}{% endif %}
+        </div>
+        {% else %}
+        <p style="margin:0;color:#b91c1c;font-size:0.9rem">No formula with ingredients on this SKU.</p>
+        {% endif %}
+        {% endwith %}
+      {% else %}
       <select id="formula" name="formula" onchange="this.form.submit()">
         <option value="">— Select formula —</option>
         {% for f in formula_choices %}
@@ -317,6 +330,7 @@
         </option>
         {% endfor %}
       </select>
+      {% endif %}
     </div>
     {% endif %}
   </form>
@@ -464,12 +478,113 @@
     <p>This formula has no ingredients.</p>
     {% endfor %}
 
+    <h3 style="margin:1.25rem 0 0.35rem">Packaging (optional)</h3>
+    <p style="margin:0 0 0.65rem;color:#64748b;font-size:0.9rem">
+      Soft defaults from this FPS. Suggested count = full packs + one for a partial
+      (hint only — change freely or skip). Bags/liners are never required by the system.
+    </p>
+    <input type="hidden" name="packaging_warned" id="packaging_warned"
+           value="{% if packaging_needs_confirm %}1{% else %}0{% endif %}" />
+    {% if packaging_needs_confirm %}
+    <div style="padding:0.55rem 0.75rem;margin-bottom:0.75rem;background:#fff7ed;border:1px solid #fed7aa;border-radius:6px;color:#9a3412;font-size:0.9rem">
+      No packaging was selected. Click <strong>Create batch</strong> again to confirm, or allocate packaging below.
+    </div>
+    {% endif %}
+    {% if packaging_suggest and packaging_suggest.ok %}
+    <p id="pkg-suggest-hint" style="margin:0 0 0.75rem;font-size:0.88rem;color:#334155"
+       data-pack-net="{{ packaging_suggest.pack_net_display }}"
+       data-pack-unit="{{ packaging_suggest.pack_unit }}">
+      Pack net ≈ <strong>{{ packaging_suggest.pack_net_display }} {{ packaging_suggest.pack_unit }}</strong>.
+      Enter quantity above to refresh the suggested container count.
+    </p>
+    {% endif %}
+
+    {% for prow in preferred_packaging_rows %}
+    <div class="ingredient-group pkg-pref-row"
+         data-pref-id="{{ prow.pref.id }}"
+         data-suggest="{% if prow.suggest_qty %}1{% else %}0{% endif %}"
+         data-suggested="{{ prow.suggested|default_if_none:'' }}">
+      <div class="ingredient-header">
+        <div class="ingredient-title">
+          <span class="ingredient-name">{{ prow.packaging_item.sku }} — {{ prow.packaging_item.name }}</span>
+          <span class="ingredient-percentage">{{ prow.label }}</span>
+          {% if prow.suggest_qty %}
+          <span class="partial-chip" style="background:#ecfdf5;color:#047857;margin-left:0.35rem">Suggest qty</span>
+          {% endif %}
+        </div>
+        {% if prow.suggest_qty %}
+        <div class="ingredient-summary">
+          <span class="balance-chip">
+            <span class="bal-label">Suggested</span>
+            <span class="pkg-suggested-val">{% if prow.suggested %}{{ prow.suggested }}{% else %}—{% endif %}</span>
+            <span>ea</span>
+          </span>
+        </div>
+        {% endif %}
+      </div>
+      {% if prow.lots %}
+      <div class="lots-list">
+        {% for lr in prow.lots %}
+        <div class="lot-row" data-lot-id="{{ lr.lot.id }}" data-avail="{{ lr.available }}">
+          <div class="lot-row-ident">
+            <span class="lot-number-badge">{{ lr.lot.lot_number }}</span>
+            <span class="lot-available-inline">
+              avail {{ lr.available|floatformat:2 }} {{ lr.uom }}
+            </span>
+          </div>
+          <div class="lot-row-qty">
+            <label for="pkg_qty_{{ prow.pref.id }}_{{ lr.lot.id }}">Qty (ea)</label>
+            <input id="pkg_qty_{{ prow.pref.id }}_{{ lr.lot.id }}"
+                   name="pkg_qty_{{ prow.pref.id }}_{{ lr.lot.id }}"
+                   type="number"
+                   step="any"
+                   min="0"
+                   max="{{ lr.available }}"
+                   class="quantity-input pkg-qty-input"
+                   {% if prow.suggest_qty and prow.suggested and forloop.first %}value="{{ prow.suggested }}"{% else %}placeholder="0"{% endif %} />
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+      {% else %}
+      <div class="no-lots-available" style="padding:0.75rem;background:#fff7ed;border:1px solid #fde68a;border-radius:6px;color:#92400e">
+        No open lots for {{ prow.packaging_item.sku }}.
+      </div>
+      {% endif %}
+    </div>
+    {% empty %}
+    <p style="color:#94a3b8;font-size:0.9rem;margin:0 0 0.65rem">
+      No preferred packaging on this FPS — add other packaging below, or set defaults on the FPS sheet.
+    </p>
+    {% endfor %}
+
+    {% if packaging_lot_rows %}
+    <details style="margin:0.75rem 0 1rem">
+      <summary style="cursor:pointer;font-weight:600;color:#334155">Add other packaging lots</summary>
+      <p style="margin:0.5rem 0;color:#64748b;font-size:0.85rem">Any open indirect-material lot (usually EA).</p>
+      {% for pr in packaging_lot_rows %}
+      <div class="lot-row" style="margin-bottom:0.35rem">
+        <div class="lot-row-ident">
+          <span class="lot-number-badge">{{ pr.lot.lot_number }}</span>
+          <span class="lot-available-inline">{{ pr.sku }} — {{ pr.name }} · avail {{ pr.available|floatformat:2 }} {{ pr.uom }}</span>
+        </div>
+        <div class="lot-row-qty">
+          <label for="pkg_other_qty_{{ pr.lot.id }}">Qty</label>
+          <input id="pkg_other_qty_{{ pr.lot.id }}"
+                 name="pkg_other_qty_{{ pr.lot.id }}"
+                 type="number" step="any" min="0" max="{{ pr.available }}"
+                 class="quantity-input pkg-qty-input" placeholder="0" />
+        </div>
+      </div>
+      {% endfor %}
+    </details>
+    {% endif %}
+
     {% if work_in_partial_lots %}
     <h3 style="margin:1.25rem 0 0.35rem">Work in finished-good partials (optional)</h3>
     <p style="margin:0 0 0.65rem;color:#64748b;font-size:0.9rem">
-      Finished-good lots below one full pack. Selected partials combine into this batch when it closes.
-      Lots that are mostly full packs but still have a remnant (e.g. 49×20 + 15 lb) appear under
-      Inventory → <strong>Has remainder</strong>.
+      Partials under this product’s <strong>parent family</strong> (any pack variant).
+      Selected qty is added to produced output when the batch closes — formula math stays unchanged.
     </p>
     <div class="lots-list" style="margin-bottom:1rem">
       {% for pl in work_in_partial_lots %}
@@ -477,6 +592,9 @@
         <div class="lot-row-partial-main">
           <input type="checkbox" name="work_in_partial" value="{{ pl.lot.id }}" style="margin-right:0.35rem" />
           <span class="lot-number-badge">{{ pl.lot.lot_number }}</span>
+          {% if not pl.same_sku %}
+          <span class="partial-chip" style="background:#e0e7ff;color:#3730a3">{{ pl.lot.item.sku }}</span>
+          {% endif %}
           <span class="partial-chip">Partial</span>
           <span class="lot-available-inline">{{ pl.available|floatformat:2 }} {{ pl.uom }} remaining</span>
         </div>
@@ -527,6 +645,7 @@
     }
 
     function updateIngredientBalance(row) {
+      if (!row || !qtyInput) return;
       var pct = parseFloat(row.getAttribute('data-pct') || '0');
       var base = parseFloat(qtyInput.value || '0');
       if (!isFinite(base)) base = 0;
@@ -546,14 +665,19 @@
       selected = normalize(selected);
       var remaining = normalize(required - selected);
 
-      row.querySelector('.req-val').textContent = String(required);
-      row.querySelector('.sel-val').textContent = String(selected);
-      row.querySelector('.rem-val').textContent = String(remaining);
+      var reqEl = row.querySelector('.req-val');
+      var selEl = row.querySelector('.sel-val');
+      var remEl = row.querySelector('.rem-val');
+      if (reqEl) reqEl.textContent = String(required);
+      if (selEl) selEl.textContent = String(selected);
+      if (remEl) remEl.textContent = String(remaining);
 
       var remChip = row.querySelector('.rem-chip');
       var selChip = row.querySelector('.selected-qty');
-      remChip.classList.toggle('is-done', required > 0 && Math.abs(remaining) <= 0.01);
-      remChip.classList.toggle('is-over', remaining < -0.01);
+      if (remChip) {
+        remChip.classList.toggle('is-done', required > 0 && Math.abs(remaining) <= 0.01);
+        remChip.classList.toggle('is-over', remaining < -0.01);
+      }
       if (selChip) selChip.classList.toggle('has-selection', selected > 0);
     }
 
@@ -561,7 +685,16 @@
       document.querySelectorAll('.ingredient-row').forEach(updateIngredientBalance);
     }
 
-    qtyInput.addEventListener('input', recalcAll);
+    if (qtyInput) {
+      qtyInput.addEventListener('input', function () {
+        recalcAll();
+        updatePkgSuggest();
+      });
+      qtyInput.addEventListener('change', function () {
+        recalcAll();
+        updatePkgSuggest();
+      });
+    }
 
     document.querySelectorAll('.lot-qty-input').forEach(function (inp) {
       inp.addEventListener('input', function () {
@@ -638,9 +771,53 @@
         if (problems.length) {
           e.preventDefault();
           alert('Fix ingredient allocations before creating:\n\n• ' + problems.join('\n• '));
+          return;
+        }
+        var pkgTotal = 0;
+        form.querySelectorAll('.pkg-qty-input').forEach(function (inp) {
+          pkgTotal += parseQty(inp);
+        });
+        var warnEl = document.getElementById('packaging_warned');
+        if (pkgTotal <= 0 && warnEl && warnEl.value !== '1') {
+          if (!confirm('No packaging selected. Create this batch without packaging?')) {
+            e.preventDefault();
+            return;
+          }
+          warnEl.value = '1';
         }
       });
     }
+
+    function updatePkgSuggest() {
+      var hint = document.getElementById('pkg-suggest-hint');
+      var packNet = hint ? parseFloat(hint.getAttribute('data-pack-net') || '0') : 0;
+      var base = parseFloat(qtyInput.value || '0');
+      if (!isFinite(packNet) || packNet <= 0 || !isFinite(base) || base <= 0) {
+        document.querySelectorAll('.pkg-pref-row').forEach(function (row) {
+          if (row.getAttribute('data-suggest') !== '1') return;
+          var el = row.querySelector('.pkg-suggested-val');
+          if (el) el.textContent = '—';
+        });
+        return;
+      }
+      var full = Math.floor(base / packNet + 1e-9);
+      var rem = base - full * packNet;
+      var partial = rem > 1e-6 ? 1 : 0;
+      if (full === 0 && base > 1e-6) partial = 1;
+      var suggested = full + partial;
+      document.querySelectorAll('.pkg-pref-row').forEach(function (row) {
+        if (row.getAttribute('data-suggest') !== '1') return;
+        var el = row.querySelector('.pkg-suggested-val');
+        if (el) el.textContent = String(suggested);
+        var firstInp = row.querySelector('.pkg-qty-input');
+        if (firstInp && firstInp.dataset.userEdited !== '1') {
+          firstInp.value = String(suggested);
+        }
+      });
+    }
+    document.querySelectorAll('.pkg-qty-input').forEach(function (inp) {
+      inp.addEventListener('input', function () { inp.dataset.userEdited = '1'; });
+    });
 
     var savedUom = sessionStorage.getItem('batch_uom_' + formulaId);
     var savedQty = sessionStorage.getItem('batch_qty_' + formulaId);
@@ -650,6 +827,7 @@
       sessionStorage.removeItem('batch_uom_' + formulaId);
     }
     recalcAll();
+    updatePkgSuggest();
   })();
   </script>
   {% endif %}

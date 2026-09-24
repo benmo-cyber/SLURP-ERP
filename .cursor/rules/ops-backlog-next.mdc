@@ -1,0 +1,18 @@
+---
+description: Ops backlog — work in order; update as each item ships
+alwaysApply: true
+---
+
+# Ops backlog (ordered)
+
+Work **top item first**. After each ships, mark done / remove from this list.
+
+## Done
+1. ~~Shelf life extensions~~ — re-QC + months → expiration from QC date; new master COA keeps micros, notes color/QC extension. Soft warn if extending again (generally one extension). (`LotShelfLifeExtension`, Quality → COA library → Master → Extend shelf life; library shows “Shelf life extended” badge; campaign lots grouped by campaign code.)
+2. ~~Returns & complaints~~ — RMA open (credit at open) → Inventory → **Check-In → Customer return (RMA)** as `-R` staging on hold → investigate via hold log (notes/photos) → accept merges to source lot or scrap staging. Freight optional at check-in (no auto GL). No separate RMA check-in nav. Policy PDFs stay outside the repo.
+3. ~~Rework~~ — Production → Rework: blend parent-family FG partials (+ optional RM strength adjust) into target pack SKU; output on hold awaiting micro (`RW-…` batch).
+4. ~~Create-batch partials prompt~~ — work-in partials list parent-family pack variants; close adds qty to output without changing formula math.
+5. ~~Full lot mass-balance traceability~~ — Quality → Lot Tracking: search WWI/vendor lot → production, SO/shipments, PO, returns/RMA, lab stock, ledger; green/red balance.
+
+## Next
+(none — ops backlog cleared)

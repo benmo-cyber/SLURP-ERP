@@ -29,11 +29,11 @@
           <button class="hs-btn hs-btn-primary" type="submit">Issue</button>
         </form>
         {% endif %}
-        {% if not ready_shipment %}
-        {% if order.status == 'issued' or order.status == 'allocated' %}
-        <a class="hs-btn" href="{% url 'slurp_ui:sales_allocate_order' order.id %}">Allocate</a>
-        <a class="hs-btn hs-btn-primary" href="{% url 'slurp_ui:sales_checkout' %}?so={{ order.id }}">Mark Ready</a>
+        {% if show_allocate %}
+        <a class="hs-btn" href="{% url 'slurp_ui:sales_allocate_order' order.id %}">{% if is_reallocate %}Re-allocate{% else %}Allocate{% endif %}</a>
         {% endif %}
+        {% if show_mark_ready %}
+        <a class="hs-btn hs-btn-primary" href="{% url 'slurp_ui:sales_checkout' %}?so={{ order.id }}">Mark Ready</a>
         {% endif %}
         {% if ready_shipment %}
         <a class="hs-btn" href="{% url 'slurp_ui:sales_packing_list_pdf' order.id %}" target="_blank">Packing list</a>
@@ -46,17 +46,19 @@
         {% endfor %}
         <form method="post" action="{% url 'slurp_ui:sales_mark_picked_up' order.id %}" style="display:inline">{% csrf_token %}
           <button class="hs-btn hs-btn-primary" type="submit"
-                  onclick="return confirm('Mark picked up? Creates draft invoice.');">Picked up</button>
+                  onclick="return confirm('Mark picked up? Creates draft invoice for Finance.');">Mark picked up</button>
         </form>
         {% endif %}
         {% if order.status != 'draft' and not ready_shipment %}
+        {% if has_allocation %}
         <a class="hs-btn" href="{% url 'slurp_ui:sales_pick_list_pdf' order.id %}" target="_blank">Pick list</a>
+        {% endif %}
         <a class="hs-btn" href="{% url 'slurp_ui:sales_packing_list_pdf' order.id %}" target="_blank">Packing list</a>
         {% endif %}
         {% if can_cancel %}
         <form method="post" action="{% url 'slurp_ui:sales_cancel_order' order.id %}">{% csrf_token %}
           <button class="hs-btn hs-btn-danger" type="submit"
-                  onclick="return confirm('Cancel {{ order.so_number }}? Releases allocations.');">
+                  onclick="return confirm('Cancel {{ order.so_number }}? Releases lot holds back to inventory{% if ready_shipment %}; clears Mark Ready{% endif %}.');">
             Cancel order
           </button>
         </form>
@@ -106,43 +108,52 @@
         <strong>Returns:</strong>
         Wrong ship / unpaid — void invoice in Finance then Reverse shipment.
         Unused full receipt — Inventory → Reverse check-in.
-        Customer return after ship — use Credit memo / return below (restocks inventory, applies open AR; unapplied credit stays on the memo until refund or next invoice).
+        Customer return after ship — open an RMA below (credit at open). Check in returned material under Inventory → Check-in (RMA); it goes on hold until investigation resolves.
       </p>
     </div>
   </div>
 
   {% if can_return %}
-  <div class="hs-card" style="margin-bottom:1rem">
-    <div class="hs-card-header"><h3>Credit memo / return</h3></div>
+  <div class="hs-card" style="margin-bottom:1rem" id="rma">
+    <div class="hs-card-header"><h3>Open RMA / credit</h3></div>
     <div class="hs-card-body">
+      <p class="hs-section-note" style="margin-top:0">
+        Select quantities by lot (or return all available). Issues a credit memo now; inventory returns only after check-in (Inventory → Check-In → Customer return).
+      </p>
+      {% if rma_lot_rows %}
       <form method="post" action="{% url 'slurp_ui:sales_create_return' order.id %}">
         {% csrf_token %}
         <table class="hs-table" style="margin-bottom:0.75rem">
           <thead>
-            <tr><th>Item</th><th>Shipped</th><th>Return qty</th></tr>
+            <tr><th>Item</th><th>Lot</th><th>Shipped</th><th>Already on RMA</th><th>Available</th><th>Return qty</th></tr>
           </thead>
           <tbody>
-            {% for line in order.items.all %}
-            {% if line.quantity_shipped %}
+            {% for row in rma_lot_rows %}
             <tr>
               <td>
-                <div class="hs-list-title">{{ line.item.sku }}</div>
-                <div class="hs-list-sub">{{ line.item.name }} @ {% if line.unit_price != None %}{{ line.unit_price|money:2 }}{% else %}—{% endif %}</div>
+                <div class="hs-list-title">{{ row.sales_order_item.item.sku }}</div>
+                <div class="hs-list-sub">{{ row.sales_order_item.item.name }}</div>
               </td>
-              <td>{{ line.quantity_shipped|floatformat:2 }} {{ line.item.unit_of_measure }}</td>
+              <td>{{ row.lot.lot_number }}</td>
+              <td>{{ row.shipped_qty|floatformat:2 }}</td>
+              <td>{{ row.already_rma_qty|floatformat:2 }}</td>
+              <td>{{ row.available_qty|floatformat:2 }}</td>
               <td>
-                <input name="return_qty_{{ line.id }}" type="number" step="any" min="0"
-                       max="{{ line.quantity_shipped }}" placeholder="0"
-                       style="max-width:8rem" />
+                {% if row.available_qty > 0 %}
+                <input name="return_qty_{{ row.sales_order_item.id }}_{{ row.lot.id }}"
+                       type="number" step="any" min="0" max="{{ row.available_qty }}"
+                       placeholder="0" style="max-width:8rem" />
+                {% else %}
+                —
+                {% endif %}
               </td>
             </tr>
-            {% endif %}
             {% endfor %}
           </tbody>
         </table>
         <div class="hs-form-grid">
           <div class="form-row" style="margin:0">
-            <label>Apply to invoice</label>
+            <label>Apply credit to invoice</label>
             <select name="source_invoice_id">
               <option value="">— Optional —</option>
               {% for inv in returnable_invoices %}
@@ -151,24 +162,45 @@
             </select>
           </div>
           <div class="form-row" style="margin:0">
+            <label>Reason</label>
+            <input name="reason" type="text" placeholder="Customer complaint / return reason" />
+          </div>
+          <div class="form-row" style="margin:0">
             <label>Notes</label>
-            <input name="notes" type="text" placeholder="Reason / RMA reference" />
+            <input name="notes" type="text" placeholder="Optional" />
           </div>
         </div>
         <label class="hs-check-inline" style="display:block;margin:0.75rem 0">
-          <input type="checkbox" name="restock" value="1" checked />
-          Restock returned qty as new accepted lot(s)
+          <input type="checkbox" name="return_all" value="1" />
+          Return all available qty on every lot (ignores per-line qty fields)
         </label>
         <div class="hs-form-actions">
           <button type="submit" class="hs-btn hs-btn-primary"
-                  onclick="return confirm('Create credit memo and process return?');">
-            Create credit memo
+                  onclick="return confirm('Open RMA and issue credit memo? Material must still be checked in when it arrives.');">
+            Open RMA + credit
           </button>
         </div>
       </form>
+      {% else %}
+      <div class="hs-empty">No shipped lot quantities available for RMA (already fully returned or no lot ship trail).</div>
+      {% endif %}
+      {% if order_rmas %}
+      <div style="margin-top:1rem">
+        <div class="hs-section-note" style="margin-bottom:0.35rem">RMAs on this order</div>
+        {% for r in order_rmas %}
+        <a class="hs-list-link" href="{% url 'slurp_ui:sales_rma_detail' r.id %}">
+          <div class="hs-list-title">{{ r.rma_number }} <span class="hs-badge">{{ r.get_status_display }}</span></div>
+          <div class="hs-list-sub">
+            {{ r.opened_at|date:"Y-m-d" }}
+            {% if r.credit_invoice %} · credit {{ r.credit_invoice.invoice_number }}{% endif %}
+          </div>
+        </a>
+        {% endfor %}
+      </div>
+      {% endif %}
       {% if credit_memos %}
       <div style="margin-top:1rem">
-        <div class="hs-section-note" style="margin-bottom:0.35rem">Prior credit memos</div>
+        <div class="hs-section-note" style="margin-bottom:0.35rem">Credit memos</div>
         {% for inv in credit_memos %}
         <a class="hs-list-link" href="{% url 'slurp_ui:finance_invoice_detail' inv.id %}">
           <div class="hs-list-title">{{ inv.invoice_number }} <span class="hs-badge warn">credit</span></div>

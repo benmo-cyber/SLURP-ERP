@@ -10,7 +10,8 @@ from django.contrib.auth.decorators import login_required
 
 from django.db import transaction
 
-from django.db.models import Q, Sum
+from django.db.models import Count, Q, Sum
+from erp_core.sku_family import parse_sku_family
 
 from django.http import FileResponse, Http404, HttpRequest, HttpResponse
 
@@ -36,6 +37,7 @@ from erp_core.models import (
     FormulaItem,
     Item,
     ItemCoaTestLine,
+    ItemPreferredPackaging,
     Lot,
     LotCoaCertificate,
     LotCoaCustomerCopy,
@@ -1119,37 +1121,39 @@ def quality_vendor_document_download(request: HttpRequest, pk: int, doc_pk: int)
 
 
 @login_required
-
 @require_http_methods(["GET", "POST"])
-
 def quality_lot_tracking(request: HttpRequest) -> HttpResponse:
+    from erp_core.lot_mass_balance import build_lot_mass_balance, resolve_lots_for_search
 
     search = (request.GET.get("q") or request.POST.get("q") or "").strip()
+    lot_id = (request.GET.get("lot") or "").strip()
+    candidates = resolve_lots_for_search(search) if search else []
+    lot = None
+    if lot_id:
+        lot = next((c for c in candidates if str(c.id) == lot_id), None)
+        if lot is None:
+            lot = Lot.objects.select_related("item", "source_lot").filter(pk=lot_id).first()
+    elif len(candidates) == 1:
+        lot = candidates[0]
 
-    lot, forward_trace, backward_trace = _lot_trace(search)
+    balance = build_lot_mass_balance(lot) if lot is not None else None
+    # Keep legacy names for any leftover template refs
+    forward_trace = (balance or {}).get("production_uses") or []
+    backward_trace = (balance or {}).get("produced_from") or []
 
     return render(
-
         request,
-
         "slurp_ui/quality/lot_tracking.html",
-
         _quality_ctx(
-
             "lot-tracking",
-
             search=search,
-
             lot=lot,
-
+            candidates=candidates if len(candidates) > 1 and lot is None else [],
+            balance=balance,
             forward_trace=forward_trace,
-
             backward_trace=backward_trace,
-
             port_status="full",
-
         ),
-
     )
 
 
@@ -1157,73 +1161,83 @@ def quality_lot_tracking(request: HttpRequest) -> HttpResponse:
 
 
 @login_required
-
 def quality_coa_library(request: HttpRequest) -> HttpResponse:
+    from erp_core.models import ProductionBatchOutput
 
     tab = (request.GET.get("tab") or "customer").lower()
-
     if tab not in ("master", "customer"):
-
         tab = "customer"
-
     sku = (request.GET.get("sku") or "").strip()
-
     so = (request.GET.get("so") or "").strip()
 
-
-
-    master_qs = LotCoaCertificate.objects.select_related("lot__item").order_by("-issued_at")
-
+    master_qs = (
+        LotCoaCertificate.objects.select_related("lot__item")
+        .prefetch_related("lot__shelf_life_extensions")
+        .order_by("-issued_at")
+    )
     customer_qs = LotCoaCustomerCopy.objects.select_related(
-
         "certificate__lot__item",
-
         "sales_order_lot__sales_order_item__sales_order",
-
     ).order_by("-created_at")
 
-
-
     if sku:
-
         master_qs = master_qs.filter(lot__item__sku=sku)
-
         customer_qs = customer_qs.filter(certificate__lot__item__sku=sku)
-
     if so:
-
         customer_qs = customer_qs.filter(
-
             sales_order_lot__sales_order_item__sales_order__so_number=so
-
         )
 
+    master_rows = list(master_qs[:200])
+    lot_ids = [row.lot_id for row in master_rows if row.lot_id]
+    campaign_by_lot: dict[int, str] = {}
+    if lot_ids:
+        for lot_id, code in (
+            ProductionBatchOutput.objects.filter(lot_id__in=lot_ids)
+            .exclude(batch__campaign_id__isnull=True)
+            .values_list("lot_id", "batch__campaign__campaign_code")
+        ):
+            if lot_id and code and lot_id not in campaign_by_lot:
+                campaign_by_lot[int(lot_id)] = code
 
+    campaign_groups: dict[str, list] = {}
+    ungrouped = []
+    for row in master_rows:
+        lot = row.lot
+        item = getattr(lot, "item", None)
+        item_type = (getattr(item, "item_type", None) or "").strip()
+        rem = float(getattr(lot, "quantity_remaining", 0) or 0)
+        sle_count = lot.shelf_life_extensions.count() if lot is not None else 0
+        row.can_extend_shelf_life = (
+            item_type in ("finished_good", "distributed_item") and rem > 0
+        )
+        row.sle_count = sle_count
+        row.has_shelf_life_extension = sle_count > 0
+        row.campaign_code = campaign_by_lot.get(row.lot_id) or ""
+        if row.campaign_code:
+            campaign_groups.setdefault(row.campaign_code, []).append(row)
+        else:
+            ungrouped.append(row)
+
+    campaign_sections = [
+        {"campaign_code": code, "rows": rows}
+        for code, rows in sorted(campaign_groups.items(), key=lambda kv: kv[0], reverse=True)
+    ]
 
     return render(
-
         request,
-
         "slurp_ui/quality/coa_library.html",
-
         _quality_ctx(
-
             "coa-library",
-
             tab=tab,
-
             sku=sku,
-
             so=so,
-
-            master_rows=list(master_qs[:200]),
-
+            master_rows=master_rows,
+            campaign_sections=campaign_sections,
+            ungrouped_master_rows=ungrouped,
             customer_rows=list(customer_qs[:200]),
-
             port_status="full",
-
         ),
-
     )
 
 
@@ -1231,25 +1245,31 @@ def quality_coa_library(request: HttpRequest) -> HttpResponse:
 
 
 @login_required
-
 def quality_coa_pdf(request: HttpRequest, pk: int) -> HttpResponse:
+    cert = get_object_or_404(
+        LotCoaCertificate.objects.select_related("lot__item"), pk=pk
+    )
+    lot = cert.lot
+    # Older master PDFs may have printed "—" for exp; backfill + regenerate once.
+    if lot is not None and lot.expiration_date is None:
+        try:
+            from erp_core.coa_pdf_html import (
+                backfill_lot_expiration_from_shelf_life,
+                save_coa_pdf_to_certificate,
+            )
 
-    cert = get_object_or_404(LotCoaCertificate, pk=pk)
-
+            if backfill_lot_expiration_from_shelf_life(lot):
+                save_coa_pdf_to_certificate(cert)
+                cert.refresh_from_db()
+        except Exception:
+            pass
     if not cert.coa_pdf:
-
         messages.error(request, "No PDF on file for this certificate.")
-
         return redirect("slurp_ui:quality_coa_library")
-
     return FileResponse(
-
         cert.coa_pdf.open("rb"),
-
         content_type="application/pdf",
-
         filename=f"coa-{cert.lot.lot_number or cert.lot_id}.pdf",
-
     )
 
 
@@ -1505,50 +1525,241 @@ def quality_coa_customer_customize(request: HttpRequest, pk: int) -> HttpRespons
 
 
 
-@login_required
+def _fps_parent_code(item: Item) -> str:
+    """Material family / parent SKU (e.g. D1307, P2408); falls back to parse or full SKU."""
+    code = (getattr(item, "sku_parent_code", None) or "").strip().upper()
+    if code:
+        return code
+    parent, _pack = parse_sku_family(
+        item.sku or "",
+        product_category=getattr(item, "product_category", None),
+        item_type=getattr(item, "item_type", None),
+    )
+    return (parent or item.sku or "").strip().upper()
 
-def quality_finished_goods(request: HttpRequest) -> HttpResponse:
 
-    items = list(
-
-        Item.objects.filter(item_type__in=["finished_good", "distributed_item"]).order_by("sku")[
-
-            :300
-
-        ]
-
+def _fps_item_rank(item: Item, *, formula_fg_ids: set, coa_counts: dict) -> tuple:
+    return (
+        1 if item.id in formula_fg_ids else 0,
+        int(getattr(item, "_lot_n", 0) or 0),
+        int(coa_counts.get(item.id, 0) or 0),
+        -item.id,
     )
 
+
+def _dedupe_items_by_full_sku(items: list[Item], *, formula_fg_ids: set, coa_counts: dict) -> list[Item]:
+    """Collapse duplicate Item rows that share the same full SKU."""
+    by_sku: dict[str, Item] = {}
+    for it in items:
+        key = (it.sku or "").strip().upper() or f"__ID_{it.id}"
+        prev = by_sku.get(key)
+        if prev is None or _fps_item_rank(it, formula_fg_ids=formula_fg_ids, coa_counts=coa_counts) > _fps_item_rank(
+            prev, formula_fg_ids=formula_fg_ids, coa_counts=coa_counts
+        ):
+            by_sku[key] = it
+    return list(by_sku.values())
+
+
+@login_required
+def quality_finished_goods(request: HttpRequest) -> HttpResponse:
+    """FPS list: one row per parent SKU; click through to pack variants."""
+    q = (request.GET.get("q") or "").strip()
+    type_f = (request.GET.get("type") or "").strip()
+    cat_f = (request.GET.get("category") or "").strip()
+
+    qs = Item.objects.filter(item_type__in=["finished_good", "distributed_item"])
+    if type_f in ("finished_good", "distributed_item"):
+        qs = qs.filter(item_type=type_f)
+    if cat_f:
+        qs = qs.filter(product_category=cat_f)
+
+    items = list(qs.annotate(_lot_n=Count("lots", distinct=True)).order_by("sku", "id")[:800])
     formula_fg_ids = set(
-
         Formula.objects.filter(finished_good_id__in=[i.id for i in items]).values_list(
-
             "finished_good_id", flat=True
+        )
+    )
+    coa_counts = {
+        row["item_id"]: row["n"]
+        for row in ItemCoaTestLine.objects.filter(item_id__in=[i.id for i in items])
+        .values("item_id")
+        .annotate(n=Count("id"))
+    }
+    items = _dedupe_items_by_full_sku(items, formula_fg_ids=formula_fg_ids, coa_counts=coa_counts)
 
+    # Group by parent SKU
+    families: dict[str, list[Item]] = {}
+    for it in items:
+        families.setdefault(_fps_parent_code(it), []).append(it)
+
+    q_upper = q.upper()
+    rows = []
+    for parent, members in families.items():
+        if q:
+            hay = " ".join(
+                [
+                    parent,
+                    *[m.sku or "" for m in members],
+                    *[m.name or "" for m in members],
+                    *[m.product_category or "" for m in members],
+                ]
+            ).upper()
+            if q_upper not in hay:
+                continue
+        # Prefer FG with formula as the display representative
+        members_sorted = sorted(
+            members,
+            key=lambda x: _fps_item_rank(x, formula_fg_ids=formula_fg_ids, coa_counts=coa_counts),
+            reverse=True,
+        )
+        primary = members_sorted[0]
+        types = {m.item_type for m in members}
+        if "finished_good" in types and "distributed_item" in types:
+            type_label = "FG/DI"
+        elif "finished_good" in types:
+            type_label = "FG"
+        else:
+            type_label = "DI"
+        from erp_core.coa_template import resolve_coa_template_item
+
+        tmpl = resolve_coa_template_item(primary)
+        family_coa = int(coa_counts.get(tmpl.id, 0) or 0) if tmpl else 0
+        rows.append(
+            {
+                "parent_code": parent,
+                "name": primary.name,
+                "type_label": type_label,
+                "category_label": primary.get_product_category_display()
+                if primary.product_category
+                else "",
+                "variant_count": len(members),
+                "has_formula": any(m.id in formula_fg_ids for m in members),
+                "coa_lines": family_coa,
+            }
         )
 
-    )
-
-    rows = [{"item": it, "has_formula": it.id in formula_fg_ids} for it in items]
+    rows.sort(key=lambda r: r["parent_code"])
+    categories = list(Item.PRODUCT_CATEGORY_CHOICES)
 
     return render(
-
         request,
-
         "slurp_ui/quality/finished_goods.html",
-
-        _quality_ctx("finished-goods", rows=rows, port_status="full"),
-
+        _quality_ctx(
+            "finished-goods",
+            rows=rows,
+            q=q,
+            type_f=type_f,
+            cat_f=cat_f,
+            categories=categories,
+            result_count=len(rows),
+            port_status="full",
+        ),
     )
-
-
-
 
 
 @login_required
-
 @require_http_methods(["GET", "POST"])
+def quality_fps_family(request: HttpRequest, parent_code: str) -> HttpResponse:
+    """Parent SKU landing: chart of full pack-variant SKUs in this family."""
+    from erp_core.coa_template import (
+        resolve_coa_template_item,
+        set_family_coa_template,
+    )
 
+    parent = (parent_code or "").strip().upper()
+    if not parent:
+        messages.error(request, "Missing parent SKU.")
+        return redirect("slurp_ui:quality_finished_goods")
+
+    qs = Item.objects.filter(item_type__in=["finished_good", "distributed_item"]).annotate(
+        _lot_n=Count("lots", distinct=True)
+    )
+    # Include stored parent matches and parse fallback (covers missing sku_parent_code)
+    scan = list(qs.order_by("sku", "id")[:800])
+    candidates = [it for it in scan if _fps_parent_code(it) == parent]
+
+    if not candidates:
+        messages.error(request, f"No FPS products found for parent {parent}.")
+        return redirect("slurp_ui:quality_finished_goods")
+
+    formula_fg_ids = set(
+        Formula.objects.filter(finished_good_id__in=[i.id for i in candidates]).values_list(
+            "finished_good_id", flat=True
+        )
+    )
+    coa_counts = {
+        row["item_id"]: row["n"]
+        for row in ItemCoaTestLine.objects.filter(item_id__in=[i.id for i in candidates])
+        .values("item_id")
+        .annotate(n=Count("id"))
+    }
+    variants = _dedupe_items_by_full_sku(
+        candidates, formula_fg_ids=formula_fg_ids, coa_counts=coa_counts
+    )
+    variants.sort(key=lambda x: ((x.sku_pack_suffix or "") or (x.sku or ""), x.id))
+
+    if request.method == "POST" and (request.POST.get("action") or "") == "set_coa_master":
+        master_id = (request.POST.get("master_item_id") or "").strip()
+        master = next((m for m in variants if str(m.id) == master_id), None)
+        if not master:
+            messages.error(request, "Select a valid pack SKU for the family COA master.")
+        else:
+            set_family_coa_template(master)
+            messages.success(
+                request,
+                f"Family COA master set to {master.sku}.",
+            )
+        return redirect("slurp_ui:quality_fps_family", parent_code=parent)
+
+    coa_template = resolve_coa_template_item(variants[0]) if variants else None
+    template_coa_n = int(coa_counts.get(coa_template.id, 0) or 0) if coa_template else 0
+
+    primary = max(
+        variants,
+        key=lambda x: _fps_item_rank(x, formula_fg_ids=formula_fg_ids, coa_counts=coa_counts),
+    )
+    rows = [
+        {
+            "item": it,
+            "pack": (it.sku_pack_suffix or "").strip()
+            or (
+                parse_sku_family(
+                    it.sku or "",
+                    product_category=it.product_category,
+                    item_type=it.item_type,
+                )[1]
+                or "—"
+            ),
+            "type_label": "FG" if it.item_type == "finished_good" else "DI",
+            "has_formula": it.id in formula_fg_ids,
+            "coa_lines": template_coa_n,
+            "is_coa_master": bool(coa_template and it.id == coa_template.id),
+            "lots": int(getattr(it, "_lot_n", 0) or 0),
+        }
+        for it in variants
+    ]
+
+    return render(
+        request,
+        "slurp_ui/quality/fps_family.html",
+        _quality_ctx(
+            "finished-goods",
+            parent_code=parent,
+            family_name=primary.name,
+            category_label=primary.get_product_category_display()
+            if primary.product_category
+            else "",
+            rows=rows,
+            variant_count=len(rows),
+            coa_template=coa_template,
+            template_coa_n=template_coa_n,
+            port_status="full",
+        ),
+    )
+
+
+@login_required
+@require_http_methods(["GET", "POST"])
 def quality_create_finished_good(request: HttpRequest) -> HttpResponse:
 
     approved_vendors = list(
@@ -2016,6 +2227,8 @@ def quality_create_finished_good(request: HttpRequest) -> HttpResponse:
 
 
 
+@login_required
+@require_http_methods(["GET", "POST"])
 def quality_unlink_finished_good(request: HttpRequest) -> HttpResponse:
 
     finished_goods = list(Item.objects.filter(item_type="finished_good").order_by("sku"))
@@ -2068,21 +2281,124 @@ def quality_unlink_finished_good(request: HttpRequest) -> HttpResponse:
 
 
 
+def _preferred_packaging_ctx(item: Item) -> dict:
+    prefs = list(
+        ItemPreferredPackaging.objects.filter(finished_good=item)
+        .select_related("packaging_item")
+        .order_by("sort_order", "id")
+    )
+    packaging_choices = list(
+        Item.objects.filter(item_type="indirect_material").order_by("sku")[:400]
+    )
+    return {
+        "preferred_packaging": prefs,
+        "packaging_item_choices": packaging_choices,
+    }
+
+
+def _handle_preferred_packaging_post(request: HttpRequest, item: Item, pk: int):
+    """Returns redirect response if handled, else None."""
+    action = (request.POST.get("action") or "").strip().lower()
+    if action not in (
+        "add_preferred_packaging",
+        "delete_preferred_packaging",
+        "update_preferred_packaging",
+    ):
+        return None
+
+    detail_url = reverse("slurp_ui:quality_finished_good_detail", kwargs={"pk": pk})
+    # Preserve formula tab when present
+    formula_q = (request.POST.get("formula_id") or request.GET.get("formula") or "").strip()
+    if formula_q.isdigit():
+        detail_url = f"{detail_url}?formula={formula_q}"
+
+    if action == "delete_preferred_packaging":
+        pref_id = (request.POST.get("pref_id") or "").strip()
+        try:
+            ItemPreferredPackaging.objects.filter(
+                pk=int(pref_id), finished_good=item
+            ).delete()
+            messages.success(request, "Preferred packaging removed.")
+        except Exception as e:
+            messages.error(request, str(e))
+        return redirect(detail_url)
+
+    if action == "update_preferred_packaging":
+        pref_id = (request.POST.get("pref_id") or "").strip()
+        pref = ItemPreferredPackaging.objects.filter(
+            pk=pref_id, finished_good=item
+        ).first() if pref_id.isdigit() else None
+        if not pref:
+            messages.error(request, "Packaging line not found.")
+            return redirect(detail_url)
+        try:
+            pref.sort_order = int(request.POST.get("sort_order") or 0)
+        except ValueError:
+            pref.sort_order = 0
+        pref.label = (request.POST.get("label") or "").strip()[:64]
+        pref.suggest_qty = bool(request.POST.get("suggest_qty"))
+        pref.save()
+        messages.success(request, "Preferred packaging updated.")
+        return redirect(detail_url)
+
+    # add_preferred_packaging
+    pkg_id = (request.POST.get("packaging_item_id") or "").strip()
+    pkg = Item.objects.filter(pk=pkg_id, item_type="indirect_material").first() if pkg_id.isdigit() else None
+    if not pkg:
+        messages.error(request, "Select an indirect / packaging SKU.")
+        return redirect(detail_url)
+    try:
+        sort_order = int(request.POST.get("sort_order") or 0)
+    except ValueError:
+        sort_order = 0
+    label = (request.POST.get("label") or "").strip()[:64]
+    suggest_qty = bool(request.POST.get("suggest_qty"))
+    # First line defaults to suggest_qty if none exist yet
+    if not ItemPreferredPackaging.objects.filter(finished_good=item).exists() and not request.POST.get(
+        "suggest_qty"
+    ):
+        suggest_qty = True
+    try:
+        pref, created = ItemPreferredPackaging.objects.update_or_create(
+            finished_good=item,
+            packaging_item=pkg,
+            defaults={
+                "sort_order": sort_order,
+                "label": label,
+                "suggest_qty": suggest_qty,
+            },
+        )
+        messages.success(
+            request,
+            f"{'Updated' if not created else 'Added'} preferred packaging {pkg.sku}.",
+        )
+    except Exception as e:
+        messages.error(request, str(e))
+    return redirect(detail_url)
+
+
 @login_required
-
 @require_http_methods(["GET", "POST"])
-
 def quality_finished_good_detail(request: HttpRequest, pk: int) -> HttpResponse:
     item = get_object_or_404(Item, pk=pk)
     if item.item_type not in ("finished_good", "distributed_item"):
         messages.error(request, "Not a finished good / distributed item.")
         return redirect("slurp_ui:quality_finished_goods")
 
+    parent_code = _fps_parent_code(item)
+
+    if request.method == "POST":
+        handled = _handle_preferred_packaging_post(request, item, pk)
+        if handled is not None:
+            return handled
+
     formulas = list(
         Formula.objects.filter(finished_good=item)
         .prefetch_related("ingredients__item")
         .order_by("-is_default", "name", "id")
     )
+
+    pkg_ctx = _preferred_packaging_ctx(item)
 
     if item.item_type != "finished_good":
         return render(
@@ -2091,12 +2407,14 @@ def quality_finished_good_detail(request: HttpRequest, pk: int) -> HttpResponse:
             _quality_ctx(
                 "finished-goods",
                 item=item,
+                parent_code=parent_code,
                 formula=None,
                 formulas=[],
                 recipes=[],  # legacy alias
                 ingredients=[],
                 can_edit_formula=False,
                 port_status="full",
+                **pkg_ctx,
             ),
         )
 
@@ -2303,12 +2621,14 @@ def quality_finished_good_detail(request: HttpRequest, pk: int) -> HttpResponse:
         _ing.select_value = ingredient_select_value(_ing)
 
     label = recipe_label(formula)
+    pkg_ctx = _preferred_packaging_ctx(item)
     return render(
         request,
         "slurp_ui/quality/finished_good_detail.html",
         _quality_ctx(
             "finished-goods",
             item=item,
+            parent_code=parent_code,
             formula=formula,
             formulas=formulas,
             recipes=formulas,
@@ -2320,26 +2640,53 @@ def quality_finished_good_detail(request: HttpRequest, pk: int) -> HttpResponse:
             formula_label=label,
             recipe_label=label,
             port_status="full",
+            **pkg_ctx,
         ),
     )
 
 
 def quality_item_coa_test_lines(request: HttpRequest, pk: int) -> HttpResponse:
+    from erp_core.coa_template import (
+        family_items,
+        fps_parent_code,
+        resolve_coa_template_item,
+        set_family_coa_template,
+    )
+
     item = get_object_or_404(Item, pk=pk)
     if item.item_type not in ("finished_good", "distributed_item"):
         messages.error(request, "COA test lines apply only to finished goods / distributed items.")
         return redirect("slurp_ui:quality_finished_goods")
 
+    template = resolve_coa_template_item(item) or item
+    members = family_items(item)
+    parent_code = fps_parent_code(item)
+
     if request.method == "POST":
         action = (request.POST.get("action") or "save").strip()
+        if action == "set_coa_master":
+            master_id = (request.POST.get("master_item_id") or "").strip()
+            master = next((m for m in members if str(m.id) == master_id), None)
+            if not master:
+                messages.error(request, "Select a valid pack SKU for the family COA master.")
+                return redirect("slurp_ui:quality_item_coa_test_lines", pk=template.id)
+            set_family_coa_template(master)
+            messages.success(
+                request,
+                f"Family COA master set to {master.sku}. Pack variants share these tests.",
+            )
+            return redirect("slurp_ui:quality_item_coa_test_lines", pk=master.id)
+
+        # Edits always apply to the resolved template item
+        edit_item = template
         if action == "delete":
             line_id = request.POST.get("line_id")
             try:
-                ItemCoaTestLine.objects.filter(pk=int(line_id), item=item).delete()
+                ItemCoaTestLine.objects.filter(pk=int(line_id), item=edit_item).delete()
                 messages.success(request, "Test line deleted.")
             except Exception as e:
                 messages.error(request, str(e))
-            return redirect("slurp_ui:quality_item_coa_test_lines", pk=pk)
+            return redirect("slurp_ui:quality_item_coa_test_lines", pk=edit_item.id)
 
         line_id = (request.POST.get("line_id") or "").strip()
         test_name = (request.POST.get("test_name") or "").strip()
@@ -2374,18 +2721,22 @@ def quality_item_coa_test_lines(request: HttpRequest, pk: int) -> HttpResponse:
             }
             try:
                 if line_id and line_id != "new":
-                    line = get_object_or_404(ItemCoaTestLine, pk=int(line_id), item=item)
+                    line = get_object_or_404(ItemCoaTestLine, pk=int(line_id), item=edit_item)
                     for k, v in payload.items():
                         setattr(line, k, v)
                     line.save()
                 else:
-                    ItemCoaTestLine.objects.create(item=item, **payload)
+                    ItemCoaTestLine.objects.create(item=edit_item, **payload)
                 messages.success(request, "Test line saved.")
             except Exception as e:
                 messages.error(request, str(e))
-        return redirect("slurp_ui:quality_item_coa_test_lines", pk=pk)
+        return redirect("slurp_ui:quality_item_coa_test_lines", pk=edit_item.id)
 
-    lines = list(item.coa_test_lines.select_related("catalog_test").all())
+    # GET: always land on the template item URL
+    if item.id != template.id:
+        return redirect("slurp_ui:quality_item_coa_test_lines", pk=template.id)
+
+    lines = list(template.coa_test_lines.select_related("catalog_test").all())
     catalog_options = list(
         CoaTestCatalog.objects.filter(is_active=True).order_by("sort_order", "test_name")
     )
@@ -2394,13 +2745,49 @@ def quality_item_coa_test_lines(request: HttpRequest, pk: int) -> HttpResponse:
         "slurp_ui/quality/item_coa_test_lines.html",
         _quality_ctx(
             "finished-goods",
-            item=item,
+            item=template,
             lines=lines,
             catalog_options=catalog_options,
             result_kind_choices=ItemCoaTestLine.RESULT_KIND_CHOICES,
             customer_result_display_choices=ItemCoaTestLine.CUSTOMER_RESULT_DISPLAY_CHOICES,
+            parent_code=parent_code,
+            family_members=members,
+            family_variant_count=len(members),
             port_status="full",
         ),
+    )
+
+
+@login_required
+def quality_item_example_coa_pdf(request: HttpRequest, pk: int) -> HttpResponse:
+    """Example COA PDF from FPS tests — for customer requests (not a lot certificate)."""
+    from erp_core.coa_pdf_html import generate_example_fps_coa_pdf_bytes
+    from erp_core.coa_template import item_has_coa_template_lines, resolve_coa_template_item
+
+    item = get_object_or_404(Item, pk=pk)
+    if item.item_type not in ("finished_good", "distributed_item"):
+        messages.error(request, "Example COA applies only to finished goods / distributed items.")
+        return redirect("slurp_ui:quality_finished_goods")
+    template = resolve_coa_template_item(item) or item
+    if not item_has_coa_template_lines(item):
+        messages.warning(
+            request,
+            f"{template.sku} has no COA / micro tests yet — add tests, then open Example COA.",
+        )
+        return redirect("slurp_ui:quality_item_coa_test_lines", pk=template.id)
+
+    pdf = generate_example_fps_coa_pdf_bytes(item)
+    if not pdf:
+        messages.error(request, "Could not generate example COA PDF.")
+        return redirect("slurp_ui:quality_finished_good_detail", pk=pk)
+
+    safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in (template.sku or str(template.pk)))
+    return HttpResponse(
+        pdf,
+        content_type="application/pdf",
+        headers={
+            "Content-Disposition": f'inline; filename="COA_EXAMPLE_{safe}.pdf"',
+        },
     )
 
 

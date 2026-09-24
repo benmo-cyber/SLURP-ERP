@@ -94,6 +94,20 @@
 
   <h1>Certificate of Analysis</h1>
 
+  {% if is_example %}
+  <div style="background:#fef3c7;border:1px solid #d97706;color:#92400e;padding:6pt 8pt;margin:0 0 8pt 0;font-size:9pt;font-weight:bold;text-align:center">
+    EXAMPLE COA — Not a lot certificate. For reference / customer requests only.
+    Results shown are typical values from the product FPS.
+  </div>
+  {% endif %}
+
+  {% if shelf_life_extension %}
+  <div style="background:#ecfdf5;border:1px solid #059669;color:#065f46;padding:6pt 8pt;margin:0 0 8pt 0;font-size:8.5pt;text-align:center">
+    {{ shelf_life_extension.banner }}
+    Microbiological results below are unchanged from the prior certificate.
+  </div>
+  {% endif %}
+
   <table class="meta">
     <tr><td class="k">Product</td><td class="v">{{ product_name }}</td></tr>
     <tr><td class="k">Lot No</td><td class="v">{{ lot_number }}</td></tr>

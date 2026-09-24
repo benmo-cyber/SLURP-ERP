@@ -85,13 +85,20 @@ def inventory_empty_vendor_label_for_sku(sku_items):
     return "Unknown"
 
 
-def _expiration_datetime_for_fg_output(item, base_dt):
-    """If the finished good has a formula with shelf_life_months, return expiration datetime from base_dt."""
-    if not item or getattr(item, 'item_type', None) != 'finished_good' or not base_dt:
-        return None
-    from .formula_resolve import formula_for_item
+def _expiration_datetime_for_fg_output(item, base_dt, formula=None):
+    """If the FG/DI has a formula with shelf_life_months, return expiration datetime from base_dt.
 
-    formula = formula_for_item(item.id)
+    Prefer an explicit ``formula`` (e.g. the batch's locked recipe); otherwise the
+    item's default formula. ``base_dt`` may be a date or datetime.
+    """
+    if not item or not base_dt:
+        return None
+    if getattr(item, "item_type", None) not in ("finished_good", "distributed_item"):
+        return None
+    if formula is None:
+        from .formula_resolve import formula_for_item
+
+        formula = formula_for_item(item.id)
     if not formula or not formula.shelf_life_months:
         return None
     from .lot_date_utils import add_calendar_months_to_datetime
@@ -1426,6 +1433,33 @@ def generate_po_number():
     
     return po_number
 
+
+def generate_rma_number():
+    """Generate a unique customer RMA number in format 5yy0000."""
+    from django.db import transaction
+    from .models import CustomerRma, RmaNumberSequence
+
+    today = timezone.now()
+    year_prefix = today.strftime("%y")
+
+    with transaction.atomic():
+        sequence, _created = RmaNumberSequence.objects.select_for_update().get_or_create(
+            year_prefix=year_prefix,
+            defaults={"sequence_number": 0},
+        )
+        sequence.sequence_number += 1
+        sequence.save()
+        rma_number = f"5{year_prefix}{sequence.sequence_number:04d}"
+        max_retries = 10
+        retry_count = 0
+        while CustomerRma.objects.filter(rma_number=rma_number).exists() and retry_count < max_retries:
+            sequence.sequence_number += 1
+            sequence.save()
+            rma_number = f"5{year_prefix}{sequence.sequence_number:04d}"
+            retry_count += 1
+    return rma_number
+
+
 def generate_sales_order_number():
     """Generate a unique sales order number in format 3yy0000 (7 digits: 3 + year + 4-digit sequence)"""
     from django.db import transaction
@@ -1567,7 +1601,7 @@ def generate_batch_number(batch_type='production'):
     
     today = timezone.now()
     date_prefix = today.strftime('%Y%m%d')  # YYYYMMDD
-    prefix = 'R' if batch_type == 'repack' else 'BT'
+    prefix = "R" if batch_type == "repack" else ("RW" if batch_type == "rework" else "BT")
     
     # Use select_for_update to lock the row and prevent race conditions
     with transaction.atomic():
