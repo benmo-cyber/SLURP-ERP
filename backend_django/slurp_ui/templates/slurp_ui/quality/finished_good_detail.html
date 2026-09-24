@@ -1,71 +1,94 @@
 {% extends "slurp_ui/base_module.html" %}
 {% load static %}
-{% block title %}{{ item.sku }} — SLURP{% endblock %}
-{% block module_title %}Finished Good{% endblock %}
+{% block title %}{{ item.sku }} — FPS — SLURP{% endblock %}
+{% block module_title %}FPS — {{ item.sku }}{% endblock %}
 {% block extra_css %}
-<link rel="stylesheet" href="{% static 'slurp_ui/css/FinishedGoodDetail.css' %}?v=20260922b" />
+<link rel="stylesheet" href="{% static 'slurp_ui/css/FinishedGoodDetail.css' %}?v=20260923c" />
+<link rel="stylesheet" href="{% static 'slurp_ui/css/Quality.css' %}?v=20260923c" />
 {% endblock %}
 {% block header_actions %}
-  <a href="{% url 'slurp_ui:quality_finished_goods' %}" class="hs-btn">All finished goods</a>
-  <a href="{% url 'slurp_ui:quality_item_coa_test_lines' item.id %}" class="hs-btn">COA test lines</a>
+  <a href="{% url 'slurp_ui:quality_finished_goods' %}" class="hs-btn">All FPS</a>
+  <a href="{% url 'slurp_ui:quality_item_coa_test_lines' item.id %}" class="hs-btn hs-btn-primary">COA / Micro</a>
 {% endblock %}
 {% block main %}
 <div class="fg-sheet hs-bleed">
   <section class="fg-sheet-hero">
     <div class="fg-sheet-hero-copy">
-      <p class="fg-sheet-kicker">Product recipes</p>
+      <p class="fg-sheet-kicker">FPS</p>
       <h2>{{ item.sku }} — {{ item.name }}</h2>
       <p class="fg-sheet-lede">
         {% if can_edit_formula %}
-          One finished-good spec can have alternate make paths (e.g. from 3% vs 5% concentrate).
-          Pick a recipe on create batch.
+          Alternate formulas share this FG; pick one on create batch.
         {% else %}
-          Distributed items use repack lots — no production formula on this sheet.
+          Distributed item — repack lots only, no production formula.
         {% endif %}
       </p>
     </div>
     <div class="fg-sheet-meta" aria-label="Product meta">
-      <span class="fg-sheet-chip">{{ item.get_item_type_display }}</span>
+      <span class="fg-sheet-chip">{% if item.item_type == 'finished_good' %}FG{% elif item.item_type == 'distributed_item' %}DI{% else %}{{ item.get_item_type_display }}{% endif %}</span>
       <span class="fg-sheet-chip is-muted">{{ item.unit_of_measure }}</span>
       {% if formula %}
-      <span class="fg-sheet-chip is-muted">{{ recipe_label|default:formula.name }}</span>
+      <span class="fg-sheet-chip is-muted">{{ formula_label|default:formula.name }}</span>
       {% endif %}
-      <span class="fg-sheet-chip is-muted">{{ recipes|length }} recipe{{ recipes|length|pluralize }}</span>
+      {% if can_edit_formula %}
+      <span class="fg-sheet-chip is-muted">{{ formulas|length }} formula{{ formulas|length|pluralize }}</span>
+      {% endif %}
     </div>
   </section>
 
   <div class="fg-sheet-body">
+
+  <div class="fg-sheet-card" style="margin-bottom:0;border-color:#93c5fd;background:#eff6ff">
+    <div class="fg-sheet-card-head">
+      <h3>COA / Micro</h3>
+      <span class="hint">Hold release · customer COAs</span>
+    </div>
+    <div class="fg-sheet-card-body" style="display:flex;flex-wrap:wrap;gap:0.75rem;align-items:center;justify-content:space-between">
+      <p style="margin:0;color:#1e3a5f;font-size:0.92rem;max-width:36rem">
+        Catalog pick autofills specs; edit per-FPS if needed.
+      </p>
+      <div style="display:flex;flex-wrap:wrap;gap:0.5rem">
+        <a href="{% url 'slurp_ui:quality_item_coa_test_lines' item.id %}" class="hs-btn hs-btn-primary">
+          Edit tests
+        </a>
+        <a href="{% url 'slurp_ui:quality_coa_test_catalog' %}" class="hs-btn">
+          Catalog
+        </a>
+      </div>
+    </div>
+  </div>
+
   {% if not can_edit_formula %}
     <div class="fg-sheet-card">
       <div class="fg-sheet-empty">
-        Formula editor applies to finished goods only. Distributed items use repack lots, not production formulas.
+        Formula editor applies to finished goods only. Distributed items use repack lots, not production formulas on this FPS.
       </div>
     </div>
   {% else %}
 
   <div class="fg-sheet-card" style="margin-bottom:0">
     <div class="fg-sheet-card-head">
-      <h3>Recipes</h3>
+      <h3>Formulas</h3>
       <span class="hint">Same FG / QC destination — different ingredient paths</span>
     </div>
     <div class="fg-sheet-card-body">
-      <div class="fg-recipe-tabs" role="tablist">
-        {% for r in recipes %}
-        <a class="fg-recipe-tab {% if formula and formula.id == r.id %}is-active{% endif %}"
-           href="?recipe={{ r.id }}" role="tab">
+      <div class="fg-formula-tabs" role="tablist">
+        {% for r in formulas %}
+        <a class="fg-formula-tab {% if formula and formula.id == r.id %}is-active{% endif %}"
+           href="?formula={{ r.id }}" role="tab">
           {{ r.name }}{% if r.is_default %} · default{% endif %}
         </a>
         {% empty %}
-        <span class="hs-muted">No recipes yet — save below to create Standard.</span>
+        <span class="hs-muted">No formulas yet — save below to create Standard.</span>
         {% endfor %}
       </div>
-      <form method="post" class="fg-recipe-add" style="margin-top:0.85rem;display:flex;flex-wrap:wrap;gap:0.55rem;align-items:end">
+      <form method="post" class="fg-formula-add" style="margin-top:0.85rem;display:flex;flex-wrap:wrap;gap:0.55rem;align-items:end">
         {% csrf_token %}
-        <input type="hidden" name="action" value="add_recipe" />
+        <input type="hidden" name="action" value="add_formula" />
         {% if formula %}<input type="hidden" name="clone_from" value="{{ formula.id }}" />{% endif %}
         <div class="form-row" style="margin:0;min-width:14rem;flex:1">
-          <label for="new_recipe_name">Add recipe</label>
-          <input id="new_recipe_name" name="new_recipe_name" placeholder="e.g. From G3405 5%" />
+          <label for="new_formula_name">Add formula</label>
+          <input id="new_formula_name" name="new_formula_name" placeholder="e.g. From G3405 5%" />
         </div>
         <button type="submit" class="hs-btn">+ Add{% if formula %} (clone current){% endif %}</button>
       </form>
@@ -75,11 +98,11 @@
   <form method="post" id="formula-form">
     {% csrf_token %}
     <input type="hidden" name="action" value="save" />
-    {% if formula %}<input type="hidden" name="recipe_id" value="{{ formula.id }}" />{% endif %}
+    {% if formula %}<input type="hidden" name="formula_id" value="{{ formula.id }}" />{% endif %}
 
     <div class="fg-sheet-card">
       <div class="fg-sheet-card-head">
-        <h3>{% if formula %}{{ formula.name }}{% else %}New recipe{% endif %}</h3>
+        <h3>{% if formula %}{{ formula.name }}{% else %}New formula{% endif %}</h3>
         {% if formula and not formula.is_default %}
         <button type="submit" name="action" value="set_default" class="hs-btn hs-btn-sm"
                 formaction="" formmethod="post">Make default</button>
@@ -88,22 +111,22 @@
       <div class="fg-sheet-card-body">
         <div class="fg-sheet-grid-3">
           <div class="form-row">
-            <label for="recipe_name">Recipe name</label>
-            <input id="recipe_name" name="recipe_name" value="{{ formula.name|default:'Standard' }}" required />
+            <label for="formula_name">Name</label>
+            <input id="formula_name" name="formula_name" value="{{ formula.name|default:'Standard' }}" required />
           </div>
           <div class="form-row">
-            <label for="version">Version</label>
+            <label for="version">Ver</label>
             <input id="version" name="version" value="{{ formula.version|default:'1.0' }}" />
           </div>
           <div class="form-row">
-            <label for="shelf_life_months">Shelf life (months)</label>
+            <label for="shelf_life_months">Shelf life (mo)</label>
             <input id="shelf_life_months" name="shelf_life_months" type="number" min="0"
                    value="{{ formula.shelf_life_months|default_if_none:'' }}" />
           </div>
           <div class="form-row">
             <label for="critical_control_point">CCP</label>
             <select id="critical_control_point" name="critical_control_point">
-              <option value="">— None —</option>
+              <option value="">—</option>
               {% for c in ccps %}
               <option value="{{ c.id }}"
                 {% if formula and formula.critical_control_point_id == c.id %}selected{% endif %}>
@@ -114,9 +137,9 @@
           </div>
           <div class="form-row" style="display:flex;align-items:center;gap:0.5rem;padding-top:1.4rem">
             <input type="checkbox" id="is_default" name="is_default" value="1"
-                   {% if formula.is_default or not recipes %}checked{% endif %} />
+                   {% if formula.is_default or not formulas %}checked{% endif %} />
             <label for="is_default" style="margin:0;text-transform:none;letter-spacing:0;font-size:0.9rem;color:#1e2a3a">
-              Default recipe (shelf life / QC when batch has no recipe)
+              Default
             </label>
           </div>
         </div>
@@ -125,8 +148,8 @@
 
     <div class="fg-sheet-card">
       <div class="fg-sheet-card-head">
-        <h3>QC specification</h3>
-        <span class="hint">Ports to batch close and release-from-hold for this recipe</span>
+        <h3>QC</h3>
+        <span class="hint">Batch close / hold release</span>
       </div>
       <div class="fg-sheet-card-body">
         <div class="fg-sheet-grid-3">
@@ -134,17 +157,19 @@
             <label for="qc_parameter_name">Parameter</label>
             <input id="qc_parameter_name" name="qc_parameter_name"
                    value="{{ formula.qc_parameter_name|default:'' }}"
-                   placeholder="e.g. Betanin" />
+                   placeholder="e.g. % beta carotene" />
           </div>
           <div class="form-row">
             <label for="qc_spec_min">Min</label>
             <input id="qc_spec_min" name="qc_spec_min" type="number" step="any"
-                   value="{{ formula.qc_spec_min|default_if_none:'' }}" />
+                   value="{{ formula.qc_spec_min|default_if_none:'' }}"
+                   placeholder="1.0" />
           </div>
           <div class="form-row">
             <label for="qc_spec_max">Max</label>
             <input id="qc_spec_max" name="qc_spec_max" type="number" step="any"
-                   value="{{ formula.qc_spec_max|default_if_none:'' }}" />
+                   value="{{ formula.qc_spec_max|default_if_none:'' }}"
+                   placeholder="1.5" />
           </div>
         </div>
       </div>
@@ -153,8 +178,8 @@
     <div class="fg-sheet-card">
       <div class="fg-sheet-card-head">
         <h3>Ingredients</h3>
-        <span class="hint">Must total 100%. Prefer a parent family so new pack sizes stay valid.</span>
-        <button type="button" class="hs-btn hs-btn-sm" id="add-ing">+ Add ingredient</button>
+        <span class="hint">Must total 100%</span>
+        <button type="button" class="hs-btn hs-btn-sm" id="add-ing">+ Add</button>
       </div>
       <div class="fg-sheet-card-body">
         <input type="hidden" name="line_count" id="line_count" value="{{ ingredients|length|default:1 }}" />
@@ -186,7 +211,7 @@
                 <div class="form-row">
                   <label>Item</label>
                   <select name="ing_item_0">
-                    {% include "slurp_ui/quality/_formula_ingredient_options.html" with selected_value="" %}
+                    {% include "slurp_ui/quality/_formula_ingredient_options.html" %}
                   </select>
                 </div>
                 <div class="form-row">
@@ -195,7 +220,7 @@
                 </div>
                 <div class="form-row">
                   <label>Notes</label>
-                  <input name="ing_notes_0" />
+                  <input name="ing_notes_0" value="" />
                 </div>
               </div>
             </div>
@@ -221,7 +246,7 @@
     </div>
 
     <div class="fg-sheet-actions">
-      <button type="submit" class="hs-btn hs-btn-primary">Save recipe</button>
+      <button type="submit" class="hs-btn hs-btn-primary">Save formula</button>
     </div>
   </form>
 

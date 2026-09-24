@@ -83,6 +83,8 @@ def get_indirect_materials_for_batch(batch):
     # 2) batch.inputs where item is indirect (same as view), or UoM is EA (packaging)
     try:
         for batch_input in batch.inputs.select_related('lot__item').all():
+            if batch_input.lot is None:
+                continue
             item = getattr(batch_input.lot, 'item', None)
             if not item:
                 continue
@@ -1391,12 +1393,18 @@ def build_batch_ticket_pdf(batch):
             # Same relationship as pick list: one loop over batch.inputs. Raw -> pick list, indirect -> pack off.
             pick_rows = []
             indirect_materials_rows = []
-            for batch_input in batch.inputs.select_related('lot__item', 'lot__pack_size').prefetch_related(
-                'lot__item__pack_sizes'
+            for batch_input in batch.inputs.select_related('lot__item', 'lot__pack_size', 'item').prefetch_related(
+                'lot__item__pack_sizes', 'item__pack_sizes'
             ).all():
                 lot = batch_input.lot
-                item = lot.item
+                item = batch_input.resolved_item() if hasattr(batch_input, 'resolved_item') else None
+                if item is None and lot is not None:
+                    item = lot.item
+                if not item:
+                    continue
                 if _is_indirect_material(item):
+                    if lot is None:
+                        continue
                     qty_str = f"{int(batch_input.quantity_used)}" if batch_input.quantity_used == int(batch_input.quantity_used) else f"{batch_input.quantity_used:.2f}"
                     indirect_materials_rows.append({
                         'packaging': (getattr(item, 'description', None) or item.name or item.sku or '').strip(),
@@ -1406,7 +1414,14 @@ def build_batch_ticket_pdf(batch):
                     })
                     continue
                 vendor = (getattr(item, 'vendor', None) or '').strip() or '—'
-                vendor_lot = (lot.vendor_lot_number or lot.lot_number or '—').strip()
+                if lot is None or getattr(item, 'plant_utility', False):
+                    vendor_lot = 'PLANT'
+                    wildwood = ''
+                    packs_note = 'Plant utility'
+                else:
+                    vendor_lot = (lot.vendor_lot_number or lot.lot_number or '—').strip()
+                    wildwood = lot.lot_number or ''
+                    packs_note = None
                 qty = batch_input.quantity_used
                 if (item.unit_of_measure or 'lbs') == 'kg':
                     qty = convert_mass_uom(qty, 'kg', 'lbs')
@@ -1415,12 +1430,13 @@ def build_batch_ticket_pdf(batch):
                 raw_material = (getattr(item, 'description', None) or item.name or item.sku or '').strip()
                 uom = (getattr(item, 'unit_of_measure', None) or 'lbs').strip() or 'lbs'
                 from .pack_display import format_packs_partial_note, resolve_pack_size
-                pack_qty, pack_uom = resolve_pack_size(item=item, lot=lot)
-                try:
-                    qty_num = float(qty_str)
-                except (TypeError, ValueError):
-                    qty_num = float(qty_base)
-                packs_note = format_packs_partial_note(qty_num, base_unit or uom, pack_qty, pack_uom)
+                if packs_note is None:
+                    pack_qty, pack_uom = resolve_pack_size(item=item, lot=lot)
+                    try:
+                        qty_num = float(qty_str)
+                    except (TypeError, ValueError):
+                        qty_num = float(qty_base)
+                    packs_note = format_packs_partial_note(qty_num, base_unit or uom, pack_qty, pack_uom)
                 qty_cell = qty_str
                 if packs_note:
                     qty_cell = f"{qty_str} ({packs_note})"
@@ -1431,7 +1447,7 @@ def build_batch_ticket_pdf(batch):
                     'vendor_lot': vendor_lot,
                     'qty': qty_cell,
                     'uom': uom,
-                    'wildwood_lot': lot.lot_number or '',
+                    'wildwood_lot': wildwood,
                 })
             pack_rows = []
             for batch_output in batch.outputs.select_related('lot__item').all():
@@ -1607,29 +1623,39 @@ def build_batch_ticket_pdf(batch):
     pick_headers = ['Raw Material SKU', 'Vendor', 'Vendor Lot', 'Quantity', 'Pick Initials', 'Production Initials', 'Wildwood Lot']
     pick_rows = [pick_headers]
     from .pack_display import format_packs_partial_note, resolve_pack_size
-    for batch_input in batch.inputs.select_related('lot__item', 'lot__pack_size').prefetch_related(
-        'lot__item__pack_sizes'
+    for batch_input in batch.inputs.select_related('lot__item', 'lot__pack_size', 'item').prefetch_related(
+        'lot__item__pack_sizes', 'item__pack_sizes'
     ).all():
         lot = batch_input.lot
-        item = lot.item
-        if _is_indirect_material(item):
+        item = batch_input.resolved_item() if hasattr(batch_input, 'resolved_item') else None
+        if item is None and lot is not None:
+            item = lot.item
+        if not item or _is_indirect_material(item):
             continue
         vendor = (getattr(item, 'vendor', None) or '').strip() or '—'
-        vendor_lot = (lot.vendor_lot_number or lot.lot_number or '—').strip()
+        if lot is None or getattr(item, 'plant_utility', False):
+            vendor_lot = 'PLANT'
+            wildwood = ''
+            packs_note = 'Plant utility'
+        else:
+            vendor_lot = (lot.vendor_lot_number or lot.lot_number or '—').strip()
+            wildwood = lot.lot_number or ''
+            packs_note = None
         qty = batch_input.quantity_used
         if (item.unit_of_measure or 'lbs') == 'kg':
             qty = convert_mass_uom(qty, 'kg', 'lbs')
         qty_base = convert_from_lbs_to_base(qty)
         qty_str = f"{int(round(qty_base))}" if abs(qty_base - round(qty_base)) <= 0.01 else f"{qty_base:.2f}"
-        pack_qty, pack_uom = resolve_pack_size(item=item, lot=lot)
-        try:
-            qty_num = float(qty_str)
-        except (TypeError, ValueError):
-            qty_num = float(qty_base)
-        packs_note = format_packs_partial_note(qty_num, base_unit or 'lbs', pack_qty, pack_uom)
+        if packs_note is None:
+            pack_qty, pack_uom = resolve_pack_size(item=item, lot=lot)
+            try:
+                qty_num = float(qty_str)
+            except (TypeError, ValueError):
+                qty_num = float(qty_base)
+            packs_note = format_packs_partial_note(qty_num, base_unit or 'lbs', pack_qty, pack_uom)
         if packs_note:
             qty_str = f"{qty_str} ({packs_note})"
-        pick_rows.append([item.sku or '', vendor[:14], vendor_lot[:12], qty_str, '', '', lot.lot_number or ''])
+        pick_rows.append([item.sku or '', vendor[:14], vendor_lot[:12], qty_str, '', '', wildwood])
     if len(pick_rows) == 1:
         pick_rows.append(['', '', '', '', '', '', ''])
     pick_tbl = Table(pick_rows, colWidths=_PICK_COL_WIDTHS)
@@ -1754,7 +1780,9 @@ def build_batch_ticket_pdf(batch):
     pack_headers = ['Packaging', 'Lot', 'Quantity', 'Pick Initial', 'Pack Initial', 'Amount Unused & Returned to Inventory']
     pack_rows = [pack_headers]
     # Same relationship as pick list: batch.inputs. Indirect -> pack off (first), then outputs.
-    for batch_input in batch.inputs.select_related('lot__item').all():
+    for batch_input in batch.inputs.select_related('lot__item', 'item').all():
+        if batch_input.lot is None:
+            continue
         if not _is_indirect_material(batch_input.lot.item):
             continue
         item = batch_input.lot.item

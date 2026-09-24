@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { updateProductionBatch, getFormulas } from '../../api/inventory'
 import { formatNumber } from '../../utils/formatNumber'
+import { useGodMode } from '../../context/GodModeContext'
 import './CloseBatch.css'
 
 interface CloseBatchProps {
@@ -25,6 +26,8 @@ function CloseBatch({ batch, onClose, onSuccess }: CloseBatchProps) {
   const [unitDisplay, setUnitDisplay] = useState<'lbs' | 'kg'>('lbs')
   const [formula, setFormula] = useState<Formula | null>(null)
   const [loadingFormula, setLoadingFormula] = useState(true)
+  const { godModeOn, canUseGodMode } = useGodMode()
+  const allowEarlyClose = Boolean(godModeOn && canUseGodMode)
   const [formData, setFormData] = useState({
     quantity_actual: batch.quantity_actual || batch.quantity_produced || '',
     wastes: batch.wastes || '',
@@ -38,6 +41,10 @@ function CloseBatch({ batch, onClose, onSuccess }: CloseBatchProps) {
 
   // Get the unit of measure for the finished good (default to lbs)
   const finishedGoodUnit = batch.finished_good_item?.unit_of_measure || 'lbs'
+
+  const productionDateStr = (batch.production_date || '').split('T')[0]
+  const todayStr = new Date().toISOString().slice(0, 10)
+  const isBeforeProductionDate = Boolean(productionDateStr && productionDateStr > todayStr)
 
   // Load formula for the finished good
   useEffect(() => {
@@ -133,6 +140,14 @@ function CloseBatch({ batch, onClose, onSuccess }: CloseBatchProps) {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
 
+    if (isBeforeProductionDate && !allowEarlyClose) {
+      alert(
+        `Cannot close before production date (${productionDateStr}). ` +
+          'Enable God mode (staff) to close early, or wait until that date.'
+      )
+      return
+    }
+
     if (!formData.qc_parameters || !formData.qc_actual || !formData.qc_initials) {
       alert('Please fill in all QC fields')
       return
@@ -187,6 +202,7 @@ function CloseBatch({ batch, onClose, onSuccess }: CloseBatchProps) {
         status: 'closed',
         closed_date: new Date().toISOString(),
         notes: notes,
+        ...(allowEarlyClose ? { allow_early_close: true } : {}),
       })
       
       alert('Batch closed successfully! A new lot has been created and added to inventory. Please refresh the Inventory page to see it.')
@@ -271,6 +287,16 @@ function CloseBatch({ batch, onClose, onSuccess }: CloseBatchProps) {
         </div>
 
         <form onSubmit={handleSubmit} className="close-batch-form">
+        {isBeforeProductionDate && !allowEarlyClose && (
+          <div style={{ marginBottom: '1rem', padding: '0.75rem 1rem', background: '#fef3c7', border: '1px solid #f59e0b', borderRadius: 8 }}>
+            Production date is <strong>{productionDateStr}</strong> (after today). Enable God mode (staff) to close early, or wait until that date.
+          </div>
+        )}
+        {isBeforeProductionDate && allowEarlyClose && (
+          <div style={{ marginBottom: '1rem', padding: '0.75rem 1rem', background: '#eff6ff', border: '1px solid #93c5fd', borderRadius: 8 }}>
+            God mode: closing before production date <strong>{productionDateStr}</strong>.
+          </div>
+        )}
           <div className="batch-info">
             <div className="info-item">
               <label>Finished Good:</label>
@@ -455,7 +481,7 @@ function CloseBatch({ batch, onClose, onSuccess }: CloseBatchProps) {
             <button type="button" onClick={onClose} className="btn btn-secondary">
               Cancel
             </button>
-            <button type="submit" className="btn btn-primary" disabled={submitting}>
+            <button type="submit" className="btn btn-primary" disabled={submitting || (isBeforeProductionDate && !allowEarlyClose)}>
               {submitting ? 'Closing...' : 'Close Batch'}
             </button>
           </div>

@@ -26,29 +26,66 @@ def _format_qty_display(qty, uom: str) -> str:
     return f"{qty_s} {(uom or 'lbs')}".strip()
 
 
-def _test_rows_from_certificate(certificate):
+def _test_rows_from_certificate(
+    certificate,
+    *,
+    include_ids=None,
+    include_qc: bool = True,
+    display_mode: str = "actual",
+    line_overrides: dict | None = None,
+):
+    """
+    Build Test | Specification | Result rows for a COA PDF.
+
+    Master path: include_ids=None, include_qc=True, display_mode='actual'.
+    Customer path: filter by include_ids / include_qc; display_mode may be
+    actual | pass_fail | per_line (with line_overrides).
+    """
+    from .coa_customer_options import _pass_fail_label
     from .coa_logic import qc_spec_display
 
+    mode = (display_mode or "actual").strip().lower()
+    overrides = line_overrides or {}
     test_rows = []
+
     qname = (certificate.qc_parameter_name_snapshot or "").strip()
-    if qname or certificate.qc_result_value is not None:
+    has_qc = bool(qname or certificate.qc_result_value is not None)
+    if include_qc and has_qc:
         spec = qc_spec_display(
             qname or "QC",
             certificate.qc_spec_min_snapshot,
             certificate.qc_spec_max_snapshot,
         )
-        if certificate.qc_result_value is not None:
+        qc_disp = mode
+        if mode == "per_line":
+            qc_disp = overrides.get("qc", "actual")
+        if qc_disp == "pass_fail":
+            res = _pass_fail_label(certificate.qc_result_pass)
+        elif certificate.qc_result_value is not None:
             res = f"{float(certificate.qc_result_value):g}"
         else:
             res = "—"
         test_rows.append({"test": qname or "QC parameter", "specification": spec, "result": res})
 
+    id_filter = None
+    if include_ids is not None:
+        id_filter = {int(x) for x in include_ids}
+
     for lr in certificate.line_results.all().order_by("id"):
+        if id_filter is not None and int(lr.id) not in id_filter:
+            continue
+        line_mode = mode
+        if mode == "per_line":
+            line_mode = overrides.get(str(lr.id), "actual")
+        if line_mode == "pass_fail":
+            res = _pass_fail_label(lr.passes)
+        else:
+            res = _s(lr.result_text)
         test_rows.append(
             {
                 "test": _s(lr.test_name),
                 "specification": _s(lr.specification_text),
-                "result": _s(lr.result_text),
+                "result": res,
             }
         )
     return test_rows
@@ -138,6 +175,8 @@ def build_master_coa_context(certificate):
 
 def build_customer_copy_coa_context(certificate, copy):
     """Customer-facing COA for one SalesOrderLot allocation."""
+    from .coa_customer_options import resolve_customer_coa_row_options
+
     lot = certificate.lot
     item = lot.item
     uom = _s(getattr(item, "unit_of_measure", "") or "lbs")
@@ -145,7 +184,14 @@ def build_customer_copy_coa_context(certificate, copy):
     manufacture_date, expiration_date = _dates_from_lot(lot)
     issue_dt = copy.updated_at or copy.created_at or timezone.now()
     issue_date = issue_dt.strftime("%B %d, %Y") if issue_dt else ""
-    test_rows = _test_rows_from_certificate(certificate)
+    opts = resolve_customer_coa_row_options(copy, certificate)
+    test_rows = _test_rows_from_certificate(
+        certificate,
+        include_ids=opts["include_ids"],
+        include_qc=opts["include_qc"],
+        display_mode=opts["display_mode"],
+        line_overrides=opts["line_overrides"],
+    )
     return build_coa_template_context(
         product_name=item.name,
         lot_number=lot.lot_number or lot.vendor_lot_number or "",

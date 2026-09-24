@@ -171,6 +171,49 @@
   }
 }
 
+/* Label immediately beside its control (not a 50/50 grid that leaves a wide gap). */
+.quality-main .hs-card .form-row,
+.quality-main .fg-sheet .form-row {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.quality-main .hs-card .form-row:has(> textarea),
+.quality-main .fg-sheet .form-row:has(> textarea) {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.3rem;
+}
+
+.quality-main .hs-card .form-row > label,
+.quality-main .fg-sheet .form-row > label {
+  display: block;
+  flex: 0 0 auto;
+  margin: 0;
+  width: auto;
+  max-width: 100%;
+  white-space: nowrap;
+}
+
+.quality-main .hs-card .form-row > input,
+.quality-main .hs-card .form-row > select,
+.quality-main .hs-card .form-row > textarea,
+.quality-main .fg-sheet .form-row > input,
+.quality-main .fg-sheet .form-row > select,
+.quality-main .fg-sheet .form-row > textarea {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: auto;
+  max-width: 100%;
+}
+
+.quality-main .hs-card .form-row:has(> textarea) > label,
+.quality-main .fg-sheet .form-row:has(> textarea) > label {
+  white-space: normal;
+}
+
 /* Vendor record — quieter, read-first */
 .quality-main .hs-card .form-row label {
   text-transform: none;

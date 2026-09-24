@@ -19,6 +19,7 @@ from .lot_display_quantities import compute_lot_quantity_breakdown
 from .mass_quantity import convert_mass_uom, normalize_mass_quantity
 from .models import (
     InventoryTransaction,
+    Item,
     ItemPackSize,
     Lot,
     LotTransactionLog,
@@ -27,10 +28,132 @@ from .models import (
     ProductionBatchOutput,
     ProductionLog,
 )
+from .pack_display import resolve_pack_size
 
 logger = logging.getLogger(__name__)
 
 _QUANTITY_TOLERANCE = 0.02
+_MASS_UOMS = frozenset({"lbs", "lb", "kg"})
+
+
+def net_yield_native(batch: ProductionBatch) -> float | None:
+    """
+    Net yield after spill/waste for display / PDF.
+
+    If wastes+spills already explain ticket−actual (proper close), ``quantity_actual``
+    is already net — do not subtract again. Otherwise subtract losses from actual
+    (common when actual is left at ticket and spill/waste are recorded separately).
+    """
+    if batch.quantity_actual is None:
+        return None
+    actual = float(batch.quantity_actual or 0)
+    ticket = float(batch.quantity_produced or 0)
+    loss = float(batch.wastes or 0) + float(batch.spills or 0)
+    if loss <= 0:
+        return actual
+    shortfall = max(0.0, ticket - actual)
+    if shortfall > 0.05 and abs(loss - shortfall) <= 0.05:
+        return actual
+    return max(0.0, actual - loss)
+
+
+def _norm_mass_uom(uom: str | None) -> str:
+    u = (uom or "lbs").strip().lower()
+    if u in ("lb", "lbs"):
+        return "lbs"
+    return u
+
+
+def _convert_item_mass(qty: float, from_uom: str | None, to_uom: str | None) -> float:
+    """Convert mass between lbs/kg; pass through when UoMs match or are non-mass."""
+    f = _norm_mass_uom(from_uom)
+    t = _norm_mass_uom(to_uom)
+    if f == t:
+        return float(qty)
+    if f in ("lbs", "kg") and t in ("lbs", "kg"):
+        return float(convert_mass_uom(qty, f, t))
+    return float(qty)
+
+
+def pack_units_for_mass(item: Item | None, mass_qty: float, mass_uom: str | None) -> float | None:
+    """
+    How many packs/jugs ``mass_qty`` fills for ``item`` (e.g. 440 lbs / 8 lb = 55).
+
+    Returns None when pack size is unknown or not mass-comparable.
+    """
+    if item is None or mass_qty <= 0:
+        return None
+    pack_qty, pack_uom = resolve_pack_size(item=item)
+    if not pack_qty or pack_qty <= 0:
+        return None
+    pu = _norm_mass_uom(pack_uom or item.unit_of_measure)
+    mu = _norm_mass_uom(mass_uom or item.unit_of_measure)
+    if pu not in ("lbs", "kg") or mu not in ("lbs", "kg"):
+        # Non-mass packs (ea): treat mass_qty as unit count already
+        if pu in ("ea", "each", "pcs") or mu in ("ea", "each", "pcs"):
+            return float(mass_qty)
+        return None
+    mass_in_pack_uom = _convert_item_mass(mass_qty, mu, pu)
+    return mass_in_pack_uom / float(pack_qty)
+
+
+def _is_plant_utility(item) -> bool:
+    return bool(item and getattr(item, "plant_utility", False))
+
+
+def _resolve_batch_input_row(input_data: dict, *, require_available: bool = True):
+    """
+    Resolve a create/adjust input dict to (lot|None, item, quantity_used).
+
+    Accepts either lot_id (normal RM) or item_id for plant_utility items.
+    """
+    from .views import _round_production_quantity_used
+
+    lot_id = input_data.get("lot_id")
+    item_id = input_data.get("item_id")
+    raw_quantity = float(input_data.get("quantity_used", 0) or 0)
+
+    if lot_id:
+        try:
+            lot = Lot.objects.select_related("item").get(id=lot_id)
+        except Lot.DoesNotExist as e:
+            raise MakeFlowError(f"Lot with id {lot_id} not found", status_code=404) from e
+        item = lot.item
+        if _is_plant_utility(item):
+            raise MakeFlowError(
+                f"{item.sku} is a plant utility — use item_id quantity, not a lot."
+            )
+        quantity_used = _round_production_quantity_used(raw_quantity, lot)
+        if quantity_used <= 0:
+            raise MakeFlowError("Invalid input data: lot_id and quantity_used are required")
+        if require_available:
+            available = float(compute_lot_quantity_breakdown(lot)["quantity_available_for_use"])
+            if quantity_used > available + 1e-6:
+                raise MakeFlowError(
+                    f"Insufficient quantity in lot {lot.lot_number}. "
+                    f"Available: {available}, Requested: {quantity_used}"
+                )
+        return lot, item, quantity_used
+
+    if item_id:
+        try:
+            item = Item.objects.get(id=item_id)
+        except Item.DoesNotExist as e:
+            raise MakeFlowError(f"Item with id {item_id} not found", status_code=404) from e
+        if not _is_plant_utility(item):
+            raise MakeFlowError(
+                f"{item.sku} requires a lot allocation (not marked plant utility)."
+            )
+        from .mass_quantity import snap_stored_batch_input_quantity
+
+        quantity_used = snap_stored_batch_input_quantity(
+            raw_quantity, getattr(item, "unit_of_measure", None)
+        )
+        if quantity_used <= 0:
+            raise MakeFlowError("Invalid input data: item_id and quantity_used are required")
+        return None, item, quantity_used
+
+    raise MakeFlowError("Invalid input data: lot_id or plant-utility item_id is required")
 
 
 class MakeFlowError(Exception):
@@ -74,7 +197,7 @@ def create_batch_ticket(user, data: dict) -> ProductionBatch:
 
     ``data`` keys: batch_type, finished_good_item_id, quantity_produced, production_date,
     status, batch_ticket_mass_unit, recipe_snapshot, notes, inputs, indirect_materials,
-    work_in_partials, outputs, batch_number (optional).
+    work_in_partials, outputs, batch_number (optional), critical_control_point (optional CCP pk).
     """
     from .serializers import ProductionBatchSerializer
     from .views import (
@@ -114,15 +237,27 @@ def create_batch_ticket(user, data: dict) -> ProductionBatch:
         if not inputs_data:
             raise MakeFlowError("Repack batches require at least one input lot")
         try:
-            first_lot = Lot.objects.get(id=inputs_data[0]["lot_id"])
-            item = first_lot.item
+            first_lot = Lot.objects.select_related("item").get(id=inputs_data[0]["lot_id"])
+            source_item = first_lot.item
             for input_data in inputs_data:
-                lot = Lot.objects.get(id=input_data["lot_id"])
-                if lot.item.id != item.id:
+                lot = Lot.objects.select_related("item").get(id=input_data["lot_id"])
+                if lot.item_id != source_item.id:
                     raise MakeFlowError(
-                        "All input lots must be for the same item in a repack batch"
+                        "All input lots must be for the same source SKU in a repack batch"
                     )
-            payload["finished_good_item_id"] = item.id
+            # Target SKU (output): explicit finished_good_item_id, else same as source
+            target_id = payload.get("finished_good_item_id")
+            if target_id:
+                try:
+                    target_item = Item.objects.get(id=int(target_id))
+                except (Item.DoesNotExist, TypeError, ValueError) as e:
+                    raise MakeFlowError(
+                        "Invalid finished_good_item_id for repack target SKU", status_code=404
+                    ) from e
+            else:
+                target_item = source_item
+                payload["finished_good_item_id"] = source_item.id
+            payload["finished_good_item_id"] = target_item.id
         except Lot.DoesNotExist as e:
             raise MakeFlowError("Invalid lot ID in inputs", status_code=404) from e
 
@@ -131,39 +266,44 @@ def create_batch_ticket(user, data: dict) -> ProductionBatch:
     )
     total_input_quantity_in_lbs = 0.0
     total_input_quantity_native = 0.0
+    resolved_inputs = []
 
     for input_data in inputs_data:
-        lot_id = input_data.get("lot_id")
-        raw_quantity = float(input_data.get("quantity_used", 0))
-        if not lot_id:
-            raise MakeFlowError("Invalid input data: lot_id and quantity_used are required")
-        try:
-            lot = Lot.objects.get(id=lot_id)
-        except Lot.DoesNotExist as e:
-            raise MakeFlowError(f"Lot with id {lot_id} not found", status_code=404) from e
-        quantity_used = _round_production_quantity_used(raw_quantity, lot)
-        if quantity_used <= 0:
-            raise MakeFlowError("Invalid input data: lot_id and quantity_used are required")
-        available = float(compute_lot_quantity_breakdown(lot)["quantity_available_for_use"])
-        if quantity_used > available + 1e-6:
-            raise MakeFlowError(
-                f"Insufficient quantity in lot {lot.lot_number}. "
-                f"Available: {available}, Requested: {quantity_used}"
-            )
+        lot, item, quantity_used = _resolve_batch_input_row(input_data, require_available=True)
         quantity_used_in_lbs = quantity_used
-        if lot.item.unit_of_measure == "kg":
+        if (item.unit_of_measure or "").lower() == "kg":
             quantity_used_in_lbs = convert_mass_uom(quantity_used, "kg", "lbs")
         total_input_quantity_in_lbs += quantity_used_in_lbs
         total_input_quantity_native += quantity_used
+        resolved_inputs.append((lot, item, quantity_used))
 
     if batch_type == "repack":
-        quantity_produced = normalize_mass_quantity(round(total_input_quantity_native, 2))
-        if abs(total_input_quantity_native - quantity_produced_from_request) > _QUANTITY_TOLERANCE:
-            raise MakeFlowError(
-                f"Quantity mismatch: Total quantity used ({total_input_quantity_native:.2f} "
-                f"{lot.item.unit_of_measure}) must equal quantity to produce "
-                f"({quantity_produced_from_request:.2f} {lot.item.unit_of_measure})"
+        target_item = Item.objects.get(id=payload["finished_good_item_id"])
+        target_uom = target_item.unit_of_measure or "lbs"
+        source_uom = resolved_inputs[0][1].unit_of_measure if resolved_inputs else target_uom
+        # Convert consumed source mass into target native UoM (cross-pack kg↔lbs)
+        total_in_target_uom = 0.0
+        for _lot, item, qty in resolved_inputs:
+            total_in_target_uom += _convert_item_mass(
+                qty, item.unit_of_measure, target_uom
             )
+        total_in_target_uom = normalize_mass_quantity(round(total_in_target_uom, 2))
+        quantity_produced = total_in_target_uom
+        if abs(total_in_target_uom - quantity_produced_from_request) > _QUANTITY_TOLERANCE:
+            raise MakeFlowError(
+                f"Quantity mismatch: Consumed input equals {total_in_target_uom:.2f} "
+                f"{_norm_mass_uom(target_uom)} toward target {target_item.sku}, but quantity "
+                f"to produce is {quantity_produced_from_request:.2f} "
+                f"{_norm_mass_uom(target_uom)}"
+            )
+        # Soft note when source/target differ
+        if target_item.id != resolved_inputs[0][1].id:
+            note = (
+                f"[REPACK {resolved_inputs[0][1].sku} → {target_item.sku}; "
+                f"source {_norm_mass_uom(source_uom)} → target {_norm_mass_uom(target_uom)}]"
+            )
+            existing_notes = (payload.get("notes") or "").strip()
+            payload["notes"] = f"{existing_notes}\n{note}".strip() if existing_notes else note
     else:
         total_rounded = normalize_mass_quantity(round(total_input_quantity_in_lbs, 2))
         if abs(total_input_quantity_in_lbs - quantity_produced_from_request) > _QUANTITY_TOLERANCE:
@@ -189,26 +329,27 @@ def create_batch_ticket(user, data: dict) -> ProductionBatch:
     batch = serializer.save()
 
     try:
-        for input_data in inputs_data:
-            lot_id = input_data.get("lot_id")
-            raw_quantity = float(input_data.get("quantity_used", 0))
-            lot = Lot.objects.get(id=lot_id)
-            quantity_used = _round_production_quantity_used(raw_quantity, lot)
+        for lot, item, quantity_used in resolved_inputs:
             ProductionBatchInput.objects.create(
                 batch=batch,
                 lot=lot,
+                item=item,
                 quantity_used=quantity_used,
             )
 
         if batch_type == "repack":
-            if inputs_data:
-                first_lot = Lot.objects.get(id=inputs_data[0]["lot_id"])
-                item_unit = first_lot.item.unit_of_measure
-                if abs(total_input_quantity_native - quantity_produced) > _QUANTITY_TOLERANCE:
-                    raise MakeFlowError(
-                        f"Quantity mismatch: Total quantity used ({total_input_quantity_native:.2f} "
-                        f"{item_unit}) must equal quantity to produce ({quantity_produced:.2f} {item_unit})"
-                    )
+            target = batch.finished_good_item
+            target_uom = target.unit_of_measure if target else "lbs"
+            converted = 0.0
+            for _lot, item, qty in resolved_inputs:
+                converted += _convert_item_mass(qty, item.unit_of_measure, target_uom)
+            converted = normalize_mass_quantity(round(converted, 2))
+            if abs(converted - quantity_produced) > _QUANTITY_TOLERANCE:
+                raise MakeFlowError(
+                    f"Quantity mismatch: Total quantity used ({converted:.2f} "
+                    f"{_norm_mass_uom(target_uom)}) must equal quantity to produce "
+                    f"({quantity_produced:.2f} {_norm_mass_uom(target_uom)})"
+                )
         elif abs(total_input_quantity_in_lbs - quantity_produced) > _QUANTITY_TOLERANCE:
             raise MakeFlowError(
                 f"Quantity mismatch: Total quantity used ({total_input_quantity_in_lbs:.2f} lbs) "
@@ -359,75 +500,90 @@ def adjust_batch_inputs(batch: ProductionBatch, data: dict) -> ProductionBatch:
     if quantity_produced is not None:
         quantity_produced = normalize_mass_quantity(round(float(quantity_produced), 2))
 
-    for existing_input in batch.inputs.all():
+    for existing_input in batch.inputs.select_related("lot", "item").all():
+        resolved = existing_input.resolved_item() if hasattr(existing_input, "resolved_item") else (
+            existing_input.item or (existing_input.lot.item if existing_input.lot_id else None)
+        )
+        if resolved and resolved.item_type == "indirect_material":
+            # Keep packaging / IM rows; adjust form only replaces product lots
+            continue
         lot = existing_input.lot
-        old_transactions = InventoryTransaction.objects.filter(
-            lot=lot,
-            reference_number=batch.batch_number,
-            transaction_type__in=["production_input", "repack_input"],
-            quantity__lt=0,
-        ).order_by("-transaction_date")
-        for old_txn in old_transactions:
-            if abs(abs(old_txn.quantity) - existing_input.quantity_used) < 0.01:
-                lot.quantity_remaining = round(
-                    lot.quantity_remaining + existing_input.quantity_used, 2
-                )
-                lot.save()
-                break
-        for old_txn in list(old_transactions):
-            if abs(abs(old_txn.quantity) - existing_input.quantity_used) < 0.01:
-                old_txn.delete()
-        LotTransactionLog.objects.filter(
-            lot=lot,
-            reference_number=batch.batch_number,
-            transaction_type__in=["production_input", "repack_input"],
-            batch_id=batch.id,
-        ).delete()
+        if lot is not None:
+            old_transactions = InventoryTransaction.objects.filter(
+                lot=lot,
+                reference_number=batch.batch_number,
+                transaction_type__in=["production_input", "repack_input"],
+                quantity__lt=0,
+            ).order_by("-transaction_date")
+            for old_txn in old_transactions:
+                if abs(abs(old_txn.quantity) - existing_input.quantity_used) < 0.01:
+                    lot.quantity_remaining = round(
+                        lot.quantity_remaining + existing_input.quantity_used, 2
+                    )
+                    lot.save()
+                    break
+            for old_txn in list(old_transactions):
+                if abs(abs(old_txn.quantity) - existing_input.quantity_used) < 0.01:
+                    old_txn.delete()
+            LotTransactionLog.objects.filter(
+                lot=lot,
+                reference_number=batch.batch_number,
+                transaction_type__in=["production_input", "repack_input"],
+                batch_id=batch.id,
+            ).delete()
         existing_input.delete()
 
     total_lbs = 0.0
     total_native = 0.0
+    total_target_uom = 0.0
     item_unit = None
+    target_uom = None
+    if batch.batch_type == "repack" and batch.finished_good_item_id:
+        target_uom = batch.finished_good_item.unit_of_measure or "lbs"
 
     for input_data in inputs_data:
-        lot_id = input_data.get("lot_id")
-        raw_quantity = float(input_data.get("quantity_used", 0))
-        if not lot_id or raw_quantity <= 0:
-            continue
         try:
-            lot = Lot.objects.get(id=lot_id)
-        except Lot.DoesNotExist as e:
-            raise MakeFlowError(f"Lot with id {lot_id} not found", status_code=404) from e
-        quantity_used = _round_production_quantity_used(raw_quantity, lot)
-        if quantity_used <= 0:
-            continue
-        available = float(compute_lot_quantity_breakdown(lot)["quantity_available_for_use"])
-        if quantity_used > available + 1e-6:
-            raise MakeFlowError(
-                f"Insufficient quantity in lot {lot.lot_number}. "
-                f"Available: {available}, Requested: {quantity_used}"
+            lot, item, quantity_used = _resolve_batch_input_row(
+                input_data, require_available=True
             )
+        except MakeFlowError:
+            # Skip empty / zero rows from the form
+            raw_quantity = float(input_data.get("quantity_used", 0) or 0)
+            if raw_quantity <= 0:
+                continue
+            raise
+        # Skip re-adding indirect materials here — adjust form is product lots only
+        if item and item.item_type == "indirect_material":
+            continue
         ProductionBatchInput.objects.create(
             batch=batch,
             lot=lot,
+            item=item,
             quantity_used=quantity_used,
         )
         if batch.batch_type == "repack":
-            item_unit = lot.item.unit_of_measure
+            item_unit = item.unit_of_measure
+            total_target_uom += _convert_item_mass(
+                quantity_used, item.unit_of_measure, target_uom or item.unit_of_measure
+            )
         qty_lbs = quantity_used
-        if lot.item.unit_of_measure == "kg":
+        if (item.unit_of_measure or "").lower() == "kg":
             qty_lbs = convert_mass_uom(quantity_used, "kg", "lbs")
         total_lbs += qty_lbs
         total_native += quantity_used
 
     target_qty = quantity_produced if quantity_produced is not None else batch.quantity_produced
     if batch.batch_type == "repack":
-        if abs(total_native - target_qty) > _QUANTITY_TOLERANCE:
-            unit = item_unit or "ea"
+        total_target_uom = normalize_mass_quantity(round(total_target_uom, 2))
+        if abs(total_target_uom - target_qty) > _QUANTITY_TOLERANCE:
+            unit = _norm_mass_uom(target_uom or item_unit or "lbs")
             raise MakeFlowError(
-                f"Quantity mismatch: Total quantity used ({total_native:.2f} {unit}) "
+                f"Quantity mismatch: Total quantity used ({total_target_uom:.2f} {unit}) "
                 f"must equal quantity to produce ({target_qty:.2f} {unit})"
             )
+        batch.quantity_produced = total_target_uom
+        batch.save(update_fields=["quantity_produced"])
+        return batch
     elif abs(total_lbs - target_qty) > _QUANTITY_TOLERANCE:
         raise MakeFlowError(
             f"Quantity mismatch: Total quantity used ({total_lbs:.2f} lbs) "
@@ -455,6 +611,64 @@ def _extract_work_in_partials(batch: ProductionBatch, work_in_partials_data: lis
         return []
 
 
+def _batch_is_relabel(batch: ProductionBatch) -> bool:
+    """Same-SKU / same-container relabel (no packaging, no pack-change)."""
+    notes = (batch.notes or "").upper()
+    if "[RELABEL" in notes:
+        return True
+    if batch.batch_type != "repack" or not batch.finished_good_item_id:
+        return False
+    product_inputs = []
+    for inp in batch.inputs.select_related("lot__item", "item").all():
+        item = inp.resolved_item()
+        if item is None:
+            continue
+        if item.item_type == "indirect_material":
+            return False
+        product_inputs.append(item.id)
+    if not product_inputs:
+        return False
+    return all(iid == batch.finished_good_item_id for iid in product_inputs)
+
+
+def _primary_product_input_lot(batch: ProductionBatch):
+    """First non-indirect input lot — source of inbound PO / vendor-lot pedigree."""
+    for inp in batch.inputs.select_related("lot__item", "item").all():
+        if not inp.lot_id:
+            continue
+        item = inp.resolved_item() if hasattr(inp, "resolved_item") else (
+            inp.item or (inp.lot.item if inp.lot_id else None)
+        )
+        if item is not None and getattr(item, "item_type", "") == "indirect_material":
+            continue
+        return inp.lot
+    return None
+
+
+def _copy_inbound_traceability(dest_lot, src_lot, *, save: bool = True) -> list[str]:
+    """
+    Carry PO #, vendor lot #, and manufacture date from inbound source → output lot.
+    Does not overwrite values already set on dest.
+    """
+    if dest_lot is None or src_lot is None:
+        return []
+    fields: list[str] = []
+    if not (dest_lot.po_number or "").strip() and (src_lot.po_number or "").strip():
+        dest_lot.po_number = (src_lot.po_number or "").strip()
+        fields.append("po_number")
+    if not (dest_lot.vendor_lot_number or "").strip() and (
+        src_lot.vendor_lot_number or ""
+    ).strip():
+        dest_lot.vendor_lot_number = (src_lot.vendor_lot_number or "").strip()
+        fields.append("vendor_lot_number")
+    if dest_lot.manufacture_date is None and src_lot.manufacture_date is not None:
+        dest_lot.manufacture_date = src_lot.manufacture_date
+        fields.append("manufacture_date")
+    if save and fields:
+        dest_lot.save(update_fields=fields)
+    return fields
+
+
 def close_batch_ticket(batch: ProductionBatch, user, data: dict) -> ProductionBatch:
     """
     Close an open batch: apply close fields, validate wastes/spills, run inventory side effects.
@@ -475,6 +689,20 @@ def close_batch_ticket(batch: ProductionBatch, user, data: dict) -> ProductionBa
     prior_status = data.get("_prior_status")
     if prior_status == "closed":
         raise MakeFlowError("Batch is already closed.")
+
+    allow_early = bool(data.get("allow_early_close"))
+    pd = getattr(batch, "production_date", None)
+    if pd and not allow_early:
+        prod_day = (
+            timezone.localtime(pd).date()
+            if timezone.is_aware(pd)
+            else (pd.date() if hasattr(pd, "date") else pd)
+        )
+        if prod_day > timezone.localdate():
+            raise MakeFlowError(
+                f"Cannot close before production date ({prod_day.isoformat()}). "
+                "Enable God mode (staff) to close early, or wait until that date."
+            )
 
     close_payload: dict[str, Any] = {"status": "closed"}
     for key in ("quantity_actual", "wastes", "spills", "variance", "notes", "closed_date"):
@@ -515,9 +743,12 @@ def close_batch_ticket(batch: ProductionBatch, user, data: dict) -> ProductionBa
     batch_type_label = "repack" if batch.batch_type == "repack" else "production"
     input_transaction_type = "repack_input" if batch.batch_type == "repack" else "production_input"
 
-    for batch_input in batch.inputs.select_related("lot__item").all():
+    for batch_input in batch.inputs.select_related("lot__item", "item").all():
         lot = batch_input.lot
-        if lot.item.item_type == "indirect_material":
+        item = batch_input.resolved_item()
+        if lot is None or _is_plant_utility(item):
+            continue
+        if item and item.item_type == "indirect_material":
             continue
         qty = batch_input.quantity_used
         rounded_qty = _round_production_quantity_used(qty, lot)
@@ -702,36 +933,81 @@ def close_batch_ticket(batch: ProductionBatch, user, data: dict) -> ProductionBa
         )
 
     elif batch.batch_type == "repack":
-        total_input_quantity = sum(
-            input_item.quantity_used for input_item in batch.inputs.all()
-        )
-        output_quantity = round(total_input_quantity, 2)
-        item = batch.finished_good_item
+        # Prefer quantity_actual (close form); fall back to converted product inputs.
+        # Spill/waste document shortfall vs ticket — they do not shrink this further.
+        target_item = batch.finished_good_item
+        target_uom = (target_item.unit_of_measure if target_item else None) or "lbs"
+        input_converted = 0.0
+        for input_item in batch.inputs.select_related("lot__item", "item").all():
+            resolved = input_item.resolved_item() if hasattr(input_item, "resolved_item") else (
+                input_item.item or (input_item.lot.item if input_item.lot_id else None)
+            )
+            if resolved and resolved.item_type == "indirect_material":
+                continue
+            src_uom = (resolved.unit_of_measure if resolved else None) or target_uom
+            input_converted += _convert_item_mass(
+                float(input_item.quantity_used or 0), src_uom, target_uom
+            )
+        input_converted = round(input_converted, 2)
+        if batch.quantity_actual is not None and float(batch.quantity_actual) > 0:
+            output_quantity = round(float(batch.quantity_actual), 2)
+        else:
+            output_quantity = input_converted
+        item = target_item
         closed_dt = batch.closed_date or timezone.now()
         output_expiration = _expiration_datetime_for_fg_output(item, closed_dt)
 
-        pack_size = None
-        first_input = batch.inputs.first()
-        if first_input and first_input.lot and first_input.lot.pack_size:
-            pack_size = first_input.lot.pack_size
-        else:
-            pack_size = ItemPackSize.objects.filter(
-                item=item, is_default=True, is_active=True
-            ).first()
+        # Prefer target SKU pack size (e.g. 8 lb jug), not source drum pack
+        pack_size = ItemPackSize.objects.filter(
+            item=item, is_default=True, is_active=True
+        ).first()
+        if pack_size is None:
+            pack_size = ItemPackSize.objects.filter(item=item, is_active=True).first()
 
         lot_number = generate_lot_number()
-        new_lot = Lot.objects.create(
-            lot_number=lot_number,
-            item=item,
-            pack_size=pack_size,
-            quantity=output_quantity,
-            quantity_remaining=output_quantity,
-            quantity_on_hold=output_quantity,
-            received_date=closed_dt,
-            expiration_date=output_expiration,
-            status="on_hold",
-            on_hold=True,
-        )
+        is_relabel = _batch_is_relabel(batch)
+        src_lot = _primary_product_input_lot(batch)
+        if is_relabel:
+            # Same container — source already accepted; do not gate sales behind micro.
+            new_lot = Lot.objects.create(
+                lot_number=lot_number,
+                item=item,
+                pack_size=pack_size,
+                quantity=output_quantity,
+                quantity_remaining=output_quantity,
+                quantity_on_hold=0.0,
+                received_date=closed_dt,
+                expiration_date=output_expiration,
+                status="accepted",
+                on_hold=False,
+            )
+            _copy_inbound_traceability(new_lot, src_lot)
+            # Supplier COA on inbound lot follows through to WWI/relabel lot
+            try:
+                from .coa_supplier import clone_lot_coa_certificate
+
+                if src_lot:
+                    clone_lot_coa_certificate(src_lot, new_lot, user=user)
+            except Exception:
+                logger.exception(
+                    "Failed to clone supplier COA onto relabel lot %s (batch %s)",
+                    lot_number,
+                    batch.batch_number,
+                )
+        else:
+            new_lot = Lot.objects.create(
+                lot_number=lot_number,
+                item=item,
+                pack_size=pack_size,
+                quantity=output_quantity,
+                quantity_remaining=output_quantity,
+                quantity_on_hold=output_quantity,
+                received_date=closed_dt,
+                expiration_date=output_expiration,
+                status="on_hold",
+                on_hold=True,
+            )
+            _copy_inbound_traceability(new_lot, src_lot)
 
         ProductionBatchOutput.objects.create(
             batch=batch,
@@ -739,49 +1015,60 @@ def close_batch_ticket(batch: ProductionBatch, user, data: dict) -> ProductionBa
             quantity_produced=output_quantity,
         )
 
-        try:
-            from .hold_services import ensure_open_hold_case, parse_batch_qc_notes, parse_qc_float
+        if not is_relabel:
+            try:
+                from .hold_services import ensure_open_hold_case, parse_batch_qc_notes, parse_qc_float
 
-            qc_param = (data.get("qc_parameter") or data.get("qc_parameters") or "").strip()
-            qc_actual = data.get("qc_actual")
-            qc_initials = (data.get("qc_initials") or "").strip()
-            if not qc_param and not qc_actual and not qc_initials:
-                parsed = parse_batch_qc_notes(batch.notes)
-                qc_param = parsed["parameter"]
-                qc_actual = parsed["actual_value"]
-                qc_initials = parsed["initials"]
-            qc_val = parse_qc_float(qc_actual)
-            summary = "Awaiting micro/QC results"
-            if qc_param and qc_val is not None:
-                summary = f"Awaiting micro/QC — {qc_param}: {qc_val:g}"
-            elif qc_param:
-                summary = f"Awaiting micro/QC — {qc_param}"
+                qc_param = (data.get("qc_parameter") or data.get("qc_parameters") or "").strip()
+                qc_actual = data.get("qc_actual")
+                qc_initials = (data.get("qc_initials") or "").strip()
+                if not qc_param and not qc_actual and not qc_initials:
+                    parsed = parse_batch_qc_notes(batch.notes)
+                    qc_param = parsed["parameter"]
+                    qc_actual = parsed["actual_value"]
+                    qc_initials = parsed["initials"]
+                qc_val = parse_qc_float(qc_actual)
+                summary = "Awaiting micro/QC results"
+                if qc_param and qc_val is not None:
+                    summary = f"Awaiting micro/QC — {qc_param}: {qc_val:g}"
+                elif qc_param:
+                    summary = f"Awaiting micro/QC — {qc_param}"
 
-            ensure_open_hold_case(
-                new_lot,
-                user=user,
-                kind="awaiting_micro",
-                summary=summary,
-                initial_note=(
-                    f"Repack lot from batch {batch.batch_number} "
-                    "placed on hold pending micro/QC release."
-                ),
-                qc_parameter_name=qc_param,
-                qc_result_value=qc_val,
-                qc_initials=qc_initials,
-            )
-        except Exception:
-            logger.exception(
-                "Failed to open awaiting_micro hold case for lot %s (batch %s)",
-                new_lot.lot_number,
-                batch.batch_number,
-            )
+                ensure_open_hold_case(
+                    new_lot,
+                    user=user,
+                    kind="awaiting_micro",
+                    summary=summary,
+                    initial_note=(
+                        f"Repack lot from batch {batch.batch_number} "
+                        "placed on hold pending micro/QC release."
+                    ),
+                    qc_parameter_name=qc_param,
+                    qc_result_value=qc_val,
+                    qc_initials=qc_initials,
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to open awaiting_micro hold case for lot %s (batch %s)",
+                    new_lot.lot_number,
+                    batch.batch_number,
+                )
 
+        _uom = getattr(item, "unit_of_measure", None) or "lbs"
+        doc_bits = []
+        if (batch.wastes or 0) > 0:
+            doc_bits.append(f"wastes {batch.wastes} {_uom} documented")
+        if (batch.spills or 0) > 0:
+            doc_bits.append(f"spills {batch.spills} {_uom} documented")
+        doc_suffix = f" — {', '.join(doc_bits)}" if doc_bits else ""
         txn = InventoryTransaction.objects.create(
             transaction_type="repack_output",
             lot=new_lot,
             quantity=output_quantity,
-            notes=f"Repack batch {batch.batch_number} output",
+            notes=(
+                f"Repack batch {batch.batch_number} output "
+                f"({output_quantity} {_uom} produced{doc_suffix})"
+            ),
             reference_number=batch.batch_number,
         )
         log_lot_transaction(

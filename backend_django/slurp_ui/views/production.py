@@ -1,6 +1,7 @@
 from datetime import datetime
 import re
 
+from django.db import transaction
 from django.db.models import Q
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
@@ -16,19 +17,38 @@ from erp_core.make_services import (
     adjust_batch_inputs,
     close_batch_ticket,
     create_batch_ticket,
+    pack_units_for_mass,
     reverse_batch_ticket,
 )
 from erp_core.mass_quantity import LBS_PER_KG, convert_mass_uom, normalize_mass_quantity
-from erp_core.models import Formula, Item, Lot, ProductionBatch
+from erp_core.models import CriticalControlPoint, Formula, Item, Lot, ProductionBatch
 from erp_core.pack_display import format_pack_label, is_partial_lot, resolve_pack_size
 from erp_core.formula_ingredient import lots_for_formula_ingredient, skus_for_formula_ingredient
-from erp_core.formula_resolve import formula_for_batch, recipe_label
+from erp_core.formula_resolve import formula_for_batch, formulas_for_fg, recipe_label
 from erp_core.reversal_guard import build_batch_reversal_plan
+from erp_core.sku_family import parse_sku_family
 
 from ..nav import PRODUCTION_NAV
 
 _FORMULA_BASELINE_RE = re.compile(r"\[FORMULA_BASELINE_QTY:([0-9]+(?:\.[0-9]+)?)\]")
 _QUANTITY_TOLERANCE = 0.05
+
+
+def _item_parent_code(item: Item | None) -> str:
+    """Parent material code for cascade pickers (sku_parent_code or parsed from SKU)."""
+    if item is None:
+        return ""
+    code = (item.sku_parent_code or "").strip().upper()
+    if code:
+        return code
+    parent, _pack = parse_sku_family(
+        item.sku or "",
+        product_category=getattr(item, "product_category", None),
+        item_type=getattr(item, "item_type", None),
+    )
+    if parent:
+        return parent.strip().upper()
+    return (item.sku or "").strip().upper()
 
 
 def _formula_baseline_qty_lbs(batch: ProductionBatch) -> float:
@@ -66,22 +86,28 @@ def _build_adjustment_summary(batch: ProductionBatch, formula: Formula | None, d
         return [], 0.0, 0.0
     baseline_lbs = _formula_baseline_qty_lbs(batch)
     # Sum actual usage by ingredient SKU set
-    inputs = list(batch.inputs.select_related("lot__item").all())
+    inputs = list(batch.inputs.select_related("lot__item", "item").all())
     rows = []
     total_delta_lbs = 0.0
     for ing in formula.ingredients.select_related("item").all():
         pct = float(ing.percentage or 0)
         target_lbs = normalize_mass_quantity(baseline_lbs * (pct / 100.0))
         skus = set(skus_for_formula_ingredient(ing))
+        is_utility = bool(getattr(ing.item, "plant_utility", False))
         actual_lbs = 0.0
         for inp in inputs:
-            lot = inp.lot
-            if not lot or not lot.item:
+            item = inp.resolved_item() if hasattr(inp, "resolved_item") else None
+            if item is None and inp.lot_id:
+                item = inp.lot.item
+            if not item:
                 continue
-            if (lot.item.sku or "") not in skus:
+            if is_utility:
+                if item.id != ing.item_id:
+                    continue
+            elif (item.sku or "") not in skus:
                 continue
             q = float(inp.quantity_used or 0)
-            lu = (lot.item.unit_of_measure or "lbs").lower()
+            lu = (item.unit_of_measure or "lbs").lower()
             actual_lbs += _to_lbs(q, lu)
         actual_lbs = normalize_mass_quantity(actual_lbs)
         delta_lbs = normalize_mass_quantity(actual_lbs - target_lbs)
@@ -143,20 +169,109 @@ def _display_to_native(qty_display: float, display_uom: str, native_uom: str) ->
     return convert_mass_uom(qty_display, d, n)
 
 
+def _close_storage_uom(batch: ProductionBatch) -> str:
+    """Unit quantities are stored in on the batch row (production = lbs; repack = FG UoM)."""
+    if batch.batch_type == "repack" and batch.finished_good_item_id:
+        u = (batch.finished_good_item.unit_of_measure or "lbs").strip().lower() or "lbs"
+        return "lbs" if u in ("lb", "lbs") else u
+    return "lbs"
+
+
+def _close_display_uom(batch: ProductionBatch) -> str:
+    """Unit the ticket was entered in — spill/waste/actual on close use this."""
+    saved = (getattr(batch, "batch_ticket_mass_unit", None) or "").strip().lower()
+    if saved in ("lb", "lbs"):
+        return "lbs"
+    if saved == "kg":
+        return "kg"
+    if saved:
+        return saved
+    return _close_storage_uom(batch)
+
+
+def _net_yield_native(batch: ProductionBatch) -> float | None:
+    from erp_core.make_services import net_yield_native
+
+    return net_yield_native(batch)
+
+
+def _pack_breakout_for_item(item: Item | None, qty: float, qty_uom: str) -> dict | None:
+    """Full packs + remainder for a quantity against the item's default pack size."""
+    from erp_core.pack_display import pack_quantity_breakdown, resolve_pack_size
+
+    if item is None or qty is None:
+        return None
+    try:
+        q = float(qty)
+    except (TypeError, ValueError):
+        return None
+    if q <= 0:
+        return None
+    pq, pu = resolve_pack_size(item=item)
+    return pack_quantity_breakdown(q, qty_uom, pq, pu)
+
+
 def _repack_item_choices():
-    """Items with available lots suitable for repack (same SKU lots)."""
+    """Items with available lots suitable for repack (source SKUs)."""
     skus_with_lots = set(
         Lot.objects.filter(quantity_remaining__gt=0)
         .exclude(status="rejected")
         .values_list("item__sku", flat=True)
     )
-    return (
+    return list(
         Item.objects.filter(
             sku__in=skus_with_lots,
             item_type__in=["finished_good", "distributed_item", "raw_material"],
-        )
-        .order_by("sku")[:300]
+        ).order_by("sku")[:300]
     )
+
+
+def _repack_target_choices(parent_code: str) -> list[Item]:
+    """All pack variants under a parent (output SKUs), whether or not they have stock."""
+    parent = (parent_code or "").strip().upper()
+    if not parent:
+        return []
+    qs = Item.objects.filter(
+        item_type__in=["finished_good", "distributed_item", "raw_material"]
+    ).order_by("sku")
+    # Prefer indexed parent code; also catch rows where parent equals full SKU
+    by_code = list(qs.filter(sku_parent_code__iexact=parent)[:200])
+    seen = {it.id for it in by_code}
+    for it in qs.filter(sku__istartswith=parent)[:200]:
+        if it.id in seen:
+            continue
+        if _item_parent_code(it) == parent:
+            by_code.append(it)
+            seen.add(it.id)
+    return sorted(by_code, key=lambda it: (it.sku or "").upper())
+
+
+def _packaging_lot_rows(limit: int = 80) -> list[dict]:
+    """Available indirect-material (packaging) lots for repack/production pick lists."""
+    lots = (
+        Lot.objects.filter(
+            item__item_type="indirect_material",
+            quantity_remaining__gt=0,
+        )
+        .exclude(status="rejected")
+        .select_related("item")
+        .order_by("item__sku", "-received_date")[:limit]
+    )
+    rows = []
+    for lot in lots:
+        avail = float(compute_lot_quantity_breakdown(lot)["quantity_available_for_use"])
+        if avail <= 0:
+            continue
+        rows.append(
+            {
+                "lot": lot,
+                "available": avail,
+                "sku": lot.item.sku,
+                "name": lot.item.name or lot.item.description or lot.item.sku,
+                "uom": (lot.item.unit_of_measure or "ea"),
+            }
+        )
+    return rows
 
 
 def _repack_lot_rows(item: Item, display_uom: str):
@@ -191,34 +306,170 @@ def _repack_lot_rows(item: Item, display_uom: str):
     return rows
 
 
-@login_required
-def production_batches(request: HttpRequest) -> HttpResponse:
-    batches = (
-        ProductionBatch.objects.filter(is_archived=False)
-        .select_related("finished_good_item")
+def _production_date_local(batch: ProductionBatch):
+    """Calendar date of batch.production_date in local time."""
+    pd = getattr(batch, "production_date", None)
+    if not pd:
+        return None
+    if timezone.is_aware(pd):
+        return timezone.localtime(pd).date()
+    return pd.date() if hasattr(pd, "date") else pd
+
+
+def _god_mode_on(request: HttpRequest) -> bool:
+    return bool(request.session.get("god_mode")) and bool(
+        getattr(request.user, "is_authenticated", False) and request.user.is_staff
+    )
+
+
+def _close_before_production_blocked(batch: ProductionBatch, *, allow_early: bool) -> str | None:
+    """
+    Normally batches cannot close before production_date.
+    Staff God mode overrides (allow_early=True).
+    """
+    if allow_early:
+        return None
+    pd = _production_date_local(batch)
+    if pd is None:
+        return None
+    today = timezone.localdate()
+    if pd > today:
+        return (
+            f"Cannot close before production date ({pd.isoformat()}). "
+            "Enable God mode (staff) to close early, or wait until that date."
+        )
+    return None
+
+
+def _dash_url_name(batch_type: str) -> str:
+    return (
+        "slurp_ui:production_repacks"
+        if batch_type == "repack"
+        else "slurp_ui:production"
+    )
+
+
+def _archive_url_name(batch_type: str) -> str:
+    return (
+        "slurp_ui:production_repack_archive"
+        if batch_type == "repack"
+        else "slurp_ui:production_archive"
+    )
+
+
+def _batch_list(request: HttpRequest, *, batch_type: str, active_tab: str) -> HttpResponse:
+    batches = list(
+        ProductionBatch.objects.filter(is_archived=False, batch_type=batch_type)
+        .select_related("finished_good_item", "campaign")
+        .prefetch_related("finished_good_item__pack_sizes")
         .order_by("-created_at")[:200]
     )
+    allow_early = _god_mode_on(request)
+    today = timezone.localdate()
+    batch_rows = []
+    for b in batches:
+        storage = _close_storage_uom(b)
+        display = _close_display_uom(b)
+        actual_disp = None
+        pack_breakout = ""
+        campaign_code = ""
+        if b.status == "closed" and b.quantity_actual is not None:
+            yield_native = _net_yield_native(b)
+            actual_disp = (
+                _native_to_display(float(yield_native), storage, display)
+                if yield_native is not None
+                else None
+            )
+            if actual_disp is not None:
+                brk = _pack_breakout_for_item(b.finished_good_item, actual_disp, display)
+                if brk:
+                    pack_breakout = brk["display"]
+        if b.campaign_id and getattr(b, "campaign", None):
+            campaign_code = b.campaign.campaign_code or ""
+        prod_local = _production_date_local(b)
+        early_blocked = bool(prod_local and prod_local > today and not allow_early)
+        batch_rows.append(
+            {
+                "batch": b,
+                "ticket_display": _native_to_display(
+                    float(b.quantity_produced or 0), storage, display
+                ),
+                "actual_display": actual_disp,
+                "display_uom": display,
+                "pack_breakout": pack_breakout,
+                "campaign_code": campaign_code,
+                "can_close": not early_blocked,
+                "close_blocked_reason": (
+                    f"Production date is {prod_local.isoformat()}. Enable God mode to close early."
+                    if early_blocked and prod_local
+                    else ""
+                ),
+            }
+        )
     return render(
         request,
         "slurp_ui/production/batches.html",
-        _prod_ctx(batches=batches, port_status="full"),
+        _prod_ctx(
+            active_tab=active_tab,
+            batches=batches,
+            batch_rows=batch_rows,
+            list_batch_type=batch_type,
+            port_status="full",
+        ),
     )
 
 
 @login_required
-def production_archive(request: HttpRequest) -> HttpResponse:
-    """Archived batch tickets: search + year/month or product folders."""
+def production_batches(request: HttpRequest) -> HttpResponse:
+    return _batch_list(request, batch_type="production", active_tab="batches")
+
+
+@login_required
+def production_repacks(request: HttpRequest) -> HttpResponse:
+    return _batch_list(request, batch_type="repack", active_tab="repacks")
+
+
+@login_required
+def production_archive(
+    request: HttpRequest, locked_batch_type: str | None = None
+) -> HttpResponse:
+    """Archived tickets: search + year/month or product folders.
+
+    locked_batch_type: when set via URL kwargs, scopes the archive to that type
+    (Batch Archive → production, Repack Archive → repack).
+    """
     from calendar import month_name
     from django.db.models import Count
     from django.db.models.functions import Coalesce, TruncMonth, TruncYear
 
     q = (request.GET.get("q") or "").strip()
-    batch_type = (request.GET.get("batch_type") or "all").strip().lower()
-    if batch_type not in ("all", "production", "repack"):
-        batch_type = "all"
+    if locked_batch_type in ("production", "repack"):
+        batch_type = locked_batch_type
+    else:
+        batch_type = (request.GET.get("batch_type") or "all").strip().lower()
+        if batch_type not in ("all", "production", "repack"):
+            batch_type = "all"
     browse = (request.GET.get("browse") or "date").strip().lower()
     if browse not in ("date", "product"):
         browse = "date"
+    archive_root_label = (
+        "Repack archive"
+        if batch_type == "repack"
+        else "Batch archive"
+        if batch_type == "production"
+        else "Archive"
+    )
+    archive_url = (
+        "slurp_ui:production_repack_archive"
+        if locked_batch_type == "repack" or batch_type == "repack"
+        else "slurp_ui:production_archive"
+    )
+    dash_url = _dash_url_name(
+        "repack" if batch_type == "repack" else "production"
+    )
+    active_tab = (
+        "repack-archive" if batch_type == "repack" else "archive"
+    )
 
     year_raw = (request.GET.get("year") or "").strip()
     month_raw = (request.GET.get("month") or "").strip()
@@ -248,15 +499,15 @@ def production_archive(request: HttpRequest) -> HttpResponse:
     folders = []
     batches = []
     folder_level = "list"  # years | months | products | list
-    crumbs = [{"label": "Archive", "url_params": {"browse": browse}}]
-    if batch_type != "all":
+    crumbs = [{"label": archive_root_label, "url_params": {"browse": browse}}]
+    if batch_type != "all" and not locked_batch_type:
         crumbs[0]["url_params"]["batch_type"] = batch_type
     if q:
         crumbs[0]["url_params"]["q"] = q
 
     def _qp(**extra):
         params = {"browse": browse}
-        if batch_type != "all":
+        if batch_type != "all" and not locked_batch_type:
             params["batch_type"] = batch_type
         if q:
             params["q"] = q
@@ -408,18 +659,43 @@ def production_archive(request: HttpRequest) -> HttpResponse:
         # Empty archive root
         pass
 
+    archive_batch_rows = []
+    for b in batches:
+        storage = _close_storage_uom(b)
+        display = _close_display_uom(b)
+        yield_native = _net_yield_native(b)
+        archive_batch_rows.append(
+            {
+                "batch": b,
+                "ticket_display": _native_to_display(
+                    float(b.quantity_produced or 0), storage, display
+                ),
+                "yield_display": (
+                    _native_to_display(float(yield_native), storage, display)
+                    if yield_native is not None
+                    else None
+                ),
+                "display_uom": display,
+            }
+        )
+
     return render(
         request,
         "slurp_ui/production/archive.html",
         _prod_ctx(
-            active_tab="archive",
+            active_tab=active_tab,
             batches=batches,
+            archive_batch_rows=archive_batch_rows,
             folders=folders,
             folder_level=folder_level,
             crumbs=crumbs,
             browse=browse,
             q=q,
             batch_type=batch_type,
+            locked_batch_type=locked_batch_type,
+            archive_root_label=archive_root_label,
+            archive_url_name=archive_url,
+            dash_url_name=dash_url,
             year=year,
             month=month,
             product_id=product_id,
@@ -442,6 +718,11 @@ def production_archive(request: HttpRequest) -> HttpResponse:
 def production_archive_batch(request: HttpRequest, pk: int) -> HttpResponse:
     batch = get_object_or_404(ProductionBatch, pk=pk)
     next_url = (request.POST.get("next") or "").strip() or None
+    dash = _dash_url_name(batch.batch_type)
+    archive = _archive_url_name(batch.batch_type)
+    archive_label = (
+        "Repack Archive" if batch.batch_type == "repack" else "Batch Archive"
+    )
     if batch.status != "closed":
         messages.error(request, "Only closed batches can be archived.")
         return redirect(next_url) if next_url else redirect(
@@ -449,15 +730,15 @@ def production_archive_batch(request: HttpRequest, pk: int) -> HttpResponse:
         )
     if batch.is_archived:
         messages.info(request, f"{batch.batch_number} is already archived.")
-        return redirect(next_url) if next_url else redirect("slurp_ui:production_archive")
+        return redirect(next_url) if next_url else redirect(archive)
     batch.is_archived = True
     batch.archived_at = timezone.now()
     batch.save(update_fields=["is_archived", "archived_at", "updated_at"])
     messages.success(
         request,
-        f"Archived {batch.batch_number}. Find it under Production → Archive.",
+        f"Archived {batch.batch_number}. Find it under Production → {archive_label}.",
     )
-    return redirect(next_url) if next_url else redirect("slurp_ui:production")
+    return redirect(next_url) if next_url else redirect(dash)
 
 
 @login_required
@@ -465,14 +746,18 @@ def production_archive_batch(request: HttpRequest, pk: int) -> HttpResponse:
 def production_unarchive_batch(request: HttpRequest, pk: int) -> HttpResponse:
     batch = get_object_or_404(ProductionBatch, pk=pk)
     next_url = (request.POST.get("next") or "").strip() or None
+    dash = _dash_url_name(batch.batch_type)
+    dash_label = (
+        "repacks dash" if batch.batch_type == "repack" else "batch tickets dash"
+    )
     if not batch.is_archived:
         messages.info(request, f"{batch.batch_number} is not archived.")
-        return redirect(next_url) if next_url else redirect("slurp_ui:production")
+        return redirect(next_url) if next_url else redirect(dash)
     batch.is_archived = False
     batch.archived_at = None
     batch.save(update_fields=["is_archived", "archived_at", "updated_at"])
-    messages.success(request, f"Restored {batch.batch_number} to the batch tickets dash.")
-    return redirect(next_url) if next_url else redirect("slurp_ui:production")
+    messages.success(request, f"Restored {batch.batch_number} to the {dash_label}.")
+    return redirect(next_url) if next_url else redirect(dash)
 
 
 @login_required
@@ -480,7 +765,7 @@ def production_unarchive_batch(request: HttpRequest, pk: int) -> HttpResponse:
 def production_batch_detail(request: HttpRequest, pk: int) -> HttpResponse:
     batch = get_object_or_404(
         ProductionBatch.objects.select_related(
-            "finished_good_item", "formula"
+            "finished_good_item", "formula", "campaign"
         ).prefetch_related("inputs__lot__item", "outputs__lot"),
         pk=pk,
     )
@@ -513,15 +798,75 @@ def production_batch_detail(request: HttpRequest, pk: int) -> HttpResponse:
                 .first()
             )
     can_adjust = batch.status not in ("closed", "cancelled") and not batch.is_archived
+    early_msg = _close_before_production_blocked(
+        batch, allow_early=_god_mode_on(request)
+    )
+    can_close = batch.status != "closed" and not batch.is_archived and not early_msg
+    qc_parsed = None
+    if batch.status == "closed":
+        from erp_core.hold_services import parse_batch_qc_notes
+
+        qc_parsed = parse_batch_qc_notes(batch.notes)
+    mass_uom = _close_display_uom(batch)
+    storage_uom = _close_storage_uom(batch)
+    ticket_qty_display = _native_to_display(
+        float(batch.quantity_produced or 0), storage_uom, mass_uom
+    )
+    yield_native = _net_yield_native(batch) if batch.status == "closed" else None
+    actual_qty_display = (
+        _native_to_display(float(yield_native), storage_uom, mass_uom)
+        if yield_native is not None
+        else None
+    )
+    wastes_display = _native_to_display(
+        float(batch.wastes or 0), storage_uom, mass_uom
+    )
+    spills_display = _native_to_display(
+        float(batch.spills or 0), storage_uom, mass_uom
+    )
+    variance_display = (
+        _native_to_display(float(batch.variance), storage_uom, mass_uom)
+        if batch.variance is not None
+        else None
+    )
+    pack_breakout = None
+    if actual_qty_display is not None:
+        pack_breakout = _pack_breakout_for_item(
+            batch.finished_good_item, actual_qty_display, mass_uom
+        )
     return render(
         request,
         "slurp_ui/production/batch_detail.html",
         _prod_ctx(
+            active_tab="repacks" if batch.batch_type == "repack" else "batches",
             batch=batch,
             formula=formula,
             recipe_label=recipe_label(formula),
+            formula_label=recipe_label(formula),
             can_adjust=can_adjust,
             can_edit_date=can_edit_date,
+            can_close=can_close,
+            close_blocked_reason=early_msg or "",
+            qc_parsed=qc_parsed,
+            mass_uom=mass_uom,
+            ticket_qty_display=ticket_qty_display,
+            actual_qty_display=actual_qty_display,
+            wastes_display=wastes_display,
+            spills_display=spills_display,
+            variance_display=variance_display,
+            pack_breakout=pack_breakout,
+            dash_url_name=_dash_url_name(batch.batch_type),
+            archive_url_name=_archive_url_name(batch.batch_type),
+            archive_label=(
+                "Repack Archive"
+                if batch.batch_type == "repack"
+                else "Batch Archive"
+            ),
+            dash_label=(
+                "repacks dash"
+                if batch.batch_type == "repack"
+                else "batch tickets dash"
+            ),
             port_status="full",
         ),
     )
@@ -562,28 +907,187 @@ def production_create_batch(request: HttpRequest) -> HttpResponse:
     )
     repack_items = _repack_item_choices() if batch_type == "repack" else []
 
+    # Parent → full SKU cascade (production also has formula step)
+    parent_choices: list[str] = []
+    fg_choices: list[Item] = []
+    formula_choices: list[Formula] = []
+    target_choices: list[Item] = []
+    selected_parent = (request.GET.get("parent") or request.POST.get("parent") or "").strip().upper()
+    selected_fg_id = request.GET.get("item") or request.POST.get("finished_good_id") or ""
     selected_formula = None
     selected_repack_item = None
+    selected_repack_target = None
+    selected_fg = None
     formula_id = request.GET.get("formula") or request.POST.get("formula_id")
     repack_item_id = request.GET.get("item") or request.POST.get("repack_item_id")
 
-    if batch_type == "production" and formula_id:
-        selected_formula = (
-            Formula.objects.filter(pk=formula_id)
-            .select_related("finished_good")
-            .prefetch_related("ingredients__item")
-            .first()
-        )
-    elif batch_type == "repack" and repack_item_id:
-        selected_repack_item = Item.objects.filter(pk=repack_item_id).first()
+    if batch_type == "production":
+        # Unique parent codes from FGs that have at least one formula
+        parent_map: dict[str, dict[int, Item]] = {}
+        for f in formulas:
+            fg = f.finished_good
+            if not fg:
+                continue
+            pcode = _item_parent_code(fg)
+            if not pcode:
+                continue
+            parent_map.setdefault(pcode, {})[fg.id] = fg
+        parent_choices = sorted(parent_map.keys())
 
-    display_uom = (request.POST.get("batch_ticket_mass_unit") or request.GET.get("uom") or "lbs").lower()
-    if batch_type == "repack" and selected_repack_item:
-        native = (selected_repack_item.unit_of_measure or "lbs").lower()
+        if selected_parent and selected_parent not in parent_map:
+            selected_parent = ""
+
+        if selected_parent:
+            fg_choices = sorted(
+                parent_map[selected_parent].values(),
+                key=lambda it: (it.sku or "").upper(),
+            )
+            # Auto-select sole pack SKU under this parent
+            if not selected_fg_id and len(fg_choices) == 1:
+                selected_fg_id = str(fg_choices[0].id)
+
+        if selected_fg_id:
+            try:
+                fg_pk = int(selected_fg_id)
+            except (TypeError, ValueError):
+                fg_pk = None
+            if fg_pk and selected_parent:
+                selected_fg = parent_map.get(selected_parent, {}).get(fg_pk)
+            elif fg_pk:
+                # parent missing from URL — recover from item
+                for pcode, items in parent_map.items():
+                    if fg_pk in items:
+                        selected_fg = items[fg_pk]
+                        selected_parent = pcode
+                        fg_choices = sorted(
+                            items.values(), key=lambda it: (it.sku or "").upper()
+                        )
+                        break
+            if selected_fg is None:
+                selected_fg_id = ""
+
+        if selected_fg:
+            formula_choices = list(formulas_for_fg(selected_fg.id))
+            if formula_id:
+                selected_formula = next(
+                    (f for f in formula_choices if str(f.id) == str(formula_id)), None
+                )
+            elif len(formula_choices) == 1:
+                selected_formula = formula_choices[0]
+            if selected_formula is not None:
+                selected_formula = (
+                    Formula.objects.filter(pk=selected_formula.id)
+                    .select_related("finished_good")
+                    .prefetch_related("ingredients__item")
+                    .first()
+                )
+
+    elif batch_type == "repack":
+        parent_map: dict[str, dict[int, Item]] = {}
+        for it in repack_items:
+            pcode = _item_parent_code(it) or (it.sku or "").strip().upper()
+            if not pcode:
+                continue
+            parent_map.setdefault(pcode, {})[it.id] = it
+        parent_choices = sorted(parent_map.keys())
+
+        if selected_parent and selected_parent not in parent_map:
+            # Still allow parent if only targets exist under it with no source stock
+            if not _repack_target_choices(selected_parent):
+                selected_parent = ""
+
+        if selected_parent:
+            fg_choices = sorted(
+                parent_map.get(selected_parent, {}).values(),
+                key=lambda it: (it.sku or "").upper(),
+            )
+            target_choices = _repack_target_choices(selected_parent)
+            if not repack_item_id and len(fg_choices) == 1:
+                repack_item_id = str(fg_choices[0].id)
+
+        if repack_item_id:
+            try:
+                item_pk = int(repack_item_id)
+            except (TypeError, ValueError):
+                item_pk = None
+            if item_pk and selected_parent:
+                selected_repack_item = parent_map.get(selected_parent, {}).get(item_pk)
+            elif item_pk:
+                for pcode, items in parent_map.items():
+                    if item_pk in items:
+                        selected_repack_item = items[item_pk]
+                        selected_parent = pcode
+                        fg_choices = sorted(
+                            items.values(), key=lambda it: (it.sku or "").upper()
+                        )
+                        target_choices = _repack_target_choices(selected_parent)
+                        break
+            if selected_repack_item is None:
+                selected_repack_item = Item.objects.filter(pk=repack_item_id).first()
+                if selected_repack_item and not selected_parent:
+                    selected_parent = _item_parent_code(selected_repack_item) or (
+                        selected_repack_item.sku or ""
+                    ).strip().upper()
+                if selected_repack_item and selected_parent:
+                    if selected_parent in parent_map:
+                        fg_choices = sorted(
+                            parent_map[selected_parent].values(),
+                            key=lambda it: (it.sku or "").upper(),
+                        )
+                    target_choices = _repack_target_choices(selected_parent)
+
+        if not target_choices and selected_parent:
+            target_choices = _repack_target_choices(selected_parent)
+
+        target_raw = request.GET.get("target") or request.POST.get("target_item_id") or ""
+        if target_raw and target_choices:
+            try:
+                tid = int(target_raw)
+            except (TypeError, ValueError):
+                tid = None
+            if tid:
+                selected_repack_target = next(
+                    (it for it in target_choices if it.id == tid), None
+                )
+        if selected_repack_target is None and selected_repack_item and target_choices:
+            if len(target_choices) == 1:
+                selected_repack_target = target_choices[0]
+            else:
+                selected_repack_target = next(
+                    (it for it in target_choices if it.id == selected_repack_item.id),
+                    None,
+                )
+
+    # Mass display unit: for repack default to *item native* (e.g. kg for J1410).
+    # Honor explicit lbs/kg only when the user toggled (GET uom / POST batch_ticket_mass_unit).
+    # Do not stick cascade forms at lbs when the SKU is kg.
+    requested_uom = (
+        request.POST.get("batch_ticket_mass_unit") or request.GET.get("uom") or ""
+    ).strip().lower()
+    if requested_uom in ("lb", "lbs"):
+        requested_uom = "lbs"
+
+    if batch_type == "repack":
+        uom_item = selected_repack_target or selected_repack_item
+        native = "lbs"
+        if uom_item:
+            native = (uom_item.unit_of_measure or "lbs").strip().lower() or "lbs"
+            if native in ("lb", "lbs"):
+                native = "lbs"
         if native in ("lbs", "kg"):
-            display_uom = native if display_uom not in ("lbs", "kg") else display_uom
-    if display_uom not in ("lbs", "kg"):
-        display_uom = "lbs"
+            display_uom = requested_uom if requested_uom in ("lbs", "kg") else native
+        else:
+            # Pack / count UoM — no lbs/kg conversion toggle
+            display_uom = native
+    else:
+        display_uom = requested_uom if requested_uom in ("lbs", "kg") else "lbs"
+
+    is_relabel = bool(
+        batch_type == "repack"
+        and selected_repack_item
+        and selected_repack_target
+        and selected_repack_item.id == selected_repack_target.id
+    )
 
     ingredient_lot_choices = []
     repack_lot_rows = []
@@ -619,41 +1123,44 @@ def production_create_batch(request: HttpRequest) -> HttpResponse:
 
         for ing in selected_formula.ingredients.all():
             native = (ing.item.unit_of_measure or "lbs").lower()
-            lots = lots_for_formula_ingredient(ing, limit=80)
+            is_utility = bool(getattr(ing.item, "plant_utility", False))
             lot_rows = []
-            for lot in lots:
-                avail_native = float(
-                    compute_lot_quantity_breakdown(lot)["quantity_available_for_use"]
-                )
-                if avail_native <= 0:
-                    continue
-                lot_native = (lot.item.unit_of_measure or native or "lbs").lower()
-                try:
-                    avail_display = (
-                        convert_mass_uom(avail_native, lot_native, display_uom)
-                        if lot_native in ("lbs", "kg") and display_uom in ("lbs", "kg")
-                        else avail_native
+            if not is_utility:
+                lots = lots_for_formula_ingredient(ing, limit=80)
+                for lot in lots:
+                    avail_native = float(
+                        compute_lot_quantity_breakdown(lot)["quantity_available_for_use"]
                     )
-                except ValueError:
-                    avail_display = avail_native
-                partial = is_partial_lot(lot)
-                lot_rows.append(
-                    {
-                        "lot": lot,
-                        "available_native": avail_native,
-                        "available_display": avail_display,
-                        "native_uom": lot_native,
-                        "is_partial": partial,
-                        "pack_label": format_pack_label(item=lot.item, lot=lot),
-                    }
-                )
-            # Prefer opened/partial packs first so they get used up
-            lot_rows.sort(key=lambda r: (0 if r["is_partial"] else 1, -r["available_native"]))
+                    if avail_native <= 0:
+                        continue
+                    lot_native = (lot.item.unit_of_measure or native or "lbs").lower()
+                    try:
+                        avail_display = (
+                            convert_mass_uom(avail_native, lot_native, display_uom)
+                            if lot_native in ("lbs", "kg") and display_uom in ("lbs", "kg")
+                            else avail_native
+                        )
+                    except ValueError:
+                        avail_display = avail_native
+                    partial = is_partial_lot(lot)
+                    lot_rows.append(
+                        {
+                            "lot": lot,
+                            "available_native": avail_native,
+                            "available_display": avail_display,
+                            "native_uom": lot_native,
+                            "is_partial": partial,
+                            "pack_label": format_pack_label(item=lot.item, lot=lot),
+                        }
+                    )
+                # Prefer opened/partial packs first so they get used up
+                lot_rows.sort(key=lambda r: (0 if r["is_partial"] else 1, -r["available_native"]))
             ingredient_lot_choices.append(
                 {
                     "ingredient": ing,
                     "percentage": float(ing.percentage or 0),
                     "native_uom": native,
+                    "plant_utility": is_utility,
                     "match_by_parent": bool(getattr(ing, "match_by_parent", False)),
                     "parent_code": (getattr(ing.item, "sku_parent_code", None) or "") if getattr(ing, "match_by_parent", False) else "",
                     "lots": lot_rows,
@@ -662,14 +1169,36 @@ def production_create_batch(request: HttpRequest) -> HttpResponse:
     elif selected_repack_item:
         repack_lot_rows = _repack_lot_rows(selected_repack_item, display_uom)
 
+    packaging_lot_rows = []
+    target_pack_qty = None
+    target_pack_uom = None
+    target_pack_label = ""
+    ccp_choices = []
+    if batch_type == "repack" and selected_repack_item and selected_repack_target:
+        if not is_relabel:
+            packaging_lot_rows = _packaging_lot_rows()
+            ccp_choices = list(CriticalControlPoint.objects.all())
+        target_pack_qty, target_pack_uom = resolve_pack_size(item=selected_repack_target)
+        target_pack_label = format_pack_label(item=selected_repack_target)
+
     if request.method == "POST":
         if batch_type == "repack" and selected_repack_item:
+            target_item = selected_repack_target or selected_repack_item
+            is_relabel_post = bool(
+                target_item and selected_repack_item.id == target_item.id
+            )
             try:
                 qty_display = float(request.POST.get("quantity_produced") or 0)
             except ValueError:
                 qty_display = 0
-            native = (selected_repack_item.unit_of_measure or "lbs").lower()
-            qty_native = _display_to_native(qty_display, display_uom, native) if qty_display > 0 else 0.0
+            target_native = (target_item.unit_of_measure or "lbs").lower()
+            source_native = (selected_repack_item.unit_of_measure or "lbs").lower()
+            # quantity_produced is entered in display_uom toward the *target* SKU
+            qty_target = (
+                _display_to_native(qty_display, display_uom, target_native)
+                if qty_display > 0
+                else 0.0
+            )
 
             inputs = []
             for lot_row in repack_lot_rows:
@@ -683,29 +1212,120 @@ def production_create_batch(request: HttpRequest) -> HttpResponse:
                     continue
                 if q_display <= 0:
                     continue
-                q_native = _display_to_native(q_display, display_uom, native)
+                # Lot qty entered in display_uom; convert to *source* native for inventory
+                q_native = _display_to_native(q_display, display_uom, source_native)
                 inputs.append({"lot_id": lot.id, "quantity_used": q_native})
 
+            indirect_materials = []
+            ccp_id = None
+            if not is_relabel_post:
+                for prow in packaging_lot_rows:
+                    lot = prow["lot"]
+                    raw_qty = request.POST.get(f"pack_qty_{lot.id}")
+                    if not raw_qty:
+                        continue
+                    try:
+                        q = float(raw_qty)
+                    except ValueError:
+                        continue
+                    if q <= 0:
+                        continue
+                    indirect_materials.append({"lot_id": lot.id, "quantity_used": q})
+                ccp_raw = (request.POST.get("critical_control_point_id") or "").strip()
+                if ccp_raw.isdigit():
+                    ccp_id = int(ccp_raw)
+
             if not inputs:
-                messages.error(request, "Select at least one lot with quantity.")
+                messages.error(request, "Select at least one source lot with quantity.")
+            elif not target_item:
+                messages.error(request, "Select a target (output) SKU.")
+            elif not is_relabel_post and not indirect_materials:
+                messages.error(
+                    request,
+                    "Pack-change repacks require packaging (indirect materials). "
+                    "Select at least one packaging lot.",
+                )
+            elif not is_relabel_post and not ccp_id:
+                messages.error(
+                    request,
+                    "Pack-change repacks require a CCP (screen) selection.",
+                )
+            elif not is_relabel_post and ccp_id and not CriticalControlPoint.objects.filter(pk=ccp_id).exists():
+                messages.error(request, "Selected CCP is invalid.")
             else:
-                if qty_native <= 0:
-                    qty_native = normalize_mass_quantity(sum(i["quantity_used"] for i in inputs))
+                if qty_target <= 0:
+                    # Derive target qty from converted source inputs
+                    total_target = 0.0
+                    for inp in inputs:
+                        total_target += float(
+                            convert_mass_uom(
+                                inp["quantity_used"],
+                                source_native if source_native in ("lbs", "kg") else "lbs",
+                                target_native if target_native in ("lbs", "kg") else "lbs",
+                            )
+                            if source_native in ("lbs", "kg") and target_native in ("lbs", "kg")
+                            and source_native != target_native
+                            else inp["quantity_used"]
+                        )
+                    qty_target = normalize_mass_quantity(total_target)
+
+                notes = (request.POST.get("notes") or "").strip()
+                if is_relabel_post:
+                    tag = "[RELABEL — same container; no packaging / CCP]"
+                    notes = f"{notes}\n{tag}".strip() if notes else tag
 
                 payload = {
                     "batch_type": "repack",
-                    "quantity_produced": qty_native,
-                    "production_date": (request.POST.get("production_date") or timezone.localdate().isoformat()),
+                    "finished_good_item_id": target_item.id,
+                    "quantity_produced": qty_target,
+                    "production_date": (
+                        request.POST.get("production_date") or timezone.localdate().isoformat()
+                    ),
                     "status": "in_progress",
                     "batch_ticket_mass_unit": display_uom,
-                    "notes": request.POST.get("notes") or "",
+                    "notes": notes,
                     "inputs": inputs,
-                    "indirect_materials": [],
+                    "indirect_materials": indirect_materials,
                     "work_in_partials": [],
                 }
+                if ccp_id:
+                    payload["critical_control_point"] = ccp_id
                 try:
-                    batch = create_batch_ticket(request.user, payload)
-                    messages.success(request, f"Created repack batch {batch.batch_number}.")
+                    with transaction.atomic():
+                        batch = create_batch_ticket(request.user, payload)
+                        if is_relabel_post:
+                            # Relabel never opens packs — close immediately so the
+                            # output lot number exists for labels.
+                            batch = close_batch_ticket(
+                                batch,
+                                request.user,
+                                {
+                                    "quantity_actual": float(
+                                        batch.quantity_produced or 0
+                                    ),
+                                    "wastes": 0.0,
+                                    "spills": 0.0,
+                                    "notes": batch.notes,
+                                    "allow_early_close": _god_mode_on(request),
+                                },
+                            )
+                            out = (
+                                batch.outputs.select_related("lot").first()
+                            )
+                            lot_num = (
+                                out.lot.lot_number
+                                if out is not None and out.lot_id
+                                else "—"
+                            )
+                            messages.success(
+                                request,
+                                f"Relabeled {batch.batch_number} — output lot {lot_num}.",
+                            )
+                        else:
+                            messages.success(
+                                request,
+                                f"Created repack batch {batch.batch_number}.",
+                            )
                     return redirect("slurp_ui:production_batch_detail", pk=batch.id)
                 except MakeFlowError as e:
                     messages.error(request, e.message)
@@ -744,16 +1364,40 @@ def production_create_batch(request: HttpRequest) -> HttpResponse:
                 q_native = _display_to_native(q_display, display_uom, native)
                 inputs.append({"lot_id": lot_id, "quantity_used": q_native})
 
+            # Plant utility qty: plant_utility_qty_<ingredient_id>
+            for key, raw_qty in request.POST.items():
+                if not key.startswith("plant_utility_qty_") or not raw_qty:
+                    continue
+                try:
+                    ing_id = int(key.split("_")[-1])
+                    q_display = float(raw_qty)
+                except (TypeError, ValueError):
+                    continue
+                if q_display <= 0:
+                    continue
+                ing = next(
+                    (r["ingredient"] for r in ingredient_lot_choices if r["ingredient"].id == ing_id),
+                    None,
+                )
+                if not ing or not getattr(ing.item, "plant_utility", False):
+                    continue
+                native = (ing.item.unit_of_measure or "lbs").lower()
+                q_native = _display_to_native(q_display, display_uom, native)
+                inputs.append({"item_id": ing.item_id, "quantity_used": q_native})
+
             if not inputs:
-                messages.error(request, "Allocate quantity on at least one lot.")
+                messages.error(request, "Allocate quantity on at least one ingredient.")
             else:
                 if qty_lbs <= 0:
                     qty_lbs = 0.0
                     for row in inputs:
-                        lot = Lot.objects.select_related("item").get(pk=row["lot_id"])
-                        qty_lbs += _to_lbs(
-                            float(row["quantity_used"]), lot.item.unit_of_measure or "lbs"
-                        )
+                        if row.get("lot_id"):
+                            lot = Lot.objects.select_related("item").get(pk=row["lot_id"])
+                            uom = lot.item.unit_of_measure or "lbs"
+                        else:
+                            item = Item.objects.get(pk=row["item_id"])
+                            uom = item.unit_of_measure or "lbs"
+                        qty_lbs += _to_lbs(float(row["quantity_used"]), uom)
                     qty_lbs = normalize_mass_quantity(qty_lbs)
 
                 prod_date = (request.POST.get("production_date") or "").strip()
@@ -804,6 +1448,18 @@ def production_create_batch(request: HttpRequest) -> HttpResponse:
         _prod_ctx(
             batch_type=batch_type,
             formulas=formulas,
+            parent_choices=parent_choices,
+            fg_choices=fg_choices,
+            formula_choices=formula_choices,
+            target_choices=target_choices,
+            selected_parent=selected_parent,
+            selected_fg=selected_fg,
+            selected_repack_target=selected_repack_target,
+            packaging_lot_rows=packaging_lot_rows,
+            target_pack_qty=target_pack_qty,
+            target_pack_uom=target_pack_uom,
+            target_pack_label=target_pack_label,
+            lbs_per_kg=LBS_PER_KG,
             repack_items=repack_items,
             selected_formula=selected_formula,
             selected_repack_item=selected_repack_item,
@@ -811,7 +1467,8 @@ def production_create_batch(request: HttpRequest) -> HttpResponse:
             repack_lot_rows=repack_lot_rows,
             work_in_partial_lots=work_in_partial_lots,
             display_uom=display_uom,
-            lbs_per_kg=LBS_PER_KG,
+            is_relabel=is_relabel,
+            ccp_choices=ccp_choices,
             today=today,
             god_mode=bool(request.session.get("god_mode")) and request.user.is_staff,
             port_status="full",
@@ -895,7 +1552,14 @@ def production_adjust_batch(request: HttpRequest, pk: int) -> HttpResponse:
     if display_uom not in ("lbs", "kg"):
         display_uom = native_uom if native_uom in ("lbs", "kg") else "lbs"
 
-    existing_by_lot = {inp.lot_id: inp for inp in batch.inputs.all()}
+    existing_by_lot = {
+        inp.lot_id: inp for inp in batch.inputs.all() if inp.lot_id
+    }
+    existing_by_item = {
+        inp.item_id: inp
+        for inp in batch.inputs.select_related("item").all()
+        if inp.lot_id is None and inp.item_id
+    }
     ingredient_lot_choices = []
     available_lots = []  # flat list for repack / POST fallback
 
@@ -924,8 +1588,35 @@ def production_adjust_batch(request: HttpRequest, pk: int) -> HttpResponse:
                 available_lots.append(row)
     elif formula:
         claimed_lot_ids: set[int] = set()
+        claimed_utility_item_ids: set[int] = set()
         for ing in formula.ingredients.select_related("item").all():
             native = (ing.item.unit_of_measure or "lbs").lower()
+            is_utility = bool(getattr(ing.item, "plant_utility", False))
+            if is_utility:
+                existing = existing_by_item.get(ing.item_id)
+                utility_qty_native = float(existing.quantity_used) if existing else 0.0
+                try:
+                    utility_qty_display = (
+                        convert_mass_uom(utility_qty_native, native, display_uom)
+                        if native in ("lbs", "kg") and display_uom in ("lbs", "kg")
+                        else utility_qty_native
+                    )
+                except ValueError:
+                    utility_qty_display = utility_qty_native
+                claimed_utility_item_ids.add(ing.item_id)
+                ingredient_lot_choices.append(
+                    {
+                        "ingredient": ing,
+                        "percentage": float(ing.percentage or 0),
+                        "native_uom": native,
+                        "plant_utility": True,
+                        "utility_qty_display": utility_qty_display,
+                        "match_by_parent": False,
+                        "parent_code": "",
+                        "lots": [],
+                    }
+                )
+                continue
             skus = set(skus_for_formula_ingredient(ing))
             lot_qs = lots_for_formula_ingredient(ing, limit=80)
             lot_by_id = {lot.id: lot for lot in lot_qs}
@@ -961,6 +1652,7 @@ def production_adjust_batch(request: HttpRequest, pk: int) -> HttpResponse:
                     "ingredient": ing,
                     "percentage": float(ing.percentage or 0),
                     "native_uom": native,
+                    "plant_utility": False,
                     "match_by_parent": bool(getattr(ing, "match_by_parent", False)),
                     "parent_code": (
                         (getattr(ing.item, "sku_parent_code", None) or "")
@@ -995,6 +1687,7 @@ def production_adjust_batch(request: HttpRequest, pk: int) -> HttpResponse:
                     "ingredient_label": "Other lots on this batch",
                     "percentage": 0,
                     "native_uom": display_uom,
+                    "plant_utility": False,
                     "match_by_parent": False,
                     "parent_code": "",
                     "lots": orphan_rows,
@@ -1010,6 +1703,20 @@ def production_adjust_batch(request: HttpRequest, pk: int) -> HttpResponse:
             for group in ingredient_lot_choices:
                 ing = group.get("ingredient")
                 ing_key = ing.id if ing is not None else "orphan"
+                if group.get("plant_utility") and ing is not None:
+                    raw = request.POST.get(f"plant_utility_qty_{ing.id}")
+                    if not raw:
+                        continue
+                    try:
+                        q = float(raw)
+                    except ValueError:
+                        continue
+                    if q <= 0:
+                        continue
+                    lot_native = (ing.item.unit_of_measure or "lbs").lower()
+                    q_native = _display_to_native(q, display_uom, lot_native)
+                    inputs.append({"item_id": ing.item_id, "quantity_used": q_native})
+                    continue
                 for lot_row in group.get("lots") or []:
                     lot = lot_row["lot"]
                     raw = request.POST.get(f"ing_qty_{ing_key}_{lot.id}")
@@ -1047,7 +1754,7 @@ def production_adjust_batch(request: HttpRequest, pk: int) -> HttpResponse:
                 inputs.append({"lot_id": lot.id, "quantity_used": q_native})
 
         if not inputs:
-            messages.error(request, "Select at least one lot with quantity.")
+            messages.error(request, "Select at least one ingredient with quantity.")
         else:
             # Prefer posted quantity; if blank/invalid, sync from total inputs (QC add/remove).
             raw_qty = (request.POST.get("quantity_produced") or "").strip()
@@ -1061,9 +1768,13 @@ def production_adjust_batch(request: HttpRequest, pk: int) -> HttpResponse:
             if batch.batch_type == "production":
                 total_lbs = 0.0
                 for inp in inputs:
-                    lot = Lot.objects.select_related("item").get(pk=inp["lot_id"])
+                    if inp.get("lot_id"):
+                        lot = Lot.objects.select_related("item").get(pk=inp["lot_id"])
+                        lu = (lot.item.unit_of_measure or "lbs").lower()
+                    else:
+                        item = Item.objects.get(pk=inp["item_id"])
+                        lu = (item.unit_of_measure or "lbs").lower()
                     q = float(inp["quantity_used"])
-                    lu = (lot.item.unit_of_measure or "lbs").lower()
                     total_lbs += _to_lbs(q, lu)
                 total_lbs = normalize_mass_quantity(total_lbs)
                 if qty_produced is None or qty_produced <= 0:
@@ -1174,9 +1885,16 @@ def production_close_batch(request: HttpRequest, pk: int) -> HttpResponse:
     )
     if batch.status == "closed":
         messages.warning(request, f"Batch {batch.batch_number} is already closed.")
-        return redirect("slurp_ui:production")
+        return redirect(_dash_url_name(batch.batch_type))
     if batch.is_archived:
         messages.warning(request, f"Batch {batch.batch_number} is archived.")
+        return redirect("slurp_ui:production_batch_detail", pk=pk)
+
+    early_msg = _close_before_production_blocked(
+        batch, allow_early=_god_mode_on(request)
+    )
+    if early_msg:
+        messages.error(request, early_msg)
         return redirect("slurp_ui:production_batch_detail", pk=pk)
 
     formula = None
@@ -1189,24 +1907,43 @@ def production_close_batch(request: HttpRequest, pk: int) -> HttpResponse:
                 .first()
             )
     qc_ctx = _formula_qc_context(formula)
-    display_uom = (batch.batch_ticket_mass_unit or "lbs").lower()
-    if display_uom not in ("lbs", "kg"):
-        display_uom = "lbs"
+    display_uom = _close_display_uom(batch)
+    storage_uom = _close_storage_uom(batch)
     if formula:
         _ensure_formula_baseline(batch)
     adjustment_rows, baseline_qty_display, current_qty_display = _build_adjustment_summary(
         batch, formula, display_uom
     )
     has_adjustments = any(r["has_delta"] for r in adjustment_rows)
+    ticket_display = _native_to_display(
+        float(batch.quantity_produced or 0), storage_uom, display_uom
+    )
+    from erp_core.pack_display import resolve_pack_size
+
+    pack_qty, pack_uom = resolve_pack_size(item=batch.finished_good_item)
+    pack_breakout = _pack_breakout_for_item(
+        batch.finished_good_item, ticket_display, display_uom
+    )
+    campaign_preview = ""
+    if batch.batch_type == "production" and batch.campaign_id:
+        from erp_core.campaign_lots import preview_campaign_code
+
+        campaign_preview = preview_campaign_code(batch)
 
     if request.method == "POST":
         try:
-            actual = float(request.POST.get("quantity_actual") or batch.quantity_produced)
-            wastes = float(request.POST.get("wastes") or 0)
-            spills = float(request.POST.get("spills") or 0)
+            actual_display = float(
+                request.POST.get("quantity_actual") or ticket_display
+            )
+            wastes_display = float(request.POST.get("wastes") or 0)
+            spills_display = float(request.POST.get("spills") or 0)
         except ValueError:
             messages.error(request, "Invalid quantity / waste / spill values.")
             return redirect("slurp_ui:production_close_batch", pk=pk)
+
+        actual = _display_to_native(actual_display, display_uom, storage_uom)
+        wastes = _display_to_native(wastes_display, display_uom, storage_uom)
+        spills = _display_to_native(spills_display, display_uom, storage_uom)
 
         # Always prefer formula QC identity when present (do not trust free-text override).
         if qc_ctx["formula_has_qc"]:
@@ -1249,6 +1986,7 @@ def production_close_batch(request: HttpRequest, pk: int) -> HttpResponse:
             "qc_parameter": qc_param,
             "qc_actual": qc_actual,
             "qc_initials": qc_initials,
+            "allow_early_close": _god_mode_on(request),
         }
         try:
             close_batch_ticket(batch, request.user, payload)
@@ -1270,11 +2008,65 @@ def production_close_batch(request: HttpRequest, pk: int) -> HttpResponse:
             baseline_qty_display=baseline_qty_display,
             current_qty_display=current_qty_display,
             display_uom=display_uom,
+            ticket_qty_display=ticket_display,
+            pack_qty=pack_qty,
+            pack_uom=pack_uom or "",
+            pack_breakout=pack_breakout,
+            campaign_preview=campaign_preview,
+            lbs_per_kg=LBS_PER_KG,
             qc_parameter_value=qc_ctx["formula_qc_label"],
             port_status="full",
             **qc_ctx,
         ),
     )
+
+
+@login_required
+@require_POST
+def production_campaign_link(request: HttpRequest) -> HttpResponse:
+    """Link selected production batches into one campaign (parent + ISO week)."""
+    from erp_core.campaign_lots import link_batches_to_campaign
+
+    raw_ids = request.POST.getlist("batch_ids")
+    try:
+        batch_ids = [int(x) for x in raw_ids if str(x).isdigit()]
+    except (TypeError, ValueError):
+        batch_ids = []
+    try:
+        campaign, linked = link_batches_to_campaign(batch_ids)
+        messages.success(
+            request,
+            f"Linked {len(linked)} ticket(s) to campaign {campaign.campaign_code}.",
+        )
+    except ValueError as e:
+        messages.error(request, str(e))
+    except Exception as e:
+        messages.error(request, str(e))
+    return redirect("slurp_ui:production")
+
+
+@login_required
+@require_POST
+def production_campaign_unlink(request: HttpRequest) -> HttpResponse:
+    """Clear campaign on selected production batches."""
+    from erp_core.campaign_lots import unlink_batches_from_campaign
+
+    raw_ids = request.POST.getlist("batch_ids")
+    try:
+        batch_ids = [int(x) for x in raw_ids if str(x).isdigit()]
+    except (TypeError, ValueError):
+        batch_ids = []
+    try:
+        unlinked = unlink_batches_from_campaign(batch_ids)
+        messages.success(
+            request,
+            f"Unlinked {len(unlinked)} ticket(s) from campaign.",
+        )
+    except ValueError as e:
+        messages.error(request, str(e))
+    except Exception as e:
+        messages.error(request, str(e))
+    return redirect("slurp_ui:production")
 
 
 @login_required
@@ -1301,4 +2093,4 @@ def production_reverse_batch(request: HttpRequest, pk: int) -> HttpResponse:
         messages.error(request, detail)
     except Exception as e:
         messages.error(request, str(e))
-    return redirect("slurp_ui:production")
+    return redirect(_dash_url_name(batch.batch_type))

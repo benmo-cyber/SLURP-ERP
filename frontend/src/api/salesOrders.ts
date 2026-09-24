@@ -160,16 +160,22 @@ export const getShipments = async (salesOrderId: number) => {
 }
 
 export const getAvailableSalesOrders = async () => {
-  // Get all sales orders and filter for issued or ready_for_shipment with allocations
+  // Issued or allocated with remaining allocation (ready_for_shipment = awaiting pickup)
   const response = await api.get('/sales-orders/')
   const allOrders = response.data.results || response.data
   return allOrders.filter((so: any) => {
-    // Must be issued or ready for shipment (backend sets ready_for_shipment when fully allocated)
-    if (so.status !== 'issued' && so.status !== 'ready_for_shipment') return false
-    // Must have at least one item with allocation
+    if (so.status !== 'issued' && so.status !== 'allocated') return false
     if (!so.items || so.items.length === 0) return false
     return so.items.some((item: any) => item.quantity_allocated > 0)
   })
+}
+
+export const markSalesOrderPickedUp = async (
+  id: number,
+  data: { shipment_id?: number; pickup_date?: string; tracking_number?: string } = {}
+) => {
+  const response = await api.post(`/sales-orders/${id}/mark-picked-up/`, data)
+  return response.data
 }
 
 /** Parsed customer PO result for auto-filling Create Sales Order form */

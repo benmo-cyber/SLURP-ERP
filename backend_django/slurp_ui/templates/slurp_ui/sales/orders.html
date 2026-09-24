@@ -2,43 +2,108 @@
 {% block title %}Order Workqueue — SLURP{% endblock %}
 {% block module_title %}Order Workqueue{% endblock %}
 {% block header_actions %}
-  <a href="{% url 'slurp_ui:sales_combined_checkout' %}" class="hs-btn">Combined check out</a>
-  <a href="{% url 'slurp_ui:sales_checkout' %}" class="hs-btn">Check out</a>
-  <a href="{% url 'slurp_ui:sales_create_order' %}" class="hs-btn hs-btn-primary">+ Create sales order</a>
+  <a href="{% url 'slurp_ui:sales_combined_checkout' %}" class="hs-btn">Combined ready</a>
+  <a href="{% url 'slurp_ui:sales_checkout' %}" class="hs-btn">Stage / Mark Ready</a>
+  <a href="{% url 'slurp_ui:sales_create_order' %}" class="hs-btn hs-btn-primary">+ Create SO</a>
 {% endblock %}
 {% block main %}
+<style>
+  .wq-line-name { color: #0f172a; font-size: 0.92rem; font-weight: 650; line-height: 1.3; }
+  .wq-line-qty { color: #334155; font-size: 0.88rem; font-variant-numeric: tabular-nums; margin-top: 0.1rem; }
+  .wq-kpis {
+    display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 0.55rem; margin-bottom: 0.85rem;
+  }
+  @media (max-width: 900px) { .wq-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  .wq-kpi {
+    display: block; text-decoration: none; background: #fff; border: 1px solid #e2e8f0;
+    border-radius: 10px; padding: 0.65rem 0.8rem; color: inherit;
+  }
+  .wq-kpi:hover { border-color: #94a3b8; }
+  .wq-kpi.is-active { border-color: #0f172a; box-shadow: 0 0 0 1px #0f172a; }
+  .wq-kpi .label {
+    font-size: 0.65rem; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: #64748b;
+  }
+  .wq-kpi .value { font-size: 1.25rem; font-weight: 750; color: #0f172a; margin-top: 0.1rem; font-variant-numeric: tabular-nums; }
+  .wq-kpi.is-warn .value { color: #b45309; }
+  .wq-kpi.is-ok .value { color: #047857; }
+  .wq-date {
+    max-width: 9.5rem; padding: 0.28rem 0.35rem; font-size: 0.84rem;
+    border: 1px solid #cbd5e1; border-radius: 4px; background: #fff;
+  }
+  .wq-date.is-overdue { border-color: #fca5a5; background: #fef2f2; }
+  .wq-date.is-missing { border-color: #fcd34d; background: #fffbeb; }
+  .wq-sort a { color: #64748b; text-decoration: none; }
+  .wq-sort a.is-on { color: #0f172a; font-weight: 700; }
+  .wq-docs { display: flex; flex-wrap: wrap; gap: 0.25rem; margin-top: 0.25rem; }
+</style>
 <div class="hs-bleed" style="padding:1.25rem 1.5rem 2rem">
+  <div class="wq-kpis">
+    <a class="wq-kpi {% if focus == 'today' %}is-active{% endif %}"
+       href="?focus=today{% if q %}&amp;q={{ q|urlencode }}{% endif %}&amp;sort={{ sort|default:'exp_ship' }}">
+      <div class="label">Today</div>
+      <div class="value">{{ kpi.today }}</div>
+    </a>
+    <a class="wq-kpi {% if focus == 'week' %}is-active{% endif %}"
+       href="?focus=week{% if q %}&amp;q={{ q|urlencode }}{% endif %}&amp;sort={{ sort|default:'exp_ship' }}">
+      <div class="label">This week</div>
+      <div class="value">{{ kpi.week }}</div>
+    </a>
+    <a class="wq-kpi is-ok {% if focus == 'awaiting_pickup' %}is-active{% endif %}"
+       href="?focus=awaiting_pickup{% if q %}&amp;q={{ q|urlencode }}{% endif %}">
+      <div class="label">Awaiting pickup</div>
+      <div class="value">{{ kpi.awaiting_pickup }}</div>
+    </a>
+    <a class="wq-kpi is-warn {% if focus == 'need_invoice' %}is-active{% endif %}"
+       href="?focus=need_invoice{% if q %}&amp;q={{ q|urlencode }}{% endif %}">
+      <div class="label">Need invoice</div>
+      <div class="value">{{ kpi.need_invoice }}</div>
+    </a>
+    <a class="wq-kpi {% if queue == 'open' and not focus %}is-active{% endif %}"
+       href="?queue=open{% if q %}&amp;q={{ q|urlencode }}{% endif %}&amp;sort={{ sort|default:'exp_ship' }}">
+      <div class="label">Open</div>
+      <div class="value">{{ kpi.open }}</div>
+    </a>
+  </div>
+
   <div class="hs-toolbar">
     <form method="get" style="display:flex;gap:0.5rem;flex:1;min-width:220px">
       <input type="search" name="q" value="{{ q }}" placeholder="Search SO #, customer, PO…" class="hs-search" />
       <input type="hidden" name="queue" value="{{ queue }}" />
+      {% if focus %}<input type="hidden" name="focus" value="{{ focus }}" />{% endif %}
+      <input type="hidden" name="sort" value="{{ sort|default:'exp_ship' }}" />
       <button class="hs-btn hs-btn-primary" type="submit">Search</button>
     </form>
-    <div class="hs-pills">
-      <a href="?queue=open{% if q %}&q={{ q|urlencode }}{% endif %}" class="hs-pill {% if queue == 'open' %}active{% endif %}">Open <span class="count">{{ counts.open }}</span></a>
-      <a href="?queue=draft{% if q %}&q={{ q|urlencode }}{% endif %}" class="hs-pill {% if queue == 'draft' %}active{% endif %}">Draft <span class="count">{{ counts.draft }}</span></a>
-      <a href="?queue=allocate{% if q %}&q={{ q|urlencode }}{% endif %}" class="hs-pill {% if queue == 'allocate' %}active{% endif %}">Allocate <span class="count">{{ counts.allocate }}</span></a>
-      <a href="?queue=ship{% if q %}&q={{ q|urlencode }}{% endif %}" class="hs-pill {% if queue == 'ship' %}active{% endif %}">Ship <span class="count">{{ counts.ship }}</span></a>
-      <a href="?queue=done{% if q %}&q={{ q|urlencode }}{% endif %}" class="hs-pill {% if queue == 'done' %}active{% endif %}">Shipped <span class="count">{{ counts.done }}</span></a>
-      <a href="?queue=all{% if q %}&q={{ q|urlencode }}{% endif %}" class="hs-pill {% if queue == 'all' %}active{% endif %}">All <span class="count">{{ counts.all }}</span></a>
+    <div class="hs-pills wq-sort">
+      <span class="hs-muted" style="font-size:0.75rem;align-self:center;margin-right:0.25rem">Sort</span>
+      <a class="hs-pill {% if sort == 'exp_ship' or not sort %}active{% endif %}"
+         href="?queue={{ queue }}{% if focus %}&amp;focus={{ focus }}{% endif %}{% if q %}&amp;q={{ q|urlencode }}{% endif %}&amp;sort=exp_ship">Exp. ship</a>
+      <a class="hs-pill {% if sort == 'customer' %}active{% endif %}"
+         href="?queue={{ queue }}{% if focus %}&amp;focus={{ focus }}{% endif %}{% if q %}&amp;q={{ q|urlencode }}{% endif %}&amp;sort=customer">Customer</a>
+      <a class="hs-pill {% if sort == 'crd' %}active{% endif %}"
+         href="?queue={{ queue }}{% if focus %}&amp;focus={{ focus }}{% endif %}{% if q %}&amp;q={{ q|urlencode }}{% endif %}&amp;sort=crd">Cust. req.</a>
+      <a class="hs-pill {% if sort == 'newest' %}active{% endif %}"
+         href="?queue={{ queue }}{% if focus %}&amp;focus={{ focus }}{% endif %}{% if q %}&amp;q={{ q|urlencode }}{% endif %}&amp;sort=newest">Newest</a>
+      <a class="hs-pill {% if sort == 'oldest' %}active{% endif %}"
+         href="?queue={{ queue }}{% if focus %}&amp;focus={{ focus }}{% endif %}{% if q %}&amp;q={{ q|urlencode }}{% endif %}&amp;sort=oldest">Oldest</a>
     </div>
   </div>
 
   <div class="hs-card">
     <div class="hs-card-header">
       <h3>Fulfillment queue</h3>
-      <span class="hs-muted" style="font-size:0.8rem">Issue → allocate → check out</span>
+      <span class="hs-muted" style="font-size:0.8rem">Allocate → Mark Ready → Picked up → Issue invoice</span>
     </div>
     <div class="hs-card-body tight">
       <table class="hs-table">
         <thead>
           <tr>
             <th>Order</th>
+            <th>Items</th>
             <th>Customer</th>
+            <th>Exp. ship</th>
+            <th>Cust. req.</th>
             <th>Status</th>
-            <th>Order date</th>
-            <th>Customer PO</th>
-            <th>Allocated</th>
+            <th>Cust. PO</th>
             <th>Actions</th>
           </tr>
         </thead>
@@ -50,6 +115,16 @@
               {% if o.drop_ship %}<span class="hs-badge warn">Drop-ship</span>{% endif %}
             </td>
             <td>
+              {% for line in o.items.all %}
+              <div class="wq-line"{% if not forloop.last %} style="margin-bottom:0.4rem"{% endif %}>
+                <div class="wq-line-name">{{ line.item.name }}</div>
+                <div class="wq-line-qty">{{ line.quantity_ordered|floatformat:2 }} {{ line.item.unit_of_measure }}</div>
+              </div>
+              {% empty %}
+              <span class="hs-muted">—</span>
+              {% endfor %}
+            </td>
+            <td>
               {% if o.customer_id %}
               <a href="{% url 'slurp_ui:sales_customer_profile' o.customer_id %}">{{ o.customer_name }}</a>
               {% else %}
@@ -57,16 +132,44 @@
               {% endif %}
             </td>
             <td>
+              {% if o.status == 'shipped' or o.status == 'completed' or o.status == 'cancelled' or o.status == 'received' %}
+                {% if o.expected_ship_date %}{{ o.expected_ship_date|date:"Y-m-d" }}{% else %}<span class="hs-muted">—</span>{% endif %}
+              {% else %}
+              <form method="post" action="{% url 'slurp_ui:sales_order_update_dates' o.id %}">
+                {% csrf_token %}
+                <input type="hidden" name="next" value="?queue={{ queue }}{% if focus %}&focus={{ focus }}{% endif %}{% if q %}&q={{ q|urlencode }}{% endif %}&sort={{ sort|default:'exp_ship' }}" />
+                <input class="wq-date {% if not o.expected_ship_date %}is-missing{% endif %}"
+                       type="date" name="expected_ship_date"
+                       value="{% if o.expected_ship_date %}{{ o.expected_ship_date|date:'Y-m-d' }}{% endif %}"
+                       onchange="this.form.submit()" />
+              </form>
+              {% endif %}
+            </td>
+            <td>
+              {% if o.status == 'shipped' or o.status == 'completed' or o.status == 'cancelled' or o.status == 'received' %}
+                {% if o.customer_required_date %}{{ o.customer_required_date|date:"Y-m-d" }}{% else %}<span class="hs-muted">—</span>{% endif %}
+              {% else %}
+              <form method="post" action="{% url 'slurp_ui:sales_order_update_dates' o.id %}">
+                {% csrf_token %}
+                <input type="hidden" name="next" value="?queue={{ queue }}{% if focus %}&focus={{ focus }}{% endif %}{% if q %}&q={{ q|urlencode }}{% endif %}&sort={{ sort|default:'exp_ship' }}" />
+                <input class="wq-date {% if o.customer_required_date and o.customer_required_date < today %}is-overdue{% endif %}"
+                       type="date" name="customer_required_date"
+                       value="{% if o.customer_required_date %}{{ o.customer_required_date|date:'Y-m-d' }}{% endif %}"
+                       onchange="this.form.submit()" />
+              </form>
+              {% endif %}
+            </td>
+            <td>
               {% if o.status == 'draft' %}<span class="hs-badge">Draft</span>
-              {% elif o.status == 'ready_for_shipment' %}<span class="hs-badge ok">Ready</span>
-              {% elif o.status == 'issued' or o.status == 'allocated' %}<span class="hs-badge info">{{ o.status }}</span>
+              {% elif o.ready_shipment %}<span class="hs-badge ok">Awaiting pickup</span>
+              {% elif o.status == 'allocated' %}<span class="hs-badge info">Allocated</span>
+              {% elif o.status == 'issued' %}<span class="hs-badge info">Issued</span>
+              {% elif o.status == 'ready_for_shipment' %}<span class="hs-badge info">Allocated</span>
               {% elif o.status == 'completed' or o.status == 'shipped' %}<span class="hs-badge ok">{{ o.status }}</span>
               {% elif o.status == 'cancelled' %}<span class="hs-badge danger">Cancelled</span>
               {% else %}<span class="hs-badge">{{ o.status }}</span>{% endif %}
             </td>
-            <td>{{ o.order_date|date:"Y-m-d" }}</td>
             <td>{{ o.customer_reference_number|default:"—" }}</td>
-            <td>{{ o.total_allocated|default_if_none:0|floatformat:2 }}</td>
             <td>
               <div class="hs-queue-actions">
                 {% if o.status == 'draft' %}
@@ -79,23 +182,58 @@
                           onclick="return confirm('Issue {{ o.so_number }}?');">Issue</button>
                 </form>
                 {% endif %}
-                {% if o.status != 'completed' and o.status != 'cancelled' and o.status != 'shipped' %}
+
+                {% if not o.ready_shipment and o.status != 'draft' and o.status != 'completed' and o.status != 'shipped' and o.status != 'cancelled' and o.status != 'received' %}
+                {% if o.status == 'issued' or o.status == 'allocated' or o.status == 'ready_for_shipment' %}
                 <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:sales_allocate_order' o.id %}">Allocate</a>
+                {% if o.drop_ship or o.total_allocated %}
+                <a class="hs-btn hs-btn-primary hs-btn-sm" href="{% url 'slurp_ui:sales_checkout' %}?so={{ o.id }}">Mark Ready</a>
                 {% endif %}
-                {% if o.status == 'issued' or o.status == 'ready_for_shipment' or o.status == 'allocated' %}
-                  {% if o.drop_ship or o.total_allocated %}
-                  <a class="hs-btn hs-btn-primary hs-btn-sm" href="{% url 'slurp_ui:sales_checkout' %}?so={{ o.id }}">Check out</a>
-                  {% endif %}
                 {% endif %}
+                {% endif %}
+
+                {% if o.ready_shipment %}
+                <div class="wq-docs">
+                  <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:sales_packing_list_pdf' o.id %}" target="_blank">Pack</a>
+                  {% for copy in o.coa_copies %}
+                  <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:quality_coa_customer_pdf' copy.id %}" target="_blank"
+                     title="COA {{ copy.sales_order_lot.lot.lot_number }}">COA</a>
+                  {% empty %}
+                    {% for cert in o.coa_master_certs %}
+                    <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:quality_coa_pdf' cert.id %}" target="_blank"
+                       title="Master COA">COA</a>
+                    {% empty %}
+                      {% for lot in o.coa_missing_lots %}
+                      <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:inventory_lot_supplier_coa' lot.id %}"
+                         title="Enter supplier COA for lot {{ lot.lot_number }}">Enter COA</a>
+                      {% empty %}
+                      <span class="hs-muted" style="font-size:0.75rem">No COA yet</span>
+                      {% endfor %}
+                    {% endfor %}
+                  {% endfor %}
+                </div>
+                <form method="post" action="{% url 'slurp_ui:sales_mark_picked_up' o.id %}" style="display:inline">
+                  {% csrf_token %}
+                  <input type="hidden" name="next" value="?focus=need_invoice" />
+                  <button type="submit" class="hs-btn hs-btn-primary hs-btn-sm"
+                          onclick="return confirm('Mark {{ o.so_number }} picked up? Creates draft invoice.');">
+                    Picked up
+                  </button>
+                </form>
+                {% endif %}
+
+                {% if o.draft_invoice %}
+                <a class="hs-btn hs-btn-primary hs-btn-sm" href="{% url 'slurp_ui:finance_invoice_detail' o.draft_invoice.id %}">Draft invoice</a>
+                {% endif %}
+
                 {% if o.status != 'draft' %}
                 <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:sales_pick_list_pdf' o.id %}" target="_blank">Pick</a>
-                <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:sales_packing_list_pdf' o.id %}" target="_blank">Pack</a>
                 {% endif %}
               </div>
             </td>
           </tr>
           {% empty %}
-          <tr><td colspan="7"><div class="hs-empty">No orders in this queue.</div></td></tr>
+          <tr><td colspan="8"><div class="hs-empty">No orders in this view.</div></td></tr>
           {% endfor %}
         </tbody>
       </table>

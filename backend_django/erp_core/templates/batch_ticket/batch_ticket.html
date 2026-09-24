@@ -134,6 +134,7 @@
   <div style="margin-bottom: 4px;"></div>
 
   <div class="precheck-q">{{ ccp_question }}</div>
+  {% if not ccp_is_na %}
   <table class="precheck-rows" style="margin-left: 12pt; width: 100%;">
     <tr>
       <td style="width: 5%;">Yes</td>
@@ -147,6 +148,7 @@
       <td class="precheck-ul" style="width: 15%;">&nbsp;</td>
     </tr>
   </table>
+  {% endif %}
 
   <div class="hr-line"></div>
 
@@ -259,6 +261,53 @@
   </table>
 
   <div class="small">Enter (+) when adding unused packaging back to inventory and a (-) when removing additional packaging.</div>
+
+  {% if closed_summary and closed_summary.is_closed %}
+  <div class="section-title">Closed batch summary (data archive)</div>
+  <div class="small" style="margin-bottom:4px;">{{ closed_summary.archive_note }}</div>
+  <table class="pick-table" style="margin-bottom:6px;">
+    <tr>
+      <th style="width:18%;">Ticket</th>
+      <td>{{ closed_summary.ticket }}</td>
+      <th style="width:18%;">Actual</th>
+      <td>{{ closed_summary.actual }}</td>
+    </tr>
+    <tr>
+      <th>Variance</th>
+      <td>{{ closed_summary.variance }}</td>
+      <th>Closed</th>
+      <td>{{ closed_summary.closed_date }}</td>
+    </tr>
+    <tr>
+      <th>Spill</th>
+      <td>{{ closed_summary.spill }}</td>
+      <th>Waste</th>
+      <td>{{ closed_summary.waste }}</td>
+    </tr>
+    {% if closed_summary.recipe %}
+    <tr>
+      <th>Formula</th>
+      <td colspan="3">{{ closed_summary.recipe }}</td>
+    </tr>
+    {% endif %}
+    {% if closed_summary.output_lots %}
+    <tr>
+      <th>Output lot(s)</th>
+      <td colspan="3">{{ closed_summary.output_lots }}</td>
+    </tr>
+    {% endif %}
+    {% if closed_summary.qc_parameter or closed_summary.qc_actual %}
+    <tr>
+      <th>QC</th>
+      <td colspan="3">
+        {{ closed_summary.qc_parameter }}
+        {% if closed_summary.qc_actual %} · Actual {{ closed_summary.qc_actual }}{% endif %}
+        {% if closed_summary.qc_initials %} · Initials {{ closed_summary.qc_initials }}{% endif %}
+      </td>
+    </tr>
+    {% endif %}
+  </table>
+  {% endif %}
 
   <div>Yield: {{ yield_val or '_______________' }}&nbsp;&nbsp;&nbsp;Loss: {{ loss_val or '_____________' }}&nbsp;&nbsp;&nbsp;End Time ____________</div>
   <div>Spill&nbsp;&nbsp;&nbsp;&nbsp;{{ spill_val or '_______________' }}&nbsp;&nbsp;&nbsp;&nbsp;Waste&nbsp;&nbsp;&nbsp;&nbsp;{{ waste_val or '_______________' }}</div>

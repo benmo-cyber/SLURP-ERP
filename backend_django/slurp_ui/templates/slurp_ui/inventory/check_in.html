@@ -266,33 +266,84 @@
     <div class="ci-grid ci-grid-3">
       <div class="ci-field">
         <label for="received_date">Received date</label>
-        <input id="received_date" name="received_date" type="date" value="{{ today }}" {% if not god_mode %}max="{{ today }}"{% endif %} />
+        <input id="received_date" name="received_date" type="date"
+               value="{{ form_shared.received_date|default:today }}"
+               {% if not god_mode %}max="{{ today }}"{% endif %} />
       </div>
       <div class="ci-field">
         <label for="carrier">Carrier</label>
-        <input id="carrier" name="carrier" value="{{ selected_po.carrier|default:'' }}" />
+        <input id="carrier" name="carrier"
+               value="{% firstof form_shared.carrier selected_po.carrier '' %}" />
       </div>
       <div class="ci-field">
         <label for="short_reason">Short reason</label>
-        <input id="short_reason" name="short_reason" placeholder="Required if closing remaining (e.g. vendor short-shipped)" />
+        <input id="short_reason" name="short_reason"
+               value="{{ form_shared.short_reason|default:'' }}"
+               placeholder="Required if closing remaining (e.g. vendor short-shipped)" />
       </div>
     </div>
 
+    {% if supplier_coa_profiles %}
+    <fieldset style="border:1px solid #c4b5fd;padding:0.85rem;border-radius:6px;margin:0.75rem 0;background:#faf5ff">
+      <legend style="padding:0 0.35rem">Supplier COA results *</legend>
+      <p class="field-hint" style="margin:0 0 0.75rem">
+        Enter results from the supplier COA for each test (prefilled from FPS typicals when set).
+        These follow the lot through relabel onto the branded customer COA.
+      </p>
+      {% for profile in supplier_coa_profiles %}
+      <div style="margin-bottom:1rem">
+        <strong style="display:block;margin-bottom:0.4rem">{{ profile.sku }} — {{ profile.name }}</strong>
+        {% for line in profile.lines %}
+        <div class="ci-field" style="margin-bottom:0.55rem">
+          <label for="coa_{{ profile.item_id }}_{{ line.id }}">{{ line.test_name }} *</label>
+          <div class="field-hint" style="margin:0 0 0.25rem">{{ line.specification_text }}</div>
+          <input id="coa_{{ profile.item_id }}_{{ line.id }}"
+                 name="coa_{{ profile.item_id }}_line_{{ line.id }}"
+                 required
+                 value="{{ line.posted_result }}"
+                 placeholder="{% if line.typical_result %}Typical: {{ line.typical_result }}{% else %}Supplier result{% endif %}" />
+        </div>
+        {% empty %}
+        <p class="field-hint">No COA lines on this item.</p>
+        {% endfor %}
+      </div>
+      {% endfor %}
+    </fieldset>
+    {% endif %}
+
+    {% if missing_coa_profile_skus %}
+    <div style="margin:0.75rem 0;padding:0.75rem 0.85rem;background:#fffbeb;border:1px solid #fcd34d;border-radius:6px;color:#92400e;font-size:0.9rem;line-height:1.4">
+      <strong>No supplier typical COA on FPS</strong> for:
+      {% for sku in missing_coa_profile_skus %}
+        <a href="{% url 'slurp_ui:quality_item_coa_test_lines' sku.item_id %}" style="color:#92400e;font-weight:600">{{ sku.sku }}</a>{% if not forloop.last %}, {% endif %}
+      {% endfor %}.
+      Check-in will not capture supplier results for these. Set up COA / Micro on the FPS first,
+      or proceed and use <strong>Supplier COA</strong> on the lot later.
+      <label style="display:flex;gap:0.5rem;align-items:flex-start;margin-top:0.65rem;font-weight:600;color:#78350f">
+        <input type="checkbox" name="ack_missing_coa_profile" value="1" style="margin-top:0.2rem"
+               {% if form_shared.ack_missing_coa_profile %}checked{% endif %} />
+        <span>I understand — continue check-in without a COA profile on those SKUs</span>
+      </label>
+    </div>
+    {% endif %}
+
     <fieldset style="border:1px solid #e5e7eb;padding:0.75rem;border-radius:6px;margin:0.75rem 0">
       <legend style="padding:0 0.35rem">Attestations * (apply to whole receipt)</legend>
-      <label style="display:block;margin:0.25rem 0"><input type="checkbox" name="coa" required /> COA received / acceptable</label>
-      <label style="display:block;margin:0.25rem 0"><input type="checkbox" name="prod_free_pests" required /> Product free of pests</label>
-      <label style="display:block;margin:0.25rem 0"><input type="checkbox" name="carrier_free_pests" required /> Carrier free of pests</label>
-      <label style="display:block;margin:0.25rem 0"><input type="checkbox" name="shipment_accepted" required /> Shipment accepted</label>
+      <label style="display:block;margin:0.25rem 0"><input type="checkbox" name="coa" required {% if form_shared.coa %}checked{% endif %} /> COA received / acceptable</label>
+      <label style="display:block;margin:0.25rem 0"><input type="checkbox" name="prod_free_pests" required {% if form_shared.prod_free_pests %}checked{% endif %} /> Product free of pests</label>
+      <label style="display:block;margin:0.25rem 0"><input type="checkbox" name="carrier_free_pests" required {% if form_shared.carrier_free_pests %}checked{% endif %} /> Carrier free of pests</label>
+      <label style="display:block;margin:0.25rem 0"><input type="checkbox" name="shipment_accepted" required {% if form_shared.shipment_accepted %}checked{% endif %} /> Shipment accepted</label>
       <div class="ci-field" style="margin-top:0.5rem;max-width:8rem">
         <label for="initials">Initials *</label>
-        <input id="initials" name="initials" required maxlength="10" />
+        <input id="initials" name="initials" required maxlength="10"
+               value="{{ form_shared.initials|default:'' }}" />
       </div>
     </fieldset>
 
     <div class="ci-field" style="margin:0.75rem 0;padding:0.75rem;border:1px solid #bfdbfe;border-radius:6px;background:#eff6ff">
       <label style="display:flex;gap:0.5rem;align-items:flex-start;margin:0;font-weight:600;color:#1e3a8a">
-        <input id="close_short" name="close_short" type="checkbox" style="margin-top:0.2rem" />
+        <input id="close_short" name="close_short" type="checkbox" style="margin-top:0.2rem"
+               {% if form_shared.close_short %}checked{% endif %} />
         <span>
           Close remaining open qty (accept short)
           <span style="display:block;font-weight:500;font-size:0.85rem;color:#334155;margin-top:0.25rem">
@@ -305,7 +356,7 @@
 
     <div class="form-row ci-field">
       <label for="notes">Receipt notes</label>
-      <textarea id="notes" name="notes" rows="2"></textarea>
+      <textarea id="notes" name="notes" rows="2">{{ form_shared.notes|default:'' }}</textarea>
     </div>
 
     <div class="form-actions">
@@ -321,12 +372,21 @@
   {% endif %}
 </div>
 {% if selected_po %}
+{{ form_lines|json_script:"ci-posted-lines" }}
 <script>
 (function () {
   var host = document.getElementById('ci-lines');
   var tpl = document.getElementById('ci-line-template');
   var addBtn = document.getElementById('ci-add-line');
   if (!host || !tpl || !addBtn) return;
+
+  var postedLines = [];
+  try {
+    var el = document.getElementById('ci-posted-lines');
+    postedLines = el ? JSON.parse(el.textContent || '[]') : [];
+  } catch (e) {
+    postedLines = [];
+  }
 
   function fmt(n) {
     var x = Number(n);
@@ -342,6 +402,22 @@
       var remove = row.querySelector('[data-ci-remove]');
       if (remove) remove.style.display = rows.length > 1 ? '' : 'none';
     });
+  }
+
+  function setSelectValue(sel, value) {
+    if (!sel) return;
+    var v = value == null ? '' : String(value);
+    sel.value = v;
+    if (sel.value !== v) {
+      // Option may be disabled (fully received) — still force-select for restore.
+      for (var i = 0; i < sel.options.length; i++) {
+        if (String(sel.options[i].value) === v) {
+          sel.options[i].disabled = false;
+          sel.selectedIndex = i;
+          break;
+        }
+      }
+    }
   }
 
   function wireLine(row) {
@@ -392,7 +468,7 @@
     sync();
   }
 
-  function addLine() {
+  function addLine(prefill) {
     var idx = parseInt(host.getAttribute('data-next-index') || '0', 10) || 0;
     var html = tpl.innerHTML
       .replace(/__INDEX__/g, String(idx))
@@ -402,12 +478,42 @@
     var row = wrap.firstElementChild;
     host.appendChild(row);
     host.setAttribute('data-next-index', String(idx + 1));
+
+    if (prefill) {
+      setSelectValue(row.querySelector('.ci-item'), prefill.item_id);
+      var qtyEl = row.querySelector('.ci-qty');
+      if (qtyEl && prefill.quantity != null && prefill.quantity !== '') {
+        qtyEl.value = prefill.quantity;
+      }
+      setSelectValue(row.querySelector('.ci-uom'), prefill.entry_uom || '');
+      setSelectValue(row.querySelector('.ci-status'), prefill.status || 'accepted');
+      var vl = row.querySelector('[name$="-vendor_lot_number"]');
+      if (vl) vl.value = prefill.vendor_lot_number || '';
+      var fr = row.querySelector('[name$="-freight_actual"]');
+      if (fr && prefill.freight_actual != null && prefill.freight_actual !== '') {
+        fr.value = prefill.freight_actual;
+      }
+      var md = row.querySelector('[name$="-manufacture_date"]');
+      if (md) md.value = prefill.manufacture_date || '';
+      var ed = row.querySelector('[name$="-expiration_date"]');
+      if (ed) ed.value = prefill.expiration_date || '';
+      var ln = row.querySelector('[name$="-lot_number"]');
+      if (ln) ln.value = prefill.lot_number || '';
+      var notes = row.querySelector('[name$="-notes"]');
+      if (notes) notes.value = prefill.notes || '';
+    }
+
     wireLine(row);
     renumber();
   }
 
-  addBtn.addEventListener('click', addLine);
-  addLine();
+  addBtn.addEventListener('click', function () { addLine(null); });
+
+  if (postedLines && postedLines.length) {
+    postedLines.forEach(function (line) { addLine(line); });
+  } else {
+    addLine(null);
+  }
 
   var form = host.closest('form');
   var closeShort = document.getElementById('close_short');

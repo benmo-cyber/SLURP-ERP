@@ -40,8 +40,12 @@
         <tbody>
           {% for r in entries %}
           <tr>
-            <td>{{ r.vendor_name }}</td>
-            <td>{{ r.invoice_number|default:"—" }}</td>
+            <td>
+              <a class="hs-entity-name" href="{% url 'slurp_ui:finance_ap_detail' r.id %}">{{ r.vendor_name }}</a>
+            </td>
+            <td>
+              <a class="hs-entity-name" href="{% url 'slurp_ui:finance_ap_detail' r.id %}">{{ r.invoice_number|default:"—" }}</a>
+            </td>
             <td>{{ r.due_date }}</td>
             <td>{{ r.balance|money:2 }}</td>
             <td>
@@ -51,6 +55,7 @@
               {% else %}<span class="hs-badge info">{{ r.status|title }}</span>{% endif %}
             </td>
             <td>
+              <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:finance_ap_detail' r.id %}">Details</a>
               {% if r.status != "paid" and r.status != "cancelled" %}
               <a class="hs-btn hs-btn-sm hs-btn-primary" href="{% url 'slurp_ui:finance_ap_mark_paid' r.id %}">Mark as paid</a>
               {% endif %}

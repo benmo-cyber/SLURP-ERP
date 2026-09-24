@@ -81,11 +81,14 @@
           </div>
 
           <div class="form-group full-width">
-            <label>Vendor *</label>
-            <select name="vendor" required>
+            <label for="item_vendor">Vendor <span id="vendor-required-mark">*</span></label>
+            <select name="vendor" id="item_vendor" required>
               <option value="">Select approved vendor</option>
               {% for v in vendors %}<option value="{{ v.name }}">{{ v.name }}</option>{% endfor %}
             </select>
+            <span class="form-hint" id="vendor-plant-hint" hidden>
+              Not required for plant utilities (Cost Master uses vendor “Plant”).
+            </span>
           </div>
           <div class="form-group full-width">
             <label>WWI name *</label>
@@ -110,6 +113,16 @@
               <option value="{{ val }}">{{ label }}</option>
               {% endfor %}
             </select>
+          </div>
+          <div class="form-group">
+            <label class="family-add-toggle">
+              <input type="checkbox" name="plant_utility" id="plant_utility" value="1" />
+              Plant utility
+            </label>
+            <span class="form-hint">
+              DI water, etc. — on formulas and Cost Master, but production skips lot picking and inventory.
+              Set the per-UoM price below (or edit Cost Master later from water bills). Vendor not required.
+            </span>
           </div>
           <div class="form-group">
             <label>Product category</label>
@@ -179,22 +192,41 @@
   var fam = document.getElementById('product_family');
   var code = document.getElementById('new_family_code');
   var name = document.getElementById('new_family_name');
-  if (!cb || !box) return;
-  function sync() {
-    var on = !!cb.checked;
-    box.hidden = !on;
-    box.setAttribute('aria-hidden', on ? 'false' : 'true');
-    box.classList.toggle('is-collapsed', !on);
-    if (code) code.disabled = !on;
-    if (name) name.disabled = !on;
-    if (on && fam) fam.value = '';
-    if (!on) {
-      if (code) code.value = '';
-      if (name) name.value = '';
+  if (cb && box) {
+    function syncFamily() {
+      var on = !!cb.checked;
+      box.hidden = !on;
+      box.setAttribute('aria-hidden', on ? 'false' : 'true');
+      box.classList.toggle('is-collapsed', !on);
+      if (code) code.disabled = !on;
+      if (name) name.disabled = !on;
+      if (on && fam) fam.value = '';
+      if (!on) {
+        if (code) code.value = '';
+        if (name) name.value = '';
+      }
     }
+    cb.addEventListener('change', syncFamily);
+    syncFamily();
   }
-  cb.addEventListener('change', sync);
-  sync();
+
+  var plantCb = document.getElementById('plant_utility');
+  var vendorSel = document.getElementById('item_vendor');
+  var vendorMark = document.getElementById('vendor-required-mark');
+  var vendorHint = document.getElementById('vendor-plant-hint');
+  function syncPlantUtility() {
+    var on = !!(plantCb && plantCb.checked);
+    if (vendorSel) {
+      vendorSel.required = !on;
+      if (on) vendorSel.value = '';
+    }
+    if (vendorMark) vendorMark.hidden = on;
+    if (vendorHint) vendorHint.hidden = !on;
+  }
+  if (plantCb) {
+    plantCb.addEventListener('change', syncPlantUtility);
+    syncPlantUtility();
+  }
 })();
 </script>
 {% endblock %}

@@ -4,6 +4,7 @@
 
 - Date inputs are **not** limited to today (`max` / `min` on `<input type="date">` are relaxed) so you can enter **any** historical or future date where the UI supports it.
 - Key flows accept **custom business dates** on the API when you are **`is_staff`** (e.g. PO issue date, SO issue / order date, PO received date).
+- **Close batch before production date** is allowed (normally blocked until the production date).
 
 ## Enabling
 

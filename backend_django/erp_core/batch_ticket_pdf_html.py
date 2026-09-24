@@ -165,10 +165,43 @@ def _build_batch_ticket_context(batch, mass_unit='native'):
 
     mixing_steps = ['', '', '', '', '', '']
     ccp_question = 'Has 20 mesh screen been inspected and installed properly?'  # default
+    ccp_is_na = False
     try:
         from .formula_resolve import formula_for_batch
 
-        formula = formula_for_batch(batch)
+        # Relabel repack: same source SKU as target — no screen CCP
+        if getattr(batch, 'batch_type', None) == 'repack':
+            fg_id = getattr(batch, 'finished_good_item_id', None)
+            product_ids = set()
+            for batch_input in batch.inputs.select_related('lot__item', 'item').all():
+                item = (
+                    batch_input.resolved_item()
+                    if hasattr(batch_input, 'resolved_item')
+                    else (batch_input.item or (batch_input.lot.item if batch_input.lot_id else None))
+                )
+                if not item:
+                    continue
+                if getattr(item, 'item_type', None) == 'indirect_material' or getattr(
+                    item, 'plant_utility', False
+                ):
+                    continue
+                product_ids.add(item.id)
+            if fg_id and product_ids == {fg_id}:
+                ccp_question = 'N/A — relabel (same container)'
+                ccp_is_na = True
+            elif getattr(batch, 'critical_control_point_id', None):
+                ccp = getattr(batch, 'critical_control_point', None)
+                if ccp is None:
+                    from .models import CriticalControlPoint
+
+                    ccp = CriticalControlPoint.objects.filter(
+                        pk=batch.critical_control_point_id
+                    ).first()
+                ccp_name = (ccp.name or '').strip() if ccp else ''
+                if ccp_name:
+                    ccp_question = f'Has {ccp_name} been inspected and installed properly?'
+
+        formula = None if ccp_is_na else formula_for_batch(batch)
         if formula is not None and getattr(formula, "critical_control_point_id", None):
             formula = (
                 type(formula).objects.select_related("critical_control_point").get(pk=formula.pk)
@@ -183,10 +216,11 @@ def _build_batch_ticket_context(batch, mass_unit='native'):
                 step_text = (getattr(formula, f'mixing_step_{i}', None) or '').strip()
                 if step_text:
                     mixing_steps[i - 1] = step_text
-            if getattr(formula, 'critical_control_point', None):
-                ccp_name = (formula.critical_control_point.name or '').strip()
-                if ccp_name:
-                    ccp_question = f'Has {ccp_name} been inspected and installed properly?'
+            if not ccp_is_na and not getattr(batch, 'critical_control_point_id', None):
+                if getattr(formula, 'critical_control_point', None):
+                    ccp_name = (formula.critical_control_point.name or '').strip()
+                    if ccp_name:
+                        ccp_question = f'Has {ccp_name} been inspected and installed properly?'
     except Exception:
         pass
 
@@ -194,25 +228,34 @@ def _build_batch_ticket_context(batch, mass_unit='native'):
     from .pack_display import format_packs_partial_note, resolve_pack_size
 
     pick_rows = []
-    for batch_input in batch.inputs.select_related('lot__item', 'lot__pack_size').prefetch_related(
-        'lot__item__pack_sizes'
+    for batch_input in batch.inputs.select_related('lot__item', 'lot__pack_size', 'item').prefetch_related(
+        'lot__item__pack_sizes', 'item__pack_sizes'
     ).all():
         lot = batch_input.lot
-        item = lot.item
+        item = batch_input.resolved_item() if hasattr(batch_input, 'resolved_item') else (lot.item if lot else batch_input.item)
+        if not item:
+            continue
         if _is_indirect_material(item):
             continue
         vendor = (getattr(item, 'vendor', None) or '').strip() or '—'
-        vendor_lot = (lot.vendor_lot_number or lot.lot_number or '—').strip()
+        if lot is None or getattr(item, 'plant_utility', False):
+            vendor_lot = 'PLANT'
+            wildwood_lot = '—'
+            packs_note = 'Plant utility'
+        else:
+            vendor_lot = (lot.vendor_lot_number or lot.lot_number or '—').strip()
+            wildwood_lot = (lot.lot_number or '')[:14]
+            packs_note = None
         uom = (getattr(item, 'unit_of_measure', None) or 'lbs').strip() or 'lbs'
         qty = batch_input.quantity_used  # stored in item's UoM
         qty_str, uom_out = _mass_line_display(qty, uom, mu)
-        # Packs + partial note uses the displayed qty/UoM so it matches the PDF line
         try:
             qty_display = float(qty_str.replace(',', ''))
         except (TypeError, ValueError):
             qty_display = float(qty)
-        pack_qty, pack_uom = resolve_pack_size(item=item, lot=lot)
-        packs_note = format_packs_partial_note(qty_display, uom_out, pack_qty, pack_uom)
+        if packs_note is None:
+            pack_qty, pack_uom = resolve_pack_size(item=item, lot=lot)
+            packs_note = format_packs_partial_note(qty_display, uom_out, pack_qty, pack_uom)
         pick_rows.append({
             'sku': (item.sku or '')[:18],
             'vendor': vendor[:14],
@@ -222,15 +265,18 @@ def _build_batch_ticket_context(batch, mass_unit='native'):
             'packs_note': packs_note,
             'pick_init': '',
             'prod_init': '',
-            'wildwood_lot': (lot.lot_number or '')[:14],
+            'wildwood_lot': wildwood_lot,
         })
     if not pick_rows:
         pick_rows = [{'sku': '', 'vendor': '', 'vendor_lot': '', 'qty': '', 'uom': '', 'packs_note': '', 'pick_init': '', 'prod_init': '', 'wildwood_lot': ''}]
 
     # Pack off: indirect first, then outputs (same as flowable)
     pack_rows = []
-    for batch_input in batch.inputs.select_related('lot__item').all():
-        if not _is_indirect_material(batch_input.lot.item):
+    for batch_input in batch.inputs.select_related('lot__item', 'item').all():
+        lot = batch_input.lot
+        if lot is None:
+            continue
+        if not _is_indirect_material(lot.item):
             continue
         item = batch_input.lot.item
         lot = batch_input.lot
@@ -257,23 +303,68 @@ def _build_batch_ticket_context(batch, mass_unit='native'):
             return _mass_line_display(val, base_unit, mu)
         return _production_totals_display_from_lbs(val, mu, base_unit)
 
+    is_closed = getattr(batch, 'status', None) == 'closed'
     yield_val = ''
-    if getattr(batch, 'status', None) == 'closed' and getattr(batch, 'quantity_actual', None):
-        yq, yu = _fmt_closed_qty(batch.quantity_actual)
-        yield_val = f'{yq} {yu}'
     loss_val = ''
-    if getattr(batch, 'status', None) == 'closed' and getattr(batch, 'variance', None) is not None:
-        v = float(batch.variance)
-        lq, lu = _fmt_closed_qty(abs(v))
-        loss_val = f'{"-" if v < 0 else ""}{lq} {lu}'
     spill_val = ''
-    if getattr(batch, 'spills', None):
-        sq, su = _fmt_closed_qty(batch.spills)
-        spill_val = f'{sq} {su}'
     waste_val = ''
-    if getattr(batch, 'wastes', None):
-        wq, wu = _fmt_closed_qty(batch.wastes)
+    ticket_val = ''
+    tq, tu = _fmt_closed_qty(batch.quantity_produced)
+    ticket_val = f'{tq} {tu}'
+    if is_closed:
+        from .make_services import net_yield_native
+
+        net_y = net_yield_native(batch)
+        if net_y is not None:
+            yq, yu = _fmt_closed_qty(net_y)
+            yield_val = f'{yq} {yu}'
+        if getattr(batch, 'variance', None) is not None:
+            v = float(batch.variance)
+            lq, lu = _fmt_closed_qty(abs(v))
+            loss_val = f'{"-" if v < 0 else "+"}{lq} {lu}' if v != 0 else f'0 {lu}'
+        # Always print recorded spill/waste on closed archive (including 0)
+        sq, su = _fmt_closed_qty(float(getattr(batch, 'spills', None) or 0))
+        spill_val = f'{sq} {su}'
+        wq, wu = _fmt_closed_qty(float(getattr(batch, 'wastes', None) or 0))
         waste_val = f'{wq} {wu}'
+
+    recipe_label_str = ''
+    try:
+        from .formula_resolve import formula_for_batch, recipe_label
+
+        _f = formula_for_batch(batch)
+        recipe_label_str = recipe_label(_f) if _f else ''
+    except Exception:
+        recipe_label_str = ''
+
+    output_lot_nums = []
+    for batch_output in batch.outputs.select_related('lot').all():
+        if batch_output.lot_id and batch_output.lot:
+            output_lot_nums.append(batch_output.lot.lot_number or str(batch_output.lot_id))
+
+    closed_summary = {
+        'is_closed': is_closed,
+        'ticket': ticket_val,
+        'actual': yield_val,
+        'variance': loss_val,
+        'spill': spill_val,
+        'waste': waste_val,
+        'recipe': recipe_label_str,
+        'output_lots': ', '.join(output_lot_nums) if output_lot_nums else '',
+        'closed_date': (
+            batch.closed_date.strftime('%m/%d/%Y %H:%M')
+            if getattr(batch, 'closed_date', None)
+            else ''
+        ),
+        'qc_parameter': (qc_info.get('parameters') or '')[:80],
+        'qc_actual': (qc_info.get('actual') or '')[:40],
+        'qc_initials': (qc_info.get('initials') or '')[:20],
+        'archive_note': (
+            'Slurp data archive (unsigned). Signed/initialed paper copy is retained separately.'
+            if is_closed
+            else ''
+        ),
+    }
 
     logo_base64 = get_logo_base64_cached()
 
@@ -289,11 +380,13 @@ def _build_batch_ticket_context(batch, mass_unit='native'):
         'pack_rows': pack_rows,
         'mixing_steps': mixing_steps,
         'ccp_question': ccp_question,
+        'ccp_is_na': ccp_is_na,
         'qc_info': qc_info,
-        'yield_val': yield_val[:20] if yield_val else '',
-        'loss_val': loss_val[:20] if loss_val else '',
-        'spill_val': spill_val[:12] if spill_val else '',
-        'waste_val': waste_val[:12] if waste_val else '',
+        'yield_val': yield_val[:24] if yield_val else '',
+        'loss_val': loss_val[:24] if loss_val else '',
+        'spill_val': spill_val[:20] if spill_val else '',
+        'waste_val': waste_val[:20] if waste_val else '',
+        'closed_summary': closed_summary,
         'confidentiality': CONFIDENTIALITY_FOOTER,
         'batch_ticket_updated': BATCH_TICKET_UPDATED,
         'logo_base64': logo_base64,

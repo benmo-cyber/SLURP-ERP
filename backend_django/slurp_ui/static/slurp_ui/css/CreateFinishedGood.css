@@ -255,6 +255,41 @@
   font-size: 0.85rem;
 }
 
+/* Create FG: keep each label tight to its own control inside multi-column grids. */
+#fg-form .form-row {
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center;
+  gap: 0.45rem;
+  grid-template-columns: none !important;
+}
+
+#fg-form .form-row:has(> textarea) {
+  flex-direction: column !important;
+  align-items: stretch;
+  gap: 0.3rem;
+}
+
+#fg-form .form-row > label {
+  flex: 0 0 auto;
+  margin: 0;
+  white-space: nowrap;
+}
+
+#fg-form .form-row:has(> textarea) > label {
+  white-space: normal;
+}
+
+#fg-form .form-row > input,
+#fg-form .form-row > select,
+#fg-form .form-row > textarea {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: auto !important;
+  max-width: 100%;
+}
+
+
 
 
 

@@ -118,7 +118,13 @@ PRODUCTION_NAV = [
         "label": "Production",
         "items": [
             {"id": "batches", "label": "Batch Tickets", "url_name": "slurp_ui:production"},
-            {"id": "archive", "label": "Archive", "url_name": "slurp_ui:production_archive"},
+            {"id": "archive", "label": "Batch Archive", "url_name": "slurp_ui:production_archive"},
+            {"id": "repacks", "label": "Repacks", "url_name": "slurp_ui:production_repacks"},
+            {
+                "id": "repack-archive",
+                "label": "Repack Archive",
+                "url_name": "slurp_ui:production_repack_archive",
+            },
         ],
     },
 ]
@@ -144,8 +150,13 @@ QUALITY_NAV = [
         "items": [
             {
                 "id": "finished-goods",
-                "label": "Finished Goods",
+                "label": "FPS",
                 "url_name": "slurp_ui:quality_finished_goods",
+            },
+            {
+                "id": "coa-test-catalog",
+                "label": "COA / micro catalog",
+                "url_name": "slurp_ui:quality_coa_test_catalog",
             },
             {
                 "id": "rd-formulas",

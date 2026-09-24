@@ -1,24 +1,88 @@
 {% extends "slurp_ui/base_module.html" %}
-{% block title %}Create Sales Order — SLURP{% endblock %}
-{% block module_title %}Create Sales Order{% endblock %}
+{% block title %}Create SO — SLURP{% endblock %}
+{% block module_title %}Create SO{% endblock %}
 {% block header_actions %}
   <a href="{% url 'slurp_ui:sales_orders' %}" class="hs-btn">Workqueue</a>
-  <a href="{% url 'slurp_ui:sales' %}" class="hs-btn">Customers</a>
 {% endblock %}
 {% block main %}
-<div class="hs-bleed" style="padding:1.25rem 1.5rem 2rem">
-  <div class="hs-card" style="margin-bottom:1rem">
-    <div class="hs-card-header"><h3>Customer</h3></div>
-    <div class="hs-card-body">
-      <p class="hs-section-note">
-        Creates a draft SO. Issue before allocating when possible
-        (full allocate on draft moves status out of draft and blocks Issue).
-      </p>
+<style>
+  .cso-wrap { padding: 1rem 1.25rem 1.75rem; max-width: 56rem; }
+  .cso-lede { margin: 0 0 0.85rem; color: #64748b; font-size: 0.88rem; }
+  .cso-card {
+    background: #fff; border: 1px solid #e2e8f0; border-radius: 10px;
+    margin-bottom: 0.85rem; overflow: hidden;
+  }
+  .cso-card-head {
+    display: flex; align-items: baseline; justify-content: space-between; gap: 0.75rem;
+    padding: 0.65rem 1rem; border-bottom: 1px solid #e2e8f0; background: #f8fafc;
+  }
+  .cso-card-head h3 { margin: 0; font-size: 0.92rem; font-weight: 700; color: #0f172a; }
+  .cso-card-head .hint { font-size: 0.78rem; color: #94a3b8; }
+  .cso-card-body { padding: 0.85rem 1rem 1rem; }
+  .cso-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 0.65rem 0.85rem;
+  }
+  @media (max-width: 640px) { .cso-grid { grid-template-columns: 1fr; } }
+  .cso-field label {
+    display: block; font-size: 0.68rem; font-weight: 700; letter-spacing: 0.04em;
+    text-transform: uppercase; color: #64748b; margin-bottom: 0.28rem;
+  }
+  .cso-field input,
+  .cso-field select,
+  .cso-field textarea {
+    width: 100%; box-sizing: border-box; padding: 0.4rem 0.5rem;
+    font-size: 0.9rem; border: 1px solid #cbd5e1; border-radius: 5px; background: #fff;
+    color: #0f172a;
+  }
+  .cso-field input:focus,
+  .cso-field select:focus,
+  .cso-field textarea:focus {
+    outline: none; border-color: #0f8a72; box-shadow: 0 0 0 3px rgba(15, 138, 114, 0.12);
+  }
+  .cso-check {
+    display: flex; align-items: center; gap: 0.45rem; margin-top: 0.75rem;
+    font-size: 0.9rem; color: #1e293b; font-weight: 550;
+  }
+  .cso-check input { width: auto; margin: 0; }
+  .cso-lines { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
+  .cso-lines th {
+    text-align: left; font-size: 0.68rem; font-weight: 700; letter-spacing: 0.04em;
+    text-transform: uppercase; color: #64748b; padding: 0.4rem 0.45rem;
+    border-bottom: 1px solid #e2e8f0; background: #f8fafc;
+  }
+  .cso-lines td { padding: 0.35rem 0.4rem; border-bottom: 1px solid #f1f5f9; vertical-align: middle; }
+  .cso-lines select,
+  .cso-lines input {
+    width: 100%; box-sizing: border-box; padding: 0.32rem 0.4rem;
+    font-size: 0.88rem; border: 1px solid #cbd5e1; border-radius: 4px;
+  }
+  .cso-lines .col-item { width: 55%; }
+  .cso-lines .col-qty { width: 22%; }
+  .cso-lines .col-price { width: 18%; }
+  .cso-qty-wrap {
+    display: flex; align-items: center; gap: 0.35rem;
+  }
+  .cso-qty-wrap input { flex: 1; min-width: 0; }
+  .cso-uom {
+    flex: 0 0 auto; min-width: 1.75rem;
+    font-size: 0.82rem; font-weight: 650; color: #334155;
+  }
+  .cso-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.25rem; }
+</style>
+
+<div class="hs-bleed cso-wrap">
+  <p class="cso-lede">Draft SO — issue from the workqueue before allocating when you can.</p>
+
+  <div class="cso-card">
+    <div class="cso-card-head">
+      <h3>Customer</h3>
+    </div>
+    <div class="cso-card-body">
       <form method="get">
-        <div class="form-row" style="margin:0">
-          <label for="customer">Customer *</label>
+        <div class="cso-field">
+          <label for="customer">Customer</label>
           <select id="customer" name="customer" onchange="this.form.submit()" required>
-            <option value="">— Select customer —</option>
+            <option value="">— Select —</option>
             {% for c in customers %}
             <option value="{{ c.id }}" {% if selected_customer and selected_customer.id == c.id %}selected{% endif %}>
               {{ c.name }}
@@ -35,85 +99,102 @@
     {% csrf_token %}
     <input type="hidden" name="customer_id" value="{{ selected_customer.id }}" />
 
-    <div class="hs-card" style="margin-bottom:1rem">
-      <div class="hs-card-header">
+    <div class="cso-card">
+      <div class="cso-card-head">
         <h3>{{ selected_customer.name }}</h3>
-        <span class="hs-muted" style="font-size:0.8rem">{{ selected_customer.customer_id }}</span>
+        <span class="hint">{{ selected_customer.customer_id }}</span>
       </div>
-      <div class="hs-card-body">
-        <div class="hs-form-grid">
-          <div class="form-row">
+      <div class="cso-card-body">
+        <div class="cso-grid">
+          <div class="cso-field">
             <label for="ship_to_location">Ship-to</label>
             <select id="ship_to_location" name="ship_to_location">
-              <option value="">— Optional / legacy address —</option>
+              <option value="">— Optional —</option>
               {% for st in ship_tos %}
               <option value="{{ st.id }}">{% if st.is_default %}★ {% endif %}{{ st.location_name }} — {{ st.city }}, {{ st.state }}</option>
               {% empty %}
-              <option value="" disabled>No ship-to locations on file</option>
+              <option value="" disabled>No ship-tos on file</option>
               {% endfor %}
             </select>
           </div>
-          <div class="form-row">
-            <label for="customer_po">Customer PO / reference</label>
+          <div class="cso-field">
+            <label for="customer_po">Cust. PO</label>
             <input id="customer_po" name="customer_po" />
           </div>
+          <div class="cso-field">
+            <label for="expected_ship_date">Exp. ship</label>
+            <input id="expected_ship_date" name="expected_ship_date" type="date" />
+          </div>
+          <div class="cso-field">
+            <label for="customer_required_date">Cust. req.</label>
+            <input id="customer_required_date" name="customer_required_date" type="date" />
+          </div>
           {% if god_mode %}
-          <div class="form-row">
-            <label for="order_date">Order date (God mode)</label>
+          <div class="cso-field">
+            <label for="order_date">Order date</label>
             <input id="order_date" name="order_date" type="date" value="{{ today }}" />
           </div>
           {% endif %}
+          <div class="cso-field">
+            <label for="notes">Notes</label>
+            <textarea id="notes" name="notes" rows="2"></textarea>
+          </div>
         </div>
-        <div class="form-row">
-          <label class="hs-check-inline"><input type="checkbox" name="drop_ship" /> Drop ship (virtual allocate; no inventory)</label>
-        </div>
-        <div class="form-row" style="margin-bottom:0">
-          <label for="notes">Notes</label>
-          <textarea id="notes" name="notes" rows="2"></textarea>
-        </div>
+        <label class="cso-check">
+          <input type="checkbox" name="drop_ship" />
+          Drop ship (no inventory)
+        </label>
       </div>
     </div>
 
-    <div class="hs-card" style="margin-bottom:1rem">
-      <div class="hs-card-header">
+    <div class="cso-card">
+      <div class="cso-card-head">
         <h3>Lines</h3>
-        <button type="button" class="hs-btn hs-btn-sm" id="add-line">+ Add line</button>
+        <button type="button" class="hs-btn hs-btn-sm" id="add-line">+ Add</button>
       </div>
-      <div class="hs-card-body">
+      <div class="cso-card-body" style="padding:0">
         <input type="hidden" name="line_count" id="line_count" value="1" />
-        <div id="so-lines">
-          <div class="so-line hs-line-card" data-index="0">
-            <div class="hs-form-grid-3">
-              <div class="form-row" style="margin:0">
-                <label>Item *</label>
+        <table class="cso-lines">
+          <thead>
+            <tr>
+              <th class="col-item">Item</th>
+              <th class="col-qty">Qty</th>
+              <th class="col-price">$/UoM</th>
+            </tr>
+          </thead>
+          <tbody id="so-lines">
+            <tr class="so-line" data-index="0">
+              <td class="col-item">
                 <select name="item_id_0">
                   <option value="">— Select —</option>
                   {% for it in items %}
-                  <option value="{{ it.id }}">{{ it.sku }} — {{ it.name }} ({{ it.unit_of_measure }})</option>
+                  <option value="{{ it.id }}" data-uom="{{ it.unit_of_measure }}">{{ it.sku }} — {{ it.name }}</option>
                   {% endfor %}
                 </select>
-              </div>
-              <div class="form-row" style="margin:0">
-                <label>Qty *</label>
-                <input name="qty_0" type="number" step="any" min="0" />
-              </div>
-              <div class="form-row" style="margin:0">
-                <label>Unit price</label>
+              </td>
+              <td class="col-qty">
+                <div class="cso-qty-wrap">
+                  <input name="qty_0" type="number" step="any" min="0" />
+                  <span class="cso-uom" aria-live="polite">—</span>
+                </div>
+              </td>
+              <td class="col-price">
                 <input name="price_0" type="number" step="0.01" min="0" data-auto="1" />
-              </div>
-            </div>
-          </div>
-        </div>
+              </td>
+            </tr>
+          </tbody>
+        </table>
       </div>
     </div>
 
-    <div class="hs-form-actions">
-      <button type="submit" class="hs-btn hs-btn-primary">Create draft SO</button>
+    <div class="cso-actions">
+      <button type="submit" class="hs-btn hs-btn-primary">Create draft</button>
       <a class="hs-btn" href="{% url 'slurp_ui:sales_orders' %}">Cancel</a>
     </div>
   </form>
   {% endif %}
 </div>
+
 <script id="customer-pricing-data" type="application/json">{{ customer_pricing_json|default:"{}"|safe }}</script>
 <script>
 (function () {
@@ -131,11 +212,24 @@
   function bindLine(lineEl) {
     var sel = lineEl.querySelector('select[name^="item_id_"]');
     var price = lineEl.querySelector('input[name^="price_"]');
-    if (!sel || !price) return;
-    price.addEventListener('input', function () {
-      price.dataset.auto = '0';
-    });
+    var uomEl = lineEl.querySelector('.cso-uom');
+    if (!sel) return;
+
+    function syncUom() {
+      if (!uomEl) return;
+      var opt = sel.options[sel.selectedIndex];
+      var uom = opt && opt.value ? (opt.getAttribute('data-uom') || '') : '';
+      uomEl.textContent = uom || '—';
+    }
+
+    if (price) {
+      price.addEventListener('input', function () {
+        price.dataset.auto = '0';
+      });
+    }
     sel.addEventListener('change', function () {
+      syncUom();
+      if (!price) return;
       if (price.dataset.auto === '0' && price.value !== '') return;
       var p = pricing[sel.value];
       if (p != null && p !== '') {
@@ -143,6 +237,7 @@
         price.dataset.auto = '1';
       }
     });
+    syncUom();
   }
 
   wrap.querySelectorAll('.so-line').forEach(bindLine);
@@ -150,18 +245,16 @@
   addBtn.addEventListener('click', function () {
     var n = parseInt(countInput.value || '1', 10);
     if (n >= 20) return;
-    var div = document.createElement('div');
-    div.className = 'so-line hs-line-card';
-    div.setAttribute('data-index', String(n));
-    div.innerHTML =
-      '<div class="hs-form-grid-3">' +
-      '<div class="form-row" style="margin:0"><label>Item *</label><select name="item_id_' + n + '">' + itemOptions + '</select></div>' +
-      '<div class="form-row" style="margin:0"><label>Qty *</label><input name="qty_' + n + '" type="number" step="any" min="0" /></div>' +
-      '<div class="form-row" style="margin:0"><label>Unit price</label><input name="price_' + n + '" type="number" step="0.01" min="0" data-auto="1" /></div>' +
-      '</div>';
-    wrap.appendChild(div);
+    var tr = document.createElement('tr');
+    tr.className = 'so-line';
+    tr.setAttribute('data-index', String(n));
+    tr.innerHTML =
+      '<td class="col-item"><select name="item_id_' + n + '">' + itemOptions + '</select></td>' +
+      '<td class="col-qty"><div class="cso-qty-wrap"><input name="qty_' + n + '" type="number" step="any" min="0" /><span class="cso-uom" aria-live="polite">—</span></div></td>' +
+      '<td class="col-price"><input name="price_' + n + '" type="number" step="0.01" min="0" data-auto="1" /></td>';
+    wrap.appendChild(tr);
     countInput.value = String(n + 1);
-    bindLine(div);
+    bindLine(tr);
   });
 })();
 </script>

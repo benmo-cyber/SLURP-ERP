@@ -1,40 +1,56 @@
 {% extends "slurp_ui/base_module.html" %}
-{% block title %}Finished Goods — SLURP{% endblock %}
-{% block module_title %}Finished Goods{% endblock %}
+{% block title %}FPS — SLURP{% endblock %}
+{% block module_title %}FPS{% endblock %}
 {% block header_actions %}
-  <a class="hs-btn" href="{% url 'slurp_ui:quality_unlink_finished_good' %}">Unlink FG</a>
-  <a class="hs-btn hs-btn-primary" href="{% url 'slurp_ui:quality_create_finished_good' %}">Create FG</a>
+  <a class="hs-btn" href="{% url 'slurp_ui:quality_coa_test_catalog' %}">COA catalog</a>
+  <a class="hs-btn" href="{% url 'slurp_ui:quality_unlink_finished_good' %}">Unlink</a>
+  <a class="hs-btn hs-btn-primary" href="{% url 'slurp_ui:quality_create_finished_good' %}">Create</a>
 {% endblock %}
 {% block main %}
-<div class="hs-bleed" style="padding:1.25rem 1.5rem 2rem">
-  <div class="hs-card">
-    <div class="hs-card-header"><h3>Finished goods &amp; distributed items</h3></div>
-    <div class="hs-card-body tight">
-      <table class="hs-table">
-        <thead>
-          <tr>
-            <th>SKU</th>
-            <th>Name</th>
-            <th>Type</th>
-            <th>Category</th>
-            <th>Formula</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for row in rows %}
-          <tr>
-            <td><a class="hs-entity-name" href="{% url 'slurp_ui:quality_finished_good_detail' row.item.id %}">{{ row.item.sku }}</a></td>
-            <td>{{ row.item.name }}</td>
-            <td>{{ row.item.get_item_type_display }}</td>
-            <td>{{ row.item.product_category|default:"—" }}</td>
-            <td>{% if row.has_formula %}Yes{% elif row.item.item_type == 'finished_good' %}—{% else %}n/a{% endif %}</td>
-          </tr>
-          {% empty %}
-          <tr><td colspan="5"><div class="hs-empty">No finished goods / distributed items.</div></td></tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
+<style>
+  .fps-list-wrap { padding: 1rem 1.25rem 1.75rem; }
+  .fps-list-card { background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; overflow: hidden; }
+  .fps-list-table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
+  .fps-list-table th {
+    text-align: left; font-size: 0.68rem; font-weight: 700; letter-spacing: 0.04em;
+    text-transform: uppercase; color: #64748b; padding: 0.55rem 0.75rem; border-bottom: 1px solid #e2e8f0;
+    background: #f8fafc; white-space: nowrap;
+  }
+  .fps-list-table td { padding: 0.5rem 0.75rem; border-bottom: 1px solid #f1f5f9; vertical-align: middle; }
+  .fps-list-table tr:hover td { background: #f8fafc; }
+  .fps-list-table .sku a { font-weight: 650; color: #0f172a; text-decoration: none; }
+  .fps-list-table .sku a:hover { color: #0f8a72; }
+  .fps-list-table .muted { color: #94a3b8; }
+  .fps-list-table .col-type { width: 3.5rem; }
+  .fps-list-table .col-cat { width: 8rem; }
+  .fps-list-table .col-form { width: 4.5rem; text-align: center; }
+</style>
+<div class="hs-bleed fps-list-wrap">
+  <div class="fps-list-card">
+    <table class="fps-list-table">
+      <thead>
+        <tr>
+          <th>SKU</th>
+          <th>Name</th>
+          <th class="col-type">Type</th>
+          <th class="col-cat">Category</th>
+          <th class="col-form">Formula</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+        <tr>
+          <td class="sku"><a href="{% url 'slurp_ui:quality_finished_good_detail' row.item.id %}">{{ row.item.sku }}</a></td>
+          <td>{{ row.item.name }}</td>
+          <td class="col-type">{% if row.item.item_type == 'finished_good' %}FG{% elif row.item.item_type == 'distributed_item' %}DI{% else %}{{ row.item.item_type }}{% endif %}</td>
+          <td class="col-cat">{% if row.item.product_category %}{{ row.item.product_category }}{% else %}<span class="muted">—</span>{% endif %}</td>
+          <td class="col-form">{% if row.has_formula %}Yes{% elif row.item.item_type == 'finished_good' %}<span class="muted">—</span>{% else %}<span class="muted">n/a</span>{% endif %}</td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="5"><div class="hs-empty" style="padding:1.25rem">No FPS products yet.</div></td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
   </div>
 </div>
 {% endblock %}

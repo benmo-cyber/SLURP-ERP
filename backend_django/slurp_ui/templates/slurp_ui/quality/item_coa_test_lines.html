@@ -1,89 +1,203 @@
 {% extends "slurp_ui/base_module.html" %}
-{% block title %}COA tests — {{ item.sku }} — SLURP{% endblock %}
-{% block module_title %}COA Test Lines{% endblock %}
+{% block title %}COA — {{ item.sku }} — SLURP{% endblock %}
+{% block module_title %}COA / Micro — {{ item.sku }}{% endblock %}
 {% block header_actions %}
-  <a href="{% url 'slurp_ui:quality_finished_good_detail' item.id %}" class="hs-btn">Back to formula</a>
+  <a href="{% url 'slurp_ui:quality_coa_test_catalog' %}" class="hs-btn">Catalog</a>
+  <a href="{% url 'slurp_ui:quality_finished_good_detail' item.id %}" class="hs-btn">FPS</a>
 {% endblock %}
 {% block main %}
-<div class="hs-bleed" style="padding:1.25rem 1.5rem 2rem">
-  <div class="hs-card" style="margin-bottom:1rem">
-    <div class="hs-card-header" style="align-items:flex-start">
-      <div>
-        <h3 class="hs-entity-name" style="font-size:1.2rem">COA / micro tests</h3>
-        <div class="hs-record-meta" style="margin-top:0.35rem">
-          <span><strong>{{ item.sku }}</strong> — {{ item.name }}</span>
-        </div>
-      </div>
-    </div>
-  </div>
+<style>
+  .coa-lines-wrap { padding: 1rem 1.25rem 1.75rem; }
+  .coa-lines-lede { margin: 0 0 0.85rem; color: #64748b; font-size: 0.88rem; max-width: 42rem; }
+  .coa-lines-card { background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; overflow-x: auto; }
+  .coa-lines-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; min-width: 980px; }
+  .coa-lines-table th {
+    text-align: left; font-size: 0.68rem; font-weight: 700; letter-spacing: 0.04em;
+    text-transform: uppercase; color: #64748b; padding: 0.5rem 0.4rem; border-bottom: 1px solid #e2e8f0;
+    white-space: nowrap; background: #f8fafc;
+  }
+  .coa-lines-table td { padding: 0.3rem 0.35rem; border-bottom: 1px solid #f1f5f9; vertical-align: middle; }
+  .coa-lines-table tr.is-add td { background: #f8fafc; }
+  .coa-lines-table input[type="text"],
+  .coa-lines-table input[type="number"],
+  .coa-lines-table select,
+  .coa-lines-table textarea {
+    width: 100%; min-width: 0; padding: 0.28rem 0.4rem; font-size: 0.84rem;
+    border: 1px solid #cbd5e1; border-radius: 4px; background: #fff; box-sizing: border-box;
+  }
+  .coa-lines-table textarea { min-height: 1.9rem; max-height: 4rem; resize: vertical; line-height: 1.25; }
+  .coa-lines-table .col-ord { width: 3rem; }
+  .coa-lines-table .col-cat { width: 9.5rem; }
+  .coa-lines-table .col-name { width: 9.5rem; }
+  .coa-lines-table .col-kind { width: 6.5rem; }
+  .coa-lines-table .col-num { width: 4rem; }
+  .coa-lines-table .col-cust { width: 5.5rem; }
+  .coa-lines-table .col-flags { width: 3.5rem; white-space: nowrap; }
+  .coa-lines-table .col-acts { width: 7rem; white-space: nowrap; }
+  .coa-lines-table .flag {
+    display: inline-flex; align-items: center; gap: 0.15rem;
+    font-size: 0.7rem; color: #64748b; font-weight: 600;
+  }
+  .coa-lines-table .flag input { width: auto; margin: 0; }
+  .coa-lines-table .btn-row { padding: 0.25rem 0.45rem; font-size: 0.76rem; }
+  .coa-lines-forms { display: none; }
+</style>
+<div class="hs-bleed coa-lines-wrap">
+  <p class="coa-lines-lede">
+    <strong>{{ item.sku }}</strong> — {{ item.name }}.
+    Pick from catalog to autofill; edit specs for this FPS only.
+    {% if item.item_type == 'distributed_item' %}
+    For supplier / relabel SKUs these lines are the <strong>supplier typical COA</strong>;
+    receivers enter lot-actuals at check-in, and they follow the lot through relabel onto customer COAs.
+    {% endif %}
+  </p>
 
-  <div class="hs-card" style="margin-bottom:1rem">
-    <div class="hs-card-header"><h3>Add test line</h3></div>
-    <div class="hs-card-body">
-      <form method="post">
-        {% csrf_token %}
-        <input type="hidden" name="line_id" value="new" />
-        <div class="hs-form-grid-3">
-          <div class="form-row"><label>Order</label><input name="sort_order" type="number" value="0" /></div>
-          <div class="form-row"><label>Test name *</label><input name="test_name" required /></div>
-          <div class="form-row">
-            <label>Result kind</label>
-            <select name="result_kind">
-              {% for val, label in result_kind_choices %}
-              <option value="{{ val }}">{{ label }}</option>
+  <div class="coa-lines-card">
+    <table class="coa-lines-table">
+      <thead>
+        <tr>
+          <th class="col-ord">#</th>
+          <th class="col-cat">Catalog</th>
+          <th class="col-name">Test</th>
+          <th>Spec</th>
+          <th>Typical</th>
+          <th class="col-kind">Kind</th>
+          <th class="col-num">Min</th>
+          <th class="col-num">Max</th>
+          <th class="col-cust">Cust.</th>
+          <th class="col-flags">COA</th>
+          <th class="col-acts"></th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr class="is-add">
+          <td class="col-ord"><input name="sort_order" type="number" value="0" form="coa-line-add" /></td>
+          <td class="col-cat">
+            <select id="catalog_pick" name="catalog_test_id" form="coa-line-add">
+              <option value="">— Custom —</option>
+              {% for c in catalog_options %}
+              <option value="{{ c.id }}"
+                      data-test-name="{{ c.test_name|escape }}"
+                      data-spec="{{ c.specification_text|escape }}"
+                      data-result-kind="{{ c.result_kind }}"
+                      data-numeric-min="{{ c.numeric_min|default_if_none:'' }}"
+                      data-numeric-max="{{ c.numeric_max|default_if_none:'' }}"
+                      data-typical-result="{{ c.typical_result|escape }}"
+                      data-include="{{ c.include_on_customer_coa|yesno:'1,' }}"
+                      data-customer-display="{{ c.customer_result_display }}">
+                {{ c.test_name }}
+              </option>
               {% endfor %}
             </select>
-          </div>
-        </div>
-        <div class="form-row"><label>Specification *</label><textarea name="specification_text" rows="2" required></textarea></div>
-        <div class="hs-form-grid">
-          <div class="form-row"><label>Numeric min</label><input name="numeric_min" type="number" step="any" /></div>
-          <div class="form-row"><label>Numeric max</label><input name="numeric_max" type="number" step="any" /></div>
-        </div>
-        <div class="hs-form-actions" style="margin-top:0.75rem;margin-bottom:0">
-          <button type="submit" class="hs-btn hs-btn-primary">Add line</button>
-        </div>
-      </form>
-    </div>
+          </td>
+          <td class="col-name"><input id="add_test_name" name="test_name" type="text" required placeholder="Name" form="coa-line-add" /></td>
+          <td><textarea id="add_specification_text" name="specification_text" rows="1" required placeholder="Spec" form="coa-line-add"></textarea></td>
+          <td><input id="add_typical_result" name="typical_result" type="text" placeholder="Result" form="coa-line-add" /></td>
+          <td class="col-kind">
+            <select id="add_result_kind" name="result_kind" form="coa-line-add">
+              <option value="text_only">Text</option>
+              <option value="pass_fail">Pass/Fail</option>
+              <option value="numeric_minimum">Min only</option>
+              <option value="numeric_range">Range</option>
+            </select>
+          </td>
+          <td class="col-num"><input id="add_numeric_min" name="numeric_min" type="number" step="any" form="coa-line-add" /></td>
+          <td class="col-num"><input id="add_numeric_max" name="numeric_max" type="number" step="any" form="coa-line-add" /></td>
+          <td class="col-cust">
+            <select id="add_customer_display" name="customer_result_display" form="coa-line-add">
+              <option value="actual">Actual</option>
+              <option value="pass_fail">Pass/Fail</option>
+            </select>
+          </td>
+          <td class="col-flags">
+            <label class="flag"><input id="add_include" type="checkbox" name="include_on_customer_coa" value="1" checked form="coa-line-add" /></label>
+          </td>
+          <td class="col-acts">
+            <button type="submit" class="hs-btn hs-btn-primary btn-row" form="coa-line-add">Add</button>
+          </td>
+        </tr>
+
+        {% for line in lines %}
+        <tr>
+          <td class="col-ord"><input name="sort_order" type="number" value="{{ line.sort_order }}" form="coa-line-{{ line.id }}" /></td>
+          <td class="col-cat">
+            <input type="hidden" name="catalog_test_id" value="{{ line.catalog_test_id|default:'' }}" form="coa-line-{{ line.id }}" />
+            <span style="color:#94a3b8;font-size:0.78rem">{% if line.catalog_test %}{{ line.catalog_test.test_name }}{% else %}—{% endif %}</span>
+          </td>
+          <td class="col-name"><input name="test_name" type="text" value="{{ line.test_name }}" required form="coa-line-{{ line.id }}" /></td>
+          <td><textarea name="specification_text" rows="1" required form="coa-line-{{ line.id }}">{{ line.specification_text }}</textarea></td>
+          <td><input name="typical_result" type="text" value="{{ line.typical_result }}" form="coa-line-{{ line.id }}" /></td>
+          <td class="col-kind">
+            <select name="result_kind" form="coa-line-{{ line.id }}">
+              <option value="text_only" {% if line.result_kind == 'text_only' %}selected{% endif %}>Text</option>
+              <option value="pass_fail" {% if line.result_kind == 'pass_fail' %}selected{% endif %}>Pass/Fail</option>
+              <option value="numeric_minimum" {% if line.result_kind == 'numeric_minimum' %}selected{% endif %}>Min only</option>
+              <option value="numeric_range" {% if line.result_kind == 'numeric_range' %}selected{% endif %}>Range</option>
+            </select>
+          </td>
+          <td class="col-num"><input name="numeric_min" type="number" step="any" value="{{ line.numeric_min|default_if_none:'' }}" form="coa-line-{{ line.id }}" /></td>
+          <td class="col-num"><input name="numeric_max" type="number" step="any" value="{{ line.numeric_max|default_if_none:'' }}" form="coa-line-{{ line.id }}" /></td>
+          <td class="col-cust">
+            <select name="customer_result_display" form="coa-line-{{ line.id }}">
+              <option value="actual" {% if line.customer_result_display == 'actual' %}selected{% endif %}>Actual</option>
+              <option value="pass_fail" {% if line.customer_result_display == 'pass_fail' %}selected{% endif %}>Pass/Fail</option>
+            </select>
+          </td>
+          <td class="col-flags">
+            <label class="flag"><input type="checkbox" name="include_on_customer_coa" value="1" {% if line.include_on_customer_coa %}checked{% endif %} form="coa-line-{{ line.id }}" /></label>
+          </td>
+          <td class="col-acts">
+            <button type="submit" class="hs-btn hs-btn-primary btn-row" form="coa-line-{{ line.id }}">Save</button>
+            <button type="submit" class="hs-btn hs-btn-sm hs-btn-danger btn-row" form="coa-line-del-{{ line.id }}"
+                    onclick="return confirm('Delete this test line?');">Del</button>
+          </td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="11"><div class="hs-empty" style="padding:1rem">No lines yet — pick from Catalog above.</div></td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
   </div>
 
-  {% for line in lines %}
-  <div class="hs-card hs-line-card" style="margin-bottom:1rem">
-    <div class="hs-card-body">
-      <form method="post">
-        {% csrf_token %}
-        <input type="hidden" name="line_id" value="{{ line.id }}" />
-        <div class="hs-form-grid-3">
-          <div class="form-row"><label>Order</label><input name="sort_order" type="number" value="{{ line.sort_order }}" /></div>
-          <div class="form-row"><label>Test name</label><input name="test_name" value="{{ line.test_name }}" required /></div>
-          <div class="form-row">
-            <label>Result kind</label>
-            <select name="result_kind">
-              {% for val, label in result_kind_choices %}
-              <option value="{{ val }}" {% if line.result_kind == val %}selected{% endif %}>{{ label }}</option>
-              {% endfor %}
-            </select>
-          </div>
-        </div>
-        <div class="form-row"><label>Specification</label><textarea name="specification_text" rows="2" required>{{ line.specification_text }}</textarea></div>
-        <div class="hs-form-grid">
-          <div class="form-row"><label>Numeric min</label><input name="numeric_min" type="number" step="any" value="{{ line.numeric_min|default_if_none:'' }}" /></div>
-          <div class="form-row"><label>Numeric max</label><input name="numeric_max" type="number" step="any" value="{{ line.numeric_max|default_if_none:'' }}" /></div>
-        </div>
-        <div class="hs-form-actions" style="margin-top:0.75rem;margin-bottom:0">
-          <button type="submit" class="hs-btn hs-btn-primary">Save</button>
-        </div>
-      </form>
-      <form method="post" style="margin-top:0.5rem" onsubmit="return confirm('Delete this test line?');">
-        {% csrf_token %}
-        <input type="hidden" name="action" value="delete" />
-        <input type="hidden" name="line_id" value="{{ line.id }}" />
-        <button type="submit" class="hs-btn hs-btn-sm hs-btn-danger">Delete line</button>
-      </form>
-    </div>
+  <div class="coa-lines-forms">
+    <form method="post" id="coa-line-add">
+      {% csrf_token %}
+      <input type="hidden" name="line_id" value="new" />
+    </form>
+    {% for line in lines %}
+    <form method="post" id="coa-line-{{ line.id }}">
+      {% csrf_token %}
+      <input type="hidden" name="line_id" value="{{ line.id }}" />
+    </form>
+    <form method="post" id="coa-line-del-{{ line.id }}">
+      {% csrf_token %}
+      <input type="hidden" name="action" value="delete" />
+      <input type="hidden" name="line_id" value="{{ line.id }}" />
+    </form>
+    {% endfor %}
   </div>
-  {% empty %}
-  <div class="hs-empty">No COA test lines yet.</div>
-  {% endfor %}
 </div>
+<script>
+(function () {
+  var pick = document.getElementById('catalog_pick');
+  if (!pick) return;
+  pick.addEventListener('change', function () {
+    var opt = pick.options[pick.selectedIndex];
+    if (!opt || !opt.value) return;
+    function set(id, val) {
+      var el = document.getElementById(id);
+      if (el) el.value = val || '';
+    }
+    set('add_test_name', opt.getAttribute('data-test-name'));
+    set('add_specification_text', opt.getAttribute('data-spec'));
+    set('add_result_kind', opt.getAttribute('data-result-kind'));
+    set('add_numeric_min', opt.getAttribute('data-numeric-min'));
+    set('add_numeric_max', opt.getAttribute('data-numeric-max'));
+    set('add_typical_result', opt.getAttribute('data-typical-result'));
+    set('add_customer_display', opt.getAttribute('data-customer-display'));
+    var inc = document.getElementById('add_include');
+    if (inc) inc.checked = opt.getAttribute('data-include') === '1';
+  });
+})();
+</script>
 {% endblock %}

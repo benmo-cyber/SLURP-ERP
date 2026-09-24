@@ -311,7 +311,12 @@ class LotSerializer(serializers.ModelSerializer):
 
 class ProductionBatchInputSerializer(serializers.ModelSerializer):
     lot = LotSerializer(read_only=True)
-    lot_id = serializers.PrimaryKeyRelatedField(queryset=Lot.objects.all(), source='lot', write_only=True)
+    lot_id = serializers.PrimaryKeyRelatedField(
+        queryset=Lot.objects.all(), source='lot', write_only=True, required=False, allow_null=True
+    )
+    item_id = serializers.PrimaryKeyRelatedField(
+        queryset=Item.objects.all(), source='item', write_only=True, required=False, allow_null=True
+    )
     quantity_used = serializers.SerializerMethodField()
     
     class Meta:
@@ -323,8 +328,10 @@ class ProductionBatchInputSerializer(serializers.ModelSerializer):
         from .mass_quantity import normalize_mass_quantity
 
         qty = obj.quantity_used
-        lot = obj.lot
-        if getattr(lot.item, 'unit_of_measure', None) == 'ea':
+        item = obj.resolved_item() if hasattr(obj, "resolved_item") else None
+        if item is None and obj.lot_id:
+            item = obj.lot.item
+        if getattr(item, 'unit_of_measure', None) == 'ea':
             q = float(qty)
             ri = round(q)
             if abs(q - ri) <= 0.01:
@@ -436,11 +443,11 @@ class ProductionBatchSerializer(serializers.ModelSerializer):
                 {'campaign_id': 'Campaign lot must be for the same item as this batch.'}
             )
 
-        # Closing a production batch: quantity_actual = total weight produced (inventory).
+        # Closing a production/repack batch: quantity_actual = mass into inventory.
         # variance = produced − batch ticket target. wastes + spills explain shortfall when produced < target.
         merged_status = data.get('status', getattr(inst, 'status', None) if inst else None)
         merged_type = data.get('batch_type', getattr(inst, 'batch_type', None) if inst else None)
-        if inst and merged_status == 'closed' and merged_type == 'production':
+        if inst and merged_status == 'closed' and merged_type in ('production', 'repack'):
             from .mass_quantity import normalize_mass_quantity
 
             ticket = float(data.get('quantity_produced', inst.quantity_produced) or 0)
@@ -458,7 +465,7 @@ class ProductionBatchSerializer(serializers.ModelSerializer):
                 if abs(explained - shortfall) > tol:
                     raise serializers.ValidationError({
                         'non_field_errors': [
-                            'When production is below the batch ticket, wastes + spills must explain the shortfall '
+                            'When output is below the batch ticket, wastes + spills must explain the shortfall '
                             f'(target − produced = {shortfall}; wastes + spills = {explained}).'
                         ]
                     })
@@ -498,12 +505,16 @@ class ItemCoaTestLineSerializer(serializers.ModelSerializer):
         fields = [
             'id',
             'item',
+            'catalog_test',
             'sort_order',
             'test_name',
             'specification_text',
             'result_kind',
             'numeric_min',
             'numeric_max',
+            'typical_result',
+            'include_on_customer_coa',
+            'customer_result_display',
             'created_at',
             'updated_at',
         ]

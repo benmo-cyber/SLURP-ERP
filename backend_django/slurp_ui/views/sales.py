@@ -6,7 +6,7 @@ from urllib.parse import urlencode
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.db import models
-from django.db.models import Count, Sum
+from django.db.models import Count, Prefetch, Sum
 from django.http import HttpRequest, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
@@ -27,6 +27,7 @@ from erp_core.models import (
     Item,
     Lot,
     ProductionBatch,
+    ProductionBatchOutput,
     PurchaseOrder,
     QuoteNumberSequence,
     SalesCall,
@@ -43,6 +44,7 @@ from erp_core.sell_services import (
     combined_ship_sales_orders,
     create_sales_order,
     issue_sales_order,
+    mark_shipment_picked_up,
     revert_sales_order_to_draft,
     reverse_sales_shipment,
     ship_sales_order,
@@ -245,28 +247,33 @@ def _fetch_calendar_events(start_date, end_date, event_types):
             )
             if not ship_date:
                 continue
-            needs_checkout = so.status in ["ready_for_shipment"]
-            needs_allocation = so.status in ["draft", "allocated"]
-            is_actual = so.status in ["shipped", "completed"] and so.actual_ship_date is not None
-            if needs_checkout:
-                title = f"Check Out & Ship: {so.so_number}"
+            awaiting_pickup = so.status == "ready_for_shipment"
+            needs_ready = so.status in ("issued", "allocated")
+            needs_allocation = so.status == "draft"
+            is_actual = so.status in ("shipped", "completed") and so.actual_ship_date is not None
+            if awaiting_pickup:
+                title = f"Awaiting pickup: {so.so_number}"
+            elif needs_ready:
+                title = f"Mark Ready: {so.so_number}"
             elif needs_allocation:
                 title = f"Allocate & Ship: {so.so_number}"
             elif is_actual:
                 title = f"Ship: {so.so_number}"
             else:
                 title = f"Ship (Expected): {so.so_number}"
+            cust = so.customer_name or (so.customer.name if so.customer_id else "")
             events.append(
                 {
                     "id": f"shipment_{so.id}",
                     "type": "shipment",
+                    "type_label": "Ship",
                     "title": title,
-                    "short_label": so.so_number,
-                    "subtitle": so.customer_name or (so.customer.name if so.customer_id else ""),
+                    "short_label": f"Ship · {so.so_number}",
+                    "subtitle": cust,
                     "date": ship_date.isoformat(),
                     "sales_order_id": so.id,
                     "sales_order_number": so.so_number,
-                    "customer_name": so.customer_name or (so.customer.name if so.customer_id else ""),
+                    "customer_name": cust,
                     "status": so.status,
                     "reschedulable": so.status not in ("shipped", "completed", "cancelled"),
                 }
@@ -285,11 +292,12 @@ def _fetch_calendar_events(start_date, end_date, event_types):
             sku = item.sku if item else ""
             qty = float(lot.quantity or 0)
             uom = (item.unit_of_measure if item else None) or "lbs"
-            short = f"{sku or lot.lot_number} · {qty:g} {uom}" if sku else f"Inbound · {lot.lot_number}"
+            short = f"In · {sku or lot.lot_number} · {qty:g} {uom}" if sku else f"In · {lot.lot_number}"
             events.append(
                 {
                     "id": f"raw_material_{lot.id}",
                     "type": "raw_material",
+                    "type_label": "Inbound",
                     "title": f"Inbound: {sku or lot.lot_number}",
                     "short_label": short,
                     "subtitle": lot.lot_number,
@@ -305,8 +313,14 @@ def _fetch_calendar_events(start_date, end_date, event_types):
             )
 
     if "production" in type_set:
-        batches = ProductionBatch.objects.filter(status__in=["draft", "scheduled", "in_progress", "closed"]).select_related(
-            "finished_good_item"
+        # Open production tickets only (ops planning). Closed/archived stay off the calendar.
+        batches = (
+            ProductionBatch.objects.filter(
+                batch_type="production",
+                is_archived=False,
+                status__in=["draft", "scheduled", "in_progress"],
+            )
+            .select_related("finished_good_item")
         )
         if start_date:
             batches = batches.filter(
@@ -320,17 +334,65 @@ def _fetch_calendar_events(start_date, end_date, event_types):
             fg = batch.finished_good_item
             sku = fg.sku if fg else ""
             name = fg.name if fg else ""
-            uom = "lbs" if batch.batch_type == "production" else ((fg.unit_of_measure if fg else None) or "lbs")
+            uom = "lbs"
             qty = float(batch.quantity_produced or 0)
             qty_label = f"{qty:g} {uom}"
             product_label = sku or name or "FG"
-            # Compact chip: product + qty (batch # in tooltip / detail)
-            short_label = f"{product_label} · {qty_label}"
-            title = f"{product_label}: {qty_label} ({batch.batch_number})"
+            short_label = f"Make · {product_label} · {qty_label}"
+            title = f"Production: {product_label}: {qty_label} ({batch.batch_number})"
             events.append(
                 {
                     "id": f"production_{batch.id}",
                     "type": "production",
+                    "type_label": "Production",
+                    "title": title,
+                    "short_label": short_label,
+                    "subtitle": name if sku and name and name != sku else batch.batch_number,
+                    "date": batch.production_date.date().isoformat(),
+                    "batch_id": batch.id,
+                    "batch_number": batch.batch_number,
+                    "product_sku": sku,
+                    "product_name": name,
+                    "quantity": qty,
+                    "unit": uom,
+                    "quantity_label": qty_label,
+                    "status": batch.status,
+                    "reschedulable": batch.status in ("draft", "scheduled", "in_progress"),
+                }
+            )
+
+    if "repacks" in type_set:
+        repacks = (
+            ProductionBatch.objects.filter(
+                batch_type="repack",
+                is_archived=False,
+                status__in=["draft", "scheduled", "in_progress"],
+            )
+            .select_related("finished_good_item")
+        )
+        if start_date:
+            repacks = repacks.filter(
+                production_date__gte=timezone.make_aware(datetime.combine(start_date, datetime.min.time()))
+            )
+        if end_date:
+            repacks = repacks.filter(
+                production_date__lte=timezone.make_aware(datetime.combine(end_date, datetime.max.time()))
+            )
+        for batch in repacks:
+            fg = batch.finished_good_item
+            sku = fg.sku if fg else ""
+            name = fg.name if fg else ""
+            uom = (fg.unit_of_measure if fg else None) or "lbs"
+            qty = float(batch.quantity_produced or 0)
+            qty_label = f"{qty:g} {uom}"
+            product_label = sku or name or "FG"
+            short_label = f"Repack · {product_label} · {qty_label}"
+            title = f"Repack: {product_label}: {qty_label} ({batch.batch_number})"
+            events.append(
+                {
+                    "id": f"repack_{batch.id}",
+                    "type": "repack",
+                    "type_label": "Repack",
                     "title": title,
                     "short_label": short_label,
                     "subtitle": name if sku and name and name != sku else batch.batch_number,
@@ -472,11 +534,34 @@ def sales_crm(request: HttpRequest) -> HttpResponse:
 
 @login_required
 def sales_orders(request: HttpRequest) -> HttpResponse:
+    from erp_core.models import Invoice, SalesOrderLot, Shipment
+
+    # Legacy: allocate used to set ready_for_shipment without a Ready shipment.
+    # Those are still allocated — Mark Ready (pieces/dims) is the next step.
+    ready_exists = Shipment.objects.filter(
+        sales_order_id=models.OuterRef("pk"),
+        fulfillment_status="ready",
+    )
+    SalesOrder.objects.filter(status="ready_for_shipment").annotate(
+        _has_ready=models.Exists(ready_exists)
+    ).filter(_has_ready=False).update(status="allocated")
+
     queue = (request.GET.get("queue") or "open").strip()
     q = (request.GET.get("q") or "").strip()
+    focus = (request.GET.get("focus") or "").strip()
+    sort = (request.GET.get("sort") or "exp_ship").strip()
     qs = (
         SalesOrder.objects.select_related("customer")
-        .prefetch_related("items")
+        .prefetch_related(
+            "items__item",
+            "shipments",
+            Prefetch(
+                "items__allocated_lots",
+                queryset=SalesOrderLot.objects.select_related(
+                    "lot", "lot__coa_certificate", "coa_customer_copy"
+                ),
+            ),
+        )
         .annotate(total_allocated=Sum("items__quantity_allocated"))
     )
     queue_map = {
@@ -492,7 +577,6 @@ def sales_orders(request: HttpRequest) -> HttpResponse:
     if statuses is not None:
         qs = qs.filter(status__in=statuses)
     if queue == "ship":
-        # Prefer shippable: issued/ready (and allocated) with some allocation or drop-ship
         qs = qs.filter(status__in=("issued", "ready_for_shipment", "allocated"))
     if q:
         qs = qs.filter(
@@ -501,7 +585,118 @@ def sales_orders(request: HttpRequest) -> HttpResponse:
             | models.Q(customer_reference_number__icontains=q)
             | models.Q(customer__name__icontains=q)
         )
-    orders = list(qs.order_by("-created_at")[:200])
+
+    today = timezone.localdate()
+    week_end = today + timedelta(days=7)
+    open_base = SalesOrder.objects.filter(status__in=IN_HOUSE_SO_STATUSES)
+    awaiting_qs = SalesOrder.objects.filter(status="ready_for_shipment").filter(
+        shipments__fulfillment_status="ready"
+    ).distinct()
+    need_inv_ids = set(
+        Invoice.objects.filter(
+            invoice_type="customer",
+            status="draft",
+            sales_order_id__isnull=False,
+        ).values_list("sales_order_id", flat=True)
+    )
+
+    kpi = {
+        "today": open_base.filter(expected_ship_date__date=today).count(),
+        "week": open_base.filter(
+            expected_ship_date__date__gte=today,
+            expected_ship_date__date__lte=week_end,
+        ).count(),
+        "awaiting_pickup": awaiting_qs.count(),
+        "need_invoice": SalesOrder.objects.filter(id__in=need_inv_ids).count() if need_inv_ids else 0,
+        "open": open_base.count(),
+    }
+
+    if focus == "today":
+        qs = qs.filter(status__in=IN_HOUSE_SO_STATUSES, expected_ship_date__date=today)
+        queue = "open"
+    elif focus == "week":
+        qs = qs.filter(
+            status__in=IN_HOUSE_SO_STATUSES,
+            expected_ship_date__date__gte=today,
+            expected_ship_date__date__lte=week_end,
+        )
+        queue = "open"
+    elif focus == "awaiting_pickup":
+        qs = qs.filter(status="ready_for_shipment", shipments__fulfillment_status="ready").distinct()
+        queue = "open"
+    elif focus == "need_invoice":
+        qs = qs.filter(id__in=need_inv_ids) if need_inv_ids else qs.none()
+        queue = "all"
+    elif focus == "missing_ship":
+        qs = qs.filter(status__in=IN_HOUSE_SO_STATUSES, expected_ship_date__isnull=True)
+        queue = "open"
+    elif focus == "overdue_crd":
+        qs = qs.filter(
+            status__in=IN_HOUSE_SO_STATUSES,
+            customer_required_date__isnull=False,
+            customer_required_date__lt=today,
+        )
+        queue = "open"
+
+    if sort == "customer":
+        qs = qs.order_by("customer_name", models.F("expected_ship_date").asc(nulls_last=True))
+    elif sort == "crd":
+        qs = qs.order_by(
+            models.F("customer_required_date").asc(nulls_last=True),
+            models.F("expected_ship_date").asc(nulls_last=True),
+        )
+    elif sort == "status":
+        qs = qs.order_by("status", models.F("expected_ship_date").asc(nulls_last=True))
+    elif sort == "newest":
+        qs = qs.order_by("-created_at", "-id")
+    elif sort == "oldest":
+        qs = qs.order_by("created_at", "id")
+    else:
+        # Default / exp_ship
+        qs = qs.order_by(
+            models.F("expected_ship_date").asc(nulls_last=True),
+            models.F("customer_required_date").asc(nulls_last=True),
+            "-created_at",
+        )
+
+    orders = list(qs[:200])
+    # Annotate ready shipment + draft invoice + COA docs for actions
+    for o in orders:
+        ready_sh = next(
+            (s for s in o.shipments.all() if s.fulfillment_status == "ready"),
+            None,
+        )
+        o.ready_shipment = ready_sh
+        o.draft_invoice = None
+        o.coa_copies = []
+        o.coa_master_certs = []
+        o.coa_missing_lots = []
+        seen_cert = set()
+        seen_missing = set()
+        for line in o.items.all():
+            for al in line.allocated_lots.all():
+                copy = getattr(al, "coa_customer_copy", None)
+                if copy:
+                    o.coa_copies.append(copy)
+                    continue
+                cert = getattr(al.lot, "coa_certificate", None) if al.lot_id else None
+                if cert and cert.id not in seen_cert:
+                    seen_cert.add(cert.id)
+                    o.coa_master_certs.append(cert)
+                elif al.lot_id and al.lot_id not in seen_missing and not cert:
+                    seen_missing.add(al.lot_id)
+                    o.coa_missing_lots.append(al.lot)
+
+    draft_by_so = {
+        inv.sales_order_id: inv
+        for inv in Invoice.objects.filter(
+            sales_order_id__in=[o.id for o in orders],
+            invoice_type="customer",
+            status="draft",
+        )
+    }
+    for o in orders:
+        o.draft_invoice = draft_by_so.get(o.id)
 
     counts = {
         "open": SalesOrder.objects.filter(status__in=IN_HOUSE_SO_STATUSES).count(),
@@ -519,7 +714,11 @@ def sales_orders(request: HttpRequest) -> HttpResponse:
             orders=orders,
             queue=queue,
             q=q,
+            focus=focus,
+            sort=sort,
             counts=counts,
+            kpi=kpi,
+            today=today,
             port_status="full",
             god_mode=bool(request.session.get("god_mode")) and request.user.is_staff,
         ),
@@ -537,7 +736,7 @@ def _reschedule_ops_event(event_id: str, new_date: date) -> tuple[bool, str]:
         so.expected_ship_date = timezone.make_aware(datetime.combine(new_date, datetime.min.time()))
         so.save(update_fields=["expected_ship_date"])
         return True, f"Moved {so.so_number} ship date {old} -> {new_date.isoformat()}."
-    if event_id.startswith("production_"):
+    if event_id.startswith("production_") or event_id.startswith("repack_"):
         batch_id = event_id.split("_", 1)[1]
         batch = get_object_or_404(ProductionBatch, pk=batch_id)
         if batch.status not in ("draft", "scheduled", "in_progress"):
@@ -575,8 +774,8 @@ def sales_calendar(request: HttpRequest) -> HttpResponse:
         "raw_materials",
         "production",
     ]
-    # Ops calendar only — finance due dates belong on a future Finance calendar.
-    allowed_types = {"shipments", "raw_materials", "production"}
+    # Ops calendar only — finance due dates belong on Finance calendar.
+    allowed_types = {"shipments", "raw_materials", "production", "repacks"}
     selected_types = [t for t in selected_types if t in allowed_types] or [
         "shipments",
         "raw_materials",
@@ -623,9 +822,10 @@ def sales_calendar(request: HttpRequest) -> HttpResponse:
         selected_event = next((e for e in month_events if e["id"] == sel_id), None)
 
     type_options = [
-        ("shipments", "Expected ships"),
-        ("raw_materials", "Incoming materials"),
+        ("shipments", "Ships"),
+        ("raw_materials", "Inbound"),
         ("production", "Production"),
+        ("repacks", "Repacks"),
     ]
     return render(
         request,
@@ -1373,6 +1573,12 @@ def sales_create_order(request: HttpRequest) -> HttpResponse:
             ship_to_id = request.POST.get("ship_to_location")
             if ship_to_id:
                 payload["ship_to_location"] = int(ship_to_id)
+            exp_ship = (request.POST.get("expected_ship_date") or "").strip()
+            if exp_ship:
+                payload["expected_ship_date"] = exp_ship
+            crd = (request.POST.get("customer_required_date") or "").strip()
+            if crd:
+                payload["customer_required_date"] = crd
             if request.session.get("god_mode") and request.user.is_staff:
                 od = (request.POST.get("order_date") or "").strip()
                 if od:
@@ -1440,6 +1646,54 @@ def sales_issue_order(request: HttpRequest, pk: int) -> HttpResponse:
 
 
 @login_required
+@require_POST
+def sales_order_update_dates(request: HttpRequest, pk: int) -> HttpResponse:
+    """Inline update expected ship / customer required dates from workqueue or detail."""
+    so = get_object_or_404(SalesOrder, pk=pk)
+    next_url = (request.POST.get("next") or "").strip()
+    if next_url.startswith("?"):
+        next_url = reverse("slurp_ui:sales_orders") + next_url
+    elif not next_url.startswith("/"):
+        next_url = reverse("slurp_ui:sales_orders")
+
+    if so.status in ("shipped", "completed", "cancelled", "received"):
+        messages.error(request, f"{so.so_number} dates are locked ({so.status}).")
+        return redirect(next_url)
+
+    update_fields: list[str] = []
+    if "expected_ship_date" in request.POST:
+        raw = (request.POST.get("expected_ship_date") or "").strip()
+        if raw:
+            d = parse_date(raw)
+            if not d:
+                messages.error(request, "Invalid expected ship date.")
+                return redirect(next_url)
+            so.expected_ship_date = timezone.make_aware(datetime.combine(d, datetime.min.time()))
+        else:
+            so.expected_ship_date = None
+        update_fields.append("expected_ship_date")
+
+    if "customer_required_date" in request.POST:
+        raw = (request.POST.get("customer_required_date") or "").strip()
+        if raw:
+            d = parse_date(raw)
+            if not d:
+                messages.error(request, "Invalid customer required date.")
+                return redirect(next_url)
+            so.customer_required_date = d
+        else:
+            so.customer_required_date = None
+        update_fields.append("customer_required_date")
+
+    if update_fields:
+        update_fields.append("updated_at")
+        so.save(update_fields=update_fields)
+        messages.success(request, f"Updated dates on {so.so_number}.")
+
+    return redirect(next_url)
+
+
+@login_required
 @require_http_methods(["GET", "POST"])
 def sales_allocate_order(request: HttpRequest, pk: int) -> HttpResponse:
     so = get_object_or_404(
@@ -1460,14 +1714,37 @@ def sales_allocate_order(request: HttpRequest, pk: int) -> HttpResponse:
         else:
             qs = qs.filter(item_id=line.item_id)
         lots = qs.select_related("item").order_by("-received_date")[:60]
-        rows = []
+        sellable_rows = []
+        raw_rows = []
+        if item_type == "distributed_item":
+            repack_out_ids = set(
+                ProductionBatchOutput.objects.filter(
+                    lot_id__in=[lot.id for lot in lots],
+                    batch__batch_type="repack",
+                    batch__status="closed",
+                ).values_list("lot_id", flat=True)
+            )
+        else:
+            repack_out_ids = None
         for lot in lots:
             avail = float(compute_lot_quantity_breakdown(lot)["quantity_available_for_use"])
             if avail <= 0:
                 continue
-            rows.append({"lot": lot, "available": avail})
-        line_lot_choices.append({"line": line, "lots": rows})
-
+            row = {"lot": lot, "available": avail}
+            if item_type == "distributed_item":
+                if lot.id in repack_out_ids:
+                    sellable_rows.append(row)
+                else:
+                    raw_rows.append(row)
+            else:
+                sellable_rows.append(row)
+        line_lot_choices.append(
+            {
+                "line": line,
+                "lots": sellable_rows,
+                "raw_lots": raw_rows,
+            }
+        )
     if request.method == "POST":
         if so.drop_ship:
             try:
@@ -1538,7 +1815,7 @@ def sales_allocate_order(request: HttpRequest, pk: int) -> HttpResponse:
 @login_required
 @require_http_methods(["GET", "POST"])
 def sales_checkout(request: HttpRequest) -> HttpResponse:
-    """List checkout-eligible orders, or ship one SO when ?so=<id>."""
+    """List stage-eligible orders, or Mark Ready (pieces/dims) when ?so=<id>."""
     so_id = request.GET.get("so") or request.POST.get("so_id")
     selected = None
     if so_id:
@@ -1561,10 +1838,15 @@ def sales_checkout(request: HttpRequest) -> HttpResponse:
             dims.append((request.POST.get(f"dim_{i}") or "").strip())
             weights.append((request.POST.get(f"weight_{i}") or "").strip())
 
-        ship_items = []
         try:
+            ship_items = []
             for line in selected.items.select_related("item").all():
                 rem = float(line.quantity_allocated or 0)
+                if rem <= 0 and selected.drop_ship:
+                    rem = max(
+                        0.0,
+                        float(line.quantity_ordered or 0) - float(line.quantity_shipped or 0),
+                    )
                 if rem <= 0:
                     continue
                 raw = (request.POST.get(f"ship_qty_{line.id}") or "").strip()
@@ -1588,38 +1870,45 @@ def sales_checkout(request: HttpRequest) -> HttpResponse:
 
             payload = {
                 "ship_date": (request.POST.get("ship_date") or timezone.localdate().isoformat()),
-                "invoice_date": (request.POST.get("invoice_date") or request.POST.get("ship_date") or timezone.localdate().isoformat()),
                 "carrier": (request.POST.get("carrier") or "").strip(),
                 "tracking_number": (request.POST.get("tracking_number") or "").strip(),
                 "pieces": pieces,
                 "piece_dimensions": dims,
                 "piece_weights": weights,
+                "dim_uom": (request.POST.get("dim_uom") or "in").strip(),
+                "weight_uom": (request.POST.get("weight_uom") or "lbs").strip(),
                 "items": ship_items,
             }
-            result = ship_sales_order(selected, request.user, payload)
-            inv = (result.get("invoice") or {}).get("invoice_number") or "—"
+            ship_sales_order(selected, request.user, payload)
             messages.success(
                 request,
-                f"Shipped {selected.so_number}. Invoice {inv}.",
+                f"{selected.so_number} marked Ready — packing list & COAs available. "
+                "Mark picked up when the truck leaves to create the draft invoice.",
             )
-            return redirect("slurp_ui:sales_orders")
+            return redirect(f"{reverse('slurp_ui:sales_orders')}?focus=awaiting_pickup")
         except SellFlowError as e:
             messages.error(request, e.message)
         except Exception as e:
             messages.error(request, str(e))
 
     ready = (
-        SalesOrder.objects.filter(status__in=["issued", "ready_for_shipment"])
+        SalesOrder.objects.filter(status__in=["issued", "allocated"])
         .annotate(total_allocated=Sum("items__quantity_allocated"))
         .select_related("customer")
         .order_by("-created_at")[:100]
     )
-    # Keep drop-ship (virtual alloc) and any with allocated qty
     eligible = [
         o
         for o in ready
         if o.drop_ship or float(o.total_allocated or 0) > 0
     ]
+    # Exclude orders that already have an awaiting-pickup shipment
+    from erp_core.models import Shipment
+
+    awaiting_ids = set(
+        Shipment.objects.filter(fulfillment_status="ready").values_list("sales_order_id", flat=True)
+    )
+    eligible = [o for o in eligible if o.id not in awaiting_ids]
 
     today = timezone.localdate().isoformat()
     return render(
@@ -1636,11 +1925,57 @@ def sales_checkout(request: HttpRequest) -> HttpResponse:
 
 
 @login_required
+@require_POST
+def sales_mark_picked_up(request: HttpRequest, pk: int) -> HttpResponse:
+    """Mark ready shipment as picked up → deplete inventory + draft invoice."""
+    from erp_core.models import Shipment
+
+    so = get_object_or_404(SalesOrder, pk=pk)
+    shipment = (
+        Shipment.objects.filter(sales_order=so, fulfillment_status="ready")
+        .order_by("-id")
+        .first()
+    )
+    if not shipment:
+        messages.error(request, f"{so.so_number} has no shipment awaiting pickup.")
+        return redirect("slurp_ui:sales_orders")
+
+    next_url = (request.POST.get("next") or "").strip()
+    if next_url.startswith("?"):
+        next_url = reverse("slurp_ui:sales_orders") + next_url
+    elif not next_url.startswith("/"):
+        next_url = reverse("slurp_ui:sales_orders") + "?focus=need_invoice"
+
+    try:
+        result = mark_shipment_picked_up(
+            shipment,
+            request.user,
+            {
+                "pickup_date": (request.POST.get("pickup_date") or timezone.localdate().isoformat()),
+                "tracking_number": (request.POST.get("tracking_number") or "").strip(),
+            },
+        )
+        inv = (result.get("invoice") or {}).get("invoice_number") or "—"
+        messages.success(
+            request,
+            f"{so.so_number} picked up. Draft invoice {inv} — review tracking and issue in Finance.",
+        )
+        inv_id = (result.get("invoice") or {}).get("id")
+        if inv_id:
+            return redirect("slurp_ui:finance_invoice_detail", pk=inv_id)
+    except SellFlowError as e:
+        messages.error(request, e.message)
+    except Exception as e:
+        messages.error(request, str(e))
+    return redirect(next_url)
+
+
+@login_required
 @require_http_methods(["GET", "POST"])
 def sales_combined_checkout(request: HttpRequest) -> HttpResponse:
     """Select 2+ issued/allocated SOs (same customer + ship-to) and ship together."""
     ready = (
-        SalesOrder.objects.filter(status__in=["issued", "ready_for_shipment"])
+        SalesOrder.objects.filter(status__in=["issued", "allocated"])
         .annotate(total_allocated=Sum("items__quantity_allocated"))
         .select_related("customer", "ship_to_location")
         .prefetch_related("items__item")
@@ -1721,17 +2056,19 @@ def sales_combined_checkout(request: HttpRequest) -> HttpResponse:
                     "pieces": pieces,
                     "piece_dimensions": dims,
                     "piece_weights": weights,
+                    "dim_uom": (request.POST.get("dim_uom") or "in").strip(),
+                    "weight_uom": (request.POST.get("weight_uom") or "lbs").strip(),
                 }
                 result = combined_ship_sales_orders(request.user, payload)
                 ck = result.get("combined_shipment_key")
                 messages.success(
                     request,
-                    f"Combined checkout complete ({len(order_ids)} orders). "
-                    f"Combined packing list key: {ck}.",
+                    f"Combined Mark Ready ({len(order_ids)} orders). "
+                    f"Packing list available. Mark each picked up when the truck leaves.",
                 )
                 if ck:
                     return redirect(f"{reverse('slurp_ui:sales_combined_packing_list_pdf')}?key={ck}")
-                return redirect("slurp_ui:sales_orders")
+                return redirect(f"{reverse('slurp_ui:sales_orders')}?focus=awaiting_pickup")
             except SellFlowError as e:
                 messages.error(request, e.message)
             except Exception as e:
@@ -1835,15 +2172,25 @@ def sales_combined_packing_list_pdf(request: HttpRequest) -> HttpResponse:
 
 @login_required
 def sales_order_detail(request: HttpRequest, pk: int) -> HttpResponse:
+    from erp_core.models import Shipment
+
     so = get_object_or_404(
         SalesOrder.objects.select_related("customer").prefetch_related(
             "items__item",
             "items__allocated_lots__lot",
+            "items__allocated_lots__lot__coa_certificate",
+            "items__allocated_lots__coa_customer_copy",
             "shipments__items",
             "invoices",
         ),
         pk=pk,
     )
+    # Heal legacy ready_for_shipment with no Ready shipment
+    ready_sh = so.shipments.filter(fulfillment_status="ready").order_by("-id").first()
+    if so.status == "ready_for_shipment" and not ready_sh:
+        so.status = "allocated"
+        so.save(update_fields=["status"])
+
     is_staff = bool(request.user.is_staff)
     can_revert = is_staff and so.status in ("issued", "allocated", "ready_for_shipment")
     can_cancel = so.status in ("draft", "issued", "allocated", "ready_for_shipment")
@@ -1856,18 +2203,34 @@ def sales_order_detail(request: HttpRequest, pk: int) -> HttpResponse:
     credit_memos = list(
         so.invoices.filter(invoice_type="credit").order_by("-invoice_date", "-id")
     )
+    coa_copies = []
+    coa_master_certs = []
+    seen_cert = set()
+    for line in so.items.all():
+        for al in line.allocated_lots.all():
+            copy = getattr(al, "coa_customer_copy", None)
+            if copy:
+                coa_copies.append(copy)
+                continue
+            cert = getattr(al.lot, "coa_certificate", None) if al.lot_id else None
+            if cert and cert.id not in seen_cert:
+                seen_cert.add(cert.id)
+                coa_master_certs.append(cert)
     return render(
         request,
         "slurp_ui/sales/order_detail.html",
         _sales_ctx(
             active_tab="orders",
             order=so,
+            ready_shipment=ready_sh,
             is_staff=is_staff,
             can_revert=can_revert,
             can_cancel=can_cancel,
             can_return=can_return,
             returnable_invoices=returnable_invoices,
             credit_memos=credit_memos,
+            coa_copies=coa_copies,
+            coa_master_certs=coa_master_certs,
             port_status="full",
         ),
     )

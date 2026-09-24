@@ -108,6 +108,21 @@ urlpatterns = [
         name="inventory_hold_case",
     ),
     path(
+        "inventory/lots/<int:pk>/",
+        views.inventory_lot_detail,
+        name="inventory_lot_detail",
+    ),
+    path(
+        "inventory/lots/<int:pk>/dates/",
+        views.inventory_lot_update_dates,
+        name="inventory_lot_update_dates",
+    ),
+    path(
+        "inventory/lots/<int:pk>/supplier-coa/",
+        views.inventory_lot_supplier_coa,
+        name="inventory_lot_supplier_coa",
+    ),
+    path(
         "inventory/lots/<int:pk>/reconcile/",
         views.inventory_lot_reconcile,
         name="inventory_lot_reconcile",
@@ -216,6 +231,16 @@ urlpatterns = [
         name="sales_issue_order",
     ),
     path(
+        "sales/orders/<int:pk>/dates/",
+        views.sales_order_update_dates,
+        name="sales_order_update_dates",
+    ),
+    path(
+        "sales/orders/<int:pk>/picked-up/",
+        views.sales_mark_picked_up,
+        name="sales_mark_picked_up",
+    ),
+    path(
         "sales/orders/<int:pk>/allocate/",
         views.sales_allocate_order,
         name="sales_allocate_order",
@@ -303,6 +328,16 @@ urlpatterns = [
     path("finance/payment/", views.finance_payment_entry, name="finance_payment_entry"),
     path("finance/ap/", views.finance_ap, name="finance_ap"),
     path(
+        "finance/ap/<int:pk>/",
+        views.finance_ap_detail,
+        name="finance_ap_detail",
+    ),
+    path(
+        "finance/ap/<int:pk>/invoice-pdf/",
+        views.finance_ap_invoice_pdf,
+        name="finance_ap_invoice_pdf",
+    ),
+    path(
         "finance/ap/<int:pk>/mark-paid/",
         views.finance_ap_mark_paid,
         name="finance_ap_mark_paid",
@@ -380,9 +415,21 @@ urlpatterns = [
     # Production
     path("production/", views.production_batches, name="production"),
     path(
+        "production/repacks/",
+        views.production_repacks,
+        name="production_repacks",
+    ),
+    path(
         "production/archive/",
         views.production_archive,
+        {"locked_batch_type": "production"},
         name="production_archive",
+    ),
+    path(
+        "production/repack-archive/",
+        views.production_archive,
+        {"locked_batch_type": "repack"},
+        name="production_repack_archive",
     ),
     path(
         "production/create-batch/",
@@ -408,6 +455,16 @@ urlpatterns = [
         "production/<int:pk>/close/",
         views.production_close_batch,
         name="production_close_batch",
+    ),
+    path(
+        "production/campaign/link/",
+        views.production_campaign_link,
+        name="production_campaign_link",
+    ),
+    path(
+        "production/campaign/unlink/",
+        views.production_campaign_unlink,
+        name="production_campaign_unlink",
     ),
     path(
         "production/<int:pk>/archive/",
@@ -456,6 +513,16 @@ urlpatterns = [
         "quality/coa-library/customer/<int:pk>/pdf/",
         views.quality_coa_customer_pdf,
         name="quality_coa_customer_pdf",
+    ),
+    path(
+        "quality/coa-library/customer/<int:pk>/customize/",
+        views.quality_coa_customer_customize,
+        name="quality_coa_customer_customize",
+    ),
+    path(
+        "quality/coa-test-catalog/",
+        views.quality_coa_test_catalog,
+        name="quality_coa_test_catalog",
     ),
     path(
         "quality/finished-goods/",

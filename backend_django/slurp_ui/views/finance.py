@@ -1230,13 +1230,194 @@ def finance_ap(request: HttpRequest) -> HttpResponse:
     )
 
 
+def _ap_po_received_amount(po) -> float | None:
+    """Match create_ap_entry_from_po received-value math for accuracy strip."""
+    if po is None:
+        return None
+    from erp_core.buy_services import po_line_ordered_native
+
+    total = 0.0
+    for item in po.items.select_related("item").all():
+        ordered_native = po_line_ordered_native(item)
+        if ordered_native <= 0:
+            continue
+        received = float(item.quantity_received or 0)
+        if received <= 0:
+            continue
+        line_value = float(item.quantity_ordered or 0) * float(item.unit_price or 0)
+        frac = min(1.0, received / ordered_native)
+        total += line_value * frac
+    return round(total, 2)
+
+
+def _ap_po_checkin_received_date(po):
+    """PO.received_date, else latest lot received_date for this PO number."""
+    if po is None:
+        return None
+    if po.received_date:
+        return po.received_date
+    po_num = (po.po_number or "").strip()
+    if not po_num:
+        return None
+    from erp_core.models import Lot
+
+    latest = (
+        Lot.objects.filter(po_number=po_num)
+        .exclude(received_date__isnull=True)
+        .order_by("-received_date")
+        .values_list("received_date", flat=True)
+        .first()
+    )
+    return latest
+
+
+@login_required
+@require_http_methods(["GET", "POST"])
+def finance_ap_detail(request: HttpRequest, pk: int) -> HttpResponse:
+    ap = get_object_or_404(
+        AccountsPayable.objects.select_related(
+            "purchase_order", "account", "journal_entry"
+        ).prefetch_related("purchase_order__items__item", "payments"),
+        pk=pk,
+    )
+
+    if request.method == "POST":
+        action = (request.POST.get("action") or "save").strip().lower()
+        if action == "upload_invoice":
+            upload = request.FILES.get("invoice_pdf")
+            if not upload:
+                messages.error(request, "Choose a PDF file to upload.")
+            else:
+                name = (upload.name or "").lower()
+                content_type = (getattr(upload, "content_type", None) or "").lower()
+                if not (name.endswith(".pdf") or "pdf" in content_type):
+                    messages.error(request, "Vendor invoice must be a PDF.")
+                else:
+                    if ap.invoice_pdf:
+                        ap.invoice_pdf.delete(save=False)
+                    ap.invoice_pdf = upload
+                    ap.invoice_pdf_uploaded_at = timezone.now()
+                    ap.save(update_fields=["invoice_pdf", "invoice_pdf_uploaded_at", "updated_at"])
+                    messages.success(request, "Vendor invoice PDF saved.")
+            return redirect("slurp_ui:finance_ap_detail", pk=pk)
+        if action == "clear_invoice":
+            if ap.invoice_pdf:
+                ap.invoice_pdf.delete(save=False)
+                ap.invoice_pdf = None
+                ap.invoice_pdf_uploaded_at = None
+                ap.save(update_fields=["invoice_pdf", "invoice_pdf_uploaded_at", "updated_at"])
+                messages.success(request, "Vendor invoice PDF removed.")
+            return redirect("slurp_ui:finance_ap_detail", pk=pk)
+        if action == "save":
+            inv_num = (request.POST.get("invoice_number") or "").strip() or None
+            notes = (request.POST.get("notes") or "").strip() or None
+            ap.invoice_number = inv_num
+            ap.notes = notes
+            update_fields = ["invoice_number", "notes", "updated_at"]
+
+            freight_raw = (request.POST.get("freight_total") or "").strip()
+            if freight_raw != "" or "freight_total" in request.POST:
+                try:
+                    new_ft = round(float(freight_raw or 0), 2)
+                except (TypeError, ValueError):
+                    messages.error(request, "Invoice freight (PPA) must be a number.")
+                    return redirect("slurp_ui:finance_ap_detail", pk=pk)
+                if new_ft < 0:
+                    messages.error(request, "Invoice freight (PPA) cannot be negative.")
+                    return redirect("slurp_ui:finance_ap_detail", pk=pk)
+
+                old_ft = round(float(ap.freight_total or 0), 2)
+                paid = float(ap.amount_paid or 0)
+                closed = ap.status in ("paid", "cancelled")
+
+                if closed:
+                    # Costing split only — do not change payable on a closed bill
+                    ap.freight_total = new_ft if new_ft > 0 else None
+                    update_fields.append("freight_total")
+                else:
+                    goods = round(float(ap.original_amount or 0) - old_ft, 2)
+                    new_oa = round(goods + new_ft, 2)
+                    ap.freight_total = new_ft if new_ft > 0 else None
+                    ap.original_amount = new_oa
+                    ap.balance = max(0.0, round(new_oa - paid, 2))
+                    if ap.balance <= 0.01 and paid > 0.01:
+                        ap.status = "paid"
+                    elif paid > 0.01:
+                        ap.status = "partial"
+                    elif ap.status not in ("overdue",):
+                        ap.status = "open"
+                    update_fields.extend(
+                        ["freight_total", "original_amount", "balance", "status"]
+                    )
+                    try:
+                        from erp_core.views import _sync_ap_journal_entry_amount
+
+                        _sync_ap_journal_entry_amount(ap, new_oa)
+                    except Exception:
+                        pass
+
+            ap.save(update_fields=update_fields)
+            messages.success(request, "AP entry updated.")
+            return redirect("slurp_ui:finance_ap_detail", pk=pk)
+        messages.error(request, "Unknown action.")
+        return redirect("slurp_ui:finance_ap_detail", pk=pk)
+
+    po = ap.purchase_order
+    po_received_amount = _ap_po_received_amount(po) if po else None
+    freight_total = round(float(ap.freight_total or 0), 2)
+    goods_amount = round(float(ap.original_amount or 0) - freight_total, 2)
+    amount_delta = None
+    if po_received_amount is not None and ap.cost_category in ("", "material"):
+        amount_delta = round(goods_amount - po_received_amount, 2)
+
+    payments = list(ap.payments.order_by("-payment_date", "-created_at"))
+    po_checkin_date = _ap_po_checkin_received_date(po)
+
+    return render(
+        request,
+        "slurp_ui/finance/ap_detail.html",
+        _finance_ctx(
+            "ap",
+            ap=ap,
+            po=po,
+            payments=payments,
+            po_received_amount=po_received_amount,
+            po_checkin_date=po_checkin_date,
+            goods_amount=goods_amount,
+            freight_total=freight_total,
+            amount_delta=amount_delta,
+            missing_invoice=not bool(ap.invoice_pdf),
+            port_status="full",
+        ),
+    )
+
+
+@login_required
+def finance_ap_invoice_pdf(request: HttpRequest, pk: int) -> HttpResponse:
+    """Serve the uploaded vendor invoice PDF for an AP entry."""
+    ap = get_object_or_404(AccountsPayable, pk=pk)
+    if not ap.invoice_pdf:
+        messages.error(request, "No vendor invoice PDF on this AP entry.")
+        return redirect("slurp_ui:finance_ap_detail", pk=pk)
+    try:
+        f = ap.invoice_pdf.open("rb")
+    except Exception as e:
+        messages.error(request, f"Could not open invoice PDF: {e}")
+        return redirect("slurp_ui:finance_ap_detail", pk=pk)
+    filename = (ap.invoice_pdf.name or f"ap-{pk}-invoice.pdf").rsplit("/", 1)[-1]
+    response = HttpResponse(f.read(), content_type="application/pdf")
+    disposition = "attachment" if request.GET.get("download") else "inline"
+    response["Content-Disposition"] = f'{disposition}; filename="{filename}"'
+    return response
+
+
 @login_required
 @require_http_methods(["GET", "POST"])
 def finance_ap_mark_paid(request: HttpRequest, pk: int) -> HttpResponse:
     ap = get_object_or_404(AccountsPayable, pk=pk)
     if ap.status in ("paid", "cancelled"):
         messages.info(request, "This AP entry is already closed.")
-        return redirect("slurp_ui:finance_ap")
+        return redirect("slurp_ui:finance_ap_detail", pk=pk)
 
     if request.method == "POST":
         try:
@@ -1257,7 +1438,7 @@ def finance_ap_mark_paid(request: HttpRequest, pk: int) -> HttpResponse:
                 else:
                     timing = " (on time)"
             messages.success(request, f"Marked {label} paid{timing}.")
-            return redirect("slurp_ui:finance_ap")
+            return redirect("slurp_ui:finance_ap_detail", pk=pk)
         except FinanceFormError as e:
             messages.error(request, e.message)
         except Exception as e:
@@ -1693,11 +1874,49 @@ def finance_whatif_line_delete(request: HttpRequest, pk: int) -> HttpResponse:
 
 
 @login_required
-@require_http_methods(["GET"])
+@require_http_methods(["GET", "POST"])
 def finance_costing(request: HttpRequest) -> HttpResponse:
-    tab = (request.GET.get("tab") or "whatif").strip().lower()
+    tab = (request.GET.get("tab") or request.POST.get("tab") or "whatif").strip().lower()
     if tab not in ("master", "rd", "lots", "whatif"):
         tab = "whatif"
+
+    # Purchase Cost Master inline save (tab=master)
+    if request.method == "POST" and tab == "master":
+        from ..cost_master_workspace import update_cost_master_purchase
+
+        segment = (request.POST.get("segment") or "manufactured").strip().lower()
+        q = (request.POST.get("q") or "").strip()
+        cm_id = request.POST.get("cm_id")
+        try:
+            cm_pk = int(cm_id)
+        except (TypeError, ValueError):
+            messages.error(request, "Invalid Cost Master row.")
+            return redirect(
+                f"{reverse('slurp_ui:finance_costing')}?tab=master&segment={segment}&q={q}"
+            )
+
+        def _f(name: str) -> float | None:
+            raw = (request.POST.get(name) or "").strip()
+            if raw == "":
+                return None
+            return float(raw)
+
+        try:
+            update_cost_master_purchase(
+                cm_pk,
+                price_per_lb=_f("price_per_lb"),
+                tariff=_f("tariff"),
+                freight_per_kg=_f("freight_per_kg"),
+            )
+            messages.success(request, "Cost Master updated.")
+        except CostMaster.DoesNotExist:
+            messages.error(request, "Cost Master row not found.")
+        except (TypeError, ValueError) as e:
+            messages.error(request, f"Could not save: {e}")
+        from urllib.parse import urlencode
+
+        qs = urlencode({"tab": "master", "segment": segment, "q": q})
+        return redirect(f"{reverse('slurp_ui:finance_costing')}?{qs}")
 
     search = (request.GET.get("q") or "").strip()
     ctx = {
@@ -1715,6 +1934,11 @@ def finance_costing(request: HttpRequest) -> HttpResponse:
         "whatif_totals": {},
         "whatif_catalog": {"distributed": [], "manufactured": []},
         "agreement_choices": PricingWhatIfLine.AGREEMENT_CHOICES,
+        "cm_segment": "manufactured",
+        "mfg_rows": [],
+        "dist_rows": [],
+        "raw_rows": [],
+        "cm_expand": None,
     }
 
     if tab == "whatif":
@@ -1782,24 +2006,35 @@ def finance_costing(request: HttpRequest) -> HttpResponse:
             }
         )
     else:
-        qs = CostMaster.objects.all().order_by("vendor_material", "wwi_product_code")
-        if search:
-            qs = qs.filter(
-                Q(vendor_material__icontains=search)
-                | Q(wwi_product_code__icontains=search)
-                | Q(vendor__icontains=search)
-            )
-        rows = list(qs[:300])
+        from ..cost_master_workspace import DEFAULT_SEGMENT, cost_master_workspace
+
+        segment = (request.GET.get("segment") or DEFAULT_SEGMENT).strip().lower()
+        expand = request.GET.get("expand") or ""
+        workspace = cost_master_workspace(segment, search, actuals={})
+        purchase_ids = [r["id"] for r in workspace["dist_rows"] + workspace["raw_rows"]]
         actuals = {}
-        try:
-            actuals = get_cost_master_actuals(request.user, [r.id for r in rows]) or {}
-        except Exception:
-            pass
-        for r in rows:
-            a = actuals.get(r.id) or actuals.get(str(r.id)) or {}
-            r.actual_comparison = a.get("comparison", "—")
-            r.shipments_count = a.get("shipments_count", 0)
-        ctx["rows"] = rows
+        if purchase_ids:
+            try:
+                actuals = get_cost_master_actuals(request.user, purchase_ids[:200]) or {}
+            except Exception:
+                actuals = {}
+        if actuals:
+            for r in workspace["dist_rows"] + workspace["raw_rows"]:
+                a = actuals.get(r["id"]) or actuals.get(str(r["id"])) or {}
+                r["actual_comparison"] = a.get("comparison", "—")
+                r["shipments_count"] = a.get("shipments_count", 0)
+        ctx.update(
+            {
+                "cm_segment": workspace["segment"],
+                "search": workspace["search"],
+                "mfg_rows": workspace["mfg_rows"],
+                "dist_rows": workspace["dist_rows"],
+                "raw_rows": workspace["raw_rows"],
+                "cm_counts": workspace["counts"],
+                "cm_expand": expand,
+                "port_status": "full",
+            }
+        )
 
     return render(
         request,
@@ -1812,6 +2047,8 @@ def finance_costing(request: HttpRequest) -> HttpResponse:
 def finance_cost_master(request: HttpRequest) -> HttpResponse:
     params = request.GET.copy()
     params["tab"] = "master"
+    if not params.get("segment"):
+        params["segment"] = "manufactured"
     return redirect(f"{reverse('slurp_ui:finance_costing')}?{params.urlencode()}")
 
 

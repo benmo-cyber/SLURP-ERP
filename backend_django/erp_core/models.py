@@ -43,6 +43,13 @@ class Item(models.Model):
     country_of_origin = models.CharField(max_length=255, blank=True, null=True, help_text='Country of origin for tariff calculation')
     on_order = models.FloatField(default=0.0, help_text='Quantity currently on order')
     approved_for_formulas = models.BooleanField(default=False)
+    plant_utility = models.BooleanField(
+        default=False,
+        help_text=(
+            "Plant utility (e.g. DI water): appears on formulas and Cost Master, "
+            "but production skips lot picking and inventory deduction."
+        ),
+    )
     product_category = models.CharField(
         max_length=50,
         choices=PRODUCT_CATEGORY_CHOICES,
@@ -263,6 +270,56 @@ class Lot(models.Model):
         super().save(*args, **kwargs)
 
 
+class CoaTestCatalog(models.Model):
+    """
+    Global COA / micro test definitions.
+
+    Product FPS sheets pick from this catalog; typical spec/result autofills the line.
+    """
+    RESULT_KIND_CHOICES = [
+        ('numeric_range', 'Numeric range (min–max)'),
+        ('numeric_minimum', 'Numeric minimum (e.g. NLT)'),
+        ('pass_fail', 'Pass / fail (text)'),
+        ('text_only', 'Text only (no auto pass/fail)'),
+    ]
+    CUSTOMER_RESULT_DISPLAY_CHOICES = [
+        ('actual', 'Show actual result'),
+        ('pass_fail', 'Show Pass / Fail'),
+    ]
+
+    sort_order = models.PositiveSmallIntegerField(default=0)
+    test_name = models.CharField(max_length=255, unique=True)
+    specification_text = models.TextField(
+        help_text='Typical COA Specification text (autofilled onto product lines)',
+    )
+    result_kind = models.CharField(max_length=32, choices=RESULT_KIND_CHOICES, default='text_only')
+    numeric_min = models.FloatField(blank=True, null=True)
+    numeric_max = models.FloatField(blank=True, null=True)
+    typical_result = models.CharField(
+        max_length=500,
+        blank=True,
+        default='',
+        help_text='Typical result text prefilled when recording micro/COA at hold release',
+    )
+    include_on_customer_coa = models.BooleanField(default=True)
+    customer_result_display = models.CharField(
+        max_length=16,
+        choices=CUSTOMER_RESULT_DISPLAY_CHOICES,
+        default='actual',
+    )
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['sort_order', 'test_name', 'id']
+        verbose_name = 'COA test catalog'
+        verbose_name_plural = 'COA test catalog'
+
+    def __str__(self):
+        return self.test_name
+
+
 class ItemCoaTestLine(models.Model):
     """
     Per-item COA / micro test rows (Test + Specification columns on the certificate).
@@ -281,12 +338,40 @@ class ItemCoaTestLine(models.Model):
         related_name='coa_test_lines',
         limit_choices_to={'item_type__in': ['finished_good', 'distributed_item']},
     )
+    catalog_test = models.ForeignKey(
+        'CoaTestCatalog',
+        on_delete=models.SET_NULL,
+        blank=True,
+        null=True,
+        related_name='item_lines',
+        help_text='Optional link to the global catalog entry this line was created from',
+    )
     sort_order = models.PositiveSmallIntegerField(default=0)
     test_name = models.CharField(max_length=255)
     specification_text = models.TextField(help_text='Shown in the COA Specification column')
     result_kind = models.CharField(max_length=32, choices=RESULT_KIND_CHOICES, default='text_only')
     numeric_min = models.FloatField(blank=True, null=True, help_text='For numeric_minimum or numeric_range')
     numeric_max = models.FloatField(blank=True, null=True, help_text='For numeric_range only')
+    typical_result = models.CharField(
+        max_length=500,
+        blank=True,
+        default='',
+        help_text='Prefills the result field on awaiting-micro release',
+    )
+    include_on_customer_coa = models.BooleanField(
+        default=True,
+        help_text='When True, this test is included by default on auto-generated customer COAs.',
+    )
+    CUSTOMER_RESULT_DISPLAY_CHOICES = [
+        ('actual', 'Show actual result'),
+        ('pass_fail', 'Show Pass / Fail'),
+    ]
+    customer_result_display = models.CharField(
+        max_length=16,
+        choices=CUSTOMER_RESULT_DISPLAY_CHOICES,
+        default='actual',
+        help_text='Default Result column on customer COAs for this test.',
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -300,12 +385,32 @@ class ItemCoaTestLine(models.Model):
 
 
 class LotCoaCertificate(models.Model):
-    """Master COA for a manufactured lot (micro/QC recorded at full release from hold).
+    """Master COA for a lot (in-house micro at hold release, or supplier results at check-in).
 
     Customer name and PO are not stored here; use LotCoaCustomerCopy per sales allocation.
     Legacy rows may still have customer_name / customer_po populated.
     """
+    SOURCE_CHOICES = [
+        ('in_house', 'In-house micro / QC'),
+        ('supplier', 'Supplier COA'),
+    ]
+
     lot = models.OneToOneField(Lot, on_delete=models.CASCADE, related_name='coa_certificate')
+    source = models.CharField(
+        max_length=20,
+        choices=SOURCE_CHOICES,
+        default='in_house',
+        db_index=True,
+        help_text='in_house = hold release; supplier = check-in / relabel clone from inbound.',
+    )
+    source_lot = models.ForeignKey(
+        Lot,
+        on_delete=models.SET_NULL,
+        blank=True,
+        null=True,
+        related_name='coa_certificates_cloned_from',
+        help_text='When set, this cert was cloned from another lot (e.g. relabel output).',
+    )
     customer_name = models.CharField(
         max_length=255,
         blank=True,
@@ -345,6 +450,12 @@ class LotCoaCertificate(models.Model):
 class LotCoaCustomerCopy(models.Model):
     """Customer-facing COA PDF for one lot allocation (lot + sales order line + qty)."""
 
+    RESULT_DISPLAY_MODE_CHOICES = [
+        ('actual', 'All actual results'),
+        ('pass_fail', 'All Pass / Fail'),
+        ('per_line', 'Per-test (item defaults / overrides)'),
+    ]
+
     certificate = models.ForeignKey(
         LotCoaCertificate,
         on_delete=models.CASCADE,
@@ -359,6 +470,30 @@ class LotCoaCustomerCopy(models.Model):
     customer_po = models.CharField(max_length=120, blank=True, default='')
     quantity_snapshot = models.FloatField(
         help_text='Allocated quantity (item UOM) shown on this COA',
+    )
+    included_line_result_ids = models.JSONField(
+        default=list,
+        blank=True,
+        help_text='LotCoaLineResult pks to include. Empty until defaults applied or Customize saves.',
+    )
+    include_qc_row = models.BooleanField(
+        default=True,
+        help_text='Include formula QC row on the customer COA when the master has QC.',
+    )
+    result_display_mode = models.CharField(
+        max_length=16,
+        choices=RESULT_DISPLAY_MODE_CHOICES,
+        default='per_line',
+        help_text='How Result column values are shown on the customer PDF.',
+    )
+    line_display_overrides = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text='Map of line_result_id (str) → actual|pass_fail when mode is per_line.',
+    )
+    customization_saved = models.BooleanField(
+        default=False,
+        help_text='True after Quality Customize; empty included_line_result_ids then means include none.',
     )
     coa_pdf = models.FileField(upload_to='coa_pdfs/customer/', blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -458,6 +593,22 @@ class LotTransactionLog(models.Model):
     
     reference_number = models.CharField(max_length=100, blank=True, null=True, help_text='Batch number, SO number, PO number, etc.')
     reference_type = models.CharField(max_length=50, blank=True, null=True, help_text='Type of reference (batch_number, so_number, po_number, etc.)')
+
+    # Snapshots for forward/backward lot pedigree (survive later lot edits / relabel chains)
+    po_number = models.CharField(
+        max_length=100,
+        blank=True,
+        null=True,
+        db_index=True,
+        help_text='PO number on the lot at transaction time (inbound pedigree)',
+    )
+    vendor_lot_number = models.CharField(
+        max_length=100,
+        blank=True,
+        null=True,
+        db_index=True,
+        help_text='Vendor lot number on the lot at transaction time',
+    )
     
     transaction_id = models.IntegerField(blank=True, null=True, help_text='Related InventoryTransaction ID if applicable')
     batch_id = models.IntegerField(blank=True, null=True, help_text='Related ProductionBatch ID if applicable')
@@ -477,6 +628,8 @@ class LotTransactionLog(models.Model):
             models.Index(fields=['item_sku', '-logged_at']),
             models.Index(fields=['transaction_type', '-logged_at']),
             models.Index(fields=['reference_number', '-logged_at']),
+            models.Index(fields=['po_number', '-logged_at']),
+            models.Index(fields=['vendor_lot_number', '-logged_at']),
         ]
     
     def __str__(self):
@@ -649,6 +802,14 @@ class ProductionBatch(models.Model):
         related_name='batches',
         help_text='Recipe used for this batch (when FG has alternate make paths).',
     )
+    critical_control_point = models.ForeignKey(
+        'CriticalControlPoint',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='batches',
+        help_text='CCP for pack-change repack tickets (screen check). Relabel / production use formula CCP when set.',
+    )
     quantity_produced = models.FloatField()
     quantity_actual = models.FloatField(default=0.0)
     production_date = models.DateTimeField(default=timezone.now)
@@ -698,11 +859,33 @@ class ProductionBatch(models.Model):
 
 class ProductionBatchInput(models.Model):
     batch = models.ForeignKey(ProductionBatch, on_delete=models.CASCADE, related_name='inputs')
-    lot = models.ForeignKey(Lot, on_delete=models.CASCADE, related_name='production_batch_inputs')
+    lot = models.ForeignKey(
+        Lot,
+        on_delete=models.CASCADE,
+        related_name='production_batch_inputs',
+        null=True,
+        blank=True,
+        help_text='Null for plant-utility inputs (no inventory lot).',
+    )
+    item = models.ForeignKey(
+        Item,
+        on_delete=models.PROTECT,
+        related_name='production_batch_inputs',
+        null=True,
+        blank=True,
+        help_text='Set for plant-utility inputs; otherwise taken from lot.item.',
+    )
     quantity_used = models.FloatField()
-    
+
     class Meta:
         ordering = ['id']
+
+    def resolved_item(self):
+        if self.item_id:
+            return self.item
+        if self.lot_id:
+            return self.lot.item
+        return None
 
 
 class ProductionBatchOutput(models.Model):
@@ -1295,6 +1478,11 @@ class SalesOrder(models.Model):
     # Business order date (editable; staff God mode / historical entry)
     order_date = models.DateTimeField(default=timezone.now)
     expected_ship_date = models.DateTimeField(blank=True, null=True, help_text='Requested ship date')
+    customer_required_date = models.DateField(
+        blank=True,
+        null=True,
+        help_text='Date the customer needs the goods (customer required / CRD).',
+    )
     actual_ship_date = models.DateTimeField(blank=True, null=True, help_text='Actual ship date')
     carrier = models.CharField(max_length=255, blank=True, null=True, help_text='Shipping carrier (e.g. FedEx, UPS); shown on invoice under SHIPPED VIA')
     tracking_number = models.CharField(max_length=255, blank=True, null=True, help_text='Shipping tracking number')
@@ -2192,12 +2380,29 @@ class ShipIdempotency(models.Model):
 
 class Shipment(models.Model):
     """Track individual shipments for sales orders (supports multiple shipments per order)."""
+    FULFILLMENT_STATUS_CHOICES = [
+        ('ready', 'Ready for pickup'),
+        ('picked_up', 'Picked up'),
+    ]
+
     sales_order = models.ForeignKey(SalesOrder, on_delete=models.CASCADE, related_name='shipments')
     expected_ship_date = models.DateTimeField(
         blank=True, null=True,
         help_text='Agreed/due date for this release. Used for on-time KPI (compare to ship_date).'
     )
-    ship_date = models.DateTimeField(help_text='Date the shipment was shipped')
+    ship_date = models.DateTimeField(help_text='Date the shipment was staged / ready (or historical ship date)')
+    picked_up_at = models.DateTimeField(
+        blank=True,
+        null=True,
+        help_text='When the carrier actually picked up; inventory depletes and draft invoice is created then.',
+    )
+    fulfillment_status = models.CharField(
+        max_length=20,
+        choices=FULFILLMENT_STATUS_CHOICES,
+        default='ready',
+        db_index=True,
+        help_text='ready = staged with packing docs; picked_up = left dock (invoice created).',
+    )
     tracking_number = models.CharField(max_length=255, help_text='Tracking number for this shipment')
     notes = models.TextField(blank=True, null=True)
     dimensions = models.TextField(blank=True, null=True, help_text='Human-readable summary; per-piece values in piece_dimensions')
@@ -2512,6 +2717,17 @@ class AccountsPayable(models.Model):
         max_length=20, blank=True, null=True,
         choices=[('air', 'Air'), ('sea', 'Sea')],
         help_text='Method of shipment (air vs sea)'
+    )
+    invoice_pdf = models.FileField(
+        upload_to='ap_invoices/',
+        blank=True,
+        null=True,
+        help_text='Uploaded vendor invoice PDF for this payable',
+    )
+    invoice_pdf_uploaded_at = models.DateTimeField(
+        blank=True,
+        null=True,
+        help_text='When the vendor invoice PDF was last uploaded',
     )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

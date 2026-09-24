@@ -83,6 +83,7 @@ def _inventory_return_url(request: HttpRequest) -> str:
     sku = request.GET.get("sku") or request.POST.get("sku") or ""
     vendor = request.GET.get("vendor") if "vendor" in request.GET else request.POST.get("vendor")
     deeper = request.GET.get("deeper") or request.POST.get("deeper") or ""
+    remainder = request.GET.get("remainder") or request.POST.get("remainder") or ""
     params = {"tab": tab, "uom": uom}
     if sku:
         params["sku"] = sku
@@ -92,7 +93,19 @@ def _inventory_return_url(request: HttpRequest) -> str:
         params["vendor"] = ""
     if deeper:
         params["deeper"] = deeper
+    if remainder:
+        params["remainder"] = remainder
     return reverse("slurp_ui:inventory") + "?" + urlencode(params)
+
+
+def _lot_date_iso(dt) -> str:
+    if not dt:
+        return ""
+    if timezone.is_aware(dt):
+        dt = timezone.localtime(dt)
+    if hasattr(dt, "date"):
+        return dt.date().isoformat()
+    return str(dt)[:10]
 
 
 def _inventory_ctx(**extra):
@@ -184,7 +197,10 @@ def _item_from_post(post, *, item=None):
         "hts_code": (post.get("hts_code") or "").strip() or None,
         "country_of_origin": (post.get("country_of_origin") or "").strip() or None,
         "on_order": float(getattr(item, "on_order", 0) or 0),
+        "plant_utility": bool(post.get("plant_utility")),
     }
+    if data["plant_utility"]:
+        data["approved_for_formulas"] = True
     parent_id = post.get("sku_parent_item")
     if parent_id:
         try:
@@ -252,8 +268,8 @@ def _maybe_create_default_pack_size(item, post):
 
 
 def _display_uom(request: HttpRequest) -> str:
-    u = (request.GET.get("uom") or "lbs").lower()
-    return u if u in ("lbs", "kg", "native") else "lbs"
+    u = (request.GET.get("uom") or "native").lower()
+    return u if u in ("lbs", "kg", "native") else "native"
 
 
 def _inventory_tab(request: HttpRequest) -> str:
@@ -271,15 +287,53 @@ def inventory_table(request: HttpRequest) -> HttpResponse:
     expand_sku = (request.GET.get("sku") or "").strip()
     expand_vendor = request.GET.get("vendor")  # may be '' meaning Unknown
     deeper = str(request.GET.get("deeper") or "").lower() in ("1", "true", "yes")
+    remainder_only = str(request.GET.get("remainder") or "").lower() in (
+        "1",
+        "true",
+        "yes",
+    )
 
-    from erp_core.pack_display import format_pack_label
+    from erp_core.pack_display import (
+        format_pack_label,
+        lot_pack_breakdown,
+        pack_quantity_breakdown,
+        resolve_pack_size,
+    )
 
     raw_rows = fetch_inventory_details(request.user, tab)
+
+    # SKUs that have at least one on-hand lot with a pack remainder (for filter).
+    remainder_skus: set[str] = set()
+    if remainder_only:
+        type_map = {
+            "finished_good": ["finished_good", "distributed_item"],
+            "raw_material": ["raw_material"],
+            "indirect_material": ["indirect_material"],
+        }
+        item_types = type_map.get(tab, ["finished_good", "distributed_item"])
+        cand = (
+            Lot.objects.filter(
+                quantity_remaining__gt=0,
+                item__item_type__in=item_types,
+            )
+            .exclude(status="rejected")
+            .select_related("item", "pack_size")
+            .prefetch_related("item__pack_sizes")
+        )
+        for lot in cand:
+            brk = lot_pack_breakdown(lot)
+            if brk and brk.get("has_remainder"):
+                sku = (lot.item.sku or "").strip()
+                if sku:
+                    remainder_skus.add(sku)
+
     rows = []
     for master in raw_rows:
+        sku = master.get("item_sku") or ""
+        if remainder_only and sku not in remainder_skus:
+            continue
         uom = master.get("pack_size_unit") or "lbs"
         qty_uom = qty_label_uom(uom, display_uom)
-        sku = master.get("item_sku") or ""
         is_expanded = bool(expand_sku) and sku == expand_sku
         vendors_out = []
         vendor_names = []
@@ -392,6 +446,23 @@ def inventory_table(request: HttpRequest) -> HttpResponse:
         )
         hold_case_by_lot: dict[int, int] = {}
         lot_ids = [lot.get("id") for lot in raw_lots if lot.get("id")]
+        lot_objs = {
+            lo.id: lo
+            for lo in Lot.objects.filter(pk__in=lot_ids)
+            .select_related("item", "pack_size")
+            .prefetch_related("item__pack_sizes")
+        }
+        from erp_core.models import ItemCoaTestLine, LotCoaCertificate
+
+        lots_with_cert = set(
+            LotCoaCertificate.objects.filter(lot_id__in=lot_ids).values_list("lot_id", flat=True)
+        ) if lot_ids else set()
+        item_ids = {lo.item_id for lo in lot_objs.values() if lo.item_id}
+        items_with_coa_profile = set(
+            ItemCoaTestLine.objects.filter(item_id__in=item_ids)
+            .values_list("item_id", flat=True)
+            .distinct()
+        ) if item_ids else set()
         if lot_ids:
             for case in (
                 LotHoldCase.objects.filter(lot_id__in=lot_ids, status="open")
@@ -410,6 +481,51 @@ def inventory_table(request: HttpRequest) -> HttpResponse:
             if avail is None:
                 avail = lot.get("quantity_remaining")
             lot_id = lot.get("id")
+            rem_native = float(lot.get("quantity_remaining") or 0)
+            qty_display = format_qty_for_display(rem_native, lu, display_uom)
+            display_label = qty_label_uom(lu, display_uom)
+            pack_breakout = ""
+            has_remainder = False
+            lot_obj = lot_objs.get(lot_id)
+            if lot_obj is not None:
+                pq, pu = resolve_pack_size(item=lot_obj.item, lot=lot_obj)
+                brk_uom = display_label if display_uom in ("lbs", "kg") else (lu or "lbs")
+                brk = pack_quantity_breakdown(float(qty_display), brk_uom, pq, pu)
+                if brk:
+                    pack_breakout = brk["display"]
+                    has_remainder = bool(brk.get("has_remainder"))
+            if remainder_only and not has_remainder:
+                continue
+            item_type = ""
+            item_pk = None
+            mfg_date = ""
+            exp_date = ""
+            if lot_obj is not None and lot_obj.item_id:
+                item_pk = lot_obj.item_id
+                item_type = getattr(lot_obj.item, "item_type", "") or ""
+                if lot_obj.manufacture_date:
+                    md = lot_obj.manufacture_date
+                    if timezone.is_aware(md):
+                        md = timezone.localtime(md)
+                    mfg_date = md.date().isoformat() if hasattr(md, "date") else str(md)[:10]
+                if lot_obj.expiration_date:
+                    ed = lot_obj.expiration_date
+                    if timezone.is_aware(ed):
+                        ed = timezone.localtime(ed)
+                    exp_date = ed.date().isoformat() if hasattr(ed, "date") else str(ed)[:10]
+            show_supplier_coa = False
+            if (
+                lot_id
+                and item_type in ("distributed_item", "finished_good")
+            ):
+                if lot_id not in lots_with_cert:
+                    show_supplier_coa = True
+                elif item_pk and item_pk in items_with_coa_profile:
+                    from erp_core.coa_supplier import missing_supplier_coa_profile_lines
+
+                    show_supplier_coa = bool(
+                        missing_supplier_coa_profile_lines(lot_objs.get(lot_id))
+                    )
             lot_rows.append(
                 {
                     "id": lot_id,
@@ -418,9 +534,9 @@ def inventory_table(request: HttpRequest) -> HttpResponse:
                     "po_number": lot.get("po_number") or "—",
                     "tracking": lot.get("po_tracking_number") or "—",
                     "received_date": lot.get("received_date"),
-                    "manufacture_date": lot.get("manufacture_date"),
-                    "expiration_date": lot.get("expiration_date"),
-                    "quantity": format_qty_for_display(lot.get("quantity_remaining"), lu, display_uom),
+                    "manufacture_date": mfg_date,
+                    "expiration_date": exp_date,
+                    "quantity": qty_display,
                     "available": format_qty_for_display(avail, lu, display_uom),
                     "on_hold": format_qty_for_display(
                         lot.get("quantity_on_hold") or 0, lu, display_uom
@@ -432,11 +548,15 @@ def inventory_table(request: HttpRequest) -> HttpResponse:
                     "committed_prod": format_qty_for_display(
                         lot.get("committed_to_production_qty") or 0, lu, display_uom
                     ),
-                    "uom": qty_label_uom(lu, display_uom),
+                    "uom": display_label,
+                    "pack_breakout": pack_breakout,
+                    "has_remainder": has_remainder,
                     "avail_native": float(avail or 0),
                     "hold_native": float(lot.get("quantity_on_hold") or 0),
-                    "remaining_native": float(lot.get("quantity_remaining") or 0),
+                    "remaining_native": rem_native,
                     "open_hold_case_id": hold_case_by_lot.get(lot_id),
+                    "show_supplier_coa": show_supplier_coa,
+                    "has_coa_profile": bool(item_pk and item_pk in items_with_coa_profile),
                 }
             )
 
@@ -453,6 +573,7 @@ def inventory_table(request: HttpRequest) -> HttpResponse:
             expand_sku=expand_sku,
             expand_vendor=expand_vendor,
             deeper=deeper,
+            remainder_only=remainder_only,
             show_on_order=show_on_order,
             port_status="full",
         ),
@@ -1169,42 +1290,100 @@ def inventory_check_in(request: HttpRequest) -> HttpResponse:
             .first()
         )
 
+    # Prefill after failed submit so users don't retype everything.
+    form_shared: dict = {}
+    form_lines: list[dict] = []
+
     if request.method == "POST":
+        form_shared = {
+            "received_date": request.POST.get("received_date") or "",
+            "short_reason": request.POST.get("short_reason") or "",
+            "carrier": request.POST.get("carrier") or "",
+            "coa": request.POST.get("coa") == "on",
+            "prod_free_pests": request.POST.get("prod_free_pests") == "on",
+            "carrier_free_pests": request.POST.get("carrier_free_pests") == "on",
+            "shipment_accepted": request.POST.get("shipment_accepted") == "on",
+            "initials": request.POST.get("initials") or "",
+            "notes": request.POST.get("notes") or "",
+            "close_short": request.POST.get("close_short") == "on",
+            "ack_missing_coa_profile": request.POST.get("ack_missing_coa_profile") == "1"
+            or request.POST.get("ack_missing_coa_profile") == "on",
+        }
+        form_lines = _parse_check_in_lines(request.POST)
+        if not form_lines and request.POST.get("item_id"):
+            form_lines = [
+                {
+                    "item_id": request.POST.get("item_id"),
+                    "quantity": request.POST.get("quantity"),
+                    "entry_uom": request.POST.get("entry_uom") or "",
+                    "status": request.POST.get("lot_status") or "accepted",
+                    "vendor_lot_number": request.POST.get("vendor_lot_number") or "",
+                    "expiration_date": request.POST.get("expiration_date") or None,
+                    "manufacture_date": request.POST.get("manufacture_date") or None,
+                    "freight_actual": request.POST.get("freight_actual") or None,
+                    "lot_number": request.POST.get("lot_number") or "",
+                    "notes": request.POST.get("line_notes") or "",
+                }
+            ]
         try:
             po = get_object_or_404(PurchaseOrder, pk=request.POST.get("po_id"), status="issued")
+            # Supplier COA results keyed by item_id from FPS lines
+            coa_results_by_item: dict[int, list] = {}
+            for key, val in request.POST.items():
+                # coa_{item_id}_line_{line_id}
+                if not key.startswith("coa_") or "_line_" not in key:
+                    continue
+                try:
+                    rest = key[len("coa_") :]
+                    item_part, line_part = rest.split("_line_", 1)
+                    item_id = int(item_part)
+                    line_id = int(line_part)
+                except (ValueError, TypeError):
+                    continue
+                text = (val or "").strip()
+                coa_results_by_item.setdefault(item_id, []).append(
+                    {"item_line_id": line_id, "result_text": text}
+                )
             shared = {
                 "po_number": po.po_number,
-                "received_date": request.POST.get("received_date") or "",
-                "short_reason": request.POST.get("short_reason") or "",
-                "carrier": request.POST.get("carrier") or (po.carrier or ""),
-                "coa": request.POST.get("coa") == "on",
-                "prod_free_pests": request.POST.get("prod_free_pests") == "on",
-                "carrier_free_pests": request.POST.get("carrier_free_pests") == "on",
-                "shipment_accepted": request.POST.get("shipment_accepted") == "on",
-                "initials": request.POST.get("initials") or "",
-                "notes": request.POST.get("notes") or "",
+                "received_date": form_shared["received_date"],
+                "short_reason": form_shared["short_reason"],
+                "carrier": form_shared["carrier"] or (po.carrier or ""),
+                "coa": form_shared["coa"],
+                "prod_free_pests": form_shared["prod_free_pests"],
+                "carrier_free_pests": form_shared["carrier_free_pests"],
+                "shipment_accepted": form_shared["shipment_accepted"],
+                "initials": form_shared["initials"],
+                "notes": form_shared["notes"],
+                "coa_results_by_item": coa_results_by_item,
             }
-            lines = _parse_check_in_lines(request.POST)
-            # Backward compatible: single-line form fields if no indexed lines posted.
-            if not lines and request.POST.get("item_id"):
-                lines = [
-                    {
-                        "item_id": request.POST.get("item_id"),
-                        "quantity": request.POST.get("quantity"),
-                        "entry_uom": request.POST.get("entry_uom") or "",
-                        "status": request.POST.get("lot_status") or "accepted",
-                        "vendor_lot_number": request.POST.get("vendor_lot_number") or "",
-                        "expiration_date": request.POST.get("expiration_date") or None,
-                        "manufacture_date": request.POST.get("manufacture_date") or None,
-                        "freight_actual": request.POST.get("freight_actual") or None,
-                        "lot_number": request.POST.get("lot_number") or "",
-                        "notes": request.POST.get("line_notes") or "",
-                    }
-                ]
-            close_short = request.POST.get("close_short") == "on"
+            lines = form_lines
+            close_short = form_shared["close_short"]
             if close_short and not (shared.get("short_reason") or "").strip():
                 raise BuyFlowError(
                     "Short reason is required when closing remaining open qty (accept short)."
+                )
+            # Distributed / FG lines without FPS COA profile: require ack
+            missing_ack_needed = False
+            for line in lines:
+                try:
+                    iid = int(line.get("item_id"))
+                except (TypeError, ValueError):
+                    continue
+                from erp_core.models import Item
+
+                it = Item.objects.filter(pk=iid).only("id", "sku", "item_type").first()
+                if not it or it.item_type not in ("distributed_item", "finished_good"):
+                    continue
+                from erp_core.coa_supplier import item_has_supplier_coa_profile
+
+                if not item_has_supplier_coa_profile(it):
+                    missing_ack_needed = True
+                    break
+            if missing_ack_needed and not form_shared.get("ack_missing_coa_profile"):
+                raise BuyFlowError(
+                    "One or more products have no supplier typical COA on the FPS. "
+                    "Set up COA / Micro first, or check the acknowledgment to continue without it."
                 )
             lots = check_in_lots_batch(request.user, shared, lines)
             if close_short:
@@ -1244,13 +1423,33 @@ def inventory_check_in(request: HttpRequest) -> HttpResponse:
             return redirect(f"{request.path}?po={po.id}")
         except BuyFlowError as e:
             messages.error(request, e.message)
-            selected_po = PurchaseOrder.objects.filter(pk=request.POST.get("po_id")).first()
+            selected_po = (
+                PurchaseOrder.objects.filter(pk=request.POST.get("po_id"), status="issued", drop_ship=False)
+                .prefetch_related(
+                    Prefetch("items", queryset=PurchaseOrderItem.objects.select_related("item"))
+                )
+                .first()
+            ) or PurchaseOrder.objects.filter(pk=request.POST.get("po_id")).prefetch_related(
+                Prefetch("items", queryset=PurchaseOrderItem.objects.select_related("item"))
+            ).first()
         except Exception as e:
             messages.error(request, str(e))
+            selected_po = (
+                PurchaseOrder.objects.filter(pk=request.POST.get("po_id"))
+                .prefetch_related(
+                    Prefetch("items", queryset=PurchaseOrderItem.objects.select_related("item"))
+                )
+                .first()
+            )
 
     today = timezone.localdate().isoformat()
     check_in_lines = []
+    supplier_coa_profiles = []
+    missing_coa_profile_skus = []
     if selected_po:
+        from erp_core.coa_supplier import coa_lines_for_item
+
+        seen_items = set()
         for li in selected_po.items.all():
             if not li.item_id:
                 continue
@@ -1272,6 +1471,43 @@ def inventory_check_in(request: HttpRequest) -> HttpResponse:
                     "fully_received": remaining <= 0.01,
                 }
             )
+            if li.item_id in seen_items:
+                continue
+            seen_items.add(li.item_id)
+            lines = coa_lines_for_item(li.item_id)
+            item_type = getattr(li.item, "item_type", "") or ""
+            if not lines and item_type in ("distributed_item", "finished_good"):
+                missing_coa_profile_skus.append(
+                    {"item_id": li.item_id, "sku": li.item.sku}
+                )
+                continue
+            if not lines:
+                continue
+            profile_lines = []
+            for ln in lines:
+                posted = (request.POST.get(f"coa_{li.item_id}_line_{ln.id}") or "").strip()
+                profile_lines.append(
+                    {
+                        "id": ln.id,
+                        "test_name": ln.test_name,
+                        "specification_text": ln.specification_text,
+                        "typical_result": ln.typical_result or "",
+                        "posted_result": posted or (ln.typical_result or ""),
+                    }
+                )
+            supplier_coa_profiles.append(
+                {
+                    "item_id": li.item_id,
+                    "sku": li.item.sku,
+                    "name": li.item.name or "",
+                    "lines": profile_lines,
+                }
+            )
+
+    if not form_shared.get("received_date"):
+        form_shared.setdefault("received_date", today)
+    if selected_po and not form_shared.get("carrier"):
+        form_shared.setdefault("carrier", selected_po.carrier or "")
 
     return render(
         request,
@@ -1281,6 +1517,10 @@ def inventory_check_in(request: HttpRequest) -> HttpResponse:
             issued_pos=issued_pos,
             selected_po=selected_po,
             check_in_lines=check_in_lines,
+            supplier_coa_profiles=supplier_coa_profiles,
+            missing_coa_profile_skus=missing_coa_profile_skus,
+            form_shared=form_shared,
+            form_lines=form_lines,
             today=today,
             god_mode=bool(request.session.get("god_mode")) and request.user.is_staff,
             port_status="full",
@@ -2234,6 +2474,278 @@ def inventory_lot_hold_log(request: HttpRequest, pk: int) -> HttpResponse:
             initial_note="Hold log opened from inventory.",
         )
     return redirect("slurp_ui:inventory_hold_case", pk=case.pk)
+
+
+@login_required
+@require_http_methods(["GET", "POST"])
+def inventory_lot_detail(request: HttpRequest, pk: int) -> HttpResponse:
+    """Lot panel: identity, qty, dates (editable), COA, and common actions."""
+    from datetime import datetime
+
+    from erp_core.models import LotAttributeChangeLog, LotCoaCertificate, LotHoldCase
+    from erp_core.pack_display import lot_pack_breakdown
+    from erp_core.coa_supplier import (
+        item_has_supplier_coa_profile,
+        missing_supplier_coa_profile_lines,
+    )
+
+    lot = get_object_or_404(Lot.objects.select_related("item", "pack_size"), pk=pk)
+    next_url = _inventory_return_url(request)
+
+    def _parse_date(raw: str):
+        raw = (raw or "").strip()
+        if not raw:
+            return None
+        try:
+            d = datetime.strptime(raw, "%Y-%m-%d").date()
+        except ValueError:
+            raise ValueError(f"Invalid date: {raw}")
+        return timezone.make_aware(datetime.combine(d, datetime.min.time()))
+
+    def _as_date(dt):
+        if dt is None:
+            return None
+        if timezone.is_aware(dt):
+            return timezone.localtime(dt).date()
+        if hasattr(dt, "date"):
+            return dt.date()
+        return dt
+
+    if request.method == "POST":
+        try:
+            new_mfg = _parse_date(request.POST.get("manufacture_date") or "")
+            new_exp = _parse_date(request.POST.get("expiration_date") or "")
+        except ValueError as e:
+            messages.error(request, str(e))
+            return redirect("slurp_ui:inventory_lot_detail", pk=pk)
+
+        old_mfg = lot.manufacture_date
+        old_exp = lot.expiration_date
+        changed = []
+        update_fields = []
+        reason = (request.POST.get("reason") or "Lot detail").strip()[:500]
+
+        if _as_date(old_mfg) != _as_date(new_mfg):
+            lot.manufacture_date = new_mfg
+            update_fields.append("manufacture_date")
+            changed.append("mfg")
+            LotAttributeChangeLog.objects.create(
+                lot=lot,
+                field_name="manufacture_date",
+                old_value=(_as_date(old_mfg).isoformat() if _as_date(old_mfg) else ""),
+                new_value=(_as_date(new_mfg).isoformat() if _as_date(new_mfg) else ""),
+                reason=reason,
+                changed_by=getattr(request.user, "username", None) or "",
+            )
+        if _as_date(old_exp) != _as_date(new_exp):
+            lot.expiration_date = new_exp
+            update_fields.append("expiration_date")
+            changed.append("exp")
+            LotAttributeChangeLog.objects.create(
+                lot=lot,
+                field_name="expiration_date",
+                old_value=(_as_date(old_exp).isoformat() if _as_date(old_exp) else ""),
+                new_value=(_as_date(new_exp).isoformat() if _as_date(new_exp) else ""),
+                reason=reason,
+                changed_by=getattr(request.user, "username", None) or "",
+            )
+            try:
+                from erp_core.coa_pdf_html import refresh_all_coa_pdfs_for_lot
+
+                refresh_all_coa_pdfs_for_lot(lot)
+            except Exception:
+                pass
+
+        if update_fields:
+            lot.save(update_fields=update_fields)
+            messages.success(
+                request,
+                f"Updated {' / '.join(changed)} date(s) on lot {lot.lot_number}.",
+            )
+        else:
+            messages.info(request, f"No date changes for lot {lot.lot_number}.")
+        # Stay on lot panel so user can keep working
+        q = request.GET.urlencode() or urlencode(
+            {k: v for k, v in request.POST.items() if k in ("tab", "uom", "sku", "vendor", "deeper", "remainder")}
+        )
+        dest = reverse("slurp_ui:inventory_lot_detail", args=[pk])
+        return redirect(f"{dest}?{q}" if q else dest)
+
+    rem = float(lot.quantity_remaining or 0)
+    hold = float(getattr(lot, "quantity_on_hold", 0) or 0)
+    avail = max(0.0, rem - hold)
+    pack_brk = lot_pack_breakdown(lot) or {}
+    cert = LotCoaCertificate.objects.filter(lot=lot).first()
+    open_case = (
+        LotHoldCase.objects.filter(lot=lot, status="open").order_by("-opened_at").first()
+    )
+    has_coa_profile = item_has_supplier_coa_profile(lot.item) if lot.item_id else False
+    missing_coa_lines = missing_supplier_coa_profile_lines(lot) if lot.item_id else []
+    show_supplier_coa = bool(
+        lot.item_id
+        and (getattr(lot.item, "item_type", "") or "") in ("distributed_item", "finished_good")
+        and (not cert or missing_coa_lines)
+    )
+    # Commits: soft allocations still pointing at this lot
+    from erp_core.models import SalesOrderLot, ProductionBatchInput
+
+    committed_sales = (
+        SalesOrderLot.objects.filter(lot=lot, quantity_allocated__gt=0).aggregate(
+            t=Sum("quantity_allocated")
+        )["t"]
+        or 0
+    )
+    committed_prod = (
+        ProductionBatchInput.objects.filter(
+            lot=lot, batch__status__in=("draft", "scheduled", "in_progress")
+        ).aggregate(t=Sum("quantity_used"))["t"]
+        or 0
+    )
+
+    po_tracking = ""
+    if (lot.po_number or "").strip():
+        from erp_core.models import PurchaseOrder
+
+        po = (
+            PurchaseOrder.objects.filter(po_number=lot.po_number)
+            .only("tracking_number")
+            .first()
+        )
+        if po and po.tracking_number:
+            po_tracking = po.tracking_number
+
+    return render(
+        request,
+        "slurp_ui/inventory/lot_detail.html",
+        _inventory_ctx(
+            active_tab="inventory",
+            lot=lot,
+            next_url=next_url,
+            mfg_date=_lot_date_iso(lot.manufacture_date),
+            exp_date=_lot_date_iso(lot.expiration_date),
+            received_date=_lot_date_iso(lot.received_date),
+            po_tracking=po_tracking or "—",
+            avail=avail,
+            hold=hold,
+            rem=rem,
+            pack_breakout=pack_brk.get("display") or "",
+            has_remainder=bool(pack_brk.get("has_remainder")),
+            cert=cert,
+            open_hold_case=open_case,
+            has_coa_profile=has_coa_profile,
+            show_supplier_coa=show_supplier_coa,
+            missing_coa_line_count=len(missing_coa_lines),
+            committed_sales=float(committed_sales),
+            committed_prod=float(committed_prod),
+            dates_missing=not (lot.manufacture_date and lot.expiration_date),
+            port_status="full",
+        ),
+    )
+
+
+@login_required
+@require_POST
+def inventory_lot_update_dates(request: HttpRequest, pk: int) -> HttpResponse:
+    """Compat: POST dates → lot detail handler."""
+    return inventory_lot_detail(request, pk)
+
+
+@login_required
+@require_http_methods(["GET", "POST"])
+def inventory_lot_supplier_coa(request: HttpRequest, pk: int) -> HttpResponse:
+    """Catch-up: enter supplier COA results on an already-received lot (or complete missing lines)."""
+    from erp_core.coa_allocation import sync_customer_coas_for_lot
+    from erp_core.coa_supplier import (
+        SupplierCoaError,
+        coa_lines_for_item,
+        complete_supplier_coa_for_lot,
+        issue_supplier_coa_for_lot,
+        missing_supplier_coa_profile_lines,
+    )
+    from erp_core.models import LotCoaCertificate, LotCoaLineResult
+
+    lot = get_object_or_404(Lot.objects.select_related("item"), pk=pk)
+    next_url = _inventory_return_url(request)
+    existing = LotCoaCertificate.objects.filter(lot=lot).first()
+    raw_lines = coa_lines_for_item(lot.item_id) if lot.item_id else []
+    missing_lines = missing_supplier_coa_profile_lines(lot) if lot.item_id else []
+    can_edit = (not existing) or bool(missing_lines)
+
+    if request.method == "POST" and can_edit:
+        if not raw_lines:
+            messages.error(
+                request,
+                f"{lot.item.sku} has no FPS COA profile yet. Add COA / micro lines first.",
+            )
+            return redirect("slurp_ui:quality_item_coa_test_lines", pk=lot.item_id)
+        target_lines = missing_lines if existing else raw_lines
+        line_results = []
+        for ln in target_lines:
+            line_results.append(
+                {
+                    "item_line_id": ln.id,
+                    "result_text": (request.POST.get(f"line_{ln.id}") or "").strip(),
+                }
+            )
+        try:
+            if existing:
+                complete_supplier_coa_for_lot(
+                    lot, request.user, line_results, require_all_missing=True
+                )
+                messages.success(
+                    request,
+                    f"Added {len(target_lines)} COA line(s) to lot {lot.lot_number}.",
+                )
+            else:
+                issue_supplier_coa_for_lot(
+                    lot, request.user, line_results, require_all_lines=True
+                )
+                messages.success(
+                    request,
+                    f"Supplier COA saved for lot {lot.lot_number}. Customer COAs will refresh where allocated.",
+                )
+            sync_customer_coas_for_lot(lot.id)
+            return redirect(next_url)
+        except SupplierCoaError as e:
+            messages.error(request, e.message)
+        except Exception as e:
+            messages.error(request, str(e))
+
+    existing_by_line = {}
+    if existing:
+        for lr in LotCoaLineResult.objects.filter(certificate=existing):
+            if lr.item_line_id:
+                existing_by_line[lr.item_line_id] = lr.result_text
+
+    form_lines = missing_lines if existing else raw_lines
+    lines = []
+    for ln in form_lines:
+        posted = (request.POST.get(f"line_{ln.id}") or "").strip()
+        lines.append(
+            {
+                "id": ln.id,
+                "test_name": ln.test_name,
+                "specification_text": ln.specification_text,
+                "typical_result": ln.typical_result or "",
+                "posted_result": posted or (ln.typical_result or ""),
+            }
+        )
+
+    return render(
+        request,
+        "slurp_ui/inventory/lot_supplier_coa.html",
+        _inventory_ctx(
+            active_tab="inventory",
+            lot=lot,
+            lines=lines,
+            existing_cert=existing,
+            existing_results=existing_by_line,
+            incomplete=bool(existing and missing_lines),
+            can_edit=can_edit,
+            next_url=next_url,
+            port_status="full",
+        ),
+    )
 
 
 @login_required

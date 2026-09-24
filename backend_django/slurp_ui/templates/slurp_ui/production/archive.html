@@ -1,21 +1,23 @@
 {% extends "slurp_ui/base_module.html" %}
 {% load static %}
-{% block title %}Batch archive — SLURP{% endblock %}
-{% block module_title %}Archive{% endblock %}
+{% block title %}{{ archive_root_label }} — SLURP{% endblock %}
+{% block module_title %}{{ archive_root_label }}{% endblock %}
 {% block extra_css %}
 <link rel="stylesheet" href="{% static 'slurp_ui/css/ProductionArchive.css' %}?v=20260922a" />
 {% endblock %}
 {% block header_actions %}
-  <a href="{% url 'slurp_ui:production' %}" class="btn btn-secondary">Batch tickets</a>
+  <a href="{% url dash_url_name %}" class="btn btn-secondary">
+    {% if batch_type == 'repack' %}Repacks{% else %}Batch tickets{% endif %}
+  </a>
 {% endblock %}
 {% block main %}
 <div class="prod-arch">
   <div class="prod-arch-toolbar">
     <div class="prod-arch-browse" aria-label="Browse mode">
       <a class="{% if browse == 'date' and not q %}is-active{% endif %}"
-         href="?browse=date{% if batch_type != 'all' %}&amp;batch_type={{ batch_type }}{% endif %}">By date</a>
+         href="?browse=date{% if not locked_batch_type and batch_type != 'all' %}&amp;batch_type={{ batch_type }}{% endif %}">By date</a>
       <a class="{% if browse == 'product' and not q %}is-active{% endif %}"
-         href="?browse=product{% if batch_type != 'all' %}&amp;batch_type={{ batch_type }}{% endif %}">By product</a>
+         href="?browse=product{% if not locked_batch_type and batch_type != 'all' %}&amp;batch_type={{ batch_type }}{% endif %}">By product</a>
     </div>
 
     <form method="get" class="prod-arch-search">
@@ -27,6 +29,7 @@
         <label for="q">Search</label>
         <input id="q" name="q" value="{{ q }}" placeholder="Batch #, SKU, name, notes…" />
       </div>
+      {% if not locked_batch_type %}
       <div class="form-row" style="min-width:8.5rem">
         <label for="batch_type">Type</label>
         <select id="batch_type" name="batch_type">
@@ -35,9 +38,10 @@
           <option value="repack" {% if batch_type == 'repack' %}selected{% endif %}>Repack</option>
         </select>
       </div>
+      {% endif %}
       <button type="submit" class="btn btn-primary">Search</button>
-      {% if q or batch_type != 'all' or year or month or product_id %}
-      <a class="btn btn-secondary" href="{% url 'slurp_ui:production_archive' %}?browse={{ browse }}">Clear</a>
+      {% if q or year or month or product_id or batch_type != 'all' and not locked_batch_type %}
+      <a class="btn btn-secondary" href="{% url archive_url_name %}?browse={{ browse }}">Clear</a>
       {% endif %}
     </form>
   </div>
@@ -63,7 +67,7 @@
     {% elif q %}
       {{ result_count }} result{{ result_count|pluralize }} for “{{ q }}”.
     {% else %}
-      {{ result_count }} batch{{ result_count|pluralize }} in this folder.
+      {{ result_count }} {% if batch_type == 'repack' %}repack{{ result_count|pluralize }}{% else %}batch{{ result_count|pluralize }}{% endif %} in this folder.
     {% endif %}
   </p>
 
@@ -89,14 +93,15 @@
         <th>Batch #</th>
         <th>Type</th>
         <th>Finished good</th>
-        <th>Ticket / Actual</th>
+        <th>Ticket / Yield</th>
         <th>Closed</th>
         <th>Archived</th>
         <th>Actions</th>
       </tr>
     </thead>
     <tbody>
-      {% for b in batches %}
+      {% for row in archive_batch_rows %}
+      {% with b=row.batch %}
       <tr>
         <td><a href="{% url 'slurp_ui:production_batch_detail' b.id %}">{{ b.batch_number }}</a></td>
         <td>{{ b.batch_type }}</td>
@@ -105,14 +110,13 @@
           <div style="color:#64748b;font-size:0.82rem">{{ b.finished_good_item.name }}</div>
         </td>
         <td>
-          {{ b.quantity_produced|floatformat:2 }}
-          {% if b.batch_type == 'production' %}lbs{% else %}{{ b.finished_good_item.unit_of_measure|default:"lbs" }}{% endif %}
-          {% if b.quantity_actual != None %}
-          · act {{ b.quantity_actual|floatformat:2 }}
+          {{ row.ticket_display|floatformat:2 }} {{ row.display_uom }}
+          {% if row.yield_display != None %}
+          · yield {{ row.yield_display|floatformat:2 }}
           {% endif %}
         </td>
         <td>{% if b.closed_date %}{{ b.closed_date|date:"Y-m-d" %}{% else %}—{% endif %}</td>
-        <td>{% if b.archived_at %}{{ b.archived_at|date:"Y-m-d" }}{% else %}—{% endif %}</td>
+        <td>{% if b.archived_at %}{{ b.archived_at|date:"Y-m-d" %}{% else %}—{% endif %}</td>
         <td style="white-space:nowrap">
           <a class="btn btn-secondary" style="padding:0.35rem 0.7rem;font-size:0.85rem"
              href="{% url 'slurp_ui:production_batch_detail' b.id %}">Detail</a>
@@ -120,17 +124,18 @@
              href="{% url 'slurp_ui:production_batch_pdf' b.id %}" target="_blank">PDF</a>
           <form method="post" action="{% url 'slurp_ui:production_unarchive_batch' b.id %}" style="display:inline">
             {% csrf_token %}
-            <input type="hidden" name="next" value="{% url 'slurp_ui:production_archive' %}?{% for k,v in restore_params.items %}{{ k }}={{ v|urlencode }}{% if not forloop.last %}&amp;{% endif %}{% endfor %}" />
+            <input type="hidden" name="next" value="{% url archive_url_name %}?{% for k,v in restore_params.items %}{{ k }}={{ v|urlencode }}{% if not forloop.last %}&amp;{% endif %}{% endfor %}" />
             <button type="submit" class="btn btn-primary" style="padding:0.35rem 0.7rem;font-size:0.85rem"
-                    onclick="return confirm('Restore {{ b.batch_number }} to the batch tickets dash?');">Restore</button>
+                    onclick="return confirm('Restore {{ b.batch_number }} to the {% if batch_type == 'repack' %}repacks{% else %}batch tickets{% endif %} dash?');">Restore</button>
           </form>
         </td>
       </tr>
+      {% endwith %}
       {% empty %}
       <tr>
         <td colspan="7">
           {% if q %}
-            No archived batches match that search.
+            No archived {% if batch_type == 'repack' %}repacks{% else %}batches{% endif %} match that search.
           {% else %}
             This folder is empty.
           {% endif %}
@@ -141,7 +146,8 @@
   </table>
   {% elif not folders %}
   <div style="padding:1.5rem;color:#64748b;background:#fff;border:1px dashed #cbd5e1;border-radius:12px">
-    No archived batches yet. Archive a closed ticket from the dash or batch detail.
+    No archived {% if batch_type == 'repack' %}repacks{% else %}batches{% endif %} yet.
+    Archive a closed ticket from the {% if batch_type == 'repack' %}repacks{% else %}batch tickets{% endif %} dash or batch detail.
   </div>
   {% endif %}
 </div>

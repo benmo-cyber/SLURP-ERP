@@ -1,0 +1,69 @@
+{% extends "slurp_ui/base.html" %}
+{% block title %}Supplier COA — {{ lot.lot_number }} — SLURP{% endblock %}
+{% block content %}
+<div class="modal-page" style="max-width:560px;margin:2rem auto">
+  <h2>{% if incomplete %}Complete supplier COA{% else %}Enter supplier COA{% endif %}</h2>
+  <p>Lot <strong>{{ lot.lot_number }}</strong> — {{ lot.item.sku }} · {{ lot.item.name }}</p>
+  <p class="field-hint" style="color:#64748b;font-size:0.88rem;line-height:1.4">
+    {% if incomplete %}
+    This lot’s master COA was issued before the FPS profile had all tests.
+    Enter the missing results below (existing lines stay as-is).
+    {% else %}
+    Enter results from the supplier COA (prefilled from FPS typicals when set).
+    Creates the master certificate so customer COAs and the workqueue button work.
+    {% endif %}
+  </p>
+
+  {% if existing_cert and not can_edit %}
+  <p style="padding:0.75rem;background:#ecfdf5;border-radius:6px;color:#065f46">
+    This lot already has a complete COA ({{ existing_cert.source }}).
+    {% if existing_cert.coa_pdf %}
+    <a href="{% url 'slurp_ui:quality_coa_pdf' existing_cert.id %}" target="_blank">Open PDF</a>
+    {% endif %}
+  </p>
+  <a class="btn btn-secondary" href="{{ next_url }}">Back</a>
+
+  {% elif not lines and not incomplete %}
+  <p style="padding:0.75rem;background:#fffbeb;border-radius:6px;color:#92400e">
+    No supplier typical COA profile on this FPS yet. Add COA / micro lines first, then return here.
+  </p>
+  <div class="form-actions" style="margin-top:1rem;display:flex;gap:0.5rem">
+    <a class="btn btn-primary" href="{% url 'slurp_ui:quality_item_coa_test_lines' lot.item_id %}">Set up FPS COA</a>
+    <a class="btn btn-secondary" href="{{ next_url }}">Cancel</a>
+  </div>
+
+  {% else %}
+  {% if incomplete and existing_cert %}
+  <p style="padding:0.65rem 0.75rem;background:#eff6ff;border-radius:6px;color:#1e40af;font-size:0.88rem;margin-bottom:1rem">
+    Master COA on file
+    {% if existing_cert.coa_pdf %}
+    · <a href="{% url 'slurp_ui:quality_coa_pdf' existing_cert.id %}" target="_blank">Open current PDF</a>
+    {% endif %}
+    — add the missing tests below.
+  </p>
+  {% endif %}
+  <form method="post">
+    {% csrf_token %}
+    {% for key, val in request.GET.items %}
+    <input type="hidden" name="{{ key }}" value="{{ val }}" />
+    {% endfor %}
+    {% for line in lines %}
+    <div class="form-group" style="margin-bottom:0.85rem">
+      <label for="line_{{ line.id }}">{{ line.test_name }} *</label>
+      {% if line.specification_text %}
+      <div style="font-size:0.82rem;color:#64748b;margin:0.15rem 0 0.35rem">{{ line.specification_text }}</div>
+      {% endif %}
+      <input id="line_{{ line.id }}" name="line_{{ line.id }}" required
+             value="{{ line.posted_result }}"
+             placeholder="{% if line.typical_result %}Typical: {{ line.typical_result }}{% else %}Supplier result{% endif %}"
+             style="width:100%;padding:0.45rem 0.6rem;box-sizing:border-box" />
+    </div>
+    {% endfor %}
+    <div class="form-actions" style="display:flex;gap:0.5rem;margin-top:1rem">
+      <button type="submit" class="btn btn-primary">{% if incomplete %}Add missing lines{% else %}Save supplier COA{% endif %}</button>
+      <a class="btn btn-secondary" href="{{ next_url }}">Cancel</a>
+    </div>
+  </form>
+  {% endif %}
+</div>
+{% endblock %}

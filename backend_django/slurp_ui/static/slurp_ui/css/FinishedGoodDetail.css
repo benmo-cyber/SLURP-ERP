@@ -211,13 +211,15 @@
   font-size: 0.95rem;
 }
 
-.fg-recipe-tabs {
+.fg-recipe-tabs,
+.fg-formula-tabs {
   display: flex;
   flex-wrap: wrap;
   gap: 0.4rem;
 }
 
-.fg-recipe-tab {
+.fg-recipe-tab,
+.fg-formula-tab {
   display: inline-flex;
   align-items: center;
   padding: 0.4rem 0.85rem;
@@ -230,12 +232,14 @@
   border: 1px solid transparent;
 }
 
-.fg-recipe-tab:hover {
+.fg-recipe-tab:hover,
+.fg-formula-tab:hover {
   color: var(--fg-ink);
   border-color: rgba(15, 138, 114, 0.25);
 }
 
-.fg-recipe-tab.is-active {
+.fg-recipe-tab.is-active,
+.fg-formula-tab.is-active {
   color: var(--fg-teal-deep);
   background: var(--fg-teal-wash);
   border-color: rgba(15, 138, 114, 0.35);

@@ -48,6 +48,68 @@ def _fmt_qty_uom(qty, uom):
     return f"{s} {uom}".strip() if (uom or "").strip() else s
 
 
+def _lots_maps_from_allocations(shipment):
+    """
+    Lot display from SalesOrderLot allocations (Mark Ready / awaiting pickup).
+    Used when inventory sale logs do not exist yet (pre-pickup).
+    """
+    from collections import defaultdict
+
+    by_item = defaultdict(list)
+    by_sku = defaultdict(list)
+    seen = set()
+
+    ship_items = shipment.items.select_related(
+        "sales_order_item__item"
+    ).prefetch_related("sales_order_item__allocated_lots__lot__item")
+
+    for si in ship_items:
+        so_item = si.sales_order_item
+        if not so_item:
+            continue
+        remaining = float(si.quantity_shipped or 0)
+        if remaining <= 0:
+            continue
+        item = so_item.item
+        sku_key = ((item.sku if item else "") or "").strip()
+        item_uom = ((item.unit_of_measure if item else "") or "").strip()
+        for al in so_item.allocated_lots.all():
+            if remaining <= 1e-9:
+                break
+            take = min(remaining, float(al.quantity_allocated or 0))
+            if take <= 1e-9:
+                continue
+            lot = al.lot
+            if not lot or not lot.id:
+                continue
+            dedupe_key = (lot.id, round(take, 6))
+            if dedupe_key in seen:
+                remaining -= take
+                continue
+            seen.add(dedupe_key)
+            uom = (
+                (getattr(lot.item, "unit_of_measure", None) or "").strip()
+                if lot.item_id
+                else item_uom
+            ) or item_uom
+            qty_part = _fmt_qty_uom(take, uom)
+            lot_part = (lot.lot_number or "").strip() or "—"
+            fragment = f"{lot_part} ({qty_part})"
+            if so_item.item_id:
+                by_item[so_item.item_id].append(fragment)
+            if sku_key:
+                by_sku[sku_key].append(fragment)
+            # Also key by lot's item id when it differs from SO line item
+            if lot.item_id and lot.item_id != so_item.item_id:
+                by_item[lot.item_id].append(fragment)
+            remaining -= take
+
+    return (
+        {k: "; ".join(v) for k, v in by_item.items()},
+        {k: "; ".join(v) for k, v in by_sku.items()},
+    )
+
+
 def _lots_maps_for_shipment(shipment):
     """
     Build two lookup maps for lot display strings (lot # + qty/UoM):
@@ -56,8 +118,9 @@ def _lots_maps_for_shipment(shipment):
     - By **SKU** (stripped) — needed when the SO line points at a different Item row than the
       allocated lot (same SKU, e.g. duplicate item records); SO 1023-style cases.
 
-    Sources: LotTransactionLog (sale) + InventoryTransaction for this shipment id in notes.
-    Dedupes physical moves by (lot_id, qty).
+    Sources (in order):
+    1. LotTransactionLog (sale) + InventoryTransaction for this shipment id in notes (post-pickup)
+    2. SalesOrderLot allocations (Mark Ready / awaiting pickup — no deplete yet)
     """
     from collections import defaultdict
 
@@ -112,14 +175,17 @@ def _lots_maps_for_shipment(shipment):
         uom = (getattr(lot.item, "unit_of_measure", None) or "").strip()
         _append_from_lot(lot, lot.lot_number, qty, uom)
 
-    return (
-        {k: "; ".join(v) for k, v in by_item.items()},
-        {k: "; ".join(v) for k, v in by_sku.items()},
-    )
+    if by_item or by_sku:
+        return (
+            {k: "; ".join(v) for k, v in by_item.items()},
+            {k: "; ".join(v) for k, v in by_sku.items()},
+        )
+
+    return _lots_maps_from_allocations(shipment)
 
 
 def _build_shipment_line_items(shipment):
-    """Line rows for packing list: shipped qty per SO line + lot breakdown from checkout logs."""
+    """Line rows for packing list: shipped qty per SO line + lot breakdown (logs or allocations)."""
     sales_order = shipment.sales_order
     lots_by_item_id, lots_by_sku = _lots_maps_for_shipment(shipment)
     si_items = list(shipment.items.select_related("sales_order_item__item").all())

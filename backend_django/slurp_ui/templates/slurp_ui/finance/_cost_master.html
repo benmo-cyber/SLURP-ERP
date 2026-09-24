@@ -1,0 +1,207 @@
+{% load static %}
+<link rel="stylesheet" href="{% static 'slurp_ui/css/CostMaster.css' %}?v=20260923a" />
+
+<div class="cm-wrap">
+  <p class="cm-lede">
+    Manufactured costs roll up from each FPS formula using ingredient
+    <strong>Cost Master landed</strong> $/lb (price × tariff + freight).
+    Distributed and raw rows are purchase estimates you can edit.
+  </p>
+
+  <div class="cm-toolbar">
+    <form method="get" class="cm-search-form">
+      <input type="hidden" name="tab" value="master" />
+      <input type="hidden" name="segment" value="{{ cm_segment }}" />
+      <input class="hs-search" name="q" value="{{ search }}" placeholder="Search SKU, name, vendor…" />
+      <button class="hs-btn hs-btn-primary" type="submit">Search</button>
+    </form>
+    <div class="cm-segments" role="tablist" aria-label="Cost Master segment">
+      <a class="cm-seg {% if cm_segment == 'manufactured' %}is-active{% endif %}"
+         href="?tab=master&amp;segment=manufactured{% if search %}&amp;q={{ search|urlencode }}{% endif %}">
+        Manufactured{% if cm_counts.manufactured != None %}<span class="n">{{ cm_counts.manufactured }}</span>{% endif %}
+      </a>
+      <a class="cm-seg {% if cm_segment == 'distributed' %}is-active{% endif %}"
+         href="?tab=master&amp;segment=distributed{% if search %}&amp;q={{ search|urlencode }}{% endif %}">
+        Distributed{% if cm_counts.distributed != None %}<span class="n">{{ cm_counts.distributed }}</span>{% endif %}
+      </a>
+      <a class="cm-seg {% if cm_segment == 'raw' %}is-active{% endif %}"
+         href="?tab=master&amp;segment=raw{% if search %}&amp;q={{ search|urlencode }}{% endif %}">
+        Raw{% if cm_counts.raw != None %}<span class="n">{{ cm_counts.raw }}</span>{% endif %}
+      </a>
+      <a class="cm-seg {% if cm_segment == 'all' %}is-active{% endif %}"
+         href="?tab=master&amp;segment=all{% if search %}&amp;q={{ search|urlencode }}{% endif %}">
+        All
+      </a>
+    </div>
+  </div>
+
+  {% if cm_segment == 'manufactured' or cm_segment == 'all' %}
+  <section class="cm-section">
+    <div class="cm-section-head">
+      <h3>Manufactured</h3>
+      <span class="hint">Finished goods — compare formula variants</span>
+    </div>
+    <div class="cm-table-wrap">
+      <table class="cm-table">
+        <thead>
+          <tr>
+            <th>SKU</th>
+            <th>Name</th>
+            <th>Formulas</th>
+            <th>$/lb</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in mfg_rows %}
+          <tr class="cm-parent" id="mfg-{{ row.item.id }}">
+            <td>
+              <a class="cm-sku" href="{% url 'slurp_ui:quality_finished_good_detail' row.item.id %}">{{ row.sku }}</a>
+            </td>
+            <td>{{ row.name }}</td>
+            <td>
+              {% if row.formula_count == 0 %}
+                <span class="cm-muted">None</span>
+              {% elif row.formula_count == 1 %}
+                <span class="cm-chip ok">1</span>
+              {% else %}
+                <span class="cm-chip">{{ row.formula_count }} variants</span>
+              {% endif %}
+              {% if row.has_incomplete %}<span class="cm-chip warn" title="Some ingredients missing cost">Gaps</span>{% endif %}
+            </td>
+            <td class="cm-cost">
+              {% if row.default_cost_per_lb != None %}{{ row.default_cost_per_lb|floatformat:4 }}{% else %}<span class="cm-muted">—</span>{% endif %}
+            </td>
+            <td>
+              {% if row.formula_count %}
+              <button type="button" class="cm-expand-btn" data-cm-toggle="mfg-detail-{{ row.item.id }}"
+                      aria-expanded="{% if row.formula_count > 1 or cm_expand == row.sku %}true{% else %}false{% endif %}">
+                {% if row.formula_count > 1 %}Compare{% else %}Details{% endif %}
+              </button>
+              {% endif %}
+            </td>
+          </tr>
+          <tr class="cm-child-row" id="mfg-detail-{{ row.item.id }}"
+              {% if row.formula_count <= 1 and cm_expand != row.sku %}hidden{% endif %}>
+            <td colspan="5">
+              <div class="cm-compare">
+                {% if not row.formulas %}
+                  <div class="cm-empty">No formulas on this FPS yet.</div>
+                {% else %}
+                <table class="cm-compare-table">
+                  <thead>
+                    <tr>
+                      <th>Formula</th>
+                      <th>$/lb</th>
+                      <th>Δ vs default</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {% for f in row.formulas %}
+                    <tr>
+                      <td>
+                        <strong>{{ f.name }}</strong>
+                        {% if f.is_default %}<span class="cm-chip ok">Default</span>{% endif %}
+                        {% if not f.complete %}<span class="cm-chip warn">Incomplete</span>{% endif %}
+                      </td>
+                      <td class="cm-cost">
+                        {% if f.cost_per_lb != None %}{{ f.cost_per_lb|floatformat:4 }}{% else %}<span class="cm-muted">—</span>{% endif %}
+                      </td>
+                      <td>
+                        {% if f.delta_vs_default == None %}
+                          <span class="cm-muted">—</span>
+                        {% elif f.delta_vs_default == 0 %}
+                          <span class="cm-delta zero">0</span>
+                        {% elif f.delta_vs_default > 0 %}
+                          <span class="cm-delta pos">+{{ f.delta_vs_default|floatformat:4 }}</span>
+                        {% else %}
+                          <span class="cm-delta neg">{{ f.delta_vs_default|floatformat:4 }}</span>
+                        {% endif %}
+                      </td>
+                      <td>
+                        <details class="cm-ing">
+                          <summary>Ingredients</summary>
+                          <table class="cm-ing-table">
+                            <thead>
+                              <tr>
+                                <th>SKU</th>
+                                <th>%</th>
+                                <th>Unit $/lb</th>
+                                <th>Contrib</th>
+                                <th>Src</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {% for line in f.lines %}
+                              <tr>
+                                <td>{{ line.sku }}</td>
+                                <td>{{ line.percentage|floatformat:2 }}</td>
+                                <td>{% if line.unit_cost_per_lb != None %}{{ line.unit_cost_per_lb|floatformat:4 }}{% else %}<span class="cm-muted">—</span>{% endif %}</td>
+                                <td>{% if line.contribution != None %}{{ line.contribution|floatformat:4 }}{% else %}<span class="cm-muted">—</span>{% endif %}</td>
+                                <td class="cm-muted">{% if line.source == 'cost_master' %}CM{% elif line.source == 'item_price' %}Item{% else %}Miss{% endif %}</td>
+                              </tr>
+                              {% empty %}
+                              <tr><td colspan="5" class="cm-muted">No ingredients</td></tr>
+                              {% endfor %}
+                            </tbody>
+                          </table>
+                        </details>
+                      </td>
+                    </tr>
+                    {% endfor %}
+                  </tbody>
+                </table>
+                {% endif %}
+              </div>
+            </td>
+          </tr>
+          {% empty %}
+          <tr><td colspan="5"><div class="cm-empty">No manufactured products{% if search %} match “{{ search }}”{% endif %}.</div></td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+  {% endif %}
+
+  {% if cm_segment == 'distributed' or cm_segment == 'all' %}
+  <section class="cm-section">
+    <div class="cm-section-head">
+      <h3>Distributed</h3>
+      <span class="hint">Purchased resale — edit price, tariff, freight</span>
+    </div>
+    {% include "slurp_ui/finance/_cost_master_purchase_table.html" with purchase_rows=dist_rows empty_label="distributed" %}
+  </section>
+  {% endif %}
+
+  {% if cm_segment == 'raw' or cm_segment == 'all' %}
+  <section class="cm-section">
+    <div class="cm-section-head">
+      <h3>Raw materials</h3>
+      <span class="hint">Ingredient purchase estimates</span>
+    </div>
+    {% include "slurp_ui/finance/_cost_master_purchase_table.html" with purchase_rows=raw_rows empty_label="raw" %}
+  </section>
+  {% endif %}
+</div>
+
+<script>
+(function () {
+  document.querySelectorAll('[data-cm-toggle]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var id = btn.getAttribute('data-cm-toggle');
+      var row = document.getElementById(id);
+      if (!row) return;
+      var open = row.hasAttribute('hidden');
+      if (open) {
+        row.removeAttribute('hidden');
+        btn.setAttribute('aria-expanded', 'true');
+      } else {
+        row.setAttribute('hidden', '');
+        btn.setAttribute('aria-expanded', 'false');
+      }
+    });
+  });
+})();
+</script>

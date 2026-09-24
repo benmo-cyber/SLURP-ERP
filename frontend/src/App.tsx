@@ -18,8 +18,10 @@ import { importPrivateSampleXml } from './api/sampleImport'
 function usePreventWheelOnNumberInputs() {
   useEffect(() => {
     const handler = (e: WheelEvent) => {
-      const target = e.target as HTMLElement
-      if (target.tagName === 'INPUT' && (target as HTMLInputElement).type === 'number') {
+      const t = e.target
+      if (!(t instanceof Element)) return
+      const input = t.closest('input')
+      if (input instanceof HTMLInputElement && input.type === 'number') {
         e.preventDefault()
       }
     }

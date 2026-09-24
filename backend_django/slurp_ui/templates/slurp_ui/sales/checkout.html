@@ -1,8 +1,8 @@
 {% extends "slurp_ui/base_module.html" %}
-{% block title %}Check Out — SLURP{% endblock %}
-{% block module_title %}Check Out{% endblock %}
+{% block title %}Stage / Mark Ready — SLURP{% endblock %}
+{% block module_title %}Stage / Mark Ready{% endblock %}
 {% block header_actions %}
-  <a href="{% url 'slurp_ui:sales_combined_checkout' %}" class="hs-btn">Combined check out</a>
+  <a href="{% url 'slurp_ui:sales_combined_checkout' %}" class="hs-btn">Combined ready</a>
   <a href="{% url 'slurp_ui:sales_orders' %}" class="hs-btn">Workqueue</a>
 {% endblock %}
 {% block main %}
@@ -11,17 +11,19 @@
   <div class="hs-card">
     <div class="hs-card-header">
       <h3>Eligible orders</h3>
-      <span class="hs-muted" style="font-size:0.8rem">Issued / ready with allocation</span>
+      <span class="hs-muted" style="font-size:0.8rem">Issued / allocated — stage with pieces &amp; dims</span>
     </div>
     <div class="hs-card-body">
-      <p class="hs-section-note">Pick an order to ship, or use combined checkout for multiple orders on one load.</p>
+      <p class="hs-section-note">
+        Mark Ready locks packing list dimensions. Inventory and draft invoice wait until
+        <strong>Picked up</strong> on the workqueue.
+      </p>
       <div class="hs-card-body tight" style="border:1px solid var(--hs-border);border-radius:var(--hs-radius);overflow:hidden">
         {% for o in orders %}
         <a class="hs-list-link" href="{% url 'slurp_ui:sales_checkout' %}?so={{ o.id }}">
           <div class="hs-list-title">
             {{ o.so_number }}
             {% if o.drop_ship %}<span class="hs-badge warn">Drop-ship</span>
-            {% elif o.status == 'ready_for_shipment' %}<span class="hs-badge ok">Ready</span>
             {% else %}<span class="hs-badge info">{{ o.status }}</span>{% endif %}
           </div>
           <div class="hs-list-sub">
@@ -30,7 +32,7 @@
           </div>
         </a>
         {% empty %}
-        <div class="hs-empty">No checkout-eligible orders.</div>
+        <div class="hs-empty">No orders ready to stage.</div>
         {% endfor %}
       </div>
     </div>
@@ -54,10 +56,10 @@
       </div>
 
       <div class="hs-card">
-        <div class="hs-card-header"><h3>Lines to ship</h3></div>
+        <div class="hs-card-header"><h3>Lines to stage</h3></div>
         <div class="hs-card-body tight">
           <table class="hs-table">
-            <thead><tr><th>SKU</th><th>Ordered</th><th>Allocated</th><th>Ship qty</th><th>Lots</th></tr></thead>
+            <thead><tr><th>SKU</th><th>Ordered</th><th>Allocated</th><th>Stage qty</th><th>Lots</th></tr></thead>
             <tbody>
               {% for line in selected.items.all %}
               <tr>
@@ -68,11 +70,19 @@
                 <td>{{ line.quantity_ordered|floatformat:2 }} {{ line.item.unit_of_measure }}</td>
                 <td>{{ line.quantity_allocated|floatformat:2 }} {{ line.item.unit_of_measure }}</td>
                 <td>
+                  {% if selected.drop_ship and not line.quantity_allocated %}
+                  <input form="checkout-form" name="ship_qty_{{ line.id }}" type="number" step="any" min="0"
+                         max="{{ line.quantity_ordered }}"
+                         value="{{ line.quantity_ordered }}"
+                         style="width:6.5rem"
+                         title="Qty to stage for this shipment" />
+                  {% else %}
                   <input form="checkout-form" name="ship_qty_{{ line.id }}" type="number" step="any" min="0"
                          max="{{ line.quantity_allocated }}"
                          value="{{ line.quantity_allocated }}"
                          style="width:6.5rem"
-                         title="Qty to ship this checkout" />
+                         title="Qty to stage for this shipment" />
+                  {% endif %}
                   <span class="hs-muted">{{ line.item.unit_of_measure }}</span>
                 </td>
                 <td>
@@ -87,8 +97,8 @@
             </tbody>
           </table>
           <p class="hs-section-note" style="padding:0.75rem 1rem">
-            Enter ship qty per line (defaults to full allocation). Leave 0 to hold the line for a later shipment.
-            Creates a draft invoice for this checkout only.
+            Defaults to full allocation. Leave 0 to hold a line for a later shipment.
+            Does not pull inventory yet.
           </p>
         </div>
       </div>
@@ -96,19 +106,15 @@
 
     <div class="hs-col">
       <div class="hs-card">
-        <div class="hs-card-header"><h3>Shipment details</h3></div>
+        <div class="hs-card-header"><h3>Packing details</h3></div>
         <div class="hs-card-body">
           <form id="checkout-form" method="post">
             {% csrf_token %}
             <input type="hidden" name="so_id" value="{{ selected.id }}" />
             <div class="hs-form-grid">
               <div class="form-row">
-                <label for="ship_date">Ship date *</label>
+                <label for="ship_date">Stage date *</label>
                 <input id="ship_date" name="ship_date" type="date" value="{{ today }}" required />
-              </div>
-              <div class="form-row">
-                <label for="invoice_date">Invoice date</label>
-                <input id="invoice_date" name="invoice_date" type="date" value="{{ today }}" />
               </div>
               <div class="form-row">
                 <label for="carrier">Carrier *</label>
@@ -116,29 +122,48 @@
               </div>
               <div class="form-row">
                 <label for="tracking_number">Tracking #</label>
-                <input id="tracking_number" name="tracking_number" />
+                <input id="tracking_number" name="tracking_number" placeholder="Optional until pickup" />
               </div>
             </div>
             <div class="form-row">
               <label for="pieces">Pieces *</label>
               <input id="pieces" name="pieces" type="number" min="1" max="20" value="1" />
             </div>
+            <div class="hs-form-grid">
+              <div class="form-row">
+                <label for="dim_uom">Dim UoM *</label>
+                <select id="dim_uom" name="dim_uom" required>
+                  <option value="in" selected>in</option>
+                  <option value="cm">cm</option>
+                  <option value="mm">mm</option>
+                  <option value="ft">ft</option>
+                </select>
+              </div>
+              <div class="form-row">
+                <label for="weight_uom">Weight UoM *</label>
+                <select id="weight_uom" name="weight_uom" required>
+                  <option value="lbs" selected>lbs</option>
+                  <option value="kg">kg</option>
+                  <option value="oz">oz</option>
+                </select>
+              </div>
+            </div>
             <div id="piece-rows" class="hs-piece-rows">
               <div class="piece-row hs-form-grid">
                 <div class="form-row" style="margin:0">
                   <label>Piece 1 dimensions *</label>
-                  <input name="dim_0" required placeholder='e.g. 48x40x36"' />
+                  <input name="dim_0" required placeholder="e.g. 48x40x36" />
                 </div>
                 <div class="form-row" style="margin:0">
                   <label>Piece 1 weight *</label>
-                  <input name="weight_0" required placeholder="e.g. 45 lbs" />
+                  <input name="weight_0" required placeholder="e.g. 45" />
                 </div>
               </div>
             </div>
             <div class="hs-form-actions">
               <button type="submit" class="hs-btn hs-btn-primary"
-                      onclick="return confirm('Ship {{ selected.so_number }} and create draft invoice?');">
-                Ship / Check Out
+                      onclick="return confirm('Mark {{ selected.so_number }} Ready for pickup? Packing docs will lock.');">
+                Mark Ready
               </button>
               <a class="hs-btn" href="{% url 'slurp_ui:sales_checkout' %}">Back to list</a>
             </div>
@@ -159,9 +184,9 @@
       for (var i = 0; i < n; i++) {
         html += '<div class="piece-row hs-form-grid" style="margin-top:0.5rem">' +
           '<div class="form-row" style="margin:0"><label>Piece ' + (i + 1) + ' dimensions *</label>' +
-          '<input name="dim_' + i + '" required /></div>' +
+          '<input name="dim_' + i + '" required placeholder="e.g. 48x40x36" /></div>' +
           '<div class="form-row" style="margin:0"><label>Piece ' + (i + 1) + ' weight *</label>' +
-          '<input name="weight_' + i + '" required /></div></div>';
+          '<input name="weight_' + i + '" required placeholder="e.g. 45" /></div></div>';
       }
       wrap.innerHTML = html;
     }

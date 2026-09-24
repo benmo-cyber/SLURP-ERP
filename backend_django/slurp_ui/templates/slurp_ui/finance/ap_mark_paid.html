@@ -2,7 +2,7 @@
 {% block title %}Mark AP paid — SLURP{% endblock %}
 {% block module_title %}Mark as paid{% endblock %}
 {% block header_actions %}
-  <a class="hs-btn" href="{% url 'slurp_ui:finance_ap' %}">Back to AP</a>
+  <a class="hs-btn" href="{% url 'slurp_ui:finance_ap_detail' ap.id %}">Back to detail</a>
 {% endblock %}
 {% block main %}
 <div class="hs-bleed" style="padding:1.25rem 1.5rem 2rem;max-width:40rem">

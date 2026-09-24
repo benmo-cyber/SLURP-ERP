@@ -261,6 +261,7 @@ def release_from_hold(user, lot: Lot, quantity: float, coa_payload: dict | None 
         if need_cert_here:
             cert = LotCoaCertificate(
                 lot=lot_locked,
+                source="in_house",
                 customer_name="",
                 customer_po="",
                 quantity_snapshot=float(lot_locked.quantity_remaining or 0),

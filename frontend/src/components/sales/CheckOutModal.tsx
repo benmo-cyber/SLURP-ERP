@@ -113,6 +113,8 @@ function CheckOutModal({ onClose, onSuccess }: CheckOutModalProps) {
   const [pieces, setPieces] = useState<number | ''>('')
   const [pieceDimensions, setPieceDimensions] = useState<string[]>([])
   const [pieceWeights, setPieceWeights] = useState<string[]>([])
+  const [dimUom, setDimUom] = useState('in')
+  const [weightUom, setWeightUom] = useState('lbs')
   const [unitDisplay, setUnitDisplay] = useState<'lbs' | 'kg'>('lbs')
   const [saving, setSaving] = useState(false)
   const [shipping, setShipping] = useState(false)
@@ -468,8 +470,8 @@ function CheckOutModal({ onClose, onSuccess }: CheckOutModalProps) {
     }
 
     const confirmMsg = combinedMode
-      ? 'Check out these orders on one shipment? One draft invoice per order; freight applies to the first order only. A combined packing list will open.'
-      : 'Are you sure you want to checkout this order? This will create a DRAFT invoice and save packing list details.'
+      ? 'Mark these orders Ready on one truck? Packing docs lock now; inventory and draft invoices wait until each is marked picked up. Freight applies to the first order only.'
+      : 'Mark this order Ready? Packing list details lock now. Inventory and draft invoice wait until Picked up.'
     if (!confirm(confirmMsg)) {
       return
     }
@@ -491,11 +493,13 @@ function CheckOutModal({ onClose, onSuccess }: CheckOutModalProps) {
             pieces: pieceCount,
             piece_dimensions: pieceDimensions.map((d) => d.trim()),
             piece_weights: pieceWeights.map((w) => w.trim()),
+            dim_uom: dimUom,
+            weight_uom: weightUom,
           },
           { idempotencyKey }
         )
         alert(
-          'Orders checked out on one shipment. Draft invoices were created. Review the combined packing list in the new tab.'
+          'Orders marked Ready. Review the combined packing list. Mark each picked up when the truck leaves to create draft invoices.'
         )
         if (res.combined_shipment_key) {
           openCombinedPackingList(res.combined_shipment_key)
@@ -511,10 +515,12 @@ function CheckOutModal({ onClose, onSuccess }: CheckOutModalProps) {
             pieces: pieceCount,
             piece_dimensions: pieceDimensions.map((d) => d.trim()),
             piece_weights: pieceWeights.map((w) => w.trim()),
+            dim_uom: dimUom,
+            weight_uom: weightUom,
           },
           { idempotencyKey }
         )
-        alert('Order checked out successfully! DRAFT invoice created. You can now go to Finance > Invoices to review and issue it.')
+        alert('Order marked Ready. Packing list is available. Mark picked up when the truck leaves to create the draft invoice.')
       }
       onSuccess()
       onClose()
@@ -836,7 +842,26 @@ function CheckOutModal({ onClose, onSuccess }: CheckOutModalProps) {
                 {typeof pieces === 'number' && pieces >= 1 && (
                   <div className="form-group piece-dimensions-block">
                     <label className="piece-dimensions-heading">Dimensions &amp; weight * (one row per piece)</label>
-                    <p className="info-text">Enter size and weight for each handling unit.</p>
+                    <p className="info-text">Enter size and weight for each handling unit. UoM applies to all pieces.</p>
+                    <div className="piece-handling-unit-fields" style={{ marginBottom: 12 }}>
+                      <div className="piece-field">
+                        <label htmlFor="dim-uom">Dim UoM</label>
+                        <select id="dim-uom" className="form-input" value={dimUom} onChange={(e) => setDimUom(e.target.value)}>
+                          <option value="in">in</option>
+                          <option value="cm">cm</option>
+                          <option value="mm">mm</option>
+                          <option value="ft">ft</option>
+                        </select>
+                      </div>
+                      <div className="piece-field">
+                        <label htmlFor="weight-uom">Weight UoM</label>
+                        <select id="weight-uom" className="form-input" value={weightUom} onChange={(e) => setWeightUom(e.target.value)}>
+                          <option value="lbs">lbs</option>
+                          <option value="kg">kg</option>
+                          <option value="oz">oz</option>
+                        </select>
+                      </div>
+                    </div>
                     {Array.from({ length: pieces }, (_, idx) => (
                       <div key={idx} className="piece-handling-unit">
                         <div className="piece-handling-unit-title">Piece {idx + 1}</div>
@@ -856,7 +881,7 @@ function CheckOutModal({ onClose, onSuccess }: CheckOutModalProps) {
                                   return copy
                                 })
                               }}
-                              placeholder="e.g. 48×40×60 in"
+                              placeholder={`e.g. 48x40x36 (${dimUom})`}
                               className="form-input"
                               autoComplete="off"
                             />
@@ -876,7 +901,7 @@ function CheckOutModal({ onClose, onSuccess }: CheckOutModalProps) {
                                   return copy
                                 })
                               }}
-                              placeholder="e.g. 45 lbs"
+                              placeholder={`e.g. 45 (${weightUom})`}
                               className="form-input"
                               autoComplete="off"
                             />

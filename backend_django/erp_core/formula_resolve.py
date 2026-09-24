@@ -1,4 +1,4 @@
-"""Resolve commercial Formula rows when an FG has multiple recipes."""
+"""Resolve commercial Formula rows when an FG has multiple formulas."""
 from __future__ import annotations
 
 from .models import Formula, Lot, ProductionBatch, ProductionBatchOutput
@@ -21,7 +21,7 @@ def default_formula_for_fg(finished_good_id: int | None) -> Formula | None:
 
 
 def formula_for_batch(batch: ProductionBatch | None) -> Formula | None:
-    """Prefer the recipe locked on the batch; else FG default."""
+    """Prefer the formula locked on the batch; else FG default."""
     if batch is None:
         return None
     if getattr(batch, "formula_id", None):
@@ -37,7 +37,7 @@ def formula_for_batch(batch: ProductionBatch | None) -> Formula | None:
 
 
 def formula_for_lot(lot: Lot | None) -> Formula | None:
-    """Recipe used to manufacture this lot, else FG default."""
+    """Formula used to manufacture this lot, else FG default."""
     if lot is None:
         return None
     out = (
@@ -52,11 +52,11 @@ def formula_for_lot(lot: Lot | None) -> Formula | None:
 
 
 def formula_for_item(item_id: int | None) -> Formula | None:
-    """Default recipe for an FG item (shelf life, FPS, generic QC)."""
+    """Default formula for an FG item (shelf life, FPS, generic QC)."""
     return default_formula_for_fg(item_id)
 
 
-def recipe_label(formula: Formula | None) -> str:
+def formula_label(formula: Formula | None) -> str:
     if formula is None:
         return ""
     name = (formula.name or "").strip() or "Standard"
@@ -64,3 +64,7 @@ def recipe_label(formula: Formula | None) -> str:
     if ver:
         return f"{name} (v{ver})"
     return name
+
+
+# Back-compat alias
+recipe_label = formula_label

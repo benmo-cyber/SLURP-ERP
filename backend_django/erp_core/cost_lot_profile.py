@@ -57,8 +57,9 @@ def lot_row_kg(lot):
 def aggregate_ap_landed_costs_for_po(po):
     """
     Sum material / freight / duty dollars from all AP rows on this PO.
-    Legacy rows: cost_category blank — original_amount counts as material; freight_total /
-    tariff_duties_paid on any row add to freight / duty pools.
+    Legacy / material rows: when freight_total (PPA) is set, original_amount is the full
+    invoice (goods + freight); material = original − freight_total so freight is not
+    double-counted. tariff_duties_paid on any row adds to the duty pool.
     """
     from .models import AccountsPayable
 
@@ -80,12 +81,19 @@ def aggregate_ap_landed_costs_for_po(po):
             duty_total += oa + td
             freight_total += ft
         elif cat == 'material':
-            material_total += oa
+            # PPA: original_amount is full invoice (goods + freight_total); don't double-count
+            if ft > 0:
+                material_total += max(0.0, oa - ft)
+            else:
+                material_total += oa
             freight_total += ft
             duty_total += td
         else:
-            # Legacy / unspecified: invoice total is material; side fields are freight/duty splits
-            material_total += oa
+            # Legacy / unspecified: same PPA rule when freight_total is set
+            if ft > 0:
+                material_total += max(0.0, oa - ft)
+            else:
+                material_total += oa
             freight_total += ft
             duty_total += td
 

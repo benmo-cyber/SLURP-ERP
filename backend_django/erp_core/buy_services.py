@@ -327,6 +327,33 @@ def check_in_lot(user, data: dict) -> Lot:
             raise BuyFlowError("Vendor lot number is required for raw materials")
         payload["vendor_lot_number"] = vendor_lot_number
 
+    # Pre-validate supplier COA profile before creating the lot
+    from .coa_supplier import (
+        SupplierCoaError,
+        coa_lines_for_item,
+        item_has_supplier_coa_profile,
+    )
+
+    supplier_coa_needed = item_has_supplier_coa_profile(item)
+    if supplier_coa_needed:
+        lines_qs = coa_lines_for_item(item.id)
+        by_id: dict[int, str] = {}
+        for row in payload.get("coa_line_results") or []:
+            if not isinstance(row, dict):
+                continue
+            try:
+                lid = int(row.get("item_line_id"))
+            except (TypeError, ValueError):
+                continue
+            by_id[lid] = (row.get("result_text") or "").strip()
+        missing = [ln.test_name for ln in lines_qs if ln.id not in by_id or not by_id[ln.id]]
+        if missing:
+            raise BuyFlowError(
+                f"Supplier COA results required for {item.sku}: "
+                + "; ".join(missing[:8])
+                + ("…" if len(missing) > 8 else "")
+            )
+
     po_number_raw = (payload.get("po_number") or "").strip()
     po = _po_by_number(po_number_raw) if po_number_raw else None
     if po_number_raw and po and po.drop_ship:
@@ -476,7 +503,8 @@ def check_in_lot(user, data: dict) -> Lot:
             )
             if all_received and po.status == "issued":
                 po.status = "received"
-                po.save(update_fields=["status"])
+                po.received_date = lot.received_date
+                po.save(update_fields=["status", "received_date"])
                 log_purchase_order_action(
                     po, "completed", lot=lot, notes="All items fully received"
                 )
@@ -530,6 +558,23 @@ def check_in_lot(user, data: dict) -> Lot:
         )
     except Exception as e:
         logger.error("Failed to persist CheckInLog for lot %s: %s", lot.lot_number, e, exc_info=True)
+
+    # Supplier typical COA profile on FG/DI → capture results on this inbound lot
+    if supplier_coa_needed:
+        try:
+            from .coa_supplier import issue_supplier_coa_for_lot
+
+            issue_supplier_coa_for_lot(
+                lot,
+                user,
+                payload.get("coa_line_results"),
+                require_all_lines=True,
+            )
+        except SupplierCoaError as e:
+            raise BuyFlowError(e.message) from e
+        except Exception as e:
+            logger.exception("Supplier COA issue failed for lot %s: %s", lot.lot_number, e)
+            raise BuyFlowError(f"Could not save supplier COA for {item.sku}: {e}") from e
 
     if lot_status == "on_hold":
         try:
@@ -617,6 +662,17 @@ def check_in_lots_batch(user, shared: dict, lines: list[dict]) -> list[Lot]:
                 **line,
                 "status": (line.get("status") or "accepted"),
             }
+            # Prefer line-specific results; else shared map by item_id
+            if not payload.get("coa_line_results"):
+                by_item = shared.get("coa_results_by_item") or {}
+                try:
+                    iid = int(line.get("item_id"))
+                except (TypeError, ValueError):
+                    iid = None
+                if iid is not None and by_item.get(iid):
+                    payload["coa_line_results"] = by_item[iid]
+                elif by_item.get(str(iid)):
+                    payload["coa_line_results"] = by_item[str(iid)]
             try:
                 lots.append(check_in_lot(user, payload))
             except BuyFlowError as e:
@@ -715,7 +771,20 @@ def accept_short_close_po(user, purchase_order: PurchaseOrder, short_reason: str
         # quantity_received stays as actual — do not inflate
 
     purchase_order.status = "received"
-    purchase_order.save(update_fields=["status"])
+    update_fields = ["status"]
+    if not purchase_order.received_date:
+        po_num = (purchase_order.po_number or "").strip()
+        if po_num:
+            latest_lot = (
+                Lot.objects.filter(po_number=po_num)
+                .exclude(received_date__isnull=True)
+                .order_by("-received_date")
+                .first()
+            )
+            if latest_lot and latest_lot.received_date:
+                purchase_order.received_date = latest_lot.received_date
+                update_fields.append("received_date")
+    purchase_order.save(update_fields=update_fields)
 
     who = getattr(user, "username", None) or "system"
     notes = (

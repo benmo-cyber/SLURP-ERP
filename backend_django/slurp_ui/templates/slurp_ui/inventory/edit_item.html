@@ -72,6 +72,17 @@
             </select>
           </div>
           <div class="form-group">
+            <label class="family-add-toggle">
+              <input type="checkbox" name="plant_utility" value="1"
+                     {% if item.plant_utility %}checked{% endif %} />
+              Plant utility
+            </label>
+            <span class="form-hint">
+              No lot pick / inventory deduction on batches. Price still flows to Cost Master
+              (vendor “Plant” when blank). Vendor not required.
+            </span>
+          </div>
+          <div class="form-group">
             <label>UoM</label>
             <select name="unit_of_measure">
               {% for val, label in uom_choices %}

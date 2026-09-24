@@ -12,27 +12,41 @@
 {% block main %}
 <div class="inventory-table-page{% if expand_vendor != None %} has-lot-open{% endif %}">
   <div class="inventory-table-controls" style="display:flex;justify-content:space-between;align-items:center;gap:1rem;flex-wrap:wrap;margin-bottom:1rem">
-    <div class="inventory-tabs" style="display:flex;gap:0.35rem">
+    <div class="inventory-tabs" style="display:flex;gap:0.35rem;flex-wrap:wrap;align-items:center">
       <a class="btn {% if tab == 'finished_good' %}btn-primary{% else %}btn-secondary{% endif %}"
-         href="?tab=finished_good&uom={{ display_uom }}">Finished Goods</a>
+         href="?tab=finished_good&uom={{ display_uom }}{% if remainder_only %}&remainder=1{% endif %}">Finished Goods</a>
       <a class="btn {% if tab == 'raw_material' %}btn-primary{% else %}btn-secondary{% endif %}"
-         href="?tab=raw_material&uom={{ display_uom }}">Raw Materials</a>
+         href="?tab=raw_material&uom={{ display_uom }}{% if remainder_only %}&remainder=1{% endif %}">Raw Materials</a>
       <a class="btn {% if tab == 'indirect_material' %}btn-primary{% else %}btn-secondary{% endif %}"
-         href="?tab=indirect_material&uom={{ display_uom }}">Indirect</a>
+         href="?tab=indirect_material&uom={{ display_uom }}{% if remainder_only %}&remainder=1{% endif %}">Indirect</a>
+      {% if remainder_only %}
+      <a class="btn btn-primary" title="Showing SKUs/lots with a pack remainder only"
+         href="?tab={{ tab }}&uom={{ display_uom }}{% if expand_sku %}&sku={{ expand_sku|urlencode }}{% endif %}{% if expand_vendor != None %}&vendor={{ expand_vendor|urlencode }}{% endif %}{% if deeper %}&deeper=1{% endif %}">Has remainder ✓</a>
+      {% else %}
+      <a class="btn btn-secondary" title="Filter to lots with a partial pack remnant (e.g. 49×20 + 15 lb)"
+         href="?tab={{ tab }}&uom={{ display_uom }}&remainder=1{% if expand_sku %}&sku={{ expand_sku|urlencode }}{% endif %}{% if expand_vendor != None %}&vendor={{ expand_vendor|urlencode }}{% endif %}{% if deeper %}&deeper=1{% endif %}">Has remainder</a>
+      {% endif %}
     </div>
     <div class="unit-toggle" style="display:inline-flex;border:1px solid #cbd5e1;border-radius:6px;overflow:hidden">
-      <a href="?tab={{ tab }}&uom=lbs{% if expand_sku %}&sku={{ expand_sku|urlencode }}{% endif %}{% if expand_vendor != None %}&vendor={{ expand_vendor|urlencode }}{% endif %}"
+      <a href="?tab={{ tab }}&uom=lbs{% if remainder_only %}&remainder=1{% endif %}{% if expand_sku %}&sku={{ expand_sku|urlencode }}{% endif %}{% if expand_vendor != None %}&vendor={{ expand_vendor|urlencode }}{% endif %}"
          class="toggle-btn {% if display_uom == 'lbs' %}active{% endif %}"
          style="padding:0.4rem 0.9rem;text-decoration:none;background:{% if display_uom == 'lbs' %}#1e40af{% else %}#fff{% endif %};color:{% if display_uom == 'lbs' %}#fff{% else %}#334155{% endif %}">lbs</a>
-      <a href="?tab={{ tab }}&uom=kg{% if expand_sku %}&sku={{ expand_sku|urlencode }}{% endif %}{% if expand_vendor != None %}&vendor={{ expand_vendor|urlencode }}{% endif %}"
+      <a href="?tab={{ tab }}&uom=kg{% if remainder_only %}&remainder=1{% endif %}{% if expand_sku %}&sku={{ expand_sku|urlencode }}{% endif %}{% if expand_vendor != None %}&vendor={{ expand_vendor|urlencode }}{% endif %}"
          class="toggle-btn {% if display_uom == 'kg' %}active{% endif %}"
          style="padding:0.4rem 0.9rem;text-decoration:none;background:{% if display_uom == 'kg' %}#1e40af{% else %}#fff{% endif %};color:{% if display_uom == 'kg' %}#fff{% else %}#334155{% endif %}">kg</a>
-      <a href="?tab={{ tab }}&uom=native{% if expand_sku %}&sku={{ expand_sku|urlencode }}{% endif %}{% if expand_vendor != None %}&vendor={{ expand_vendor|urlencode }}{% endif %}"
+      <a href="?tab={{ tab }}&uom=native{% if remainder_only %}&remainder=1{% endif %}{% if expand_sku %}&sku={{ expand_sku|urlencode }}{% endif %}{% if expand_vendor != None %}&vendor={{ expand_vendor|urlencode }}{% endif %}"
          class="toggle-btn {% if display_uom == 'native' %}active{% endif %}"
          title="Each row in its stored item UoM (no lbs/kg conversion)"
          style="padding:0.4rem 0.9rem;text-decoration:none;background:{% if display_uom == 'native' %}#1e40af{% else %}#fff{% endif %};color:{% if display_uom == 'native' %}#fff{% else %}#334155{% endif %}">Native</a>
     </div>
   </div>
+
+  {% if remainder_only %}
+  <p style="margin:0 0 0.85rem;color:#9a3412;font-size:0.9rem">
+    Showing SKUs with at least one lot that has a pack remainder (full packs + partial remnant).
+    Expand a row to see the breakout.
+  </p>
+  {% endif %}
 
   <div class="table-wrapper inventory-table-container">
     <table class="inventory-table">
@@ -58,13 +72,13 @@
           <td>
             <div class="sku-cell">
               {% if row.expanded %}
-              <a class="expand-btn" href="?tab={{ tab }}&uom={{ display_uom }}" title="Collapse">▾</a>
+              <a class="expand-btn" href="?tab={{ tab }}&uom={{ display_uom }}{% if remainder_only %}&remainder=1{% endif %}" title="Collapse">▾</a>
               {% elif row.sole_vendor %}
               <a class="expand-btn"
-                 href="?tab={{ tab }}&uom={{ display_uom }}&sku={{ row.sku|urlencode }}&vendor={{ row.sole_vendor|urlencode }}"
+                 href="?tab={{ tab }}&uom={{ display_uom }}{% if remainder_only %}&remainder=1{% endif %}&sku={{ row.sku|urlencode }}&vendor={{ row.sole_vendor|urlencode }}"
                  title="Expand lots">▸</a>
               {% else %}
-              <a class="expand-btn" href="?tab={{ tab }}&uom={{ display_uom }}&sku={{ row.sku|urlencode }}"
+              <a class="expand-btn" href="?tab={{ tab }}&uom={{ display_uom }}{% if remainder_only %}&remainder=1{% endif %}&sku={{ row.sku|urlencode }}"
                  title="Expand vendors">▸</a>
               {% endif %}
               <span class="sku-master-label">{{ row.sku }}</span>
@@ -91,11 +105,11 @@
             <td>
               <div class="sku-cell" style="padding-left:1.25rem">
                 {% if v.expanded %}
-                <a class="expand-btn" href="?tab={{ tab }}&uom={{ display_uom }}&sku={{ row.sku|urlencode }}"
+                <a class="expand-btn" href="?tab={{ tab }}&uom={{ display_uom }}{% if remainder_only %}&remainder=1{% endif %}&sku={{ row.sku|urlencode }}"
                    title="Collapse lots">▾</a>
                 {% else %}
                 <a class="expand-btn"
-                   href="?tab={{ tab }}&uom={{ display_uom }}&sku={{ row.sku|urlencode }}&vendor={{ v.vendor|urlencode }}"
+                   href="?tab={{ tab }}&uom={{ display_uom }}{% if remainder_only %}&remainder=1{% endif %}&sku={{ row.sku|urlencode }}&vendor={{ v.vendor|urlencode }}"
                    title="Expand lots">▸</a>
                 {% endif %}
                 <span>{{ row.sku }}</span>
@@ -116,18 +130,18 @@
 
           {% if v.expanded %}
           <tr class="lot-details-row">
-            <td colspan="{% if show_on_order %}12{% else %}11{% endif %}" class="lot-details-cell">
+            <td colspan="{% if show_on_order %}13{% else %}12{% endif %}" class="lot-details-cell">
               <div class="lot-breakdown">
                 <div class="lot-breakdown-head">
                   <strong>Lots — {{ row.sku }} / {{ v.vendor }}</strong>
                   {% if not deeper %}
                   <a class="btn btn-secondary" style="padding:0.3rem 0.6rem;font-size:0.85rem"
-                     href="?tab={{ tab }}&uom={{ display_uom }}&sku={{ row.sku|urlencode }}&vendor={{ v.vendor|urlencode }}&deeper=1">
+                     href="?tab={{ tab }}&uom={{ display_uom }}{% if remainder_only %}&remainder=1{% endif %}&sku={{ row.sku|urlencode }}&vendor={{ v.vendor|urlencode }}&deeper=1">
                     Deeper (depleted)…
                   </a>
                   {% else %}
                   <a class="btn btn-secondary" style="padding:0.3rem 0.6rem;font-size:0.85rem"
-                     href="?tab={{ tab }}&uom={{ display_uom }}&sku={{ row.sku|urlencode }}&vendor={{ v.vendor|urlencode }}">
+                     href="?tab={{ tab }}&uom={{ display_uom }}{% if remainder_only %}&remainder=1{% endif %}&sku={{ row.sku|urlencode }}&vendor={{ v.vendor|urlencode }}">
                     Hide depleted
                   </a>
                   {% endif %}
@@ -142,6 +156,7 @@
                         <th>Tracking</th>
                         <th>Received</th>
                         <th>Qty</th>
+                        <th>Pack breakout</th>
                         <th>Available</th>
                         <th>On Hold</th>
                         <th>Status</th>
@@ -151,13 +166,22 @@
                     </thead>
                     <tbody>
                       {% for lot in lot_rows %}
-                      <tr {% if deeper %}class="lot-row-depleted"{% endif %}>
+                      <tr {% if deeper %}class="lot-row-depleted"{% endif %}{% if lot.has_remainder %} style="background:#fff7ed"{% endif %}>
                         <td>{{ lot.vendor_lot_number }}</td>
-                        <td>{{ lot.lot_number }}</td>
+                        <td>
+                          <a href="{% url 'slurp_ui:inventory_lot_detail' lot.id %}?tab={{ tab }}&uom={{ display_uom }}{% if remainder_only %}&remainder=1{% endif %}&sku={{ row.sku|urlencode }}&vendor={{ v.vendor|urlencode }}{% if deeper %}&deeper=1{% endif %}"
+                             style="font-weight:650;{% if not lot.manufacture_date or not lot.expiration_date %}color:#b45309{% endif %}"
+                             title="{% if not lot.manufacture_date or not lot.expiration_date %}Open lot — mfg/exp missing{% else %}Open lot detail{% endif %}">
+                            {{ lot.lot_number }}
+                          </a>
+                        </td>
                         <td>{{ lot.po_number }}</td>
                         <td>{{ lot.tracking }}</td>
                         <td>{% if lot.received_date %}{{ lot.received_date|slice:":10" }}{% else %}—{% endif %}</td>
                         <td class="lot-table-col-qty">{{ lot.quantity|floatformat:2 }} {{ lot.uom }}</td>
+                        <td style="font-size:0.85rem;{% if lot.has_remainder %}color:#9a3412;font-weight:600{% else %}color:#64748b{% endif %}">
+                          {{ lot.pack_breakout|default:"—" }}
+                        </td>
                         <td class="lot-table-col-qty">{{ lot.available|floatformat:2 }} {{ lot.uom }}</td>
                         <td class="lot-table-col-qty">{{ lot.on_hold|floatformat:2 }} {{ lot.uom }}</td>
                         <td><span class="status-badge status-{{ lot.status }}">{{ lot.status }}</span></td>
@@ -167,7 +191,7 @@
                         <td style="white-space:nowrap">
                           {% if lot.avail_native > 0 %}
                           <a class="btn btn-secondary" style="padding:0.2rem 0.45rem;font-size:0.75rem"
-                             href="{% url 'slurp_ui:inventory_lot_hold' lot.id %}?tab={{ tab }}&uom={{ display_uom }}&sku={{ row.sku|urlencode }}&vendor={{ v.vendor|urlencode }}{% if deeper %}&deeper=1{% endif %}">Hold</a>
+                             href="{% url 'slurp_ui:inventory_lot_hold' lot.id %}?tab={{ tab }}&uom={{ display_uom }}{% if remainder_only %}&remainder=1{% endif %}&sku={{ row.sku|urlencode }}&vendor={{ v.vendor|urlencode }}{% if deeper %}&deeper=1{% endif %}">Hold</a>
                           {% endif %}
                           {% if lot.hold_native > 0 %}
                           {% if lot.open_hold_case_id %}
@@ -180,14 +204,19 @@
                           <a class="btn btn-secondary" style="padding:0.2rem 0.45rem;font-size:0.75rem"
                              href="{% url 'slurp_ui:inventory_lot_hold_log' lot.id %}">Hold log</a>
                           {% endif %}
+                          {% if lot.show_supplier_coa %}
+                          <a class="btn btn-secondary" style="padding:0.2rem 0.45rem;font-size:0.75rem"
+                             href="{% url 'slurp_ui:inventory_lot_supplier_coa' lot.id %}?tab={{ tab }}&uom={{ display_uom }}{% if remainder_only %}&remainder=1{% endif %}&sku={{ row.sku|urlencode }}&vendor={{ v.vendor|urlencode }}{% if deeper %}&deeper=1{% endif %}"
+                             title="{% if lot.has_coa_profile %}Enter supplier COA results{% else %}FPS has no COA profile yet — set up or enter after{% endif %}">Supplier COA</a>
+                          {% endif %}
                           {% if request.user.is_staff %}
                           <a class="btn btn-secondary" style="padding:0.2rem 0.45rem;font-size:0.75rem"
-                             href="{% url 'slurp_ui:inventory_lot_reconcile' lot.id %}?tab={{ tab }}&uom={{ display_uom }}&sku={{ row.sku|urlencode }}&vendor={{ v.vendor|urlencode }}{% if deeper %}&deeper=1{% endif %}">Reconcile</a>
+                             href="{% url 'slurp_ui:inventory_lot_reconcile' lot.id %}?tab={{ tab }}&uom={{ display_uom }}{% if remainder_only %}&remainder=1{% endif %}&sku={{ row.sku|urlencode }}&vendor={{ v.vendor|urlencode }}{% if deeper %}&deeper=1{% endif %}">Reconcile</a>
                           {% endif %}
                         </td>
                       </tr>
                       {% empty %}
-                      <tr><td colspan="11">{% if deeper %}No depleted lots.{% else %}No on-hand lots.{% endif %}</td></tr>
+                      <tr><td colspan="12">{% if deeper %}No depleted lots.{% elif remainder_only %}No lots with a pack remainder.{% else %}No on-hand lots.{% endif %}</td></tr>
                       {% endfor %}
                     </tbody>
                   </table>

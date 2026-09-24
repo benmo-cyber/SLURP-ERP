@@ -158,7 +158,9 @@
             {% for line in preview.template_lines %}
             <div class="form-row">
               <label>{{ line.test_name }}{% if line.specification_text %} ({{ line.specification_text }}){% endif %}</label>
-              <input name="line_{{ line.id }}" type="text" required />
+              <input name="line_{{ line.id }}" type="text" required
+                     value="{{ line.typical_result|default:'' }}"
+                     placeholder="{% if line.typical_result %}Confirm or edit typical result{% else %}Enter result{% endif %}" />
             </div>
             {% endfor %}
             {% if preview.formula_qc %}

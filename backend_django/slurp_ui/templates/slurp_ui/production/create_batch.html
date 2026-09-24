@@ -5,9 +5,10 @@
   <h2>Create {% if batch_type == 'repack' %}Repack{% else %}Batch Ticket (Production){% endif %}</h2>
   <p style="color:#64748b;margin-bottom:1rem">
     {% if batch_type == 'repack' %}
-    Select an item and input lots to repack. Total quantity used must equal quantity to repack (native UoM).
+    Select a parent SKU, then source and target pack.
+    Same SKU = <strong>relabel</strong> (no packaging/CCP). Different SKUs = <strong>pack-change</strong> (packaging + CCP required).
     {% else %}
-    Select a formula, enter quantity to produce, then allocate one or more lots per ingredient.
+    Select a parent SKU, then the full SKU and formula variation. Enter quantity to produce, then allocate lots per ingredient.
     A running <strong>remaining</strong> balance updates as you enter quantities.
     {% endif %}
     Conversion: <strong>1 kg = {{ lbs_per_kg }} lbs</strong>.
@@ -21,32 +22,96 @@
   </div>
 
   {% if batch_type == 'repack' %}
-  <form method="get" style="margin-bottom:1rem">
+  <form method="get" style="margin-bottom:1rem" id="repack-cascade-form">
     <input type="hidden" name="batch_type" value="repack" />
+    {# Omit uom on SKU cascade so native (e.g. kg) becomes the default. Toggle sets ?uom=. #}
     <div class="form-row">
-      <label for="item">Item to repack *</label>
-      <select id="item" name="item" onchange="this.form.submit()">
-        <option value="">— Select item —</option>
-        {% for it in repack_items %}
+      <label for="parent">Parent SKU *</label>
+      <select id="parent" name="parent"
+              onchange="var f=this.form; if(f.item) f.item.value=''; if(f.target) f.target.value=''; f.submit();">
+        <option value="">— Select parent SKU —</option>
+        {% for p in parent_choices %}
+        <option value="{{ p }}" {% if selected_parent == p %}selected{% endif %}>{{ p }}</option>
+        {% endfor %}
+      </select>
+    </div>
+
+    {% if selected_parent %}
+    <div class="form-row">
+      <label for="item">Source SKU (consume) *</label>
+      <select id="item" name="item"
+              onchange="var f=this.form; if(f.target) f.target.value=''; f.submit();">
+        <option value="">— Select source pack —</option>
+        {% for it in fg_choices %}
         <option value="{{ it.id }}" {% if selected_repack_item and selected_repack_item.id == it.id %}selected{% endif %}>
           {{ it.sku }} — {{ it.name }} ({{ it.unit_of_measure }})
         </option>
         {% endfor %}
       </select>
     </div>
+    {% endif %}
+
+    {% if selected_repack_item %}
+    <div class="form-row">
+      <label for="target">Target SKU (produce) *</label>
+      <select id="target" name="target" onchange="this.form.submit()">
+        <option value="">— Select target pack —</option>
+        {% for it in target_choices %}
+        <option value="{{ it.id }}" {% if selected_repack_target and selected_repack_target.id == it.id %}selected{% endif %}>
+          {{ it.sku }} — {{ it.name }}
+          {% if it.pack_size %} · {{ it.pack_size }} {{ it.unit_of_measure }}{% endif %}
+        </option>
+        {% endfor %}
+      </select>
+    </div>
+    {% endif %}
   </form>
 
-  {% if selected_repack_item %}
+  {% if selected_repack_item and selected_repack_target %}
   <form method="post" id="create-repack-form">
     {% csrf_token %}
     <input type="hidden" name="batch_type" value="repack" />
+    <input type="hidden" name="parent" value="{{ selected_parent }}" />
     <input type="hidden" name="repack_item_id" value="{{ selected_repack_item.id }}" />
-    <input type="hidden" name="batch_ticket_mass_unit" value="{{ display_uom }}" />
+    <input type="hidden" name="target_item_id" value="{{ selected_repack_target.id }}" />
+    <input type="hidden" name="batch_ticket_mass_unit" id="batch_ticket_mass_unit" value="{{ display_uom }}" />
+
+    {% if is_relabel %}
+    <div style="padding:0.65rem 0.85rem;margin-bottom:1rem;border-radius:6px;background:#ecfdf5;border:1px solid #a7f3d0;font-size:0.9rem;color:#065f46">
+      <strong>Relabel</strong> — same SKU / same container.
+      No packaging or screen CCP. Qty is in <strong>{{ display_uom }}</strong> (native).
+      Submit <strong>creates and closes</strong> in one step and assigns the inventory lot number immediately (for labels).
+    </div>
+    {% else %}
+    <div style="padding:0.65rem 0.85rem;margin-bottom:1rem;border-radius:6px;background:#fff7ed;border:1px solid #fed7aa;font-size:0.9rem;color:#9a3412">
+      <strong>Pack-change</strong>
+      <strong>{{ selected_repack_item.sku }}</strong>
+      → <strong>{{ selected_repack_target.sku }}</strong>
+      {% if target_pack_label %} · Target pack {{ target_pack_label }}{% endif %}.
+      Packaging and a CCP (screen) are required. Qty in <strong>{{ display_uom }}</strong>.
+    </div>
+    {% endif %}
+
+    {% if display_uom == 'lbs' or display_uom == 'kg' %}
+    <div style="display:flex;align-items:center;gap:1rem;margin-bottom:1rem;flex-wrap:wrap">
+      <div class="unit-toggle" style="display:inline-flex;border:1px solid #cbd5e1;border-radius:6px;overflow:hidden">
+        <button type="button" class="repack-uom-btn {% if display_uom == 'lbs' %}active{% endif %}" data-uom="lbs"
+                style="padding:0.4rem 0.9rem;border:0;background:{% if display_uom == 'lbs' %}#1e40af{% else %}#fff{% endif %};color:{% if display_uom == 'lbs' %}#fff{% else %}#334155{% endif %};cursor:pointer">lbs</button>
+        <button type="button" class="repack-uom-btn {% if display_uom == 'kg' %}active{% endif %}" data-uom="kg"
+                style="padding:0.4rem 0.9rem;border:0;background:{% if display_uom == 'kg' %}#1e40af{% else %}#fff{% endif %};color:{% if display_uom == 'kg' %}#fff{% else %}#334155{% endif %};cursor:pointer">kg</button>
+      </div>
+      <span style="color:#64748b;font-size:0.9rem">Ticket mass unit (qty &amp; lot allocation)</span>
+    </div>
+    {% endif %}
 
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem">
       <div class="form-row">
-        <label for="quantity_produced">Quantity to repack ({{ display_uom }}) *</label>
+        <label for="quantity_produced">Quantity to produce ({{ display_uom }}) *</label>
         <input id="quantity_produced" name="quantity_produced" type="number" step="any" min="0" required />
+        <p class="hs-muted" style="margin:0.35rem 0 0;font-size:0.82rem">
+          Must match converted source mass.
+          <span id="suggested-units-line"></span>
+        </p>
       </div>
       <div class="form-row">
         <label for="production_date">Production date</label>
@@ -55,9 +120,10 @@
       </div>
     </div>
 
-    <h3 style="margin:1rem 0 0.5rem">Input lots (same SKU)</h3>
+    <h3 style="margin:1rem 0 0.5rem">Source lots ({{ selected_repack_item.sku }})</h3>
     {% for lr in repack_lot_rows %}
-    <div style="border:1px solid #e5e7eb;border-radius:6px;padding:0.75rem;margin-bottom:0.5rem">
+    <div class="repack-lot-row" style="border:1px solid #e5e7eb;border-radius:6px;padding:0.75rem;margin-bottom:0.5rem"
+         data-avail="{{ lr.available_display }}">
       <div style="display:flex;justify-content:space-between;gap:1rem;flex-wrap:wrap">
         <div>
           <strong>{{ lr.lot.lot_number }}</strong>
@@ -65,13 +131,58 @@
         </div>
         <div class="form-row" style="margin:0;min-width:10rem">
           <label>Qty to use ({{ display_uom }})</label>
-          <input name="repack_qty_{{ lr.lot.id }}" type="number" step="any" min="0" max="{{ lr.available_display }}" />
+          <input class="repack-qty-input" name="repack_qty_{{ lr.lot.id }}" type="number" step="any" min="0"
+                 max="{{ lr.available_display }}" />
         </div>
       </div>
     </div>
     {% empty %}
-    <p>No available lots for this item.</p>
+    <p>No available lots for this source SKU.</p>
     {% endfor %}
+
+    {% if not is_relabel %}
+    <h3 style="margin:1.25rem 0 0.35rem">Packaging (indirect materials) *</h3>
+    <p style="margin:0 0 0.65rem;color:#64748b;font-size:0.9rem">
+      Suggested pack count for target
+      {% if target_pack_label %}<strong>{{ target_pack_label }}</strong>{% endif %}:
+      <strong id="suggested-pack-count">—</strong>
+      Enter qty on the packaging lot(s) you will use (usually EA). Required for pack-change.
+    </p>
+    {% for pr in packaging_lot_rows %}
+    <div style="border:1px solid #e5e7eb;border-radius:6px;padding:0.75rem;margin-bottom:0.5rem">
+      <div style="display:flex;justify-content:space-between;gap:1rem;flex-wrap:wrap;align-items:flex-end">
+        <div>
+          <strong>{{ pr.sku }}</strong> — {{ pr.name }}
+          <div style="color:#64748b;font-size:0.85rem">
+            Lot {{ pr.lot.lot_number }} · avail {{ pr.available|floatformat:0 }} {{ pr.uom }}
+          </div>
+        </div>
+        <div class="form-row" style="margin:0;min-width:8rem">
+          <label>Qty ({{ pr.uom }})</label>
+          <input class="pack-qty-input" name="pack_qty_{{ pr.lot.id }}" type="number" step="any" min="0"
+                 max="{{ pr.available }}" data-pack-lot="1" />
+        </div>
+      </div>
+    </div>
+    {% empty %}
+    <p style="color:#b91c1c">No packaging lots on hand. Check in packaging inventory before creating a pack-change ticket.</p>
+    {% endfor %}
+
+    <div class="form-row">
+      <label for="critical_control_point_id">CCP (screen) *</label>
+      <select id="critical_control_point_id" name="critical_control_point_id" required>
+        <option value="">— Select CCP —</option>
+        {% for c in ccp_choices %}
+        <option value="{{ c.id }}">{{ c.name }}</option>
+        {% endfor %}
+      </select>
+      {% if not ccp_choices %}
+      <small class="form-hint" style="color:#b91c1c">No CCPs defined. Add one under Quality → Critical Control Points.</small>
+      {% endif %}
+    </div>
+    {% else %}
+    <p id="suggested-pack-count" style="display:none">—</p>
+    {% endif %}
 
     <div class="form-row">
       <label for="notes">Notes</label>
@@ -79,29 +190,135 @@
     </div>
 
     <div class="form-actions">
-      <button type="submit" class="btn btn-primary">Create repack ticket</button>
-      <a class="btn btn-secondary" href="{% url 'slurp_ui:production' %}">Cancel</a>
+      <button type="submit" class="btn btn-primary">{% if is_relabel %}Create &amp; close relabel{% else %}Create repack ticket{% endif %}</button>
+      <a class="btn btn-secondary" href="{% url 'slurp_ui:production_repacks' %}">Cancel</a>
     </div>
   </form>
+  <script>
+  (function () {
+    var lbsPerKg = {{ lbs_per_kg }};
+    var displayUom = '{{ display_uom }}';
+    var targetPackQty = {% if target_pack_qty %}{{ target_pack_qty }}{% else %}null{% endif %};
+    var targetPackUom = '{{ target_pack_uom|default:"" }}';
+    var qtyInput = document.getElementById('quantity_produced');
+    var suggestedEl = document.getElementById('suggested-pack-count');
+    var suggestedLine = document.getElementById('suggested-units-line');
+
+    document.querySelectorAll('.repack-uom-btn').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var newUom = btn.getAttribute('data-uom');
+        var url = new URL(window.location.href);
+        url.searchParams.set('batch_type', 'repack');
+        url.searchParams.set('uom', newUom);
+        window.location.href = url.toString();
+      });
+    });
+
+    function toNum(v) {
+      var n = parseFloat(v);
+      return isFinite(n) ? n : 0;
+    }
+    function convert(q, fromU, toU) {
+      fromU = (fromU || 'lbs').toLowerCase();
+      toU = (toU || 'lbs').toLowerCase();
+      if (fromU === 'lb') fromU = 'lbs';
+      if (toU === 'lb') toU = 'lbs';
+      if (fromU === toU) return q;
+      if (fromU === 'kg' && toU === 'lbs') return q * lbsPerKg;
+      if (fromU === 'lbs' && toU === 'kg') return q / lbsPerKg;
+      return q;
+    }
+    function sumSourceDisplay() {
+      var total = 0;
+      document.querySelectorAll('.repack-qty-input').forEach(function (inp) {
+        total += toNum(inp.value);
+      });
+      return total;
+    }
+    function updateSuggested() {
+      var massDisplay = toNum(qtyInput && qtyInput.value) || sumSourceDisplay();
+      if (qtyInput && !toNum(qtyInput.value) && massDisplay > 0) {
+        qtyInput.value = String(Math.round(massDisplay * 100) / 100);
+      }
+      if (!targetPackQty || targetPackQty <= 0 || massDisplay <= 0) {
+        if (suggestedEl) suggestedEl.textContent = '—';
+        if (suggestedLine) suggestedLine.textContent = '';
+        return;
+      }
+      var packU = (targetPackUom || displayUom).toLowerCase();
+      var massInPack = convert(massDisplay, displayUom, packU);
+      var units = massInPack / targetPackQty;
+      var rounded = Math.round(units * 1000) / 1000;
+      var label = (Math.abs(rounded - Math.round(rounded)) < 0.001)
+        ? String(Math.round(rounded))
+        : String(rounded);
+      if (suggestedEl) {
+        suggestedEl.textContent = label + ' × ' + (targetPackQty + ' ' + (targetPackUom || displayUom));
+      }
+      if (suggestedLine) {
+        suggestedLine.textContent = ' ≈ ' + label + ' packs/jugs.';
+      }
+      var firstPack = document.querySelector('.pack-qty-input');
+      if (firstPack && !firstPack.value && units > 0) {
+        firstPack.placeholder = String(Math.ceil(units - 1e-9));
+      }
+    }
+    document.querySelectorAll('.repack-qty-input').forEach(function (inp) {
+      inp.addEventListener('input', function () {
+        var total = sumSourceDisplay();
+        if (qtyInput) qtyInput.value = total > 0 ? String(Math.round(total * 100) / 100) : '';
+        updateSuggested();
+      });
+    });
+    if (qtyInput) qtyInput.addEventListener('input', updateSuggested);
+    updateSuggested();
+  })();
+  </script>
   {% endif %}
 
   {% else %}
-  <form method="get" style="margin-bottom:1rem">
+  <form method="get" id="batch-pick-form" style="margin-bottom:1rem">
     <input type="hidden" name="batch_type" value="production" />
     <input type="hidden" name="uom" value="{{ display_uom }}" />
     <div class="form-row">
-      <label for="formula">Finished good / recipe *</label>
+      <label for="parent">Parent SKU *</label>
+      <select id="parent" name="parent"
+              onchange="var f=this.form; if(f.item) f.item.value=''; if(f.formula) f.formula.value=''; f.submit();">
+        <option value="">— Select parent SKU —</option>
+        {% for p in parent_choices %}
+        <option value="{{ p }}" {% if selected_parent == p %}selected{% endif %}>{{ p }}</option>
+        {% endfor %}
+      </select>
+    </div>
+
+    {% if selected_parent %}
+    <div class="form-row">
+      <label for="item">Full SKU *</label>
+      <select id="item" name="item" onchange="this.form.formula && (this.form.formula.value=''); this.form.submit()">
+        <option value="">— Select full SKU —</option>
+        {% for it in fg_choices %}
+        <option value="{{ it.id }}" {% if selected_fg and selected_fg.id == it.id %}selected{% endif %}>
+          {{ it.sku }} — {{ it.name }}
+        </option>
+        {% endfor %}
+      </select>
+    </div>
+    {% endif %}
+
+    {% if selected_fg %}
+    <div class="form-row">
+      <label for="formula">Formula *</label>
       <select id="formula" name="formula" onchange="this.form.submit()">
-        <option value="">— Select recipe —</option>
-        {% for f in formulas %}
+        <option value="">— Select formula —</option>
+        {% for f in formula_choices %}
         <option value="{{ f.id }}" {% if selected_formula and selected_formula.id == f.id %}selected{% endif %}>
-          {{ f.finished_good.sku }} — {{ f.finished_good.name }}
-          · {{ f.name }}{% if f.is_default %} (default){% endif %}
+          {{ f.name }}{% if f.is_default %} (default){% endif %}
           {% if f.version %} · v{{ f.version }}{% endif %}
         </option>
         {% endfor %}
       </select>
     </div>
+    {% endif %}
   </form>
 
   {% if selected_formula %}
@@ -142,11 +359,18 @@
     <div class="ingredient-group ingredient-row"
          data-ing-id="{{ row.ingredient.id }}"
          data-pct="{{ row.percentage }}"
-         data-native-uom="{{ row.native_uom }}">
+         data-native-uom="{{ row.native_uom }}"
+         data-plant-utility="{% if row.plant_utility %}1{% else %}0{% endif %}">
       <div class="ingredient-header">
         <div class="ingredient-title">
           <span class="ingredient-name">{{ row.ingredient.item.sku }} — {{ row.ingredient.item.name }}</span>
           <span class="ingredient-percentage">Formula: {{ row.percentage }}%</span>
+          {% if row.plant_utility %}
+          <span class="partial-chip" style="background:#ecfdf5;color:#047857;margin-left:0.35rem"
+                title="Plant utility — no lot pick; qty counts toward batch mass and Cost Master">
+            Plant utility
+          </span>
+          {% endif %}
           {% if row.match_by_parent %}
           <span class="partial-chip" style="background:#dbeafe;color:#1e40af;margin-left:0.35rem"
                 title="Lots from any pack size under this parent are allowed">
@@ -173,7 +397,27 @@
         </div>
       </div>
 
-      {% if row.lots %}
+      {% if row.plant_utility %}
+      <div class="lots-list">
+        <div class="lot-row">
+          <div class="lot-row-ident">
+            <span class="lot-available-inline">
+              No inventory lot — enter qty to use (formula % × batch size). Rate comes from Cost Master.
+            </span>
+          </div>
+          <div class="lot-row-qty">
+            <label for="plant_utility_qty_{{ row.ingredient.id }}">Qty to use (<span class="uom-label">{{ display_uom }}</span>)</label>
+            <input id="plant_utility_qty_{{ row.ingredient.id }}"
+                   name="plant_utility_qty_{{ row.ingredient.id }}"
+                   type="number"
+                   step="any"
+                   min="0"
+                   class="quantity-input lot-qty-input plant-utility-qty"
+                   placeholder="0" />
+          </div>
+        </div>
+      </div>
+      {% elif row.lots %}
       <div class="lots-list">
         {% for lr in row.lots %}
         <div class="lot-row{% if lr.is_partial %} is-partial{% endif %}"
@@ -224,6 +468,8 @@
     <h3 style="margin:1.25rem 0 0.35rem">Work in finished-good partials (optional)</h3>
     <p style="margin:0 0 0.65rem;color:#64748b;font-size:0.9rem">
       Finished-good lots below one full pack. Selected partials combine into this batch when it closes.
+      Lots that are mostly full packs but still have a remnant (e.g. 49×20 + 15 lb) appear under
+      Inventory → <strong>Has remainder</strong>.
     </p>
     <div class="lots-list" style="margin-bottom:1rem">
       {% for pl in work_in_partial_lots %}
@@ -285,6 +531,11 @@
       var base = parseFloat(qtyInput.value || '0');
       if (!isFinite(base)) base = 0;
       var required = normalize(base * (pct / 100));
+      var isUtility = row.getAttribute('data-plant-utility') === '1';
+      var utilInp = isUtility ? row.querySelector('.plant-utility-qty') : null;
+      if (utilInp && utilInp.dataset.userEdited !== '1' && required > 0) {
+        utilInp.value = String(required);
+      }
       var selected = 0;
       row.querySelectorAll('.lot-qty-input').forEach(function (inp) {
         var q = parseQty(inp);
@@ -314,6 +565,9 @@
 
     document.querySelectorAll('.lot-qty-input').forEach(function (inp) {
       inp.addEventListener('input', function () {
+        if (inp.classList.contains('plant-utility-qty')) {
+          inp.dataset.userEdited = '1';
+        }
         var row = inp.closest('.ingredient-row');
         if (row) updateIngredientBalance(row);
       });
@@ -358,6 +612,8 @@
         url.searchParams.set('formula', formulaId);
         url.searchParams.set('uom', newUom);
         url.searchParams.set('batch_type', 'production');
+        {% if selected_parent %}url.searchParams.set('parent', '{{ selected_parent|escapejs }}');{% endif %}
+        {% if selected_fg %}url.searchParams.set('item', '{{ selected_fg.id }}');{% endif %}
         sessionStorage.setItem('batch_qty_' + formulaId, qtyInput.value || '');
         sessionStorage.setItem('batch_uom_' + formulaId, newUom);
         window.location.href = url.toString();

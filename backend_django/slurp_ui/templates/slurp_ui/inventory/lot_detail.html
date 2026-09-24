@@ -1,0 +1,147 @@
+{% extends "slurp_ui/base.html" %}
+{% block title %}Lot {{ lot.lot_number }} — SLURP{% endblock %}
+{% block content %}
+<style>
+  .lot-panel { max-width: 36rem; margin: 1.5rem auto 2.5rem; padding: 0 1rem; }
+  .lot-panel h2 { margin: 0 0 0.35rem; font-size: 1.35rem; }
+  .lot-panel .meta { color: #64748b; font-size: 0.9rem; margin-bottom: 1rem; }
+  .lot-panel .card {
+    background: #fff; border: 1px solid #e2e8f0; border-radius: 10px;
+    padding: 1rem 1.1rem; margin-bottom: 0.85rem;
+  }
+  .lot-panel .card h3 {
+    margin: 0 0 0.65rem; font-size: 0.72rem; font-weight: 700;
+    letter-spacing: 0.04em; text-transform: uppercase; color: #64748b;
+  }
+  .lot-panel .props { display: grid; grid-template-columns: 8.5rem 1fr; gap: 0.35rem 0.75rem; font-size: 0.9rem; }
+  .lot-panel .props .k { color: #64748b; }
+  .lot-panel .props .v { color: #0f172a; font-weight: 500; word-break: break-word; }
+  .lot-panel .warn-banner {
+    background: #fffbeb; border: 1px solid #fcd34d; color: #92400e;
+    border-radius: 8px; padding: 0.65rem 0.85rem; font-size: 0.88rem; margin-bottom: 0.85rem;
+  }
+  .lot-panel .form-row { margin-bottom: 0.75rem; }
+  .lot-panel .form-row label { display: block; font-weight: 600; font-size: 0.85rem; margin-bottom: 0.25rem; }
+  .lot-panel .form-row input[type="date"] {
+    width: 100%; max-width: 12rem; padding: 0.45rem 0.55rem; font: inherit;
+    border: 1px solid #cbd5e1; border-radius: 4px;
+  }
+  .lot-panel .form-row input.is-missing { border-color: #fbbf24; background: #fffbeb; }
+  .lot-panel .actions { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+  .lot-panel .actions a, .lot-panel .actions button { font-size: 0.85rem; }
+</style>
+<div class="lot-panel">
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:1rem;flex-wrap:wrap">
+    <div>
+      <h2>{{ lot.lot_number }}</h2>
+      <div class="meta">
+        {{ lot.item.sku }} — {{ lot.item.name }}
+        · <span class="status-badge status-{{ lot.status }}">{{ lot.status }}</span>
+      </div>
+    </div>
+    <a class="btn btn-secondary" href="{{ next_url }}">Back to inventory</a>
+  </div>
+
+  {% if dates_missing %}
+  <div class="warn-banner">Manufacture and/or expiration date missing — enter below.</div>
+  {% endif %}
+
+  <div class="card">
+    <h3>Identity</h3>
+    <div class="props">
+      <span class="k">Vendor lot #</span><span class="v">{{ lot.vendor_lot_number|default:"—" }}</span>
+      <span class="k">Vendor</span><span class="v">{{ lot.item.vendor|default:"—" }}</span>
+      <span class="k">Type</span><span class="v">{{ lot.item.item_type|default:"—" }}</span>
+      <span class="k">Received</span><span class="v">{% if received_date %}{{ received_date }}{% else %}—{% endif %}</span>
+      <span class="k">PO</span><span class="v">{{ lot.po_number|default:"—" }}</span>
+      <span class="k">Tracking</span><span class="v">{{ po_tracking }}</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>Quantity</h3>
+    <div class="props">
+      <span class="k">Remaining</span>
+      <span class="v">{{ rem|floatformat:2 }} {{ lot.item.unit_of_measure }}</span>
+      <span class="k">Available</span>
+      <span class="v">{{ avail|floatformat:2 }} {{ lot.item.unit_of_measure }}</span>
+      <span class="k">On hold</span>
+      <span class="v">{{ hold|floatformat:2 }} {{ lot.item.unit_of_measure }}</span>
+      <span class="k">Pack breakout</span>
+      <span class="v" {% if has_remainder %}style="color:#9a3412;font-weight:650"{% endif %}>
+        {{ pack_breakout|default:"—" }}
+      </span>
+      <span class="k">Committed</span>
+      <span class="v">Sales {{ committed_sales|floatformat:2 }} · Prod {{ committed_prod|floatformat:2 }}</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>Dates</h3>
+    <form method="post">
+      {% csrf_token %}
+      {% for key, val in request.GET.items %}
+      <input type="hidden" name="{{ key }}" value="{{ val }}" />
+      {% endfor %}
+      <div class="form-row">
+        <label for="manufacture_date">Manufacture date</label>
+        <input id="manufacture_date" name="manufacture_date" type="date"
+               value="{{ mfg_date }}" class="{% if not mfg_date %}is-missing{% endif %}" />
+      </div>
+      <div class="form-row">
+        <label for="expiration_date">Expiration date</label>
+        <input id="expiration_date" name="expiration_date" type="date"
+               value="{{ exp_date }}" class="{% if not exp_date %}is-missing{% endif %}" />
+      </div>
+      <button type="submit" class="btn btn-primary">Save dates</button>
+    </form>
+  </div>
+
+  <div class="card">
+    <h3>COA</h3>
+    {% if cert %}
+    <p style="margin:0 0 0.65rem;font-size:0.9rem">
+      Master COA on file ({{ cert.get_source_display|default:cert.source }}).
+      {% if cert.coa_pdf %}
+      <a href="{% url 'slurp_ui:quality_coa_pdf' cert.id %}" target="_blank">Open PDF</a>
+      {% endif %}
+    </p>
+    {% elif show_supplier_coa %}
+    <p style="margin:0 0 0.65rem;font-size:0.9rem;color:#92400e">
+      {% if cert and missing_coa_line_count %}
+      Master COA is missing {{ missing_coa_line_count }} test(s) from the FPS profile.
+      {% else %}
+      No master COA yet.
+      {% endif %}
+      {% if not has_coa_profile %}FPS has no typical COA profile — set that up first or enter after.{% endif %}
+    </p>
+    <a class="btn btn-primary" href="{% url 'slurp_ui:inventory_lot_supplier_coa' lot.id %}?{{ request.GET.urlencode }}">{% if cert %}Complete COA lines{% else %}Enter supplier COA{% endif %}</a>
+    {% else %}
+    <p style="margin:0;font-size:0.9rem;color:#64748b">No COA on this lot.</p>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <h3>Actions</h3>
+    <div class="actions">
+      {% if avail > 0 %}
+      <a class="btn btn-secondary" href="{% url 'slurp_ui:inventory_lot_hold' lot.id %}?{{ request.GET.urlencode }}">Hold</a>
+      {% endif %}
+      {% if hold > 0 %}
+      {% if open_hold_case %}
+      <a class="btn btn-secondary" href="{% url 'slurp_ui:inventory_hold_case' open_hold_case.id %}">Release / hold case</a>
+      {% else %}
+      <a class="btn btn-secondary" href="{% url 'slurp_ui:inventory_lot_hold_log' lot.id %}">Hold log / release</a>
+      {% endif %}
+      {% endif %}
+      <a class="btn btn-secondary" href="{% url 'slurp_ui:inventory_lot_hold_log' lot.id %}">Hold log</a>
+      {% if request.user.is_staff %}
+      <a class="btn btn-secondary" href="{% url 'slurp_ui:inventory_lot_reconcile' lot.id %}?{{ request.GET.urlencode }}">Reconcile</a>
+      {% endif %}
+      {% if lot.item_id %}
+      <a class="btn btn-secondary" href="{% url 'slurp_ui:quality_item_coa_test_lines' lot.item_id %}">FPS COA profile</a>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}

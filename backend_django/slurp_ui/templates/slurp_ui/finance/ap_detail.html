@@ -1,0 +1,230 @@
+{% extends "slurp_ui/base_module.html" %}
+{% block title %}AP {{ ap.invoice_number|default:ap.vendor_name }} — SLURP{% endblock %}
+{% block module_title %}AP detail{% endblock %}
+{% block header_actions %}
+  <a class="hs-btn" href="{% url 'slurp_ui:finance_ap' %}">Back to AP</a>
+  {% if ap.status != "paid" and ap.status != "cancelled" %}
+  <a class="hs-btn" href="{% url 'slurp_ui:finance_payment_entry' %}?type=ap_payment&amp;ap_entry={{ ap.id }}">Partial payment</a>
+  <a class="hs-btn hs-btn-primary" href="{% url 'slurp_ui:finance_ap_mark_paid' ap.id %}">Mark as paid</a>
+  {% endif %}
+{% endblock %}
+{% block main %}
+<div class="hs-bleed" style="padding:1.25rem 1.5rem 2rem;max-width:56rem">
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:1rem;flex-wrap:wrap;margin-bottom:1.25rem">
+    <div>
+      <p class="hs-muted" style="margin:0 0 0.25rem;font-size:0.8rem;letter-spacing:0.04em;text-transform:uppercase">Accounts payable</p>
+      <h2 style="margin:0;font-size:1.35rem">{{ ap.vendor_name }}</h2>
+      <p style="margin:0.35rem 0 0;color:#64748b">
+        Invoice {{ ap.invoice_number|default:"—" }}
+        · Due {{ ap.due_date }}
+        ·
+        {% if ap.status == 'paid' %}<span class="hs-badge ok">Paid</span>
+        {% elif ap.status == 'overdue' %}<span class="hs-badge danger">Overdue</span>
+        {% elif ap.status == 'partial' %}<span class="hs-badge warn">Partial</span>
+        {% else %}<span class="hs-badge info">{{ ap.status|title }}</span>{% endif %}
+      </p>
+    </div>
+    <div style="text-align:right">
+      <div class="hs-muted" style="font-size:0.8rem">Balance</div>
+      <div style="font-size:1.5rem;font-weight:650">{{ ap.balance|money:2 }}</div>
+    </div>
+  </div>
+
+  {% if missing_invoice %}
+  <div class="hs-card" style="margin-bottom:1rem;border-color:#fde68a;background:#fffbeb">
+    <div class="hs-card-body" style="padding:0.75rem 1rem;color:#92400e;font-size:0.9rem">
+      No vendor invoice PDF yet — upload below so you can verify the bill against the PO before paying.
+    </div>
+  </div>
+  {% endif %}
+
+  <div class="hs-card" style="margin-bottom:1rem">
+    <div class="hs-card-header"><h3>Amounts</h3></div>
+    <div class="hs-card-body">
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(10rem,1fr));gap:0.85rem">
+        <div><span class="hs-muted" style="font-size:0.78rem">Invoice date</span><div>{{ ap.invoice_date }}</div></div>
+        <div><span class="hs-muted" style="font-size:0.78rem">Due date</span><div>{{ ap.due_date }}</div></div>
+        <div><span class="hs-muted" style="font-size:0.78rem">Original</span><div>{{ ap.original_amount|money:2 }}</div></div>
+        <div><span class="hs-muted" style="font-size:0.78rem">Goods</span><div>{{ goods_amount|money:2 }}</div></div>
+        <div><span class="hs-muted" style="font-size:0.78rem">PPA freight</span><div>{{ freight_total|money:2 }}</div></div>
+        <div><span class="hs-muted" style="font-size:0.78rem">Paid</span><div>{{ ap.amount_paid|money:2 }}</div></div>
+        <div><span class="hs-muted" style="font-size:0.78rem">Balance</span><div>{{ ap.balance|money:2 }}</div></div>
+        <div>
+          <span class="hs-muted" style="font-size:0.78rem">Category</span>
+          <div>{% if ap.cost_category %}{{ ap.get_cost_category_display }}{% else %}Material / legacy{% endif %}</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {% if po %}
+  <div class="hs-card" style="margin-bottom:1rem">
+    <div class="hs-card-header">
+      <h3>Linked PO</h3>
+      <div style="display:flex;gap:0.4rem;flex-wrap:wrap">
+        <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:inventory_purchase_orders' %}?po={{ po.id }}&layout=split">Open PO</a>
+        <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:inventory_po_pdf' po.id %}" target="_blank" rel="noopener">View PO PDF</a>
+      </div>
+    </div>
+    <div class="hs-card-body">
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(10rem,1fr));gap:0.85rem;margin-bottom:0.85rem">
+        <div><span class="hs-muted" style="font-size:0.78rem">PO #</span><div>{{ po.po_number }}</div></div>
+        <div><span class="hs-muted" style="font-size:0.78rem">Status</span><div>{{ po.status|title }}</div></div>
+        <div>
+          <span class="hs-muted" style="font-size:0.78rem">Received date</span>
+          <div>{% if po_checkin_date %}{{ po_checkin_date|date:"Y-m-d" }}{% else %}—{% endif %}</div>
+        </div>
+        <div><span class="hs-muted" style="font-size:0.78rem">PO total</span><div>{{ po.total|money:2 }}</div></div>
+        <div>
+          <span class="hs-muted" style="font-size:0.78rem">Received value</span>
+          <div>{% if po_received_amount != None %}{{ po_received_amount|money:2 }}{% else %}—{% endif %}</div>
+        </div>
+      </div>
+
+      {% if amount_delta != None %}
+      <div style="padding:0.65rem 0.85rem;border-radius:6px;font-size:0.9rem;
+                  {% if amount_delta == 0 %}background:#ecfdf5;color:#065f46;border:1px solid #a7f3d0
+                  {% else %}background:#fff7ed;color:#9a3412;border:1px solid #fed7aa{% endif %}">
+        {% if amount_delta == 0 %}
+          AP goods amount matches PO received value.
+          {% if freight_total %} Invoice also includes PPA freight {{ freight_total|money:2 }} (payable total {{ ap.original_amount|money:2 }}).{% endif %}
+        {% else %}
+          AP goods ({{ goods_amount|money:2 }}) is {{ amount_delta|money:2 }}
+          {% if amount_delta > 0 %}higher{% else %}lower{% endif %}
+          than PO received value ({{ po_received_amount|money:2 }}).
+          {% if freight_total %}
+            PPA freight {{ freight_total|money:2 }} is on this bill (total {{ ap.original_amount|money:2 }}) and is excluded from the goods comparison.
+          {% else %}
+            Check short-ship / freight / duty before paying.
+          {% endif %}
+        {% endif %}
+      </div>
+      {% endif %}
+
+      {% if po.items.all %}
+      <table class="hs-table" style="margin-top:0.85rem">
+        <thead>
+          <tr>
+            <th>SKU</th>
+            <th>Ordered</th>
+            <th>Received</th>
+            <th>Unit price</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for li in po.items.all %}
+          <tr>
+            <td>{% if li.item %}{{ li.item.sku }}{% else %}—{% endif %}</td>
+            <td>{{ li.quantity_ordered|floatformat:2 }} {% if li.order_uom %}{{ li.order_uom }}{% elif li.item %}{{ li.item.unit_of_measure }}{% endif %}</td>
+            <td>{{ li.quantity_received|floatformat:2 }}</td>
+            <td>{{ li.unit_price|money:2 }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% endif %}
+    </div>
+  </div>
+  {% else %}
+  <div class="hs-card" style="margin-bottom:1rem">
+    <div class="hs-card-body" style="color:#64748b;font-size:0.9rem">
+      No purchase order linked to this AP entry.
+    </div>
+  </div>
+  {% endif %}
+
+  <div class="hs-card" style="margin-bottom:1rem">
+    <div class="hs-card-header"><h3>Documents</h3></div>
+    <div class="hs-card-body">
+      {% if ap.invoice_pdf %}
+      <p style="margin:0 0 0.75rem">
+        Vendor invoice on file
+        {% if ap.invoice_pdf_uploaded_at %}
+          <span class="hs-muted">(uploaded {{ ap.invoice_pdf_uploaded_at|date:"Y-m-d H:i" }})</span>
+        {% endif %}
+      </p>
+      <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:1rem">
+        <a class="hs-btn hs-btn-sm hs-btn-primary" href="{% url 'slurp_ui:finance_ap_invoice_pdf' ap.id %}" target="_blank" rel="noopener">View invoice PDF</a>
+        <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:finance_ap_invoice_pdf' ap.id %}?download=1">Download</a>
+        <form method="post" style="display:inline" onsubmit="return confirm('Remove vendor invoice PDF?');">
+          {% csrf_token %}
+          <input type="hidden" name="action" value="clear_invoice" />
+          <button type="submit" class="hs-btn hs-btn-sm hs-btn-danger">Remove</button>
+        </form>
+      </div>
+      {% endif %}
+
+      <form method="post" enctype="multipart/form-data" style="margin:0">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="upload_invoice" />
+        <div class="form-row" style="margin-bottom:0.65rem">
+          <label for="invoice_pdf">{% if ap.invoice_pdf %}Replace{% else %}Upload{% endif %} vendor invoice PDF</label>
+          <input id="invoice_pdf" name="invoice_pdf" type="file" accept="application/pdf,.pdf" required />
+        </div>
+        <button type="submit" class="hs-btn hs-btn-primary">Save invoice PDF</button>
+      </form>
+    </div>
+  </div>
+
+  <div class="hs-card" style="margin-bottom:1rem">
+    <div class="hs-card-header"><h3>Invoice #, PPA freight &amp; notes</h3></div>
+    <div class="hs-card-body">
+      <form method="post">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="save" />
+        <div class="form-row">
+          <label for="invoice_number">Vendor invoice #</label>
+          <input id="invoice_number" name="invoice_number" value="{{ ap.invoice_number|default:'' }}" />
+        </div>
+        <div class="form-row">
+          <label for="freight_total">Invoice freight (PPA)</label>
+          <input id="freight_total" name="freight_total" type="number" step="0.01" min="0"
+                 value="{% if ap.freight_total != None %}{{ ap.freight_total }}{% endif %}"
+                 placeholder="0.00" />
+          <p class="hs-muted" style="margin:0.35rem 0 0;font-size:0.82rem">
+            PPA = freight on this vendor invoice. Goods stay at PO received value; freight is additive to the payable.
+            {% if ap.status == "paid" or ap.status == "cancelled" %}
+            This bill is closed — changing freight updates cost split only, not the paid amount.
+            {% endif %}
+          </p>
+        </div>
+        <div class="form-row">
+          <label for="notes">Notes</label>
+          <textarea id="notes" name="notes" rows="3">{{ ap.notes|default:'' }}</textarea>
+        </div>
+        <button type="submit" class="hs-btn hs-btn-primary">Save</button>
+      </form>
+    </div>
+  </div>
+
+  <div class="hs-card">
+    <div class="hs-card-header"><h3>Payment history</h3></div>
+    <div class="hs-card-body tight">
+      <table class="hs-table">
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>Method</th>
+            <th>Amount</th>
+            <th>Reference</th>
+            <th>Notes</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for p in payments %}
+          <tr>
+            <td>{{ p.payment_date }}</td>
+            <td>{{ p.get_payment_method_display }}</td>
+            <td>{{ p.amount|money:2 }}</td>
+            <td>{{ p.reference_number|default:"—" }}</td>
+            <td>{{ p.notes|default:"—" }}</td>
+          </tr>
+          {% empty %}
+          <tr><td colspan="5"><div class="hs-empty">No payments yet.</div></td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}

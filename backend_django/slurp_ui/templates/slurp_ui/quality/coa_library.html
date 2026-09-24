@@ -72,6 +72,7 @@
               {% if row.coa_pdf %}
               <a href="{% url 'slurp_ui:quality_coa_customer_pdf' row.id %}" target="_blank">Download</a>
               {% else %}—{% endif %}
+              · <a href="{% url 'slurp_ui:quality_coa_customer_customize' row.id %}">Customize</a>
             </td>
           </tr>
           {% empty %}

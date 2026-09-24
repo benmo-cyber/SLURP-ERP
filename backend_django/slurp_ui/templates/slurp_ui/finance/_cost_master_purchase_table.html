@@ -1,0 +1,68 @@
+<div class="cm-table-wrap">
+  <table class="cm-table">
+    <thead>
+      <tr>
+        <th>SKU</th>
+        <th>Name</th>
+        <th>Vendor</th>
+        <th>$/lb</th>
+        <th>Tariff</th>
+        <th>Frt $/kg</th>
+        <th>Landed</th>
+        <th>Actual</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in purchase_rows %}
+      <tr class="cm-edit-row" id="cm-{{ r.id }}">
+        <td>
+          <span class="cm-sku">{{ r.sku|default:"—" }}</span>
+          {% if r.unlinked %}<span class="cm-chip warn">Unlinked</span>{% endif %}
+        </td>
+        <td>{{ r.name }}</td>
+        <td>{% if r.vendor %}{{ r.vendor }}{% else %}<span class="cm-muted">—</span>{% endif %}</td>
+        <td>
+          <form method="post" id="cm-save-{{ r.id }}" style="display:contents">
+            {% csrf_token %}
+            <input type="hidden" name="tab" value="master" />
+            <input type="hidden" name="segment" value="{{ cm_segment }}" />
+            <input type="hidden" name="q" value="{{ search }}" />
+            <input type="hidden" name="cm_id" value="{{ r.id }}" />
+            <input type="number" name="price_per_lb" step="any" value="{% if r.price_per_lb != None %}{{ r.price_per_lb }}{% endif %}" title="Ex-works $/lb" />
+          </form>
+        </td>
+        <td>
+          <input type="number" name="tariff" step="any" form="cm-save-{{ r.id }}"
+                 value="{% if r.tariff != None %}{{ r.tariff }}{% endif %}" title="Tariff as decimal (e.g. 0.38)" />
+        </td>
+        <td>
+          <input type="number" name="freight_per_kg" step="any" form="cm-save-{{ r.id }}"
+                 value="{% if r.freight_per_kg != None %}{{ r.freight_per_kg }}{% endif %}" title="Freight $/kg" />
+        </td>
+        <td class="cm-cost">
+          {% if r.landed_cost_per_lb != None %}{{ r.landed_cost_per_lb|floatformat:4 }}{% else %}<span class="cm-muted">—</span>{% endif %}
+        </td>
+        <td>
+          {% if r.actual_comparison == 'over' %}
+            <span class="cm-badge-actual over">Over</span>
+          {% elif r.actual_comparison == 'under' %}
+            <span class="cm-badge-actual under">Under</span>
+          {% elif r.actual_comparison == 'ok' %}
+            <span class="cm-badge-actual ok">OK</span>
+          {% else %}
+            <span class="cm-muted">—</span>
+          {% endif %}
+        </td>
+        <td>
+          <div class="cm-edit-actions">
+            <button type="submit" class="hs-btn hs-btn-sm hs-btn-primary" form="cm-save-{{ r.id }}">Save</button>
+          </div>
+        </td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="9"><div class="cm-empty">No {{ empty_label }} cost rows{% if search %} match “{{ search }}”{% endif %}.</div></td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>

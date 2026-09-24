@@ -16,16 +16,21 @@
       <a class="btn btn-secondary" href="{% url 'slurp_ui:production_adjust_batch' batch.id %}">Adjust</a>
       {% endif %}
       {% if batch.status != 'closed' %}
+      {% if can_close %}
       <a class="btn btn-primary" href="{% url 'slurp_ui:production_close_batch' batch.id %}">Close</a>
+      {% else %}
+      <span class="btn btn-secondary" style="opacity:0.55;cursor:not-allowed"
+            title="{{ close_blocked_reason }}">Close</span>
+      {% endif %}
       {% elif not batch.is_archived %}
       <form method="post" action="{% url 'slurp_ui:production_archive_batch' batch.id %}">{% csrf_token %}
         <button class="btn btn-secondary" type="submit"
-                onclick="return confirm('Archive {{ batch.batch_number }}? It will leave the dash and move to Production → Archive.');">Archive</button>
+                onclick="return confirm('Archive {{ batch.batch_number }}? It will leave the dash and move to Production → {{ archive_label }}.');">Archive</button>
       </form>
       {% else %}
       <form method="post" action="{% url 'slurp_ui:production_unarchive_batch' batch.id %}">{% csrf_token %}
         <button class="btn btn-primary" type="submit"
-                onclick="return confirm('Restore {{ batch.batch_number }} to the batch tickets dash?');">Restore to dash</button>
+                onclick="return confirm('Restore {{ batch.batch_number }} to the {{ dash_label }}?');">Restore to dash</button>
       </form>
       {% endif %}
       <form method="post" action="{% url 'slurp_ui:production_reverse_batch' batch.id %}">{% csrf_token %}
@@ -33,17 +38,16 @@
                 onclick="return confirm('Reverse batch {{ batch.batch_number }}?');">Reverse</button>
       </form>
       {% if batch.is_archived %}
-      <a class="btn btn-secondary" href="{% url 'slurp_ui:production_archive' %}">Back to archive</a>
+      <a class="btn btn-secondary" href="{% url archive_url_name %}">Back to archive</a>
       {% else %}
-      <a class="btn btn-secondary" href="{% url 'slurp_ui:production' %}">Back</a>
+      <a class="btn btn-secondary" href="{% url dash_url_name %}">Back</a>
       {% endif %}
     </div>
   </div>
 
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin:1rem 0">
     <div>
-      <strong>Quantity ticket:</strong> {{ batch.quantity_produced|floatformat:2 }}
-      {% if batch.batch_type == 'production' %} lbs{% else %} {{ batch.finished_good_item.unit_of_measure }}{% endif %}
+      <strong>Quantity ticket:</strong> {{ ticket_qty_display|floatformat:2 }} {{ mass_uom|default:"lbs" }}
     </div>
     <div>
       <strong>Production date:</strong>
@@ -62,13 +66,70 @@
       <span style="color:#64748b;font-size:0.85rem">(locked — {{ batch.status }})</span>
       {% endif %}
     </div>
-    {% if batch.status == 'closed' %}
-    <div><strong>Actual output:</strong> {{ batch.quantity_actual|floatformat:2 }}</div>
-    {% endif %}
     {% if formula %}
-    <div><strong>Recipe:</strong> {{ recipe_label|default:formula.name }}</div>
+    <div><strong>Formula:</strong> {{ formula_label|default:recipe_label|default:formula.name }}</div>
+    {% endif %}
+    {% if batch.campaign %}
+    <div><strong>Campaign lot:</strong> {{ batch.campaign.campaign_code }}</div>
     {% endif %}
   </div>
+
+  {% if batch.status == 'closed' %}
+  <div style="margin:0 0 1.25rem;padding:0.9rem 1rem;border:1px solid #bbf7d0;background:#f0fdf4;border-radius:8px">
+    <h3 style="margin:0 0 0.5rem;font-size:1rem">Closed batch summary</h3>
+    <p style="margin:0 0 0.75rem;color:#166534;font-size:0.85rem">
+      Spill/waste reduce displayed yield. Inventory output lot still follows quantity actual at close
+      (plus any work-in partials). This screen and the PDF are the unsigned data archive — signed paper lives elsewhere.
+    </p>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(10rem,1fr));gap:0.75rem">
+      <div>
+        <span style="display:block;font-size:0.75rem;color:#64748b;text-transform:uppercase;letter-spacing:0.04em">Yield</span>
+        <strong>{{ actual_qty_display|floatformat:2 }} {{ mass_uom|default:"lbs" }}</strong>
+        {% if pack_breakout %}
+        <div style="margin-top:0.25rem;font-size:0.85rem;color:#9a3412;font-weight:600">
+          {{ pack_breakout.display }}
+        </div>
+        {% endif %}
+      </div>
+      <div>
+        <span style="display:block;font-size:0.75rem;color:#64748b;text-transform:uppercase;letter-spacing:0.04em">Variance</span>
+        <strong>
+          {% if variance_display != None %}
+            {% if variance_display > 0 %}+{% endif %}{{ variance_display|floatformat:2 }} {{ mass_uom|default:"lbs" }}
+          {% else %}—{% endif %}
+        </strong>
+      </div>
+      <div>
+        <span style="display:block;font-size:0.75rem;color:#64748b;text-transform:uppercase;letter-spacing:0.04em">Wastes</span>
+        <strong>{{ wastes_display|floatformat:2 }} {{ mass_uom|default:"lbs" }}</strong>
+      </div>
+      <div>
+        <span style="display:block;font-size:0.75rem;color:#64748b;text-transform:uppercase;letter-spacing:0.04em">Spills</span>
+        <strong>{{ spills_display|floatformat:2 }} {{ mass_uom|default:"lbs" }}</strong>
+      </div>
+      {% if batch.campaign %}
+      <div>
+        <span style="display:block;font-size:0.75rem;color:#64748b;text-transform:uppercase;letter-spacing:0.04em">Campaign lot</span>
+        <strong>{{ batch.campaign.campaign_code }}</strong>
+      </div>
+      {% endif %}
+      <div>
+        <span style="display:block;font-size:0.75rem;color:#64748b;text-transform:uppercase;letter-spacing:0.04em">Closed</span>
+        <strong>{% if batch.closed_date %}{{ batch.closed_date|date:"Y-m-d H:i" }}{% else %}—{% endif %}</strong>
+      </div>
+    </div>
+    {% if qc_parsed.parameter or qc_parsed.actual or qc_parsed.initials %}
+    <div style="margin-top:0.85rem;padding-top:0.75rem;border-top:1px solid #bbf7d0">
+      <span style="display:block;font-size:0.75rem;color:#64748b;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:0.35rem">QC at close</span>
+      <div style="font-size:0.95rem">
+        {% if qc_parsed.parameter %}<div><strong>Parameter:</strong> {{ qc_parsed.parameter }}</div>{% endif %}
+        {% if qc_parsed.actual %}<div><strong>Actual:</strong> {{ qc_parsed.actual }}</div>{% endif %}
+        {% if qc_parsed.initials %}<div><strong>Initials:</strong> {{ qc_parsed.initials }}</div>{% endif %}
+      </div>
+    </div>
+    {% endif %}
+  </div>
+  {% endif %}
 
   <h3 style="margin:1rem 0 0.5rem">Inputs</h3>
   <table class="data-table">
@@ -76,9 +137,12 @@
     <tbody>
       {% for inp in batch.inputs.all %}
       <tr>
-        <td>{{ inp.lot.lot_number }}</td>
-        <td>{{ inp.lot.item.sku }}</td>
-        <td>{{ inp.quantity_used|floatformat:2 }} {{ inp.lot.item.unit_of_measure }}</td>
+        <td>{% if inp.lot %}{{ inp.lot.lot_number }}{% else %}Plant utility{% endif %}</td>
+        <td>{% if inp.item %}{{ inp.item.sku }}{% elif inp.lot %}{{ inp.lot.item.sku }}{% else %}—{% endif %}</td>
+        <td>
+          {{ inp.quantity_used|floatformat:2 }}
+          {% if inp.item %}{{ inp.item.unit_of_measure }}{% elif inp.lot %}{{ inp.lot.item.unit_of_measure }}{% endif %}
+        </td>
       </tr>
       {% empty %}
       <tr><td colspan="3">No inputs.</td></tr>

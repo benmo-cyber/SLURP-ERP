@@ -1,6 +1,11 @@
 {% extends "slurp_ui/base_module.html" %}
+{% load static %}
 {% block title %}Create Finished Good — SLURP{% endblock %}
 {% block module_title %}Create Finished Good{% endblock %}
+{% block extra_css %}
+<link rel="stylesheet" href="{% static 'slurp_ui/css/CreateFinishedGood.css' %}?v=20260923a" />
+<link rel="stylesheet" href="{% static 'slurp_ui/css/Quality.css' %}?v=20260923a" />
+{% endblock %}
 {% block header_actions %}
   <a href="{% url 'slurp_ui:quality_finished_goods' %}" class="hs-btn">All finished goods</a>
 {% endblock %}
@@ -87,10 +92,25 @@
           </div>
         </div>
         <div class="hs-form-grid-3">
-          <div class="form-row"><label>QC parameter</label><input name="qc_parameter_name" /></div>
-          <div class="form-row"><label>Min</label><input name="qc_spec_min" type="number" step="any" /></div>
-          <div class="form-row"><label>Max</label><input name="qc_spec_max" type="number" step="any" /></div>
+          <div class="form-row">
+            <label for="qc_parameter_name">Parameter name</label>
+            <input id="qc_parameter_name" name="qc_parameter_name"
+                   placeholder="e.g. % beta carotene" />
+          </div>
+          <div class="form-row">
+            <label for="qc_spec_min">Min</label>
+            <input id="qc_spec_min" name="qc_spec_min" type="number" step="any"
+                   placeholder="1.0" />
+          </div>
+          <div class="form-row">
+            <label for="qc_spec_max">Max</label>
+            <input id="qc_spec_max" name="qc_spec_max" type="number" step="any"
+                   placeholder="1.5" />
+          </div>
         </div>
+        <p class="hs-muted" style="font-size:0.8rem;margin:0.35rem 0 0">
+          Name goes in the left box (text). Min / Max are the numeric range only — e.g. name “% beta carotene”, min 1.0, max 1.5.
+        </p>
       </div>
     </div>
 

@@ -52,13 +52,15 @@ from .lot_display_quantities import compute_lot_quantity_breakdown
 
 def _round_production_quantity_used(quantity, lot):
     """Persist batch input qty with same snap rules as migrations (see mass_quantity)."""
-    return snap_stored_batch_input_quantity(quantity, getattr(lot.item, 'unit_of_measure', None))
+    item = getattr(lot, "item", None) if lot is not None else None
+    return snap_stored_batch_input_quantity(quantity, getattr(item, "unit_of_measure", None))
 
 
 def _round_lot_qty_remaining(value, lot):
     """Keep lot.quantity_remaining consistent with unit (ea rolls may need 5 dp)."""
     v = float(value)
-    if getattr(lot.item, 'unit_of_measure', None) == 'ea':
+    item = getattr(lot, "item", None) if lot is not None else None
+    if getattr(item, "unit_of_measure", None) == "ea":
         return round(v, 5)
     return round(v, 2)
 
@@ -211,6 +213,21 @@ def log_lot_transaction(lot, quantity_before, quantity_change, transaction_type,
             # Table doesn't exist, skip logging silently
             return
         
+        lot_po = (getattr(lot, "po_number", None) or "").strip() or None
+        lot_vl = (getattr(lot, "vendor_lot_number", None) or "").strip() or None
+        po_id = purchase_order_id
+        if po_id is None and lot_po:
+            try:
+                from .models import PurchaseOrder
+
+                po_id = (
+                    PurchaseOrder.objects.filter(po_number=lot_po)
+                    .values_list("id", flat=True)
+                    .first()
+                )
+            except Exception:
+                po_id = None
+
         LotTransactionLog.objects.create(
             lot=lot,
             lot_number=lot.lot_number,
@@ -224,10 +241,12 @@ def log_lot_transaction(lot, quantity_before, quantity_change, transaction_type,
             unit_of_measure=lot.item.unit_of_measure,
             reference_number=reference_number,
             reference_type=reference_type,
+            po_number=lot_po,
+            vendor_lot_number=lot_vl,
             transaction_id=transaction_id,
             batch_id=batch_id,
             sales_order_id=sales_order_id,
-            purchase_order_id=purchase_order_id,
+            purchase_order_id=po_id,
             notes=notes or f'Lot {lot.lot_number} transaction: {transaction_type}'
         )
     except Exception as e:
@@ -499,7 +518,7 @@ def create_ap_entry_from_po(
       new material AP row (+ JE) for the delta.
     """
     from django.utils import timezone
-    from django.db.models import Q, Sum
+    from django.db.models import Q
     from .buy_services import po_line_ordered_native
 
     def _received_amount(po):
@@ -576,9 +595,12 @@ def create_ap_entry_from_po(
         vendor_name = purchase_order.vendor_customer_name or 'Unknown Vendor'
         vendor_id = purchase_order.vendor_customer_id
 
-        booked = float(
-            _material_qs(purchase_order).aggregate(s=Sum('original_amount'))['s'] or 0
-        )
+        def _goods_portion(ap_row):
+            oa = float(ap_row.original_amount or 0)
+            ft = float(ap_row.freight_total or 0)
+            return max(0.0, round(oa - ft, 2))
+
+        booked = round(sum(_goods_portion(r) for r in material_rows), 2)
 
         # Any paid material row(s): never rewrite — open a delta bill for extra received value
         paid_rows = [r for r in material_rows if float(r.amount_paid or 0) > 0.01]
@@ -595,16 +617,21 @@ def create_ap_entry_from_po(
 
         if existing_material:
             paid = float(existing_material.amount_paid or 0)
-            if abs(float(existing_material.original_amount or 0) - total_amount) < 0.01:
+            freight = float(existing_material.freight_total or 0)
+            goods_now = _goods_portion(existing_material)
+            bill_total = round(total_amount + freight, 2)
+            if abs(goods_now - total_amount) < 0.01:
                 return existing_material
-            existing_material.original_amount = total_amount
-            existing_material.balance = max(0.0, total_amount - paid)
+            existing_material.original_amount = bill_total
+            existing_material.balance = max(0.0, bill_total - paid)
             existing_material.status = 'open' if existing_material.balance > 0.01 else 'paid'
             note = (existing_material.notes or '').strip()
             bump = f'Updated from PO {purchase_order.po_number} ({source_tag}) to received value ${total_amount:,.2f}'
+            if freight > 0.01:
+                bump += f' + PPA freight ${freight:,.2f}'
             existing_material.notes = f'{note}\n{bump}'.strip() if note else bump
             existing_material.save()
-            _sync_ap_journal_entry_amount(existing_material, total_amount)
+            _sync_ap_journal_entry_amount(existing_material, bill_total)
             return existing_material
 
         return _new_material_ap(
@@ -3648,6 +3675,15 @@ class ProductionBatchViewSet(viewsets.ModelViewSet):
             for key in ('quantity_actual', 'wastes', 'spills', 'variance', 'notes', 'closed_date'):
                 if key in request.data:
                     close_data[key] = request.data.get(key)
+            # Early close (before production_date) requires staff God mode.
+            raw_early = request.data.get('allow_early_close')
+            header_gm = (request.headers.get('X-God-Mode') or '').strip().lower()
+            session_gm = bool(request.session.get('god_mode')) and request.user.is_staff
+            flag_early = str(raw_early or '').strip().lower() in ('1', 'true', 'yes')
+            header_early = header_gm in ('1', 'true', 'yes')
+            close_data['allow_early_close'] = bool(
+                request.user.is_staff and (session_gm or flag_early or header_early)
+            )
             try:
                 batch = close_batch_ticket(batch, request.user, close_data)
             except MakeFlowError as e:
@@ -4524,7 +4560,7 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
     
     @action(detail=True, methods=['post'])
     def ship(self, request, pk=None):
-        """Ship the sales order (supports partial shipments), update tracking, and create invoice."""
+        """Mark Ready: create shipment with pieces/dims (no deplete / no invoice)."""
         from .sell_services import SellFlowError, ship_sales_order
 
         sales_order = self.get_object()
@@ -4551,6 +4587,46 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
                 'detail': traceback.format_exc()
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+        return Response(response_payload, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['post'], url_path='mark-picked-up')
+    def mark_picked_up(self, request, pk=None):
+        """Carrier pickup: deplete inventory and create draft invoice for the ready shipment."""
+        from .models import Shipment
+        from .sell_services import SellFlowError, mark_shipment_picked_up
+
+        sales_order = self.get_object()
+        shipment_id = request.data.get('shipment_id')
+        if shipment_id:
+            shipment = Shipment.objects.filter(
+                pk=shipment_id, sales_order=sales_order, fulfillment_status='ready'
+            ).first()
+        else:
+            shipment = (
+                Shipment.objects.filter(sales_order=sales_order, fulfillment_status='ready')
+                .order_by('-id')
+                .first()
+            )
+        if not shipment:
+            return Response(
+                {'error': 'No shipment awaiting pickup for this order.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            response_payload = mark_shipment_picked_up(
+                shipment,
+                request.user,
+                request.data,
+                serializer_context=self.get_serializer_context(),
+            )
+        except SellFlowError as e:
+            return _sell_flow_error_response(e)
+        except Exception as e:
+            import traceback
+            return Response({
+                'error': str(e),
+                'detail': traceback.format_exc()
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         return Response(response_payload, status=status.HTTP_200_OK)
 
     @action(detail=False, methods=['post'], url_path='combined-ship')
@@ -6527,11 +6603,14 @@ class CalendarEventsViewSet(viewsets.ViewSet):
                 if ship_date:
                     # Determine if this is an actual shipment or planned
                     is_actual = so.status in ['shipped', 'completed'] and so.actual_ship_date is not None
-                    needs_checkout = so.status in ['ready_for_shipment']
-                    needs_allocation = so.status in ['draft', 'allocated']
-                    
-                    if needs_checkout:
-                        title = f'Check Out & Ship: {so.so_number}'
+                    awaiting_pickup = so.status == 'ready_for_shipment'
+                    needs_ready = so.status in ('issued', 'allocated')
+                    needs_allocation = so.status == 'draft'
+
+                    if awaiting_pickup:
+                        title = f'Awaiting pickup: {so.so_number}'
+                    elif needs_ready:
+                        title = f'Mark Ready: {so.so_number}'
                     elif needs_allocation:
                         title = f'Allocate & Ship: {so.so_number}'
                     elif is_actual:

@@ -16,6 +16,9 @@ LBS_PER_KG = 2.2
 def _vendor_name(item: Item) -> Optional[str]:
     vendor = getattr(item, "vendor", None)
     if not vendor:
+        # Plant utilities have no external vendor; still need a Cost Master key.
+        if getattr(item, "plant_utility", False):
+            return "Plant"
         return None
     if hasattr(vendor, "name"):
         return (vendor.name or "").strip() or None

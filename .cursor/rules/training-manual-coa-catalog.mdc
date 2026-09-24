@@ -1,0 +1,30 @@
+---
+description: Training manual — COA/micro catalog column explanations (+ screenshots)
+alwaysApply: true
+---
+
+# Training manual note: COA / micro catalog
+
+When building the **end-of-project training manual**, include a short section on **Quality → COA / micro catalog** with **screenshots** of the catalog table page.
+
+Explain columns the same way as in product Q&A:
+
+## # (order)
+Display order only — lower numbers appear first in the FPS catalog picker and on product COA / hold-release lines. Not a test ID.
+
+## Flags
+- **COA** — Include this test by default on customer COAs when added to an FPS.
+- **On** — Active in the catalog. Off hides it from the FPS picker without deleting.
+
+## Kind
+How the result is judged:
+- **Numeric range (min–max)** — Must fall between Min and Max.
+- **Numeric minimum (e.g. NLT)** — Must be at least Min.
+- **Pass / fail (text)** — Text like Pass / Fail / Negative; often Pass/Fail on customer COA.
+- **Text only** — Free text (e.g. `≤ 10,000 CFU/g`); no auto pass/fail from numbers.
+
+Also mention: **Specification** prints on the COA; **Typical result** prefills hold-release result entry.
+
+UI surface: `slurp_ui/templates/slurp_ui/quality/coa_test_catalog.html` (route `quality_coa_test_catalog`).
+
+After the training section is written, **delete or cancel this rule**.

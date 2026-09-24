@@ -15,6 +15,7 @@ def sales_order_customer_display(sales_order) -> str:
 
 def _sync_customer_coa_impl(sales_order_lot_id: int) -> None:
     from .models import LotCoaCertificate, LotCoaCustomerCopy, SalesOrderLot
+    from .coa_customer_options import apply_customer_coa_item_defaults
     from .coa_pdf_html import save_customer_copy_coa_pdf
 
     try:
@@ -27,7 +28,11 @@ def _sync_customer_coa_impl(sales_order_lot_id: int) -> None:
 
     lot = sol.lot
     try:
-        cert = lot.coa_certificate
+        cert = (
+            LotCoaCertificate.objects.select_related("lot__item")
+            .prefetch_related("line_results", "lot__item__coa_test_lines")
+            .get(lot_id=lot.id)
+        )
     except LotCoaCertificate.DoesNotExist:
         LotCoaCustomerCopy.objects.filter(sales_order_lot_id=sales_order_lot_id).delete()
         return
@@ -47,13 +52,30 @@ def _sync_customer_coa_impl(sales_order_lot_id: int) -> None:
                 customer_po=po,
                 quantity_snapshot=qty,
             )
+            apply_customer_coa_item_defaults(copy, cert, force=True)
             copy.save()
         else:
             copy.certificate_id = cert.id
             copy.customer_name = cust
             copy.customer_po = po
             copy.quantity_snapshot = qty
-            copy.save(update_fields=["certificate", "customer_name", "customer_po", "quantity_snapshot", "updated_at"])
+            update_fields = [
+                "certificate",
+                "customer_name",
+                "customer_po",
+                "quantity_snapshot",
+                "updated_at",
+            ]
+            if apply_customer_coa_item_defaults(copy, cert):
+                update_fields.extend(
+                    [
+                        "included_line_result_ids",
+                        "include_qc_row",
+                        "result_display_mode",
+                        "line_display_overrides",
+                    ]
+                )
+            copy.save(update_fields=update_fields)
 
     try:
         save_customer_copy_coa_pdf(copy)

@@ -44,6 +44,11 @@
           {% if row.ingredient %}
           <span class="ingredient-name">{{ row.ingredient.item.sku }} — {{ row.ingredient.item.name }}</span>
           <span class="ingredient-percentage">Formula: {{ row.percentage }}%</span>
+          {% if row.plant_utility %}
+          <span class="partial-chip" style="background:#ecfdf5;color:#047857;margin-left:0.35rem">
+            Plant utility
+          </span>
+          {% endif %}
           {% if row.match_by_parent %}
           <span class="partial-chip" style="background:#dbeafe;color:#1e40af;margin-left:0.35rem"
                 title="Lots from any pack size under this parent are allowed">
@@ -77,7 +82,25 @@
         </div>
       </div>
 
-      {% if row.lots %}
+      {% if row.plant_utility and row.ingredient %}
+      <div class="lots-list">
+        <div class="lot-row">
+          <div class="lot-row-ident">
+            <span class="lot-available-inline">Plant utility — no lot; qty still counts toward batch mass.</span>
+          </div>
+          <div class="lot-row-qty">
+            <label for="plant_utility_qty_{{ row.ingredient.id }}">Qty (<span class="uom-label">{{ display_uom }}</span>)</label>
+            <input id="plant_utility_qty_{{ row.ingredient.id }}"
+                   name="plant_utility_qty_{{ row.ingredient.id }}"
+                   type="number"
+                   step="any"
+                   min="0"
+                   class="quantity-input lot-qty-input"
+                   value="{% if row.utility_qty_display %}{{ row.utility_qty_display }}{% endif %}" />
+          </div>
+        </div>
+      </div>
+      {% elif row.lots %}
       <div class="lots-list">
         {% for lr in row.lots %}
         <div class="lot-row{% if lr.is_partial %} is-partial{% endif %}{% if lr.selected_qty_display %} selected{% endif %}"

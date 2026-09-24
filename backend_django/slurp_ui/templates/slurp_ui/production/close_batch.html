@@ -5,10 +5,17 @@
   <h2>Close Batch {{ batch.batch_number }}</h2>
   <p style="margin-bottom:1rem;color:#64748b">
     {{ batch.finished_good_item.sku }} · ticket target
-    <strong>{{ batch.quantity_produced|floatformat:2 }}</strong>
-    {% if batch.batch_type == 'production' %} {{ display_uom|default:"lbs" }}{% endif %}
+    <strong>{{ ticket_qty_display|floatformat:2 }} {{ display_uom }}</strong>
     · status {{ batch.status }}
   </p>
+  {% if campaign_preview %}
+  <div style="margin-bottom:1rem;padding:0.75rem 0.9rem;border:1px solid #bfdbfe;background:#eff6ff;border-radius:8px;font-size:0.9rem;color:#1e3a8a">
+    <strong>Campaign lot:</strong> {{ campaign_preview }}
+    <div style="margin-top:0.25rem;font-size:0.82rem;color:#475569">
+      Linked from the batch tickets list. Unlink there if this ticket should move to another week.
+    </div>
+  </div>
+  {% endif %}
 
   {% if has_adjustments %}
   <div style="margin-bottom:1rem;padding:0.85rem 1rem;border:1px solid #fecaca;background:#fef2f2;border-radius:8px">
@@ -48,7 +55,13 @@
   <h3 style="margin-bottom:0.5rem">Inputs</h3>
   <ul style="margin-bottom:1rem">
     {% for inp in batch.inputs.all %}
-    <li>{{ inp.lot.lot_number }} — {{ inp.lot.item.sku }}: {{ inp.quantity_used|floatformat:2 }} {{ inp.lot.item.unit_of_measure }}</li>
+    <li>
+      {% if inp.lot %}{{ inp.lot.lot_number }}{% else %}Plant utility{% endif %}
+      —
+      {% if inp.item %}{{ inp.item.sku }}{% elif inp.lot %}{{ inp.lot.item.sku }}{% endif %}:
+      {{ inp.quantity_used|floatformat:2 }}
+      {% if inp.item %}{{ inp.item.unit_of_measure }}{% elif inp.lot %}{{ inp.lot.item.unit_of_measure }}{% endif %}
+    </li>
     {% empty %}
     <li>No inputs.</li>
     {% endfor %}
@@ -57,25 +70,29 @@
   <form method="post">
     {% csrf_token %}
     <div class="form-row">
-      <label for="quantity_actual">Quantity actual (produced into inventory) *</label>
+      <label for="quantity_actual">Quantity actual ({{ display_uom }}) *</label>
       <input id="quantity_actual" name="quantity_actual" type="number" step="any"
-             value="{{ batch.quantity_produced }}" required />
+             value="{{ ticket_qty_display }}" required />
+      <p id="pack-breakout-hint" style="margin:0.35rem 0 0;font-size:0.85rem;color:#9a3412;font-weight:600">
+        {% if pack_breakout %}≈ {{ pack_breakout.display }}{% endif %}
+      </p>
     </div>
-    {% if batch.batch_type == 'production' %}
     <p style="font-size:0.9rem;color:#64748b;margin-bottom:0.75rem">
-      If actual is below the batch ticket, wastes + spills must equal the shortfall.
+      Enter actual, wastes, and spills in <strong>{{ display_uom }}</strong>
+      (same unit as this ticket). If actual is below the ticket, wastes + spills must equal the shortfall.
+      Spill/waste document the gap; inventory output lot = actual
+      {% if pack_qty %}(shown as full packs + remainder vs {{ pack_qty }} {{ pack_uom }} pack){% endif %}.
     </p>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem">
       <div class="form-row">
-        <label for="wastes">Wastes</label>
+        <label for="wastes">Wastes ({{ display_uom }})</label>
         <input id="wastes" name="wastes" type="number" step="any" value="0" />
       </div>
       <div class="form-row">
-        <label for="spills">Spills</label>
+        <label for="spills">Spills ({{ display_uom }})</label>
         <input id="spills" name="spills" type="number" step="any" value="0" />
       </div>
     </div>
-    {% endif %}
 
     <h3 style="margin:1rem 0 0.5rem">QC</h3>
     {% if formula_has_qc %}
@@ -128,4 +145,58 @@
     </div>
   </form>
 </div>
+{% if pack_qty %}
+<script>
+(function () {
+  var packQty = {{ pack_qty }};
+  var packUom = '{{ pack_uom|default:"" }}'.toLowerCase();
+  var displayUom = '{{ display_uom }}'.toLowerCase();
+  var lbsPerKg = {{ lbs_per_kg|default:"2.2" }};
+  var hint = document.getElementById('pack-breakout-hint');
+  var inp = document.getElementById('quantity_actual');
+  if (!hint || !inp || !(packQty > 0)) return;
+
+  function norm(u) {
+    u = (u || 'lbs').toLowerCase();
+    return (u === 'lb') ? 'lbs' : u;
+  }
+  function convert(q, fromU, toU) {
+    fromU = norm(fromU); toU = norm(toU);
+    if (fromU === toU) return q;
+    if (fromU === 'kg' && toU === 'lbs') return q * lbsPerKg;
+    if (fromU === 'lbs' && toU === 'kg') return q / lbsPerKg;
+    return q;
+  }
+  function fmt(n) {
+    if (Math.abs(n - Math.round(n)) < 0.005) return String(Math.round(n));
+    return (Math.round(n * 100) / 100).toFixed(2);
+  }
+  function fmtPartial(n) {
+    n = Math.round(n * 100) / 100;
+    if (Math.abs(n - Math.round(n)) < 0.005) return String(Math.round(n));
+    return n.toFixed(2);
+  }
+  function update() {
+    var q = parseFloat(inp.value);
+    if (!isFinite(q) || q <= 0) { hint.textContent = ''; return; }
+    var packIn = convert(packQty, packUom, displayUom);
+    if (!(packIn > 0)) { hint.textContent = ''; return; }
+    var full = Math.floor(q / packIn);
+    var rem = q - full * packIn;
+    if (rem < 0.005) rem = 0;
+    else if (Math.abs(rem - packIn) < 0.005) { full += 1; rem = 0; }
+    else rem = Math.round(rem * 100) / 100;
+    var uLong = (displayUom === 'lbs') ? 'lbs' : displayUom;
+    var packLabel = fmt(packIn) + ' ' + uLong;
+    var text;
+    if (full <= 0) text = '≈ ' + fmtPartial(rem) + ' ' + uLong + ' partial';
+    else if (rem <= 0) text = '≈ ' + full + ' × ' + packLabel;
+    else text = '≈ ' + full + ' × ' + packLabel + ' + ' + fmtPartial(rem) + ' ' + uLong + ' partial';
+    hint.textContent = text;
+  }
+  inp.addEventListener('input', update);
+  update();
+})();
+</script>
+{% endif %}
 {% endblock %}

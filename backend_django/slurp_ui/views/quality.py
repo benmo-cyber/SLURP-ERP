@@ -31,33 +31,20 @@ from erp_core.formula_ingredient import (
 )
 from erp_core.models import (
     CriticalControlPoint,
-
+    CoaTestCatalog,
     Formula,
-
     FormulaItem,
-
     Item,
-
     ItemCoaTestLine,
-
     Lot,
-
     LotCoaCertificate,
-
     LotCoaCustomerCopy,
-
     LotHoldCase,
-
     ProductionBatchInput,
-
     ProductionBatchOutput,
-
     RDFormula,
-
     RDFormulaFamily,
-
     RDFormulaLine,
-
     SupplierDocument,
 
     SupplierSurvey,
@@ -1299,6 +1286,227 @@ def quality_coa_customer_pdf(request: HttpRequest, pk: int) -> HttpResponse:
 
 @login_required
 
+@require_http_methods(["GET", "POST"])
+
+def quality_coa_customer_customize(request: HttpRequest, pk: int) -> HttpResponse:
+
+    """Pick which master tests appear on a customer COA and Pass/Fail vs actual."""
+
+    from erp_core.coa_customer_options import apply_customer_coa_item_defaults
+    from erp_core.coa_pdf_html import save_customer_copy_coa_pdf
+
+    copy = get_object_or_404(
+
+        LotCoaCustomerCopy.objects.select_related(
+
+            "certificate__lot__item",
+
+            "sales_order_lot__sales_order_item__sales_order",
+
+        ).prefetch_related(
+
+            "certificate__line_results",
+
+            "certificate__lot__item__coa_test_lines",
+
+        ),
+
+        pk=pk,
+
+    )
+
+    cert = copy.certificate
+
+    # Ensure defaults exist for the form if never customized
+
+    if not copy.customization_saved and not (copy.included_line_result_ids or []):
+
+        if apply_customer_coa_item_defaults(copy, cert, force=True):
+
+            copy.save(
+
+                update_fields=[
+
+                    "included_line_result_ids",
+
+                    "include_qc_row",
+
+                    "result_display_mode",
+
+                    "line_display_overrides",
+
+                    "updated_at",
+
+                ]
+
+            )
+
+
+
+    has_qc = bool(
+
+        (cert.qc_parameter_name_snapshot or "").strip()
+
+        or cert.qc_result_value is not None
+
+    )
+
+    line_results = list(cert.line_results.all().order_by("id"))
+
+    included_set = {int(x) for x in (copy.included_line_result_ids or [])}
+
+    overrides = dict(copy.line_display_overrides or {})
+
+
+
+    if request.method == "POST":
+
+        mode = (request.POST.get("result_display_mode") or "per_line").strip().lower()
+
+        if mode not in ("actual", "pass_fail", "per_line"):
+
+            mode = "per_line"
+
+        include_qc = bool(request.POST.get("include_qc_row")) if has_qc else False
+
+        selected: list[int] = []
+
+        new_overrides: dict[str, str] = {}
+
+        for lr in line_results:
+
+            if request.POST.get(f"include_line_{lr.id}"):
+
+                selected.append(int(lr.id))
+
+            disp = (request.POST.get(f"display_line_{lr.id}") or "actual").strip().lower()
+
+            if disp not in ("actual", "pass_fail"):
+
+                disp = "actual"
+
+            new_overrides[str(lr.id)] = disp
+
+        if has_qc:
+
+            qc_disp = (request.POST.get("display_qc") or "actual").strip().lower()
+
+            if qc_disp not in ("actual", "pass_fail"):
+
+                qc_disp = "actual"
+
+            new_overrides["qc"] = qc_disp
+
+
+
+        copy.included_line_result_ids = selected
+
+        copy.include_qc_row = include_qc
+
+        copy.result_display_mode = mode
+
+        copy.line_display_overrides = new_overrides
+
+        copy.customization_saved = True
+
+        copy.save(
+
+            update_fields=[
+
+                "included_line_result_ids",
+
+                "include_qc_row",
+
+                "result_display_mode",
+
+                "line_display_overrides",
+
+                "customization_saved",
+
+                "updated_at",
+
+            ]
+
+        )
+
+        try:
+
+            ok = save_customer_copy_coa_pdf(copy)
+
+            if ok:
+
+                messages.success(request, "Customer COA updated and PDF regenerated.")
+
+            else:
+
+                messages.warning(request, "Settings saved, but PDF generation failed.")
+
+        except Exception as e:
+
+            messages.error(request, f"Settings saved; PDF error: {e}")
+
+        return redirect("slurp_ui:quality_coa_customer_customize", pk=pk)
+
+
+
+    so = copy.sales_order_lot.sales_order_item.sales_order
+
+    rows = []
+
+    for lr in line_results:
+
+        rows.append(
+
+            {
+
+                "line": lr,
+
+                "included": int(lr.id) in included_set,
+
+                "display": overrides.get(str(lr.id), "actual"),
+
+            }
+
+        )
+
+
+
+    return render(
+
+        request,
+
+        "slurp_ui/quality/coa_customer_customize.html",
+
+        _quality_ctx(
+
+            "coa-library",
+
+            copy=copy,
+
+            certificate=cert,
+
+            sales_order=so,
+
+            has_qc=has_qc,
+
+            qc_display=overrides.get("qc", "actual"),
+
+            line_rows=rows,
+
+            display_mode_choices=LotCoaCustomerCopy.RESULT_DISPLAY_MODE_CHOICES,
+
+            port_status="full",
+
+        ),
+
+    )
+
+
+
+
+
+@login_required
+
 def quality_finished_goods(request: HttpRequest) -> HttpResponse:
 
     items = list(
@@ -1352,17 +1560,11 @@ def quality_create_finished_good(request: HttpRequest) -> HttpResponse:
 
 
     ingredient_items = (
-
         Item.objects.filter(
-
             item_type__in=["raw_material", "distributed_item"],
-
-            vendor__in=approved_vendors,
-
         )
-
+        .filter(Q(vendor__in=approved_vendors) | Q(plant_utility=True))
         .order_by("sku")[:500]
-
     )
 
 
@@ -1876,7 +2078,7 @@ def quality_finished_good_detail(request: HttpRequest, pk: int) -> HttpResponse:
         messages.error(request, "Not a finished good / distributed item.")
         return redirect("slurp_ui:quality_finished_goods")
 
-    recipes = list(
+    formulas = list(
         Formula.objects.filter(finished_good=item)
         .prefetch_related("ingredients__item")
         .order_by("-is_default", "name", "id")
@@ -1890,7 +2092,8 @@ def quality_finished_good_detail(request: HttpRequest, pk: int) -> HttpResponse:
                 "finished-goods",
                 item=item,
                 formula=None,
-                recipes=[],
+                formulas=[],
+                recipes=[],  # legacy alias
                 ingredients=[],
                 can_edit_formula=False,
                 port_status="full",
@@ -1905,18 +2108,30 @@ def quality_finished_good_detail(request: HttpRequest, pk: int) -> HttpResponse:
     parent_family_options = build_parent_family_options(ingredient_items)
     ccps = CriticalControlPoint.objects.all().order_by("name")
 
-    recipe_id = (request.GET.get("recipe") or request.POST.get("recipe_id") or "").strip()
+    formula_id = (
+        request.GET.get("formula")
+        or request.GET.get("recipe")
+        or request.POST.get("formula_id")
+        or request.POST.get("recipe_id")
+        or ""
+    ).strip()
     formula = None
-    if recipe_id.isdigit():
-        formula = next((r for r in recipes if r.id == int(recipe_id)), None)
-    if formula is None and recipes:
-        formula = recipes[0]
+    if formula_id.isdigit():
+        formula = next((r for r in formulas if r.id == int(formula_id)), None)
+    if formula is None and formulas:
+        formula = formulas[0]
 
     if request.method == "POST":
         action = (request.POST.get("action") or "save").strip().lower()
-
         if action == "add_recipe":
-            new_name = (request.POST.get("new_recipe_name") or "").strip() or "Alternate"
+            action = "add_formula"
+
+        if action == "add_formula":
+            new_name = (
+                request.POST.get("new_formula_name")
+                or request.POST.get("new_recipe_name")
+                or ""
+            ).strip() or "Alternate"
             base = new_name
             n = 2
             while Formula.objects.filter(finished_good=item, name=new_name).exists():
@@ -1953,18 +2168,18 @@ def quality_finished_good_detail(request: HttpRequest, pk: int) -> HttpResponse:
                         notes=ing.notes,
                         match_by_parent=bool(getattr(ing, "match_by_parent", False)),
                     )
-            messages.success(request, f'Added recipe "{formula.name}".')
+            messages.success(request, f'Added formula "{formula.name}".')
             return redirect(
-                f"{reverse('slurp_ui:quality_finished_good_detail', kwargs={'pk': pk})}?recipe={formula.id}"
+                f"{reverse('slurp_ui:quality_finished_good_detail', kwargs={'pk': pk})}?formula={formula.id}"
             )
 
         if action == "set_default" and formula is not None:
             Formula.objects.filter(finished_good=item, is_default=True).update(is_default=False)
             formula.is_default = True
             formula.save(update_fields=["is_default", "updated_at"])
-            messages.success(request, f'"{formula.name}" is now the default recipe.')
+            messages.success(request, f'"{formula.name}" is now the default formula.')
             return redirect(
-                f"{reverse('slurp_ui:quality_finished_good_detail', kwargs={'pk': pk})}?recipe={formula.id}"
+                f"{reverse('slurp_ui:quality_finished_good_detail', kwargs={'pk': pk})}?formula={formula.id}"
             )
 
         if formula is None:
@@ -1975,15 +2190,20 @@ def quality_finished_good_detail(request: HttpRequest, pk: int) -> HttpResponse:
                 is_default=True,
             )
 
-        formula.name = (request.POST.get("recipe_name") or formula.name or "Standard").strip() or "Standard"
+        formula.name = (
+            request.POST.get("formula_name")
+            or request.POST.get("recipe_name")
+            or formula.name
+            or "Standard"
+        ).strip() or "Standard"
         if (
             Formula.objects.filter(finished_good=item, name=formula.name)
             .exclude(pk=formula.pk)
             .exists()
         ):
-            messages.error(request, f'A recipe named "{formula.name}" already exists on this product.')
+            messages.error(request, f'A formula named "{formula.name}" already exists on this product.')
             return redirect(
-                f"{reverse('slurp_ui:quality_finished_good_detail', kwargs={'pk': pk})}?recipe={formula.id}"
+                f"{reverse('slurp_ui:quality_finished_good_detail', kwargs={'pk': pk})}?formula={formula.id}"
             )
 
         formula.version = (request.POST.get("version") or "1.0").strip() or "1.0"
@@ -2004,7 +2224,7 @@ def quality_finished_good_detail(request: HttpRequest, pk: int) -> HttpResponse:
                 except ValueError:
                     messages.error(request, f"Invalid value for {field}.")
                     return redirect(
-                        f"{reverse('slurp_ui:quality_finished_good_detail', kwargs={'pk': pk})}?recipe={formula.id}"
+                        f"{reverse('slurp_ui:quality_finished_good_detail', kwargs={'pk': pk})}?formula={formula.id}"
                     )
         for i in range(1, 7):
             setattr(
@@ -2061,27 +2281,28 @@ def quality_finished_good_detail(request: HttpRequest, pk: int) -> HttpResponse:
                         notes=row["notes"],
                         match_by_parent=bool(row.get("match_by_parent")),
                     )
-            messages.success(request, f'Saved recipe "{formula.name}" for {item.sku}.')
+            messages.success(request, f'Saved formula "{formula.name}" for {item.sku}.')
             return redirect(
-                f"{reverse('slurp_ui:quality_finished_good_detail', kwargs={'pk': pk})}?recipe={formula.id}"
+                f"{reverse('slurp_ui:quality_finished_good_detail', kwargs={'pk': pk})}?formula={formula.id}"
             )
         except Exception as e:
             messages.error(request, str(e))
 
         formula.refresh_from_db()
 
-    recipes = list(
+    formulas = list(
         Formula.objects.filter(finished_good=item)
         .prefetch_related("ingredients__item")
         .order_by("-is_default", "name", "id")
     )
     if formula is not None:
-        formula = next((r for r in recipes if r.id == formula.id), formula)
+        formula = next((r for r in formulas if r.id == formula.id), formula)
 
     ingredients = list(formula.ingredients.select_related("item").all()) if formula else []
     for _ing in ingredients:
         _ing.select_value = ingredient_select_value(_ing)
 
+    label = recipe_label(formula)
     return render(
         request,
         "slurp_ui/quality/finished_good_detail.html",
@@ -2089,144 +2310,169 @@ def quality_finished_good_detail(request: HttpRequest, pk: int) -> HttpResponse:
             "finished-goods",
             item=item,
             formula=formula,
-            recipes=recipes,
+            formulas=formulas,
+            recipes=formulas,
             ingredients=ingredients,
             ingredient_items=ingredient_items,
             parent_family_options=parent_family_options,
             ccps=ccps,
             can_edit_formula=True,
-            recipe_label=recipe_label(formula),
+            formula_label=label,
+            recipe_label=label,
             port_status="full",
         ),
     )
 
 
 def quality_item_coa_test_lines(request: HttpRequest, pk: int) -> HttpResponse:
-
     item = get_object_or_404(Item, pk=pk)
-
     if item.item_type not in ("finished_good", "distributed_item"):
-
         messages.error(request, "COA test lines apply only to finished goods / distributed items.")
-
         return redirect("slurp_ui:quality_finished_goods")
 
-
-
     if request.method == "POST":
-
         action = (request.POST.get("action") or "save").strip()
-
         if action == "delete":
-
             line_id = request.POST.get("line_id")
-
             try:
-
                 ItemCoaTestLine.objects.filter(pk=int(line_id), item=item).delete()
-
                 messages.success(request, "Test line deleted.")
-
             except Exception as e:
-
                 messages.error(request, str(e))
-
             return redirect("slurp_ui:quality_item_coa_test_lines", pk=pk)
 
-
-
         line_id = (request.POST.get("line_id") or "").strip()
-
         test_name = (request.POST.get("test_name") or "").strip()
-
         spec = (request.POST.get("specification_text") or "").strip()
-
         if not test_name or not spec:
-
             messages.error(request, "Test name and specification are required.")
-
         else:
-
             try:
-
                 sort_order = int(request.POST.get("sort_order") or 0)
-
             except ValueError:
-
                 sort_order = 0
-
             nm_min = (request.POST.get("numeric_min") or "").strip()
-
             nm_max = (request.POST.get("numeric_max") or "").strip()
-
+            catalog_raw = (request.POST.get("catalog_test_id") or "").strip()
+            catalog_id = int(catalog_raw) if catalog_raw.isdigit() else None
             payload = {
-
                 "sort_order": sort_order,
-
                 "test_name": test_name,
-
                 "specification_text": spec,
-
                 "result_kind": request.POST.get("result_kind") or "text_only",
-
                 "numeric_min": float(nm_min) if nm_min else None,
-
                 "numeric_max": float(nm_max) if nm_max else None,
-
+                "typical_result": (request.POST.get("typical_result") or "").strip(),
+                "include_on_customer_coa": bool(request.POST.get("include_on_customer_coa")),
+                "customer_result_display": (
+                    request.POST.get("customer_result_display")
+                    if (request.POST.get("customer_result_display") or "")
+                    in ("actual", "pass_fail")
+                    else "actual"
+                ),
+                "catalog_test_id": catalog_id,
             }
-
             try:
-
                 if line_id and line_id != "new":
-
                     line = get_object_or_404(ItemCoaTestLine, pk=int(line_id), item=item)
-
                     for k, v in payload.items():
-
                         setattr(line, k, v)
-
                     line.save()
-
                 else:
-
                     ItemCoaTestLine.objects.create(item=item, **payload)
-
                 messages.success(request, "Test line saved.")
-
             except Exception as e:
-
                 messages.error(request, str(e))
-
         return redirect("slurp_ui:quality_item_coa_test_lines", pk=pk)
 
-
-
-    lines = list(item.coa_test_lines.all())
-
+    lines = list(item.coa_test_lines.select_related("catalog_test").all())
+    catalog_options = list(
+        CoaTestCatalog.objects.filter(is_active=True).order_by("sort_order", "test_name")
+    )
     return render(
-
         request,
-
         "slurp_ui/quality/item_coa_test_lines.html",
-
         _quality_ctx(
-
             "finished-goods",
-
             item=item,
-
             lines=lines,
-
+            catalog_options=catalog_options,
             result_kind_choices=ItemCoaTestLine.RESULT_KIND_CHOICES,
-
+            customer_result_display_choices=ItemCoaTestLine.CUSTOMER_RESULT_DISPLAY_CHOICES,
             port_status="full",
-
         ),
-
     )
 
 
+@login_required
+@require_http_methods(["GET", "POST"])
+def quality_coa_test_catalog(request: HttpRequest) -> HttpResponse:
+    """Global COA / micro test catalog (picked on FPS sheets)."""
+    if request.method == "POST":
+        action = (request.POST.get("action") or "save").strip()
+        catalog_id = (request.POST.get("catalog_id") or "").strip()
+        if action == "delete":
+            try:
+                CoaTestCatalog.objects.filter(pk=int(catalog_id)).delete()
+                messages.success(request, "Catalog test deleted.")
+            except Exception as e:
+                messages.error(request, str(e))
+            return redirect("slurp_ui:quality_coa_test_catalog")
 
+        test_name = (request.POST.get("test_name") or "").strip()
+        spec = (request.POST.get("specification_text") or "").strip()
+        if not test_name or not spec:
+            messages.error(request, "Test name and typical specification are required.")
+            return redirect("slurp_ui:quality_coa_test_catalog")
+
+        try:
+            sort_order = int(request.POST.get("sort_order") or 0)
+        except ValueError:
+            sort_order = 0
+        nm_min = (request.POST.get("numeric_min") or "").strip()
+        nm_max = (request.POST.get("numeric_max") or "").strip()
+        payload = {
+            "sort_order": sort_order,
+            "test_name": test_name,
+            "specification_text": spec,
+            "result_kind": request.POST.get("result_kind") or "text_only",
+            "numeric_min": float(nm_min) if nm_min else None,
+            "numeric_max": float(nm_max) if nm_max else None,
+            "typical_result": (request.POST.get("typical_result") or "").strip(),
+            "include_on_customer_coa": bool(request.POST.get("include_on_customer_coa")),
+            "customer_result_display": (
+                request.POST.get("customer_result_display")
+                if (request.POST.get("customer_result_display") or "")
+                in ("actual", "pass_fail")
+                else "actual"
+            ),
+            "is_active": bool(request.POST.get("is_active")),
+        }
+        try:
+            if catalog_id and catalog_id != "new":
+                row = get_object_or_404(CoaTestCatalog, pk=int(catalog_id))
+                for k, v in payload.items():
+                    setattr(row, k, v)
+                row.save()
+            else:
+                CoaTestCatalog.objects.create(**payload)
+            messages.success(request, "Catalog test saved.")
+        except Exception as e:
+            messages.error(request, str(e))
+        return redirect("slurp_ui:quality_coa_test_catalog")
+
+    catalog_rows = list(CoaTestCatalog.objects.all().order_by("sort_order", "test_name"))
+    return render(
+        request,
+        "slurp_ui/quality/coa_test_catalog.html",
+        _quality_ctx(
+            "coa-test-catalog",
+            catalog_rows=catalog_rows,
+            result_kind_choices=CoaTestCatalog.RESULT_KIND_CHOICES,
+            customer_result_display_choices=CoaTestCatalog.CUSTOMER_RESULT_DISPLAY_CHOICES,
+            port_status="full",
+        ),
+    )
 
 
 @login_required

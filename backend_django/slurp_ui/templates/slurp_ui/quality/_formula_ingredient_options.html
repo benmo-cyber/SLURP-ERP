@@ -8,6 +8,8 @@
 {% endif %}
 <optgroup label="Exact SKUs">
   {% for it in ingredient_items %}
-  <option value="{{ it.id }}" {% if selected_value == it.id|stringformat:"s" %}selected{% endif %}>{{ it.sku }} — {{ it.name }}</option>
+  <option value="{{ it.id }}" {% if selected_value == it.id|stringformat:"s" %}selected{% endif %}>
+    {{ it.sku }} — {{ it.name }}{% if it.plant_utility %} (plant utility){% endif %}
+  </option>
   {% endfor %}
 </optgroup>

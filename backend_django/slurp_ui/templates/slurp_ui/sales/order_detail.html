@@ -15,7 +15,8 @@
         <h3 style="font-size:1.2rem">{{ order.so_number }}</h3>
         <div class="hs-record-meta" style="margin-top:0.35rem">
           <span>{{ order.customer_name }}</span>
-          {% if order.status == 'ready_for_shipment' %}<span class="hs-badge ok">Ready</span>
+          {% if ready_shipment %}<span class="hs-badge ok">Awaiting pickup</span>
+          {% elif order.status == 'ready_for_shipment' %}<span class="hs-badge info">Allocated</span>
           {% elif order.status == 'completed' or order.status == 'shipped' %}<span class="hs-badge ok">{{ order.status }}</span>
           {% elif order.status == 'cancelled' %}<span class="hs-badge danger">Cancelled</span>
           {% else %}<span class="hs-badge info">{{ order.status }}</span>{% endif %}
@@ -28,13 +29,27 @@
           <button class="hs-btn hs-btn-primary" type="submit">Issue</button>
         </form>
         {% endif %}
-        {% if order.status != 'completed' and order.status != 'cancelled' and order.status != 'shipped' %}
+        {% if not ready_shipment %}
+        {% if order.status == 'issued' or order.status == 'allocated' %}
         <a class="hs-btn" href="{% url 'slurp_ui:sales_allocate_order' order.id %}">Allocate</a>
+        <a class="hs-btn hs-btn-primary" href="{% url 'slurp_ui:sales_checkout' %}?so={{ order.id }}">Mark Ready</a>
         {% endif %}
-        {% if order.status == 'issued' or order.status == 'ready_for_shipment' or order.status == 'allocated' %}
-        <a class="hs-btn hs-btn-primary" href="{% url 'slurp_ui:sales_checkout' %}?so={{ order.id }}">Check Out</a>
         {% endif %}
-        {% if order.status != 'draft' %}
+        {% if ready_shipment %}
+        <a class="hs-btn" href="{% url 'slurp_ui:sales_packing_list_pdf' order.id %}" target="_blank">Packing list</a>
+        {% for copy in coa_copies %}
+        <a class="hs-btn" href="{% url 'slurp_ui:quality_coa_customer_pdf' copy.id %}" target="_blank">COA</a>
+        {% empty %}
+          {% for cert in coa_master_certs %}
+          <a class="hs-btn" href="{% url 'slurp_ui:quality_coa_pdf' cert.id %}" target="_blank">COA</a>
+          {% endfor %}
+        {% endfor %}
+        <form method="post" action="{% url 'slurp_ui:sales_mark_picked_up' order.id %}" style="display:inline">{% csrf_token %}
+          <button class="hs-btn hs-btn-primary" type="submit"
+                  onclick="return confirm('Mark picked up? Creates draft invoice.');">Picked up</button>
+        </form>
+        {% endif %}
+        {% if order.status != 'draft' and not ready_shipment %}
         <a class="hs-btn" href="{% url 'slurp_ui:sales_pick_list_pdf' order.id %}" target="_blank">Pick list</a>
         <a class="hs-btn" href="{% url 'slurp_ui:sales_packing_list_pdf' order.id %}" target="_blank">Packing list</a>
         {% endif %}
@@ -60,9 +75,33 @@
       <div class="hs-props" style="border:none;padding:0">
         <div class="hs-prop"><span class="k">Order date</span><span class="v">{{ order.order_date|date:"Y-m-d" }}</span></div>
         <div class="hs-prop"><span class="k">Customer PO</span><span class="v">{{ order.customer_reference_number|default:"—" }}</span></div>
-        <div class="hs-prop"><span class="k">Expected ship</span><span class="v">{% if order.expected_ship_date %}{{ order.expected_ship_date|date:"Y-m-d" }}{% else %}—{% endif %}</span></div>
         <div class="hs-prop"><span class="k">Carrier</span><span class="v">{{ order.carrier|default:"—" }}</span></div>
       </div>
+
+      {% if order.status == 'shipped' or order.status == 'completed' or order.status == 'cancelled' or order.status == 'received' %}
+      <div class="hs-props" style="border:none;padding:0;margin-top:0.75rem">
+        <div class="hs-prop"><span class="k">Exp. ship</span><span class="v">{% if order.expected_ship_date %}{{ order.expected_ship_date|date:"Y-m-d" }}{% else %}—{% endif %}</span></div>
+        <div class="hs-prop"><span class="k">Cust. req.</span><span class="v">{% if order.customer_required_date %}{{ order.customer_required_date|date:"Y-m-d" }}{% else %}—{% endif %}</span></div>
+      </div>
+      {% else %}
+      <form method="post" action="{% url 'slurp_ui:sales_order_update_dates' order.id %}" style="margin-top:0.85rem">
+        {% csrf_token %}
+        <input type="hidden" name="next" value="{% url 'slurp_ui:sales_order_detail' order.id %}" />
+        <div class="hs-form-grid" style="max-width:28rem">
+          <div class="form-row" style="margin:0">
+            <label for="expected_ship_date">Exp. ship</label>
+            <input id="expected_ship_date" type="date" name="expected_ship_date"
+                   value="{% if order.expected_ship_date %}{{ order.expected_ship_date|date:'Y-m-d' }}{% endif %}" />
+          </div>
+          <div class="form-row" style="margin:0">
+            <label for="customer_required_date">Cust. req.</label>
+            <input id="customer_required_date" type="date" name="customer_required_date"
+                   value="{% if order.customer_required_date %}{{ order.customer_required_date|date:'Y-m-d' }}{% endif %}" />
+          </div>
+        </div>
+        <button type="submit" class="hs-btn hs-btn-sm hs-btn-primary" style="margin-top:0.65rem">Save dates</button>
+      </form>
+      {% endif %}
       <p class="hs-section-note" style="margin-top:0.85rem">
         <strong>Returns:</strong>
         Wrong ship / unpaid — void invoice in Finance then Reverse shipment.

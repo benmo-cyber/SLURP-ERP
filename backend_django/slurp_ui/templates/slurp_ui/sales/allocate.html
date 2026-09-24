@@ -61,29 +61,41 @@
         </div>
         {% if row.line.item.item_type == "distributed_item" %}
         <label class="hs-check-inline" style="display:block;margin-bottom:0.65rem">
-          <input type="checkbox" name="create_from_rm_{{ row.line.id }}" />
+          <input type="checkbox" name="create_from_rm_{{ row.line.id }}" class="alloc-create-from-rm"
+                 data-line="{{ row.line.id }}" />
           Create new distributed lot from selected raw / vendor lots (depletes RM, allocates new DI lot)
         </label>
+        <p class="hs-muted alloc-di-hint" data-line="{{ row.line.id }}" style="font-size:0.82rem;margin:0 0 0.65rem">
+          Showing closed-repack (sellable) lots only. Check above or “Allow raw / pre-repack” to use vendor stock.
+        </p>
         {% endif %}
         {% for slot in "012" %}
         <div class="hs-form-grid" style="margin-top:0.5rem">
           <div class="form-row" style="margin:0">
             <label>Lot {% if forloop.counter0 %}#{{ forloop.counter }}{% endif %}</label>
-            <select name="lot_{{ row.line.id }}_{{ forloop.counter0 }}">
+            <select name="lot_{{ row.line.id }}_{{ forloop.counter0 }}"
+                    class="alloc-lot-select"
+                    data-line="{{ row.line.id }}"
+                    data-sellable='[{% for lr in row.lots %}{"id":{{ lr.lot.id }},"label":"{{ lr.lot.lot_number|escapejs }} — avail {{ lr.available|floatformat:2 }} {{ row.line.item.unit_of_measure|escapejs }} ({{ lr.lot.status|escapejs }})"}{% if not forloop.last %},{% endif %}{% endfor %}]'
+                    data-raw='[{% for lr in row.raw_lots %}{"id":{{ lr.lot.id }},"label":"{{ lr.lot.lot_number|escapejs }} — avail {{ lr.available|floatformat:2 }} {{ row.line.item.unit_of_measure|escapejs }} ({{ lr.lot.status|escapejs }})"}{% if not forloop.last %},{% endif %}{% endfor %}]'>
               <option value="">— {% if forloop.first %}Select lot{% else %}Optional{% endif %} —</option>
               {% for lr in row.lots %}
               <option value="{{ lr.lot.id }}">
                 {{ lr.lot.lot_number }} — avail {{ lr.available|floatformat:2 }} {{ row.line.item.unit_of_measure }} ({{ lr.lot.status }})
               </option>
               {% empty %}
+              {% if row.line.item.item_type == "distributed_item" %}
+              <option value="" disabled>No closed-repack lots available</option>
+              {% else %}
               <option value="" disabled>No available lots</option>
+              {% endif %}
               {% endfor %}
             </select>
           </div>
           <div class="form-row" style="margin:0">
             <label>Qty</label>
             <input name="qty_{{ row.line.id }}_{{ forloop.counter0 }}" type="number" step="any" min="0"
-                   {% if forloop.first %}value="{{ row.line.quantity_ordered }}"{% endif %} />
+                   {% if forloop.first %}value="{{ row.line.quantity_ordered|floatformat:2 }}"{% endif %} />
           </div>
         </div>
         {% endfor %}
@@ -98,6 +110,70 @@
       <a class="hs-btn" href="{% url 'slurp_ui:sales_orders' %}">Cancel</a>
     </div>
   </form>
+  <script>
+  (function () {
+    function fillSelect(sel, rows, placeholder) {
+      var cur = sel.value;
+      sel.innerHTML = '';
+      var blank = document.createElement('option');
+      blank.value = '';
+      blank.textContent = placeholder || '— Select lot —';
+      sel.appendChild(blank);
+      if (!rows || !rows.length) {
+        var dis = document.createElement('option');
+        dis.value = '';
+        dis.disabled = true;
+        dis.textContent = 'No available lots';
+        sel.appendChild(dis);
+        return;
+      }
+      rows.forEach(function (r) {
+        var opt = document.createElement('option');
+        opt.value = String(r.id);
+        opt.textContent = r.label;
+        sel.appendChild(opt);
+      });
+      if (cur && Array.prototype.some.call(sel.options, function (o) { return o.value === cur; })) {
+        sel.value = cur;
+      }
+    }
+    function parse(el, key) {
+      try { return JSON.parse(el.getAttribute(key) || '[]'); } catch (e) { return []; }
+    }
+    function refreshLine(lineId) {
+      var fromRm = document.querySelector('.alloc-create-from-rm[data-line="' + lineId + '"]');
+      var allow = document.querySelector('input[name="allow_prerepack_allocation"]');
+      var useRaw = (fromRm && fromRm.checked) || (allow && allow.checked);
+      document.querySelectorAll('.alloc-lot-select[data-line="' + lineId + '"]').forEach(function (sel, idx) {
+        var sellable = parse(sel, 'data-sellable');
+        var raw = parse(sel, 'data-raw');
+        var rows = useRaw ? sellable.concat(raw) : sellable;
+        var ph = idx === 0 ? '— Select lot —' : '— Optional —';
+        fillSelect(sel, rows, ph);
+      });
+      var hint = document.querySelector('.alloc-di-hint[data-line="' + lineId + '"]');
+      if (hint) {
+        hint.style.display = useRaw ? 'none' : '';
+      }
+    }
+    document.querySelectorAll('.alloc-create-from-rm').forEach(function (cb) {
+      cb.addEventListener('change', function () { refreshLine(cb.getAttribute('data-line')); });
+    });
+    var allow = document.querySelector('input[name="allow_prerepack_allocation"]');
+    if (allow) {
+      allow.addEventListener('change', function () {
+        document.querySelectorAll('.alloc-create-from-rm').forEach(function (cb) {
+          refreshLine(cb.getAttribute('data-line'));
+        });
+        // Non-DI lines have no create-from-rm; still refresh any DI selects via all lines
+        document.querySelectorAll('.alloc-lot-select').forEach(function (sel) {
+          var lid = sel.getAttribute('data-line');
+          if (lid) refreshLine(lid);
+        });
+      });
+    }
+  })();
+  </script>
   {% endif %}
 </div>
 {% endblock %}

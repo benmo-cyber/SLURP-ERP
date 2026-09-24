@@ -105,10 +105,30 @@ def reverse_shipment(
                 'shipment_id': shipment_id,
                 'sales_order': so.so_number,
                 'invoices': [i.invoice_number for i in invoices],
+                'fulfillment_status': shipment.fulfillment_status,
             }
 
         for inv in invoices:
             _delete_invoice_finance_chain(inv)
+
+        # Ready (awaiting pickup): Mark Ready only staged dims — no deplete / qty_shipped bump.
+        if getattr(shipment, 'fulfillment_status', None) == 'ready':
+            ShipmentItem.objects.filter(shipment=shipment).delete()
+            shipment.delete()
+            so.refresh_from_db()
+            items = list(so.items.all())
+            total_remaining_allocated = sum((it.quantity_allocated or 0) for it in items)
+            if total_remaining_allocated > 0:
+                so.status = 'allocated'
+            else:
+                so.status = 'issued'
+            so.save(update_fields=['status'])
+            return {
+                'ok': True,
+                'removed_shipment_id': shipment_id,
+                'sales_order': so.so_number,
+                'new_status': so.status,
+            }
 
         # Match txns to shipment lines by lot ↔ SalesOrderLot for that line (checkout order ≠ ShipmentItem id order).
         all_txns: List = list(
@@ -184,7 +204,7 @@ def reverse_shipment(
         if all_fully_shipped:
             so.status = 'completed'
         elif total_remaining_allocated > 0:
-            so.status = 'ready_for_shipment'
+            so.status = 'allocated'
         else:
             so.status = 'issued'
         so.save(update_fields=['status'])

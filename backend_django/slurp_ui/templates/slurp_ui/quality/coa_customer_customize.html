@@ -1,0 +1,103 @@
+{% extends "slurp_ui/base_module.html" %}
+{% block title %}Customize customer COA — SLURP{% endblock %}
+{% block module_title %}Customize Customer COA{% endblock %}
+{% block header_actions %}
+  <a href="{% url 'slurp_ui:quality_coa_library' %}?tab=customer" class="hs-btn">Back to library</a>
+  {% if copy.coa_pdf %}
+  <a href="{% url 'slurp_ui:quality_coa_customer_pdf' copy.id %}" class="hs-btn" target="_blank">Download PDF</a>
+  {% endif %}
+{% endblock %}
+{% block main %}
+<div class="hs-bleed" style="padding:1.25rem 1.5rem 2rem">
+  <div class="hs-card" style="margin-bottom:1rem">
+    <div class="hs-card-header"><h3>Allocation</h3></div>
+    <div class="hs-card-body">
+      <div class="hs-props" style="border:none;padding:0">
+        <div class="hs-prop"><span class="k">Lot</span><span class="v">{{ certificate.lot.lot_number }}</span></div>
+        <div class="hs-prop"><span class="k">SKU</span><span class="v">{{ certificate.lot.item.sku }}</span></div>
+        <div class="hs-prop"><span class="k">SO</span><span class="v">{{ sales_order.so_number }}</span></div>
+        <div class="hs-prop"><span class="k">Customer</span><span class="v">{{ copy.customer_name|default:"—" }}</span></div>
+        <div class="hs-prop"><span class="k">Qty</span><span class="v">{{ copy.quantity_snapshot|floatformat:2 }}</span></div>
+      </div>
+      <p class="hs-muted" style="margin:0.75rem 0 0;font-size:0.85rem">
+        Master COA keeps actual lab values. This page controls what appears on the <strong>customer</strong> PDF.
+      </p>
+    </div>
+  </div>
+
+  <form method="post">
+    {% csrf_token %}
+    <div class="hs-card" style="margin-bottom:1rem">
+      <div class="hs-card-header"><h3>Result display</h3></div>
+      <div class="hs-card-body">
+        <div class="form-row" style="max-width:28rem">
+          <label>Mode</label>
+          <select name="result_display_mode">
+            {% for val, label in display_mode_choices %}
+            <option value="{{ val }}" {% if copy.result_display_mode == val %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <p class="hs-muted" style="margin:0.5rem 0 0;font-size:0.82rem">
+          <strong>Per-test</strong> uses the display column on each row below (and product defaults when first generated).
+          <strong>All Pass / Fail</strong> or <strong>All actual</strong> overrides every selected row.
+        </p>
+      </div>
+    </div>
+
+    <div class="hs-card" style="margin-bottom:1rem">
+      <div class="hs-card-header"><h3>Tests on customer COA</h3></div>
+      <div class="hs-card-body tight">
+        <table class="hs-table">
+          <thead>
+            <tr>
+              <th>Include</th>
+              <th>Test</th>
+              <th>Specification</th>
+              <th>Actual</th>
+              <th>Customer shows</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% if has_qc %}
+            <tr>
+              <td><input type="checkbox" name="include_qc_row" value="1" {% if copy.include_qc_row %}checked{% endif %} /></td>
+              <td>{{ certificate.qc_parameter_name_snapshot|default:"QC parameter" }}</td>
+              <td class="hs-muted">Formula QC</td>
+              <td>{% if certificate.qc_result_value != None %}{{ certificate.qc_result_value }}{% else %}—{% endif %}</td>
+              <td>
+                <select name="display_qc">
+                  <option value="actual" {% if qc_display == 'actual' %}selected{% endif %}>Actual</option>
+                  <option value="pass_fail" {% if qc_display == 'pass_fail' %}selected{% endif %}>Pass / Fail</option>
+                </select>
+              </td>
+            </tr>
+            {% endif %}
+            {% for row in line_rows %}
+            <tr>
+              <td><input type="checkbox" name="include_line_{{ row.line.id }}" value="1" {% if row.included %}checked{% endif %} /></td>
+              <td>{{ row.line.test_name }}</td>
+              <td>{{ row.line.specification_text|truncatechars:80 }}</td>
+              <td>{{ row.line.result_text }}{% if row.line.passes != None %} <span class="hs-muted">({{ row.line.passes|yesno:"Pass,Fail" }})</span>{% endif %}</td>
+              <td>
+                <select name="display_line_{{ row.line.id }}">
+                  <option value="actual" {% if row.display == 'actual' %}selected{% endif %}>Actual</option>
+                  <option value="pass_fail" {% if row.display == 'pass_fail' %}selected{% endif %}>Pass / Fail</option>
+                </select>
+              </td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="5"><div class="hs-empty">No micro lines on the master COA.</div></td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="hs-form-actions">
+      <button type="submit" class="hs-btn hs-btn-primary">Save &amp; regenerate PDF</button>
+      <a class="hs-btn" href="{% url 'slurp_ui:quality_coa_library' %}?tab=customer">Cancel</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

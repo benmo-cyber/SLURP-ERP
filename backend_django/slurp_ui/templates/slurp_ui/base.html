@@ -113,5 +113,26 @@
       {% block content %}{% endblock %}
     </main>
   </div>
+  <script>
+    /* Prevent mouse wheel from changing focused/hovered number inputs site-wide. */
+    (function () {
+      document.addEventListener(
+        "wheel",
+        function (e) {
+          var t = e.target;
+          if (!t || !t.closest) return;
+          var input = t.closest("input");
+          if (
+            input &&
+            input instanceof HTMLInputElement &&
+            input.type === "number"
+          ) {
+            e.preventDefault();
+          }
+        },
+        { passive: false, capture: true }
+      );
+    })();
+  </script>
 </body>
 </html>

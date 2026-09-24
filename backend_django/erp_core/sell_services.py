@@ -171,6 +171,7 @@ def create_sales_order(user, data: dict) -> SalesOrder:
                 contact=validated_data.get("contact"),
                 order_date=order_date_val,
                 expected_ship_date=validated_data.get("expected_ship_date"),
+                customer_required_date=validated_data.get("customer_required_date"),
                 actual_ship_date=validated_data.get("actual_ship_date"),
                 status=validated_data.get("status", "draft"),
                 notes=validated_data.get("notes"),
@@ -241,7 +242,7 @@ def allocate_sales_order(sales_order: SalesOrder, data: dict) -> SalesOrder:
     Allocate lots to sales order items.
 
     Creates distributed item lots when raw materials are supplied. Drop-ship orders get a
-    virtual (lot-free) allocation and go straight to ``ready_for_shipment``.
+    virtual (lot-free) allocation and go to ``allocated`` (Mark Ready still required for dims).
     """
     from .inventory_fg_visibility import (
         GATED_PRODUCT_CATEGORIES,
@@ -265,7 +266,7 @@ def allocate_sales_order(sales_order: SalesOrder, data: dict) -> SalesOrder:
                 SalesOrderLot.objects.filter(sales_order_item=so_item).delete()
                 so_item.quantity_allocated = float(so_item.quantity_ordered or 0)
                 so_item.save(update_fields=["quantity_allocated"])
-            sales_order.status = "ready_for_shipment"
+            sales_order.status = "allocated"
             sales_order.save(update_fields=["status"])
         return sales_order
 
@@ -472,7 +473,7 @@ def allocate_sales_order(sales_order: SalesOrder, data: dict) -> SalesOrder:
         )
 
         if all_fully_allocated:
-            sales_order.status = "ready_for_shipment"
+            sales_order.status = "allocated"
         else:
             # Partial allocation: 'issued' orders stay issued so the user can keep allocating.
             total_allocated = sum(item.quantity_allocated for item in sales_order.items.all())
@@ -533,17 +534,15 @@ def ship_sales_order(
     serializer_context: dict | None = None,
 ) -> dict:
     """
-    Check out (ship) a sales order, fully or partially, and create the shipment invoice.
+    Mark Ready for pickup: create shipment with pieces/dims, lock packing docs.
 
-    Returns the API response payload: ``{'sales_order': …, 'invoice': …, 'shipment': …}``.
-    Drop-ship lines with no lot allocations skip inventory movement.
+    Does **not** deplete inventory or create an invoice — call
+    :func:`mark_shipment_picked_up` when the truck leaves.
+
+    Returns ``{'sales_order': …, 'invoice': None, 'shipment': …}``.
     """
-    from .serializers import InvoiceSerializer, SalesOrderSerializer
-    from .views import (
-        _normalize_checkout_ship_quantity,
-        log_lot_depletion,
-        log_lot_transaction,
-    )
+    from .serializers import SalesOrderSerializer
+    from .views import _normalize_checkout_ship_quantity
 
     payload = _payload_copy(data)
     context = serializer_context or {}
@@ -560,7 +559,6 @@ def ship_sales_order(
             return json.loads(prev.response_json)
 
     ship_date_str = payload.get("ship_date")
-    invoice_date_str = payload.get("invoice_date", ship_date_str)
     tracking_number = payload.get("tracking_number", "").strip()
     carrier = (payload.get("carrier") or "").strip()
     items_to_ship = payload.get("items", [])  # [{item_id, quantity}] for partial shipments
@@ -571,55 +569,52 @@ def ship_sales_order(
             combined_shipment_key = uuid_mod.UUID(str(raw_ck))
         except (ValueError, TypeError, AttributeError):
             combined_shipment_key = None
-    combined_freight_skip = bool(payload.get("combined_freight_skip"))
 
-    if sales_order.status not in ("issued", "ready_for_shipment"):
+    if sales_order.status not in ("issued", "allocated", "ready_for_shipment"):
         raise SellFlowError(
-            f"Sales order must be issued or ready for shipment to checkout. "
+            f"Sales order must be issued or allocated to mark ready. "
             f"Current status: {sales_order.status}"
         )
 
-    # Drop ship uses virtual allocation only
     total_allocated = sum(item.quantity_allocated for item in sales_order.items.all())
     if total_allocated == 0 and not sales_order.drop_ship:
-        raise SellFlowError("Sales order must have material allocated before checkout")
+        raise SellFlowError("Sales order must have material allocated before staging")
 
     if not ship_date_str:
         raise SellFlowError("ship_date is required")
 
     try:
         ship_date = datetime.strptime(ship_date_str, "%Y-%m-%d").date()
-        invoice_date = (
-            datetime.strptime(invoice_date_str, "%Y-%m-%d").date()
-            if invoice_date_str
-            else ship_date
-        )
     except ValueError as e:
         raise SellFlowError("Invalid date format. Use YYYY-MM-DD") from e
 
     use_partial = bool(items_to_ship)
 
     with transaction.atomic():
-        # Serialize concurrent ship() calls (prevents duplicate shipments from double-submit / races).
         sales_order = (
             SalesOrder.objects.prefetch_related("items__item")
             .select_for_update()
             .get(pk=sales_order.pk)
         )
-        if sales_order.status not in ("issued", "ready_for_shipment"):
+        if sales_order.status not in ("issued", "allocated", "ready_for_shipment"):
             raise SellFlowError(
-                f"Sales order must be issued or ready for shipment to checkout. "
+                f"Sales order must be issued or allocated to mark ready. "
                 f"Current status: {sales_order.status}"
             )
         total_allocated_locked = sum(item.quantity_allocated for item in sales_order.items.all())
         if total_allocated_locked == 0 and not sales_order.drop_ship:
-            raise SellFlowError("Sales order must have material allocated before checkout")
+            raise SellFlowError("Sales order must have material allocated before staging")
 
-        # Checkout requires carrier, piece count, per-piece dimensions & weights (packing list).
-        # Tracking optional.
+        # Block a second Ready while an awaiting-pickup shipment exists
+        if sales_order.shipments.filter(fulfillment_status="ready").exists():
+            raise SellFlowError(
+                f"{sales_order.so_number} already has a shipment awaiting pickup. "
+                "Mark it picked up (or reverse it) before staging again."
+            )
+
         if not carrier:
             raise SellFlowError(
-                "Carrier is required at checkout (shown on packing list and invoice)."
+                "Carrier is required when marking ready (shown on packing list)."
             )
         pieces_raw = payload.get("pieces")
         try:
@@ -646,6 +641,17 @@ def ship_sales_order(
                 raise SellFlowError(f"Dimensions are required for piece {idx + 1}.")
             piece_dims_clean.append(s)
 
+        dim_uom = (payload.get("dim_uom") or payload.get("dimension_uom") or "").strip()
+        if dim_uom:
+            dim_uom = dim_uom[:12]
+            piece_dims_clean = [
+                s
+                if s.lower().endswith(dim_uom.lower())
+                or s.lower().endswith(f" {dim_uom.lower()}")
+                else f"{s} {dim_uom}"
+                for s in piece_dims_clean
+            ]
+
         piece_weights_in = payload.get("piece_weights")
         if not isinstance(piece_weights_in, list):
             raise SellFlowError("piece_weights must be a JSON array with one weight per piece.")
@@ -661,12 +667,22 @@ def ship_sales_order(
                 raise SellFlowError(f"Weight is required for piece {idx + 1}.")
             piece_weights_clean.append(s)
 
+        weight_uom = (payload.get("weight_uom") or "").strip()
+        if weight_uom:
+            weight_uom = weight_uom[:12]
+            piece_weights_clean = [
+                s
+                if s.lower().endswith(weight_uom.lower())
+                or s.lower().endswith(f" {weight_uom.lower()}")
+                else f"{s} {weight_uom}"
+                for s in piece_weights_clean
+            ]
+
         dimensions_summary = "; ".join(
             f"Piece {i + 1}: {d} | {wt}"
             for i, (d, wt) in enumerate(zip(piece_dims_clean, piece_weights_clean))
         )
 
-        # Create shipment record (tracking number, dimensions, pieces can be set at checkout)
         ship_dt = timezone.make_aware(datetime.combine(ship_date, datetime.min.time()))
         expected_dt = None
         if payload.get("expected_ship_date"):
@@ -684,6 +700,8 @@ def ship_sales_order(
             sales_order=sales_order,
             expected_ship_date=expected_dt,
             ship_date=ship_dt,
+            fulfillment_status="ready",
+            picked_up_at=None,
             tracking_number=tracking_number or "",
             notes=payload.get("notes", ""),
             dimensions=dimensions_summary,
@@ -693,7 +711,6 @@ def ship_sales_order(
             combined_shipment_key=combined_shipment_key,
         )
 
-        # Normalize item_id to int for dict lookup (JSON may send string)
         items_shipped_map = {}
         if use_partial:
             for item_data in items_to_ship:
@@ -706,23 +723,162 @@ def ship_sales_order(
             for so_item in sales_order.items.all():
                 if so_item.quantity_allocated > 0:
                     items_shipped_map[so_item.id] = so_item.quantity_allocated
+                elif sales_order.drop_ship:
+                    rem = float(so_item.quantity_ordered or 0) - float(so_item.quantity_shipped or 0)
+                    if rem > 0:
+                        items_shipped_map[so_item.id] = rem
 
-        # Reduce lot quantities and create inventory transactions
+        staged_any = False
         for so_item in sales_order.items.all():
             raw_qty = items_shipped_map.get(so_item.id, 0)
             if raw_qty <= 0:
                 continue
             uom = getattr(so_item.item, "unit_of_measure", None) or ""
-            ok, quantity_to_ship = _normalize_checkout_ship_quantity(
-                raw_qty, so_item.quantity_allocated, uom
-            )
+            alloc_cap = float(so_item.quantity_allocated or 0)
+            if sales_order.drop_ship and alloc_cap <= 0:
+                alloc_cap = max(
+                    0.0,
+                    float(so_item.quantity_ordered or 0) - float(so_item.quantity_shipped or 0),
+                )
+            ok, quantity_to_ship = _normalize_checkout_ship_quantity(raw_qty, alloc_cap, uom)
             if not ok:
                 raise SellFlowError(
-                    f"Cannot ship {raw_qty} of {so_item.item.name}. "
-                    f"Only {so_item.quantity_allocated} is allocated."
+                    f"Cannot stage {raw_qty} of {so_item.item.name}. "
+                    f"Only {alloc_cap} is allocated."
                 )
+            ShipmentItem.objects.create(
+                shipment=shipment,
+                sales_order_item=so_item,
+                quantity_shipped=quantity_to_ship,
+            )
+            staged_any = True
 
-            # Ship from allocated lots proportionally or FIFO
+        if not staged_any:
+            raise SellFlowError("Enter a qty greater than 0 on at least one line.")
+
+        if carrier:
+            sales_order.carrier = carrier
+        if tracking_number and not sales_order.tracking_number:
+            sales_order.tracking_number = tracking_number
+        sales_order.status = "ready_for_shipment"
+        sales_order.save()
+
+        # Ensure customer COA copies exist for packing/docs on the workqueue
+        from .coa_allocation import sync_customer_coa_for_sales_order_lot
+
+        for so_item in sales_order.items.all():
+            for sol in so_item.allocated_lots.all():
+                sync_customer_coa_for_sales_order_lot(sol.id)
+
+    response_payload = {
+        "sales_order": SalesOrderSerializer(sales_order, context=context).data,
+        "invoice": None,
+        "shipment": {
+            "id": shipment.id,
+            "ship_date": shipment.ship_date.isoformat(),
+            "tracking_number": shipment.tracking_number,
+            "fulfillment_status": shipment.fulfillment_status,
+            "combined_shipment_key": (
+                str(combined_shipment_key) if combined_shipment_key else None
+            ),
+        },
+    }
+    if idem_key:
+        try:
+            ShipIdempotency.objects.create(
+                key=idem_key,
+                sales_order=sales_order,
+                shipment=shipment,
+                response_json=json.dumps(response_payload, cls=DjangoJSONEncoder),
+            )
+        except IntegrityError:
+            prev = ShipIdempotency.objects.filter(key=idem_key).first()
+            if prev:
+                return json.loads(prev.response_json)
+            raise
+    return response_payload
+
+
+def mark_shipment_picked_up(
+    shipment: Shipment,
+    user,
+    data: dict | None = None,
+    *,
+    serializer_context: dict | None = None,
+) -> dict:
+    """
+    Carrier pickup: deplete inventory from allocations and create a draft invoice.
+    """
+    from .serializers import InvoiceSerializer, SalesOrderSerializer
+    from .views import log_lot_depletion, log_lot_transaction
+
+    payload = _payload_copy(data or {})
+    context = serializer_context or {}
+
+    with transaction.atomic():
+        shipment = (
+            Shipment.objects.select_related("sales_order")
+            .prefetch_related("items__sales_order_item__item", "items__sales_order_item__allocated_lots__lot")
+            .select_for_update()
+            .get(pk=shipment.pk)
+        )
+        if shipment.fulfillment_status == "picked_up":
+            raise SellFlowError("This shipment is already marked picked up.")
+        if shipment.fulfillment_status != "ready":
+            raise SellFlowError(
+                f"Shipment must be ready for pickup (status={shipment.fulfillment_status})."
+            )
+
+        sales_order = (
+            SalesOrder.objects.select_for_update()
+            .prefetch_related("items__item", "items__allocated_lots__lot")
+            .get(pk=shipment.sales_order_id)
+        )
+
+        pickup_raw = (payload.get("pickup_date") or payload.get("ship_date") or "").strip()
+        if pickup_raw:
+            try:
+                pickup_date = datetime.strptime(pickup_raw, "%Y-%m-%d").date()
+            except ValueError as e:
+                raise SellFlowError("Invalid pickup date. Use YYYY-MM-DD") from e
+        else:
+            pickup_date = timezone.localdate()
+
+        invoice_raw = (payload.get("invoice_date") or "").strip() or pickup_raw
+        if invoice_raw:
+            try:
+                invoice_date = datetime.strptime(invoice_raw, "%Y-%m-%d").date()
+            except ValueError as e:
+                raise SellFlowError("Invalid invoice date. Use YYYY-MM-DD") from e
+        else:
+            invoice_date = pickup_date
+
+        tracking_number = (payload.get("tracking_number") or "").strip()
+        if tracking_number:
+            shipment.tracking_number = tracking_number
+            if not sales_order.tracking_number:
+                sales_order.tracking_number = tracking_number
+
+        pickup_dt = timezone.make_aware(datetime.combine(pickup_date, datetime.min.time()))
+
+        for shipment_item in shipment.items.all():
+            so_item = shipment_item.sales_order_item
+            quantity_to_ship = float(shipment_item.quantity_shipped or 0)
+            if quantity_to_ship <= 0:
+                continue
+
+            if sales_order.drop_ship:
+                allocs = list(
+                    SalesOrderLot.objects.filter(sales_order_item=so_item).order_by("created_at")
+                )
+                if not allocs:
+                    so_item.quantity_shipped += quantity_to_ship
+                    so_item.quantity_allocated = max(
+                        0.0, float(so_item.quantity_allocated or 0) - quantity_to_ship
+                    )
+                    so_item.save(update_fields=["quantity_shipped", "quantity_allocated"])
+                    continue
+
             remaining_to_ship = quantity_to_ship
             allocations = SalesOrderLot.objects.filter(sales_order_item=so_item).order_by(
                 "created_at"
@@ -730,13 +886,10 @@ def ship_sales_order(
 
             if sales_order.drop_ship and not allocations.exists():
                 so_item.quantity_shipped += quantity_to_ship
-                so_item.quantity_allocated -= quantity_to_ship
-                so_item.save(update_fields=["quantity_shipped", "quantity_allocated"])
-                ShipmentItem.objects.create(
-                    shipment=shipment,
-                    sales_order_item=so_item,
-                    quantity_shipped=quantity_to_ship,
+                so_item.quantity_allocated = max(
+                    0.0, float(so_item.quantity_allocated or 0) - quantity_to_ship
                 )
+                so_item.save(update_fields=["quantity_shipped", "quantity_allocated"])
                 continue
 
             for allocation in allocations:
@@ -761,7 +914,7 @@ def ship_sales_order(
                     quantity=-quantity_from_allocation,
                     reference_number=sales_order.so_number,
                     notes=(
-                        f"Shipped for sales order {sales_order.so_number} - "
+                        f"Picked up for sales order {sales_order.so_number} - "
                         f"Shipment {shipment.id}"
                     ),
                 )
@@ -776,7 +929,7 @@ def ship_sales_order(
                     transaction_id=inv_txn.id,
                     sales_order_id=sales_order.id,
                     notes=(
-                        f"Shipped for sales order {sales_order.so_number} - "
+                        f"Picked up for sales order {sales_order.so_number} - "
                         f"Shipment {shipment.id}"
                     ),
                 )
@@ -784,8 +937,6 @@ def ship_sales_order(
                 lot.quantity_remaining -= quantity_from_allocation
                 lot.save()
 
-                # Keep the SalesOrderLot row at quantity 0 after a full ship so customer COA
-                # (LotCoaCustomerCopy) and list/detail APIs still expose allocation history.
                 allocation.quantity_allocated -= quantity_from_allocation
                 if allocation.quantity_allocated <= 0:
                     allocation.quantity_allocated = 0.0
@@ -801,50 +952,64 @@ def ship_sales_order(
                     sales_order_id=sales_order.id,
                     transaction_id=inv_txn.id,
                     notes=(
-                        f"Shipped for sales order {sales_order.so_number} - "
+                        f"Picked up for sales order {sales_order.so_number} - "
                         f"Shipment {shipment.id}"
                     ),
                 )
 
                 remaining_to_ship -= quantity_from_allocation
 
+            if remaining_to_ship > 1e-6 and not sales_order.drop_ship:
+                raise SellFlowError(
+                    f"Could not fully deplete {so_item.item.sku}: "
+                    f"{remaining_to_ship} still needed from allocations."
+                )
+
             so_item.quantity_shipped += quantity_to_ship
-            so_item.quantity_allocated -= quantity_to_ship
-            so_item.save()
-
-            ShipmentItem.objects.create(
-                shipment=shipment,
-                sales_order_item=so_item,
-                quantity_shipped=quantity_to_ship,
+            so_item.quantity_allocated = max(
+                0.0, float(so_item.quantity_allocated or 0) - quantity_to_ship
             )
+            so_item.save(update_fields=["quantity_shipped", "quantity_allocated"])
 
-        # Update sales order status, tracking, and carrier
-        sales_order.actual_ship_date = timezone.make_aware(
-            datetime.combine(ship_date, datetime.min.time())
+        shipment.fulfillment_status = "picked_up"
+        shipment.picked_up_at = pickup_dt
+        shipment.ship_date = pickup_dt
+        shipment.save(
+            update_fields=[
+                "fulfillment_status",
+                "picked_up_at",
+                "ship_date",
+                "tracking_number",
+            ]
         )
-        if not sales_order.tracking_number:
-            sales_order.tracking_number = tracking_number
-        if carrier:
-            sales_order.carrier = carrier
 
+        sales_order.actual_ship_date = pickup_dt
         all_fully_shipped = all(
             item.quantity_shipped >= item.quantity_ordered for item in sales_order.items.all()
         )
-
         if all_fully_shipped:
             sales_order.status = "completed"
         else:
-            # Still has outstanding balance - keep as ready_for_shipment (allocations remain)
-            # or issued (can allocate more).
             total_remaining_allocated = sum(
                 item.quantity_allocated for item in sales_order.items.all()
             )
             if total_remaining_allocated > 0:
-                sales_order.status = "ready_for_shipment"
+                sales_order.status = "allocated"
             else:
                 sales_order.status = "issued"
-
         sales_order.save()
+
+        # Combined Mark Ready: freight on the first shipment in the group only
+        combined_freight_skip = bool(payload.get("combined_freight_skip"))
+        if not combined_freight_skip and shipment.combined_shipment_key:
+            first_id = (
+                Shipment.objects.filter(combined_shipment_key=shipment.combined_shipment_key)
+                .order_by("id")
+                .values_list("id", flat=True)
+                .first()
+            )
+            if first_id and shipment.id != first_id:
+                combined_freight_skip = True
 
         invoice = _create_shipment_invoice(
             sales_order=sales_order,
@@ -853,7 +1018,6 @@ def ship_sales_order(
             combined_freight_skip=combined_freight_skip,
         )
 
-        # Create invoice items from shipped quantities in this shipment
         for shipment_item in shipment.items.all():
             if shipment_item.quantity_shipped > 0:
                 so_item = shipment_item.sales_order_item
@@ -869,38 +1033,24 @@ def ship_sales_order(
                     notes="",
                 )
 
-    response_payload = {
+    return {
         "sales_order": SalesOrderSerializer(sales_order, context=context).data,
         "invoice": InvoiceSerializer(invoice).data,
         "shipment": {
             "id": shipment.id,
-            "ship_date": shipment.ship_date.isoformat(),
+            "ship_date": shipment.ship_date.isoformat() if shipment.ship_date else None,
+            "picked_up_at": shipment.picked_up_at.isoformat() if shipment.picked_up_at else None,
             "tracking_number": shipment.tracking_number,
-            "combined_shipment_key": (
-                str(combined_shipment_key) if combined_shipment_key else None
-            ),
+            "fulfillment_status": shipment.fulfillment_status,
         },
     }
-    if idem_key:
-        try:
-            ShipIdempotency.objects.create(
-                key=idem_key,
-                sales_order=sales_order,
-                shipment=shipment,
-                response_json=json.dumps(response_payload, cls=DjangoJSONEncoder),
-            )
-        except IntegrityError:
-            prev = ShipIdempotency.objects.filter(key=idem_key).first()
-            if prev:
-                return json.loads(prev.response_json)
-            raise
-    return response_payload
 
 
 def combined_ship_sales_orders(user, data: dict) -> dict:
     """
-    Check out multiple sales orders in one atomic operation: same carrier / tracking /
-    pieces / dimensions, one combined packing list key. Freight on the first order only.
+    Mark Ready for multiple sales orders together: same carrier / tracking / pieces /
+    dimensions, one combined packing list key. Inventory and draft invoices wait until
+    each shipment is marked picked up (freight on the first shipment in the group only).
     Requires the same customer and ship-to on every order.
     """
     orders_spec = data.get("orders")
@@ -952,9 +1102,9 @@ def combined_ship_sales_orders(user, data: dict) -> dict:
                     "Combined checkout requires the same customer and ship-to location "
                     "on every order."
                 )
-            if so.status not in ("issued", "ready_for_shipment"):
+            if so.status not in ("issued", "allocated", "ready_for_shipment"):
                 raise SellFlowError(
-                    f"Order {so.so_number} must be issued or ready for shipment "
+                    f"Order {so.so_number} must be issued or allocated to mark ready "
                     f"(status is {so.status})."
                 )
             total_alloc = sum(float(getattr(i, "quantity_allocated", 0) or 0) for i in so.items.all())

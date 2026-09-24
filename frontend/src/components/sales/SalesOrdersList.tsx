@@ -179,7 +179,10 @@ function SalesOrdersList({ refreshKey = 0, onSelectOrder, onEditOrder }: SalesOr
     }
   }
 
-  const formatStatusLabel = (status: string) => (status || '').replace(/_/g, ' ')
+  const formatStatusLabel = (status: string) => {
+    if (status === 'ready_for_shipment') return 'Awaiting pickup'
+    return (status || '').replace(/_/g, ' ')
+  }
 
   const getStatusBadgeClass = (status: string) => {
     switch (status.toLowerCase()) {

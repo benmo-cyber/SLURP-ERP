@@ -2,7 +2,7 @@
 from django.test import SimpleTestCase
 
 from erp_core.mass_quantity import LBS_PER_KG, convert_mass_uom, normalize_mass_quantity
-from erp_core.pack_display import format_packs_partial_note
+from erp_core.pack_display import format_packs_partial_note, pack_quantity_breakdown
 
 
 class PlantMassConversionTests(SimpleTestCase):
@@ -41,3 +41,13 @@ class PlantMassConversionTests(SimpleTestCase):
         note = format_packs_partial_note(430.0, "lbs", 10.0, "kg")
         self.assertNotIn("11.12", note)
         self.assertEqual(note, "19 pk + 12 lb")
+
+    def test_pack_quantity_breakdown_995_of_20(self):
+        brk = pack_quantity_breakdown(995.0, "lbs", 20.0, "lbs")
+        self.assertIsNotNone(brk)
+        self.assertEqual(brk["full_packs"], 49)
+        self.assertEqual(brk["full_mass"], 980.0)
+        self.assertEqual(brk["remainder"], 15.0)
+        self.assertTrue(brk["has_remainder"])
+        self.assertEqual(brk["display"], "49 × 20 lbs + 15 lbs partial")
+        self.assertEqual(brk["note"], "49 pk + 15 lb")

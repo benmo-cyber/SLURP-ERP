@@ -1,0 +1,153 @@
+{% extends "slurp_ui/base_module.html" %}
+{% block title %}COA / micro catalog — SLURP{% endblock %}
+{% block module_title %}COA / Micro Catalog{% endblock %}
+{% block header_actions %}
+  <a href="{% url 'slurp_ui:quality_finished_goods' %}" class="hs-btn">FPS list</a>
+{% endblock %}
+{% block main %}
+<style>
+  .coa-cat-wrap { padding: 1rem 1.25rem 1.75rem; }
+  .coa-cat-lede { margin: 0 0 0.85rem; color: #64748b; font-size: 0.88rem; max-width: 42rem; }
+  .coa-cat-card { background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; overflow-x: auto; }
+  .coa-cat-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; min-width: 920px; }
+  .coa-cat-table th {
+    text-align: left; font-size: 0.68rem; font-weight: 700; letter-spacing: 0.04em;
+    text-transform: uppercase; color: #64748b; padding: 0.5rem 0.4rem; border-bottom: 1px solid #e2e8f0;
+    white-space: nowrap; background: #f8fafc;
+  }
+  .coa-cat-table td { padding: 0.3rem 0.35rem; border-bottom: 1px solid #f1f5f9; vertical-align: middle; }
+  .coa-cat-table tr.is-inactive { opacity: 0.55; }
+  .coa-cat-table tr.is-add td { background: #f8fafc; }
+  .coa-cat-table input[type="text"],
+  .coa-cat-table input[type="number"],
+  .coa-cat-table select,
+  .coa-cat-table textarea {
+    width: 100%; min-width: 0; padding: 0.28rem 0.4rem; font-size: 0.84rem;
+    border: 1px solid #cbd5e1; border-radius: 4px; background: #fff; box-sizing: border-box;
+  }
+  .coa-cat-table textarea { min-height: 1.9rem; max-height: 4rem; resize: vertical; line-height: 1.25; }
+  .coa-cat-table .col-ord { width: 3rem; }
+  .coa-cat-table .col-name { width: 10.5rem; }
+  .coa-cat-table .col-kind { width: 8rem; }
+  .coa-cat-table .col-num { width: 4.25rem; }
+  .coa-cat-table .col-cust { width: 7rem; }
+  .coa-cat-table .col-flags { width: 5.25rem; white-space: nowrap; }
+  .coa-cat-table .col-acts { width: 7rem; white-space: nowrap; }
+  .coa-cat-table .flag {
+    display: inline-flex; align-items: center; gap: 0.15rem; margin-right: 0.3rem;
+    font-size: 0.7rem; color: #64748b; font-weight: 600;
+  }
+  .coa-cat-table .flag input { width: auto; margin: 0; }
+  .coa-cat-table .btn-row { padding: 0.25rem 0.45rem; font-size: 0.76rem; }
+  .coa-cat-forms { display: none; }
+</style>
+<div class="hs-bleed coa-cat-wrap">
+  <p class="coa-cat-lede">
+    Shared test list for FPS sheets. Spec and typical result autofill when you pick a test on a product.
+  </p>
+
+  <div class="coa-cat-card">
+    <table class="coa-cat-table">
+      <thead>
+        <tr>
+          <th class="col-ord">#</th>
+          <th class="col-name">Test</th>
+          <th>Spec</th>
+          <th>Typical</th>
+          <th class="col-kind">Kind</th>
+          <th class="col-num">Min</th>
+          <th class="col-num">Max</th>
+          <th class="col-cust">Cust.</th>
+          <th class="col-flags">Flags</th>
+          <th class="col-acts"></th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr class="is-add">
+          <td class="col-ord"><input name="sort_order" type="number" value="0" form="coa-cat-add" /></td>
+          <td class="col-name"><input name="test_name" type="text" required placeholder="Name" form="coa-cat-add" /></td>
+          <td><textarea name="specification_text" rows="1" required placeholder="Spec" form="coa-cat-add"></textarea></td>
+          <td><input name="typical_result" type="text" placeholder="e.g. Negative" form="coa-cat-add" /></td>
+          <td class="col-kind">
+            <select name="result_kind" form="coa-cat-add">
+              <option value="text_only">Text</option>
+              <option value="pass_fail">Pass/Fail</option>
+              <option value="numeric_minimum">Min only</option>
+              <option value="numeric_range">Range</option>
+            </select>
+          </td>
+          <td class="col-num"><input name="numeric_min" type="number" step="any" form="coa-cat-add" /></td>
+          <td class="col-num"><input name="numeric_max" type="number" step="any" form="coa-cat-add" /></td>
+          <td class="col-cust">
+            <select name="customer_result_display" form="coa-cat-add">
+              <option value="actual">Actual</option>
+              <option value="pass_fail">Pass/Fail</option>
+            </select>
+          </td>
+          <td class="col-flags">
+            <label class="flag" title="On customer COA"><input type="checkbox" name="include_on_customer_coa" value="1" checked form="coa-cat-add" /> COA</label>
+            <label class="flag" title="Active"><input type="checkbox" name="is_active" value="1" checked form="coa-cat-add" /> On</label>
+          </td>
+          <td class="col-acts">
+            <button type="submit" class="hs-btn hs-btn-primary btn-row" form="coa-cat-add">Add</button>
+          </td>
+        </tr>
+
+        {% for row in catalog_rows %}
+        <tr class="{% if not row.is_active %}is-inactive{% endif %}">
+          <td class="col-ord"><input name="sort_order" type="number" value="{{ row.sort_order }}" form="coa-cat-{{ row.id }}" /></td>
+          <td class="col-name"><input name="test_name" type="text" value="{{ row.test_name }}" required form="coa-cat-{{ row.id }}" /></td>
+          <td><textarea name="specification_text" rows="1" required form="coa-cat-{{ row.id }}">{{ row.specification_text }}</textarea></td>
+          <td><input name="typical_result" type="text" value="{{ row.typical_result }}" form="coa-cat-{{ row.id }}" /></td>
+          <td class="col-kind">
+            <select name="result_kind" form="coa-cat-{{ row.id }}">
+              <option value="text_only" {% if row.result_kind == 'text_only' %}selected{% endif %}>Text</option>
+              <option value="pass_fail" {% if row.result_kind == 'pass_fail' %}selected{% endif %}>Pass/Fail</option>
+              <option value="numeric_minimum" {% if row.result_kind == 'numeric_minimum' %}selected{% endif %}>Min only</option>
+              <option value="numeric_range" {% if row.result_kind == 'numeric_range' %}selected{% endif %}>Range</option>
+            </select>
+          </td>
+          <td class="col-num"><input name="numeric_min" type="number" step="any" value="{{ row.numeric_min|default_if_none:'' }}" form="coa-cat-{{ row.id }}" /></td>
+          <td class="col-num"><input name="numeric_max" type="number" step="any" value="{{ row.numeric_max|default_if_none:'' }}" form="coa-cat-{{ row.id }}" /></td>
+          <td class="col-cust">
+            <select name="customer_result_display" form="coa-cat-{{ row.id }}">
+              <option value="actual" {% if row.customer_result_display == 'actual' %}selected{% endif %}>Actual</option>
+              <option value="pass_fail" {% if row.customer_result_display == 'pass_fail' %}selected{% endif %}>Pass/Fail</option>
+            </select>
+          </td>
+          <td class="col-flags">
+            <label class="flag" title="On customer COA"><input type="checkbox" name="include_on_customer_coa" value="1" {% if row.include_on_customer_coa %}checked{% endif %} form="coa-cat-{{ row.id }}" /> COA</label>
+            <label class="flag" title="Active"><input type="checkbox" name="is_active" value="1" {% if row.is_active %}checked{% endif %} form="coa-cat-{{ row.id }}" /> On</label>
+          </td>
+          <td class="col-acts">
+            <button type="submit" class="hs-btn hs-btn-primary btn-row" form="coa-cat-{{ row.id }}">Save</button>
+            <button type="submit" class="hs-btn hs-btn-sm hs-btn-danger btn-row" form="coa-cat-del-{{ row.id }}"
+                    onclick="return confirm('Delete {{ row.test_name|escapejs }}?');">Del</button>
+          </td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="10"><div class="hs-empty" style="padding:1rem">No catalog tests yet — add one above.</div></td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="coa-cat-forms">
+    <form method="post" id="coa-cat-add">
+      {% csrf_token %}
+      <input type="hidden" name="catalog_id" value="new" />
+    </form>
+    {% for row in catalog_rows %}
+    <form method="post" id="coa-cat-{{ row.id }}">
+      {% csrf_token %}
+      <input type="hidden" name="catalog_id" value="{{ row.id }}" />
+    </form>
+    <form method="post" id="coa-cat-del-{{ row.id }}">
+      {% csrf_token %}
+      <input type="hidden" name="action" value="delete" />
+      <input type="hidden" name="catalog_id" value="{{ row.id }}" />
+    </form>
+    {% endfor %}
+  </div>
+</div>
+{% endblock %}

@@ -19,15 +19,21 @@
     </div>
     <div class="hs-card-body">
       <p class="hs-section-note">
-        Production chips show <strong>product · qty</strong>. Click a <strong>day</strong> for details.
-        Click a <strong>production</strong> line again to open the batch ticket PDF.
+        Open ops only — closed/archived tickets stay off this calendar.
+        Click a <strong>day</strong> for details; click a <strong>Make/Repack</strong> chip again for the batch PDF.
         <strong>Drag</strong> ships/production onto another day to reschedule.
       </p>
-      <form method="get" class="hs-toolbar" style="margin:0">
+      <ul class="hs-cal-legend" aria-label="Activity colors">
+        <li><span class="hs-cal-legend-swatch ship"></span>Ship</li>
+        <li><span class="hs-cal-legend-swatch inbound"></span>Inbound material</li>
+        <li><span class="hs-cal-legend-swatch production"></span>Production (Make)</li>
+        <li><span class="hs-cal-legend-swatch repack"></span>Repack</li>
+      </ul>
+      <form method="get" class="hs-toolbar" style="margin:0.85rem 0 0">
         <input type="hidden" name="month" value="{{ month_param }}" />
         <div class="hs-pills">
           {% for val, label in type_options %}
-          <label class="hs-pill {% if val in selected_types %}active{% endif %}" style="cursor:pointer">
+          <label class="hs-pill {% if val == 'shipments' %}hs-cal-filter-ship{% elif val == 'raw_materials' %}hs-cal-filter-inbound{% elif val == 'production' %}hs-cal-filter-production{% elif val == 'repacks' %}hs-cal-filter-repacks{% endif %} {% if val in selected_types %}active{% endif %}" style="cursor:pointer">
             <input type="checkbox" name="types" value="{{ val }}" {% if val in selected_types %}checked{% endif %}
                    style="margin:0" onchange="this.form.submit()" />
             {{ label }}
@@ -96,12 +102,13 @@
                data-event-type="{{ e.type }}"
                {% if e.batch_id %}data-batch-id="{{ e.batch_id }}" data-pdf-url="{% url 'slurp_ui:production_batch_pdf' e.batch_id %}"{% endif %}>
             <div class="hs-cal-detail-main">
-              {% if e.type == 'shipment' %}<span class="hs-badge info">Ship</span>
-              {% elif e.type == 'raw_material' %}<span class="hs-badge ok">Inbound</span>
-              {% elif e.type == 'production' %}<span class="hs-badge warn">Production</span>
+              {% if e.type == 'shipment' %}<span class="hs-badge hs-cal-badge-ship">Ship</span>
+              {% elif e.type == 'raw_material' %}<span class="hs-badge hs-cal-badge-inbound">Inbound</span>
+              {% elif e.type == 'production' %}<span class="hs-badge hs-cal-badge-production">Production</span>
+              {% elif e.type == 'repack' %}<span class="hs-badge hs-cal-badge-repack">Repack</span>
               {% else %}<span class="hs-badge">{{ e.type }}</span>{% endif %}
 
-              {% if e.type == 'production' %}
+              {% if e.type == 'production' or e.type == 'repack' %}
               <div class="hs-list-title">{{ e.product_sku|default:"—" }}{% if e.product_name %} — {{ e.product_name }}{% endif %}</div>
               <div class="hs-list-sub">
                 Qty {{ e.quantity_label }} · {{ e.batch_number }} · {{ e.status }}
