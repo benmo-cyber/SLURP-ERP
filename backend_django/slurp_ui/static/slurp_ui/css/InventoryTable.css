@@ -139,17 +139,17 @@
 }
 
 /* Column widths so all data fits without horizontal scroll */
-/* SKU: single line (no wrap); ellipsis if extremely long */
+/* SKU: room for expand + label + Partial/vendor chips (ellipsis on label only) */
 .inventory-table th:nth-child(1),
 .inventory-table td:nth-child(1) {
-  width: 8%;
+  width: 12%;
+  min-width: 11.5rem;
+  max-width: 18rem;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 14rem;
+  overflow: visible;
 }
 .inventory-table th:nth-child(2),
-.inventory-table td:nth-child(2) { width: 16%; }  /* Description */
+.inventory-table td:nth-child(2) { width: 14%; }  /* Description */
 .inventory-table th:nth-child(3),
 .inventory-table td:nth-child(3) { width: 8%; min-width: 5rem; }  /* Type */
 .inventory-table th:nth-child(4),
@@ -308,7 +308,21 @@
 .sku-cell {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
+  gap: 0.4rem;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.sku-cell .expand-btn,
+.sku-cell .vendor-count-badge,
+.sku-cell .inv-partial-chip {
+  flex-shrink: 0;
+}
+
+.sku-cell .sku-master-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .expand-btn {
@@ -724,7 +738,7 @@
 .vendor-count-badge {
   font-size: 0.75rem;
   color: #9ca3af;
-  margin-left: 0.5rem;
+  margin-left: 0;
   font-weight: 400;
   background: #f3f4f6;
   padding: 0.125rem 0.5rem;
@@ -958,7 +972,7 @@
 /* Tweaks: partial badge + available-sum strip */
 .inv-partial-chip {
   display: inline-block;
-  margin-left: 0.35rem;
+  margin-left: 0;
   padding: 0.08rem 0.35rem;
   font-size: 0.65rem;
   font-weight: 650;
@@ -967,6 +981,27 @@
   color: #9a3412;
   background: #ffedd5;
   border: 1px solid #fdba74;
+  border-radius: 4px;
+  vertical-align: middle;
+  white-space: nowrap;
+  text-decoration: none;
+}
+a.inv-partial-chip:hover {
+  background: #fed7aa;
+  border-color: #fb923c;
+  color: #7c2d12;
+}
+
+.inv-campaign-lot {
+  display: inline-block;
+  margin-left: 0.35rem;
+  padding: 0.08rem 0.4rem;
+  font-size: 0.72rem;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  color: #1e40af;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
   border-radius: 4px;
   vertical-align: middle;
   white-space: nowrap;

@@ -1,22 +1,27 @@
-{% extends "slurp_ui/base_module.html" %}
-{% block title %}Rework — SLURP{% endblock %}
-{% block module_title %}Rework / blend partials{% endblock %}
-{% block header_actions %}
-  <a href="{% url 'slurp_ui:production' %}" class="hs-btn">Batch tickets</a>
-{% endblock %}
-{% block main %}
-<div class="hs-bleed" style="padding:1.25rem 1.5rem 2rem;max-width:720px">
-  <p class="hs-section-note">
-    Blend finished-good <strong>partials</strong> from the same parent family into a chosen pack SKU.
-    Optionally add raw-material qty to adjust strength. Output lot goes on hold for micro/QC
-    (same as a closed production batch). Formula tickets are unchanged — this is a separate rework path.
+{% extends "slurp_ui/base.html" %}
+{% block title %}Create Ticket — Rework — SLURP{% endblock %}
+{% block content %}
+<div class="modal-page create-batch-page rework-create-page" style="max-width:960px">
+  <h2 style="margin-bottom:0.35rem">Create Ticket — Rework</h2>
+  <p style="color:#64748b;margin:0 0 0.75rem;font-size:0.9rem">
+    Blend parent-family FG remnants into a pack SKU (+ optional RM strength adjust).
+    Output on hold for micro/QC. Formula tickets unchanged.
   </p>
 
-  <form method="get" class="hs-toolbar" style="margin-bottom:1rem">
-    <div class="form-row" style="margin:0;min-width:16rem;flex:1">
-      <label for="item">Target pack SKU</label>
+  <div style="display:flex;gap:0.4rem;margin-bottom:0.75rem;flex-wrap:wrap">
+    <a class="btn btn-secondary" style="padding:0.35rem 0.75rem;font-size:0.85rem"
+       href="{% url 'slurp_ui:production_create_batch' %}?batch_type=production">Batch ticket</a>
+    <a class="btn btn-secondary" style="padding:0.35rem 0.75rem;font-size:0.85rem"
+       href="{% url 'slurp_ui:production_create_batch' %}?batch_type=repack">Repack</a>
+    <a class="btn btn-primary" style="padding:0.35rem 0.75rem;font-size:0.85rem"
+       href="{% url 'slurp_ui:production_rework' %}">Rework</a>
+  </div>
+
+  <form method="get" style="margin-bottom:0.75rem" id="rework-cascade-form">
+    <div class="form-row" style="margin:0">
+      <label for="item">Target pack SKU *</label>
       <select id="item" name="item" onchange="this.form.submit()">
-        <option value="">Select finished good…</option>
+        <option value="">— Select finished good —</option>
         {% for it in fg_choices %}
         <option value="{{ it.id }}" {% if target and target.id == it.id %}selected{% endif %}>
           {{ it.sku }} — {{ it.name }}
@@ -27,83 +32,425 @@
   </form>
 
   {% if target %}
-  <p style="margin:0 0 1rem;font-size:0.9rem;color:#64748b">
+  <p style="margin:0 0 0.5rem;color:#64748b;font-size:0.85rem">
     Parent family: <strong>{{ parent|default:"—" }}</strong>
   </p>
-  <form method="post">
+
+  <div id="rework-total-bar" style="margin:0 0 0.75rem;padding:0.5rem 0.75rem;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;font-size:0.9rem">
+    <strong>Batch total:</strong>
+    <span id="rework-total-val">0</span> <span>{{ target_uom|default:"lbs" }}</span>
+    <span id="rework-total-detail" style="color:#64748b;margin-left:0.35rem">(no selections)</span>
+  </div>
+
+  <form method="post" id="create-rework-form">
     {% csrf_token %}
     <input type="hidden" name="target_item_id" value="{{ target.id }}" />
+    <input type="hidden" name="packaging_warned" id="packaging_warned"
+           value="{% if packaging_needs_confirm %}1{% else %}0{% endif %}" />
 
-    <div class="hs-card" style="margin-bottom:1rem">
-      <div class="hs-card-header"><h3>Partials to blend</h3></div>
-      <div class="hs-card-body tight">
-        {% if partial_rows %}
-        <table class="hs-table">
-          <thead>
-            <tr><th></th><th>Lot</th><th>SKU</th><th>Available</th><th>Use qty</th></tr>
-          </thead>
+    <h3 style="margin:0.85rem 0 0.25rem;font-size:1rem">Partials to blend *</h3>
+    <p style="margin:0 0 0.45rem;color:#64748b;font-size:0.82rem">
+      Remnant only — full packs stay on the source lot. Check a lot to add its use qty to the total.
+    </p>
+    {% if partial_rows %}
+    <div class="rework-dense-scroll" style="margin-bottom:0.75rem">
+      <table class="rework-dense-table">
+        <thead>
+          <tr>
+            <th style="width:2rem" title="Check all">
+              <input type="checkbox" id="rework-partial-check-all" aria-label="Check all partials" />
+            </th>
+            <th>Lot</th>
+            <th>SKU</th>
+            <th>Remnant</th>
+            <th>On hand</th>
+            <th style="width:7.5rem">Use qty</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in partial_rows %}
+          <tr>
+            <td>
+              <input type="checkbox" class="rework-partial-cb" name="use_partial_{{ row.lot.id }}"
+                     value="1" data-lot-id="{{ row.lot.id }}" />
+            </td>
+            <td><span class="lot-number-badge">{{ row.lot.lot_number }}</span></td>
+            <td style="font-size:0.85rem">
+              {{ row.lot.item.sku }}
+              {% if not row.same_sku %}<span class="partial-chip" style="background:#e0e7ff;color:#3730a3;margin-left:0.25rem">pack</span>{% endif %}
+            </td>
+            <td style="font-size:0.85rem;white-space:nowrap">
+              {{ row.available|floatformat:2 }} {{ row.uom }}
+              {% if row.pack_label %}<span style="color:#94a3b8"> · {{ row.pack_label }}</span>{% endif %}
+            </td>
+            <td style="font-size:0.82rem;color:#64748b;white-space:nowrap">
+              {% if not row.is_pure_partial %}{{ row.on_hand|floatformat:2 }}{% else %}—{% endif %}
+            </td>
+            <td>
+              <input id="partial_qty_{{ row.lot.id }}"
+                     name="partial_qty_{{ row.lot.id }}"
+                     type="number" step="any" min="0.01" max="{{ row.available }}"
+                     value="{{ row.available }}"
+                     class="rework-qty-input rework-partial-qty"
+                     data-uom="{{ row.uom }}"
+                     data-lot-id="{{ row.lot.id }}" />
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <p style="margin:0 0 0.75rem;color:#94a3b8;font-size:0.85rem">
+      No remnant packs under this parent family right now.
+    </p>
+    {% endif %}
+
+    <h3 style="margin:0.85rem 0 0.25rem;font-size:1rem">Strength adjust (optional)</h3>
+    <p style="margin:0 0 0.45rem;color:#64748b;font-size:0.82rem">
+      RM concentrate / diluent — qty adds to the batch total.
+    </p>
+    {% if adjust_lots %}
+    <div class="rework-dense-scroll" style="margin-bottom:0.75rem;max-height:220px">
+      <table class="rework-dense-table">
+        <thead>
+          <tr>
+            <th>Lot</th>
+            <th>RM</th>
+            <th>Available</th>
+            <th style="width:7.5rem">Add qty</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in adjust_lots %}
+          <tr>
+            <td><span class="lot-number-badge">{{ row.lot.lot_number }}</span></td>
+            <td style="font-size:0.85rem">{{ row.lot.item.sku }}</td>
+            <td style="font-size:0.85rem;white-space:nowrap">{{ row.available|floatformat:2 }} {{ row.uom }}</td>
+            <td>
+              <input id="adjust_qty_{{ row.lot.id }}"
+                     name="adjust_qty_{{ row.lot.id }}"
+                     type="number" step="any" min="0" max="{{ row.available }}"
+                     class="rework-qty-input rework-adjust-qty"
+                     data-uom="{{ row.uom }}"
+                     placeholder="0" />
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <p style="margin:0 0 0.75rem;color:#94a3b8;font-size:0.85rem">No RM lots available.</p>
+    {% endif %}
+
+    <h3 style="margin:0.85rem 0 0.25rem;font-size:1rem">Packaging (optional)</h3>
+    <p style="margin:0 0 0.45rem;color:#64748b;font-size:0.82rem">
+      Soft defaults from this FPS. Suggested count follows batch total (full packs + one for a partial).
+    </p>
+    {% if packaging_needs_confirm %}
+    <div style="padding:0.5rem 0.7rem;margin-bottom:0.65rem;background:#fff7ed;border:1px solid #fed7aa;border-radius:6px;color:#9a3412;font-size:0.88rem">
+      No packaging was selected. Click <strong>Create rework ticket</strong> again to confirm, or allocate packaging below.
+    </div>
+    {% endif %}
+    {% if packaging_suggest and packaging_suggest.ok %}
+    <p id="pkg-suggest-hint" style="margin:0 0 0.55rem;font-size:0.85rem;color:#334155"
+       data-pack-net="{{ packaging_suggest.pack_net_display }}"
+       data-pack-unit="{{ packaging_suggest.pack_unit }}">
+      Pack net ≈ <strong>{{ packaging_suggest.pack_net_display }} {{ packaging_suggest.pack_unit }}</strong>.
+      Suggested count updates with the batch total.
+    </p>
+    {% endif %}
+
+    {% for prow in preferred_packaging_rows %}
+    <div class="ingredient-group pkg-pref-row" style="margin-bottom:0.55rem"
+         data-suggest="{% if prow.suggest_qty %}1{% else %}0{% endif %}">
+      <div class="ingredient-header" style="padding:0.4rem 0.65rem">
+        <div class="ingredient-title">
+          <span class="ingredient-name" style="font-size:0.9rem">{{ prow.packaging_item.sku }} — {{ prow.packaging_item.name }}</span>
+          <span class="ingredient-percentage">{{ prow.label }}</span>
+          {% if prow.suggest_qty %}
+          <span class="partial-chip" style="background:#ecfdf5;color:#047857;margin-left:0.35rem">Suggest qty</span>
+          {% endif %}
+        </div>
+        {% if prow.suggest_qty %}
+        <div class="ingredient-summary">
+          <span class="balance-chip">
+            <span class="bal-label">Suggested</span>
+            <span class="pkg-suggested-val">{% if prow.suggested %}{{ prow.suggested }}{% else %}—{% endif %}</span>
+            <span>ea</span>
+          </span>
+        </div>
+        {% endif %}
+      </div>
+      {% if prow.lots %}
+      <div class="rework-dense-scroll">
+        <table class="rework-dense-table">
+          <thead><tr><th>Lot</th><th>Available</th><th style="width:7.5rem">Qty (ea)</th></tr></thead>
           <tbody>
-            {% for row in partial_rows %}
+            {% for lr in prow.lots %}
             <tr>
-              <td><input type="checkbox" name="use_partial_{{ row.lot.id }}" value="1" checked /></td>
-              <td>{{ row.lot.lot_number }}</td>
-              <td>{{ row.lot.item.sku }}{% if not row.same_sku %} <span class="hs-badge">pack variant</span>{% endif %}</td>
-              <td>{{ row.available|floatformat:2 }} {{ row.uom }}</td>
+              <td><span class="lot-number-badge">{{ lr.lot.lot_number }}</span></td>
+              <td style="font-size:0.85rem">{{ lr.available|floatformat:2 }} {{ lr.uom }}</td>
               <td>
-                <input name="partial_qty_{{ row.lot.id }}" type="number" step="any" min="0.01"
-                       max="{{ row.available }}" value="{{ row.available }}"
-                       style="max-width:7rem" />
+                <input name="pkg_qty_{{ prow.pref.id }}_{{ lr.lot.id }}"
+                       type="number" step="any" min="0" max="{{ lr.available }}"
+                       class="rework-qty-input pkg-qty-input"
+                       {% if prow.suggest_qty and prow.suggested and forloop.first %}value="{{ prow.suggested }}"{% else %}placeholder="0"{% endif %} />
               </td>
             </tr>
             {% endfor %}
           </tbody>
         </table>
-        {% else %}
-        <div class="hs-empty">No accepted partials under this parent family.</div>
-        {% endif %}
       </div>
+      {% else %}
+      <div style="padding:0.45rem 0.65rem;font-size:0.85rem;color:#92400e;background:#fff7ed">
+        No open lots for {{ prow.packaging_item.sku }}.
+      </div>
+      {% endif %}
     </div>
+    {% empty %}
+    <p style="color:#94a3b8;font-size:0.85rem;margin:0 0 0.55rem">
+      No preferred packaging on this FPS — add other packaging below, or set defaults on the FPS sheet.
+    </p>
+    {% endfor %}
 
-    <div class="hs-card" style="margin-bottom:1rem">
-      <div class="hs-card-header"><h3>Strength adjust (optional)</h3></div>
-      <div class="hs-card-body">
-        <p class="hs-section-note" style="margin-top:0">
-          Add raw-material qty (concentrate / diluent). Leave blank to blend partials only.
-        </p>
-        {% if adjust_lots %}
-        <table class="hs-table">
-          <thead><tr><th>Lot</th><th>RM</th><th>Available</th><th>Add qty</th></tr></thead>
+    {% if packaging_lot_rows %}
+    <details style="margin-bottom:0.75rem">
+      <summary style="cursor:pointer;font-weight:600;color:#334155;font-size:0.9rem">Add other packaging lots</summary>
+      <div class="rework-dense-scroll" style="margin-top:0.4rem;max-height:180px">
+        <table class="rework-dense-table">
+          <thead><tr><th>Lot</th><th>SKU</th><th>Available</th><th style="width:7.5rem">Qty</th></tr></thead>
           <tbody>
-            {% for row in adjust_lots %}
+            {% for pr in packaging_lot_rows %}
             <tr>
-              <td>{{ row.lot.lot_number }}</td>
-              <td>{{ row.lot.item.sku }}</td>
-              <td>{{ row.available|floatformat:2 }}</td>
+              <td><span class="lot-number-badge">{{ pr.lot.lot_number }}</span></td>
+              <td style="font-size:0.85rem">{{ pr.sku }}</td>
+              <td style="font-size:0.85rem">{{ pr.available|floatformat:2 }} {{ pr.uom }}</td>
               <td>
-                <input name="adjust_qty_{{ row.lot.id }}" type="number" step="any" min="0"
-                       max="{{ row.available }}" placeholder="0" style="max-width:7rem" />
+                <input name="pkg_other_qty_{{ pr.lot.id }}"
+                       type="number" step="any" min="0" max="{{ pr.available }}"
+                       class="rework-qty-input pkg-qty-input" placeholder="0" />
               </td>
             </tr>
             {% endfor %}
           </tbody>
         </table>
-        {% else %}
-        <div class="hs-empty">No raw-material lots on hand.</div>
-        {% endif %}
       </div>
-    </div>
+    </details>
+    {% endif %}
 
-    <div class="form-row">
+    <div class="form-row" style="margin-bottom:0.75rem">
       <label for="notes">Notes</label>
       <textarea id="notes" name="notes" rows="2"></textarea>
     </div>
-    <div class="hs-form-actions">
-      <button type="submit" class="hs-btn hs-btn-primary"
-              onclick="return confirm('Blend selected material into {{ target.sku }} and place on hold?');">
-        Run rework
+
+    <div class="form-actions" style="margin-top:0.5rem">
+      <button type="submit" class="btn btn-primary" id="rework-submit" {% if not partial_rows %}disabled{% endif %}>
+        Create rework ticket
       </button>
+      <a class="btn btn-secondary" href="{% url 'slurp_ui:production' %}">Cancel</a>
     </div>
   </form>
   {% endif %}
 </div>
+<style>
+.rework-create-page .rework-dense-scroll {
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  overflow: auto;
+  background: #fff;
+}
+.rework-create-page .rework-dense-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+.rework-create-page .rework-dense-table th {
+  text-align: left;
+  padding: 0.35rem 0.55rem;
+  background: #f8fafc;
+  border-bottom: 1px solid #e5e7eb;
+  font-size: 0.72rem;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: #64748b;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+.rework-create-page .rework-dense-table td {
+  padding: 0.28rem 0.55rem;
+  border-bottom: 1px solid #f1f5f9;
+  vertical-align: middle;
+}
+.rework-create-page .rework-dense-table tr:last-child td { border-bottom: none; }
+.rework-create-page .rework-dense-table tr:hover td { background: #fafbfc; }
+.rework-create-page .rework-qty-input {
+  width: 100%;
+  max-width: 7rem;
+  padding: 0.25rem 0.4rem;
+  font-size: 0.85rem;
+  line-height: 1.2;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  box-sizing: border-box;
+}
+.rework-create-page .lot-number-badge { font-size: 0.8rem; padding: 0.1rem 0.35rem; }
+.rework-create-page .partial-chip { font-size: 0.65rem; padding: 0.05rem 0.3rem; }
+.rework-create-page .ingredient-group {
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  overflow: hidden;
+  background: #fff;
+}
+</style>
+{% if target %}
+<script>
+(function () {
+  var LBS_PER_KG = {{ lbs_per_kg|default:2.2046226218 }};
+  var targetUom = '{{ target_uom|default:"lbs"|escapejs }}'.toLowerCase();
+  if (targetUom === 'lb') targetUom = 'lbs';
+
+  function round2(n) { return Math.round(n * 100) / 100; }
+  function normalize(n) {
+    var v = round2(n);
+    var i = Math.round(v);
+    if (Math.abs(v - i) <= 0.01) return i;
+    return v;
+  }
+  function convert(value, from, to) {
+    from = (from || targetUom).toLowerCase();
+    to = (to || targetUom).toLowerCase();
+    if (from === 'lb') from = 'lbs';
+    if (to === 'lb') to = 'lbs';
+    if (from === to) return normalize(value);
+    if (from === 'lbs' && to === 'kg') return normalize(value / LBS_PER_KG);
+    if (from === 'kg' && to === 'lbs') return normalize(value * LBS_PER_KG);
+    return normalize(value);
+  }
+  function parseQty(el) {
+    var v = parseFloat(el && el.value ? el.value : '0');
+    return isFinite(v) && v > 0 ? v : 0;
+  }
+
+  function updateTotal() {
+    var partial = 0;
+    var adjust = 0;
+    document.querySelectorAll('.rework-partial-cb').forEach(function (cb) {
+      if (!cb.checked) return;
+      var lotId = cb.getAttribute('data-lot-id');
+      var inp = document.querySelector('.rework-partial-qty[data-lot-id="' + lotId + '"]');
+      if (!inp) return;
+      var q = parseQty(inp);
+      partial += convert(q, inp.getAttribute('data-uom') || targetUom, targetUom);
+    });
+    document.querySelectorAll('.rework-adjust-qty').forEach(function (inp) {
+      var q = parseQty(inp);
+      if (q <= 0) return;
+      adjust += convert(q, inp.getAttribute('data-uom') || targetUom, targetUom);
+    });
+    partial = normalize(partial);
+    adjust = normalize(adjust);
+    var total = normalize(partial + adjust);
+    var totalEl = document.getElementById('rework-total-val');
+    var detailEl = document.getElementById('rework-total-detail');
+    if (totalEl) totalEl.textContent = String(total);
+    if (detailEl) {
+      if (total <= 0) detailEl.textContent = '(no selections)';
+      else if (adjust > 0) detailEl.textContent = '(partials ' + partial + ' + adjust ' + adjust + ')';
+      else detailEl.textContent = '(partials ' + partial + ')';
+    }
+    updatePkgSuggest(total);
+    return total;
+  }
+
+  function updatePkgSuggest(total) {
+    var hint = document.getElementById('pkg-suggest-hint');
+    var packNet = hint ? parseFloat(hint.getAttribute('data-pack-net') || '0') : 0;
+    var base = typeof total === 'number' ? total : updateTotal();
+    if (!isFinite(packNet) || packNet <= 0 || !isFinite(base) || base <= 0) {
+      document.querySelectorAll('.pkg-pref-row').forEach(function (row) {
+        if (row.getAttribute('data-suggest') !== '1') return;
+        var el = row.querySelector('.pkg-suggested-val');
+        if (el) el.textContent = '—';
+      });
+      return;
+    }
+    var full = Math.floor(base / packNet + 1e-9);
+    var rem = base - full * packNet;
+    var partial = rem > 1e-6 ? 1 : 0;
+    if (full === 0 && base > 1e-6) partial = 1;
+    var suggested = full + partial;
+    document.querySelectorAll('.pkg-pref-row').forEach(function (row) {
+      if (row.getAttribute('data-suggest') !== '1') return;
+      var el = row.querySelector('.pkg-suggested-val');
+      if (el) el.textContent = String(suggested);
+      var firstInp = row.querySelector('.pkg-qty-input');
+      if (firstInp && firstInp.dataset.userEdited !== '1') {
+        firstInp.value = String(suggested);
+      }
+    });
+  }
+
+  var checkAll = document.getElementById('rework-partial-check-all');
+  function syncCheckAll() {
+    if (!checkAll) return;
+    var boxes = document.querySelectorAll('.rework-partial-cb');
+    var n = boxes.length;
+    var checked = document.querySelectorAll('.rework-partial-cb:checked').length;
+    checkAll.checked = n > 0 && checked === n;
+    checkAll.indeterminate = checked > 0 && checked < n;
+  }
+  if (checkAll) {
+    checkAll.addEventListener('change', function () {
+      var on = checkAll.checked;
+      document.querySelectorAll('.rework-partial-cb').forEach(function (cb) {
+        cb.checked = on;
+      });
+      checkAll.indeterminate = false;
+      updateTotal();
+    });
+  }
+  document.querySelectorAll('.rework-partial-cb, .rework-partial-qty, .rework-adjust-qty').forEach(function (el) {
+    el.addEventListener('input', updateTotal);
+    el.addEventListener('change', function () {
+      if (el.classList.contains('rework-partial-cb')) syncCheckAll();
+      updateTotal();
+    });
+  });
+  syncCheckAll();
+  document.querySelectorAll('.pkg-qty-input').forEach(function (inp) {
+    inp.addEventListener('input', function () { inp.dataset.userEdited = '1'; });
+  });
+
+  var form = document.getElementById('create-rework-form');
+  if (form) {
+    form.addEventListener('submit', function (e) {
+      var checked = document.querySelectorAll('.rework-partial-cb:checked').length;
+      if (!checked) {
+        e.preventDefault();
+        alert('Select at least one partial to blend.');
+        return;
+      }
+      var pkgTotal = 0;
+      form.querySelectorAll('.pkg-qty-input').forEach(function (inp) {
+        pkgTotal += parseQty(inp);
+      });
+      var warnEl = document.getElementById('packaging_warned');
+      if (pkgTotal <= 0 && warnEl && warnEl.value !== '1') {
+        if (!confirm('No packaging selected. Create this rework without packaging?')) {
+          e.preventDefault();
+          return;
+        }
+        warnEl.value = '1';
+      }
+    });
+  }
+
+  updateTotal();
+})();
+</script>
+{% endif %}
 {% endblock %}

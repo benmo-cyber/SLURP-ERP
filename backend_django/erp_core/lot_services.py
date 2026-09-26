@@ -403,9 +403,28 @@ def release_from_hold(user, lot: Lot, quantity: float, coa_payload: dict | None 
             save_coa_pdf_to_certificate(cert)
             lot_pk = lot_locked.pk
             transaction.on_commit(lambda pk=lot_pk: sync_customer_coas_for_lot(pk))
+            transaction.on_commit(
+                lambda pk=lot_pk: _maybe_campaign_coa_after_release(pk, user)
+            )
 
     lot_locked.refresh_from_db()
     return lot_locked
+
+
+def _maybe_campaign_coa_after_release(lot_id, user=None):
+    try:
+        from .campaign_coa import maybe_issue_campaign_coa_for_lot
+        from .models import Lot
+
+        lot = Lot.objects.filter(pk=lot_id).first()
+        if lot is not None:
+            maybe_issue_campaign_coa_for_lot(lot, user=user)
+    except Exception:
+        import logging
+
+        logging.getLogger(__name__).exception(
+            "Campaign COA issue after release failed for lot %s", lot_id
+        )
 
 
 def reconcile_lot(user, lot: Lot, quantity_remaining: float, reason: str = "") -> Lot:

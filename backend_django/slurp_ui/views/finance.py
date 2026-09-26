@@ -885,27 +885,98 @@ def finance_bank_recon(request: HttpRequest) -> HttpResponse:
 @login_required
 def finance_invoices(request: HttpRequest) -> HttpResponse:
     """Unified Invoicing workspace: invoice register + receivables."""
+    from django.core.paginator import Paginator
+
     tab = (request.GET.get("tab") or "register").strip().lower()
     if tab not in ("register", "ar"):
         tab = "register"
 
     status_filter = (request.GET.get("status") or "").strip()
     ar_status_filter = (request.GET.get("ar_status") or "").strip()
+    type_filter = (request.GET.get("type") or "").strip().lower()
+    q = (request.GET.get("q") or "").strip()
+    date_from = parse_date((request.GET.get("from") or "").strip() or "")
+    date_to = parse_date((request.GET.get("to") or "").strip() or "")
+    # Default window keeps the table usable; ?from=&to= (explicit empty) or all=1 shows everything.
+    show_all_dates = (request.GET.get("all") or "").strip() in ("1", "true", "yes")
+    if (
+        tab == "register"
+        and not show_all_dates
+        and "from" not in request.GET
+        and "to" not in request.GET
+    ):
+        date_from = timezone.localdate() - timedelta(days=365)
 
     invoices = []
+    page_obj = None
+    register_counts = {}
     ar_entries = []
     if tab == "ar":
         qs = AccountsReceivable.objects.select_related("invoice", "sales_order").order_by("due_date")
         if ar_status_filter:
             qs = qs.filter(status=ar_status_filter)
+        if q:
+            qs = qs.filter(
+                Q(customer_name__icontains=q)
+                | Q(invoice__invoice_number__icontains=q)
+                | Q(sales_order__so_number__icontains=q)
+            )
         ar_entries = list(qs[:200])
     else:
-        inv_qs = Invoice.objects.select_related("sales_order").order_by("-created_at")
-        if status_filter:
+        inv_qs = Invoice.objects.select_related("sales_order").order_by(
+            "-invoice_date", "-id"
+        )
+        if status_filter == "active":
+            inv_qs = inv_qs.filter(status__in=("draft", "sent", "overdue"))
+        elif status_filter:
             inv_qs = inv_qs.filter(status=status_filter)
-        invoices = list(inv_qs[:200])
+        if type_filter == "invoice":
+            inv_qs = inv_qs.filter(invoice_type="customer")
+        elif type_filter == "credit":
+            inv_qs = inv_qs.filter(invoice_type="credit")
+        else:
+            # Register is customer billing docs (invoices + credit memos), not vendor bills.
+            inv_qs = inv_qs.filter(invoice_type__in=("customer", "credit"))
+        if q:
+            inv_qs = inv_qs.filter(
+                Q(invoice_number__icontains=q)
+                | Q(customer_vendor_name__icontains=q)
+                | Q(sales_order__so_number__icontains=q)
+                | Q(notes__icontains=q)
+            )
+        if date_from:
+            inv_qs = inv_qs.filter(invoice_date__gte=date_from)
+        if date_to:
+            inv_qs = inv_qs.filter(invoice_date__lte=date_to)
+
+        # Counts for the current search/date window (ignore type/status so KPIs stay useful).
+        count_qs = Invoice.objects.filter(invoice_type__in=("customer", "credit"))
+        if q:
+            count_qs = count_qs.filter(
+                Q(invoice_number__icontains=q)
+                | Q(customer_vendor_name__icontains=q)
+                | Q(sales_order__so_number__icontains=q)
+                | Q(notes__icontains=q)
+            )
+        if date_from:
+            count_qs = count_qs.filter(invoice_date__gte=date_from)
+        if date_to:
+            count_qs = count_qs.filter(invoice_date__lte=date_to)
+        register_counts = {
+            "active": count_qs.filter(status__in=("draft", "sent", "overdue")).count(),
+            "draft": count_qs.filter(status="draft").count(),
+            "sent": count_qs.filter(status="sent").count(),
+            "paid": count_qs.filter(status="paid").count(),
+            "credit": count_qs.filter(invoice_type="credit").count(),
+        }
+
+        paginator = Paginator(inv_qs, 50)
+        page_obj = paginator.get_page(request.GET.get("page") or 1)
+        invoices = list(page_obj.object_list)
         for inv in invoices:
             inv.status_label = _status_label(inv.status)
+            num = inv.invoice_number or ""
+            inv.is_credit_child = inv.invoice_type == "credit" and "-CM" in num.upper()
 
     return render(
         request,
@@ -914,9 +985,16 @@ def finance_invoices(request: HttpRequest) -> HttpResponse:
             "invoicing",
             tab=tab,
             invoices=invoices,
+            page_obj=page_obj,
+            register_counts=register_counts,
             ar_entries=ar_entries,
             status_filter=status_filter,
             ar_status_filter=ar_status_filter,
+            type_filter=type_filter,
+            q=q,
+            date_from=date_from.isoformat() if date_from else "",
+            date_to=date_to.isoformat() if date_to else "",
+            show_all_dates=show_all_dates,
             port_status="full",
         ),
     )
@@ -1010,6 +1088,8 @@ def finance_invoice_detail(request: HttpRequest, pk: int) -> HttpResponse:
 @login_required
 @require_http_methods(["GET", "POST"])
 def finance_invoice_issue(request: HttpRequest, pk: int) -> HttpResponse:
+    from erp_core.models import AccountsReceivable
+
     invoice = get_object_or_404(
         Invoice.objects.select_related("sales_order"),
         pk=pk,
@@ -1025,12 +1105,36 @@ def finance_invoice_issue(request: HttpRequest, pk: int) -> HttpResponse:
     if request.method == "POST":
         carrier = (request.POST.get("carrier") or "").strip() or None
         tracking = (request.POST.get("tracking_number") or "").strip() or None
+        freight_raw = (request.POST.get("freight") or "").strip()
         try:
+            freight = round(float(freight_raw or 0), 2)
+            if freight < 0:
+                raise InvoiceFlowError("Freight cannot be negative.")
+            # Apply PPA freight to draft invoice + AR before marking issued.
+            subtotal = round(float(invoice.subtotal or 0), 2)
+            tax = round(float(invoice.tax or 0), 2)
+            discount = round(float(invoice.discount or 0), 2)
+            grand = round(subtotal + freight + tax - discount, 2)
+            invoice.freight = freight
+            invoice.grand_total = grand
+            update_fields = ["freight", "grand_total"]
+            if hasattr(Invoice, "total_amount"):
+                invoice.total_amount = grand
+                update_fields.append("total_amount")
+            invoice.save(update_fields=update_fields)
+            for ar in AccountsReceivable.objects.filter(invoice=invoice):
+                paid = round(float(ar.amount_paid or 0), 2)
+                ar.original_amount = grand
+                ar.balance = round(grand - paid, 2)
+                ar.save(update_fields=["original_amount", "balance"])
+
             issue_invoice(invoice, carrier=carrier, tracking_number=tracking)
             messages.success(request, f"Issued invoice {invoice.invoice_number}.")
             return redirect("slurp_ui:finance_invoice_detail", pk=pk)
         except InvoiceFlowError as e:
             messages.error(request, e.message)
+        except ValueError:
+            messages.error(request, "Freight must be a number.")
         except Exception as e:
             messages.error(request, str(e))
 

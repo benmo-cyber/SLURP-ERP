@@ -225,7 +225,7 @@ def _build_batch_ticket_context(batch, mass_unit='native'):
         pass
 
     # Pick list: raw materials only (same as flowable)
-    from .pack_display import format_packs_partial_note, resolve_pack_size
+    from .pack_display import format_batch_input_packs_note, resolve_pack_size
 
     pick_rows = []
     for batch_input in batch.inputs.select_related('lot__item', 'lot__pack_size', 'item').prefetch_related(
@@ -255,9 +255,31 @@ def _build_batch_ticket_context(batch, mass_unit='native'):
             qty_display = float(qty)
         if packs_note is None:
             pack_qty, pack_uom = resolve_pack_size(item=item, lot=lot)
-            packs_note = format_packs_partial_note(qty_display, uom_out, pack_qty, pack_uom)
+            packs_note = format_batch_input_packs_note(
+                batch_input,
+                qty_display=qty_display,
+                qty_uom=uom_out,
+                pack_qty=pack_qty,
+                pack_uom=pack_uom,
+            )
         pick_rows.append({
-            'sku': (item.sku or '')[:18],
+            'sku': (
+                f"Work-in: {(item.sku or '')}"
+                if (
+                    getattr(item, 'item_type', None) == 'finished_good'
+                    and batch.finished_good_item_id
+                    and (
+                        item.id == batch.finished_good_item_id
+                        or (
+                            (getattr(item, 'sku_parent_code', None) or '')
+                            and (getattr(batch.finished_good_item, 'sku_parent_code', None) or '')
+                            and (item.sku_parent_code or '').upper()
+                            == (batch.finished_good_item.sku_parent_code or '').upper()
+                        )
+                    )
+                )
+                else (item.sku or '')
+            )[:24],
             'vendor': vendor[:14],
             'vendor_lot': vendor_lot[:12],
             'qty': qty_str,
@@ -294,7 +316,15 @@ def _build_batch_ticket_context(batch, mass_unit='native'):
             oqs, ou = _mass_line_display(batch_output.quantity_produced, 'lbs', mu)
             qty_str = f'{oqs} {ou}'
         packaging_desc = (getattr(item, 'description', None) or item.name or item.sku or '').strip() or (item.name or item.sku or '')
-        pack_rows.append({'packaging': packaging_desc, 'lot': lot.lot_number or '', 'qty': qty_str, 'pick_init': '', 'pack_init': '', 'amount_unused': ''})
+        pack_rows.append({
+            'packaging': f'OUTPUT - {packaging_desc}',
+            'lot': lot.lot_number or '',
+            'qty': qty_str,
+            'pick_init': '',
+            'pack_init': '',
+            'amount_unused': '',
+            'is_output': True,
+        })
     if not pack_rows:
         pack_rows = [{'packaging': '', 'lot': '', 'qty': '', 'pick_init': '', 'pack_init': '', 'amount_unused': ''}]
 
@@ -341,6 +371,7 @@ def _build_batch_ticket_context(batch, mass_unit='native'):
     for batch_output in batch.outputs.select_related('lot').all():
         if batch_output.lot_id and batch_output.lot:
             output_lot_nums.append(batch_output.lot.lot_number or str(batch_output.lot_id))
+    output_lots_str = ', '.join(output_lot_nums) if output_lot_nums else ''
 
     closed_summary = {
         'is_closed': is_closed,
@@ -350,7 +381,7 @@ def _build_batch_ticket_context(batch, mass_unit='native'):
         'spill': spill_val,
         'waste': waste_val,
         'recipe': recipe_label_str,
-        'output_lots': ', '.join(output_lot_nums) if output_lot_nums else '',
+        'output_lots': output_lots_str,
         'closed_date': (
             batch.closed_date.strftime('%m/%d/%Y %H:%M')
             if getattr(batch, 'closed_date', None)
@@ -387,6 +418,7 @@ def _build_batch_ticket_context(batch, mass_unit='native'):
         'spill_val': spill_val[:20] if spill_val else '',
         'waste_val': waste_val[:20] if waste_val else '',
         'closed_summary': closed_summary,
+        'output_lots': output_lots_str,
         'confidentiality': CONFIDENTIALITY_FOOTER,
         'batch_ticket_updated': BATCH_TICKET_UPDATED,
         'logo_base64': logo_base64,

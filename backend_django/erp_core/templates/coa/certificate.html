@@ -75,6 +75,7 @@
     .footer-row { display: table; width: 100%; }
     .footer-left { display: table-cell; }
     .footer-right { display: table-cell; text-align: right; }
+    .batch-lot-trace { font-size: 8pt; color: #666; }
   </style>
 </head>
 <body>
@@ -157,7 +158,10 @@
   <div class="footer">
     <div class="footer-row">
       <div class="footer-left">Wildwood Ingredients, LLC</div>
-      <div class="footer-right">COA issue date: {{ issue_date }}</div>
+      <div class="footer-right">
+        {% if batch_lot_trace %}<span class="batch-lot-trace">{{ batch_lot_trace }}</span><br/>{% endif %}
+        COA issue date: {{ issue_date }}
+      </div>
     </div>
   </div>
 </body>

@@ -142,7 +142,15 @@
       {% for inp in batch.inputs.all %}
       <tr>
         <td>{% if inp.lot %}{{ inp.lot.lot_number }}{% else %}Plant utility{% endif %}</td>
-        <td>{% if inp.item %}{{ inp.item.sku }}{% elif inp.lot %}{{ inp.lot.item.sku }}{% else %}—{% endif %}</td>
+        <td>
+          {% if inp.item %}
+            {% if inp.item.item_type == 'finished_good' %}<span class="partial-chip">Work-in</span> {% endif %}
+            {{ inp.item.sku }}
+          {% elif inp.lot %}
+            {% if inp.lot.item.item_type == 'finished_good' %}<span class="partial-chip">Work-in</span> {% endif %}
+            {{ inp.lot.item.sku }}
+          {% else %}—{% endif %}
+        </td>
         <td>
           {{ inp.quantity_used|floatformat:2 }}
           {% if inp.item %}{{ inp.item.unit_of_measure }}{% elif inp.lot %}{{ inp.lot.item.unit_of_measure }}{% endif %}

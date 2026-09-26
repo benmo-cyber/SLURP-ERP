@@ -261,3 +261,20 @@ def format_invoice_quantity_display(qty: Optional[float], uom: str) -> str:
         num = f"{f:.2f}"
     u = (uom or "").strip()
     return f"{num} {u}" if u else num
+
+
+def format_invoice_unit_price_display(unit_price: Optional[float], uom: str) -> str:
+    """Unit price cell: $X.XX / uom when UoM known (e.g. $4.50 / lbs)."""
+    if unit_price is None:
+        return "—"
+    price = f"${float(unit_price):,.2f}"
+    u = (uom or "").strip()
+    if not u:
+        return price
+    # Normalize common mass labels for per-unit display
+    u_disp = u
+    if u_disp.lower() in ("lb", "lbs"):
+        u_disp = "lb"
+    elif u_disp.lower() == "kgs":
+        u_disp = "kg"
+    return f"{price} / {u_disp}"

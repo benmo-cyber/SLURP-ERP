@@ -423,12 +423,33 @@ def generate_invoice_pdf(invoice):
     )
     inv_num = (getattr(invoice, 'invoice_number', None) or '').strip()
     inv_date = invoice.invoice_date.strftime('%m/%d/%Y') if getattr(invoice, 'invoice_date', None) else ''
+    is_credit = (getattr(invoice, 'invoice_type', None) or '') == 'credit'
+    doc_title = 'CREDIT MEMO' if is_credit else 'INVOICE'
+    doc_num_label = 'CREDIT MEMO #' if is_credit else 'INVOICE #'
+    meta_bits = [f'{doc_num_label} {inv_num}', f'DATE: {inv_date}']
+    if is_credit:
+        import re
+        m = re.match(r'^(.+)-CM\d{3}$', inv_num, re.IGNORECASE)
+        if m:
+            meta_bits.append(f'ORIG INVOICE #: {m.group(1)}')
+        try:
+            from .models import CustomerRma
+            rma_n = (
+                CustomerRma.objects.filter(credit_invoice_id=invoice.pk)
+                .order_by('-id')
+                .values_list('rma_number', flat=True)
+                .first()
+            )
+            if rma_n:
+                meta_bits.append(f'RMA #: {rma_n}')
+        except Exception:
+            pass
     title_style = ParagraphStyle('InvTitle', parent=styles['Normal'], fontSize=font_20, fontName=bold_font, textColor=black, alignment=TA_RIGHT, spaceAfter=8)
     meta_style = ParagraphStyle('InvMeta', parent=styles['Normal'], fontSize=font_9, fontName=body_font, textColor=black, alignment=TA_RIGHT)
     # Use nested Table instead of KeepTogether to avoid ReportLab "tallest cell 16777221" layout bug
     right_cell = Table(
-        [[Paragraph('INVOICE', title_style)], [Paragraph(f'INVOICE # {inv_num}<br/>DATE: {inv_date}', meta_style)]],
-        colWidths=[4.3*inch], rowHeights=[0.35*inch, 0.3*inch]
+        [[Paragraph(doc_title, title_style)], [Paragraph('<br/>'.join(meta_bits), meta_style)]],
+        colWidths=[4.3*inch], rowHeights=[0.35*inch, 0.45*inch]
     )
     right_cell.setStyle(TableStyle([('VALIGN', (0, 0), (-1, -1), 'TOP'), ('ALIGN', (0, 0), (-1, -1), 'RIGHT')]))
     header_tbl = Table([[logo_cell, right_cell], [company_addr, '']], colWidths=[logo_col_w, 4.3*inch])
@@ -492,7 +513,11 @@ def generate_invoice_pdf(invoice):
 
     # ----- Line items: same light gray header, thin borders, 9pt throughout -----
     try:
-        from .invoice_helpers import format_invoice_quantity_display, unit_of_measure_for_invoice_line
+        from .invoice_helpers import (
+            format_invoice_quantity_display,
+            format_invoice_unit_price_display,
+            unit_of_measure_for_invoice_line,
+        )
         items = list(invoice.items.select_related('item', 'sales_order_item__item').all())
     except Exception:
         items = []
@@ -511,12 +536,12 @@ def generate_invoice_pdf(invoice):
         rows.append([
             format_invoice_quantity_display(qty, uom),
             desc or '—',
-            f"${up:,.2f}" if up is not None else '—',
+            format_invoice_unit_price_display(up, uom),
             f"${total:,.2f}" if total is not None else '—',
         ])
     if len(rows) == 1:
         rows.append(['—', '—', '—', '—'])
-    items_tbl = Table(rows, colWidths=[1.0*inch, 3.35*inch, 0.9*inch, 0.85*inch])
+    items_tbl = Table(rows, colWidths=[1.0*inch, 3.1*inch, 1.15*inch, 0.85*inch])
     items_tbl.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, 0), header_bg),
         ('TEXTCOLOR', (0, 0), (-1, -1), black),
@@ -548,7 +573,7 @@ def generate_invoice_pdf(invoice):
         ['SUBTOTAL', f"${subtotal:,.2f}"],
         ['SALES TAX', f"${tax:,.2f}"],
         ['SHIPPING', f"${freight:,.2f}"],
-        ['TOTAL DUE', f"${grand:,.2f}"],
+        ['CREDIT TOTAL' if is_credit else 'TOTAL DUE', f"${grand:,.2f}"],
     ]
     tot_tbl = Table(totals_data, colWidths=[1.2*inch, 1.5*inch])
     tot_tbl.setStyle(TableStyle([

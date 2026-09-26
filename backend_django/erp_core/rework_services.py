@@ -1,6 +1,9 @@
 """
 Rework: blend parent-family FG partials (optional strength adjust with RM lots)
-into a new lot under a chosen pack SKU. Output goes on hold awaiting micro.
+into a new lot under a chosen pack SKU.
+
+Create opens an in-progress ticket (allocates inputs; packaging consumed now).
+Close consumes FG/RM inputs and creates the on-hold output awaiting micro.
 """
 from __future__ import annotations
 
@@ -14,13 +17,11 @@ from .lot_display_quantities import compute_lot_quantity_breakdown
 from .models import (
     InventoryTransaction,
     Item,
-    ItemPackSize,
     Lot,
     ProductionBatch,
     ProductionBatchInput,
-    ProductionBatchOutput,
 )
-from .pack_display import is_partial_lot
+from .pack_display import lot_available_remnant_quantity
 
 
 class ReworkError(Exception):
@@ -30,25 +31,25 @@ class ReworkError(Exception):
 
 
 def partial_lots_for_parent(parent_code: str) -> list[Lot]:
-    """Accepted partial lots under a parent family with available qty."""
+    """Accepted lots with free remnant under a parent family (Inventory Partials semantics)."""
     skus = skus_for_parent_code(parent_code)
     if not skus:
         return []
     lots = (
         Lot.objects.filter(
             item__sku__in=skus,
+            item__item_type="finished_good",
             status="accepted",
             quantity_remaining__gt=0,
         )
         .select_related("item", "pack_size")
+        .prefetch_related("item__pack_sizes")
         .order_by("-received_date")
     )
     out = []
     for lot in lots:
-        if not is_partial_lot(lot):
-            continue
-        avail = float(compute_lot_quantity_breakdown(lot)["quantity_available_for_use"])
-        if avail > 1e-6:
+        work = lot_available_remnant_quantity(lot)
+        if work > 1e-6:
             out.append(lot)
     return out
 
@@ -58,18 +59,26 @@ def execute_rework(
     target_item: Item,
     partial_lines: list[dict[str, Any]],
     adjust_lines: list[dict[str, Any]] | None = None,
+    packaging_lines: list[dict[str, Any]] | None = None,
     notes: str = "",
     user=None,
 ) -> dict[str, Any]:
     """
-    Blend selected parent-family partials (+ optional RM adjust lots) into a new
-    on-hold lot under ``target_item``.
+    Open a rework ticket: allocate parent-family partials (+ optional RM adjust)
+    under ``target_item``. Does not consume FG/RM or create output until Close.
 
-    ``partial_lines``: [{lot_id, quantity?}] — quantity defaults to available.
+    Packaging / indirect materials are consumed immediately (same as batch tickets).
+
+    ``partial_lines``: [{lot_id, quantity?}] — quantity defaults to remnant available.
     ``adjust_lines``: [{lot_id, quantity}] — RM / other lots for strength adjust.
+    ``packaging_lines``: [{lot_id, quantity_used}] — indirect packaging consumed now.
     """
-    from .hold_services import ensure_open_hold_case
-    from .views import generate_batch_number, generate_lot_number, log_lot_transaction
+    from .views import (
+        _round_lot_qty_remaining,
+        _round_production_quantity_used,
+        generate_batch_number,
+        log_lot_transaction,
+    )
 
     if target_item is None or getattr(target_item, "item_type", "") not in (
         "finished_good",
@@ -90,9 +99,10 @@ def execute_rework(
 
     actor = getattr(user, "username", None) or "system"
     adjust_lines = adjust_lines or []
+    packaging_lines = packaging_lines or []
 
     with transaction.atomic():
-        consumed: list[tuple[Lot, float]] = []
+        allocated: list[tuple[Lot, float]] = []
         total = 0.0
 
         for raw in partial_lines:
@@ -109,24 +119,26 @@ def execute_rework(
                     raise ReworkError(
                         f"Lot {lot.lot_number} is not in parent family {parent}."
                     )
-            if not is_partial_lot(lot):
+
+            rem = lot_available_remnant_quantity(lot)
+            max_use = round(min(rem, float(lot.quantity_remaining or 0)), 2)
+            if max_use < 0.01:
                 raise ReworkError(
-                    f"Lot {lot.lot_number} is not a partial (below one full pack)."
+                    f"Lot {lot.lot_number} has no available remnant to rework."
                 )
-            avail = float(compute_lot_quantity_breakdown(lot)["quantity_available_for_use"])
             qty_raw = raw.get("quantity")
             if qty_raw is None or qty_raw == "":
-                qty = avail
+                qty = max_use
             else:
                 qty = float(qty_raw)
             qty = round(qty, 2)
             if qty <= 0:
                 continue
-            if qty > avail + 1e-6:
+            if qty > max_use + 1e-6:
                 raise ReworkError(
-                    f"Only {avail:.2f} available on partial {lot.lot_number}."
+                    f"Only {max_use:.2f} remnant available on {lot.lot_number}."
                 )
-            consumed.append((lot, qty))
+            allocated.append((lot, qty))
             total += qty
 
         for raw in adjust_lines:
@@ -146,7 +158,7 @@ def execute_rework(
                 raise ReworkError(
                     f"Only {avail:.2f} available on lot {lot.lot_number}."
                 )
-            consumed.append((lot, qty))
+            allocated.append((lot, qty))
             total += qty
 
         total = round(total, 2)
@@ -160,10 +172,9 @@ def execute_rework(
             batch_type="rework",
             finished_good_item=target_item,
             quantity_produced=total,
-            quantity_actual=total,
+            quantity_actual=0.0,
             production_date=now,
-            status="closed",
-            closed_date=now,
+            status="in_progress",
             notes=(
                 f"Rework blend under parent {parent}"
                 + (f"\n{(notes or '').strip()}" if (notes or "").strip() else "")
@@ -171,83 +182,68 @@ def execute_rework(
             ),
         )
 
-        for lot, qty in consumed:
-            before = float(lot.quantity_remaining or 0)
+        # Allocate only — quantity_remaining stays until Close (like batch tickets).
+        for lot, qty in allocated:
             ProductionBatchInput.objects.create(
                 batch=batch,
                 lot=lot,
                 item=lot.item,
                 quantity_used=qty,
             )
-            txn = InventoryTransaction.objects.create(
-                transaction_type="production_input",
+
+        # Packaging / indirect materials — consume immediately (same as make tickets).
+        for pkg in packaging_lines:
+            try:
+                lid = int(pkg.get("lot_id"))
+                raw_qty = float(pkg.get("quantity_used") or pkg.get("quantity") or 0)
+            except (TypeError, ValueError):
+                continue
+            if raw_qty <= 0:
+                continue
+            try:
+                lot = Lot.objects.select_related("item").exclude(status="rejected").get(pk=lid)
+            except Lot.DoesNotExist as e:
+                raise ReworkError(f"Packaging lot {lid} not found.") from e
+            if (getattr(lot.item, "item_type", None) or "") != "indirect_material":
+                raise ReworkError(
+                    f"Lot {lot.lot_number} is not packaging (indirect material)."
+                )
+            quantity_used = _round_production_quantity_used(raw_qty, lot)
+            if quantity_used <= 0:
+                continue
+            avail = float(compute_lot_quantity_breakdown(lot)["quantity_available_for_use"])
+            if quantity_used > avail + 1e-6:
+                raise ReworkError(
+                    f"Only {avail:.2f} available on packaging lot {lot.lot_number}."
+                )
+            before = float(lot.quantity_remaining or 0)
+            ProductionBatchInput.objects.create(
+                batch=batch,
                 lot=lot,
-                quantity=-qty,
+                item=lot.item,
+                quantity_used=quantity_used,
+            )
+            txn = InventoryTransaction.objects.create(
+                transaction_type="indirect_material_consumption",
+                lot=lot,
+                quantity=-quantity_used,
                 reference_number=batch_number,
-                notes=f"Rework {batch_number} consume",
+                notes=f"Rework {batch_number} packaging",
             )
             log_lot_transaction(
                 lot=lot,
                 quantity_before=before,
-                quantity_change=-qty,
-                transaction_type="production_input",
+                quantity_change=-quantity_used,
+                transaction_type="indirect_material_consumption",
                 reference_number=batch_number,
                 reference_type="batch_number",
                 transaction_id=txn.id,
                 batch_id=batch.id,
-                notes=f"Rework consume by {actor}",
+                notes=f"Rework packaging by {actor}",
             )
-            lot.quantity_remaining = round(before - qty, 2)
+            lot.quantity_remaining = _round_lot_qty_remaining(
+                before - quantity_used, lot
+            )
             lot.save()
 
-        pack_size = ItemPackSize.objects.filter(
-            item=target_item, is_default=True, is_active=True
-        ).first()
-        out_lot = Lot.objects.create(
-            lot_number=generate_lot_number(),
-            item=target_item,
-            pack_size=pack_size,
-            quantity=total,
-            quantity_remaining=total,
-            quantity_on_hold=total,
-            received_date=now,
-            manufacture_date=now,
-            status="on_hold",
-            on_hold=True,
-            short_reason=f"Rework {batch_number}"[:255],
-        )
-        ProductionBatchOutput.objects.create(
-            batch=batch,
-            lot=out_lot,
-            quantity_produced=total,
-        )
-        out_txn = InventoryTransaction.objects.create(
-            transaction_type="production_output",
-            lot=out_lot,
-            quantity=total,
-            reference_number=batch_number,
-            notes=f"Rework {batch_number} output",
-        )
-        log_lot_transaction(
-            lot=out_lot,
-            quantity_before=0.0,
-            quantity_change=total,
-            transaction_type="production_output",
-            reference_number=batch_number,
-            reference_type="batch_number",
-            transaction_id=out_txn.id,
-            batch_id=batch.id,
-            notes=f"Rework output by {actor}",
-        )
-        ensure_open_hold_case(
-            out_lot,
-            user=user,
-            kind="awaiting_micro",
-            summary=f"Rework {batch_number} — awaiting micro/QC",
-            initial_note=(
-                f"Rework blend into {target_item.sku}. "
-                f"Parent family {parent}. Qty {total}."
-            ),
-        )
-
-    return {"batch": batch, "output_lot": out_lot, "quantity": total}
+    return {"batch": batch, "output_lot": None, "quantity": total}

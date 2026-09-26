@@ -1,11 +1,10 @@
 {% extends "slurp_ui/base_module.html" %}
 {% block title %}Lot Tracking — SLURP{% endblock %}
-{% block module_title %}Lot Tracking / Mass balance{% endblock %}
+{% block module_title %}Lot Tracking{% endblock %}
 {% block main %}
 <div class="hs-bleed" style="padding:1.25rem 1.5rem 2rem">
   <p class="hs-section-note">
-    Search by WWI lot number or vendor lot number. One screen: production, shipments/SO, PO,
-    returns, lab stock, remaining — with green/red ledger balance.
+    Search a WWI or vendor lot #. Green/red is only whether on hand matches the ledger.
   </p>
 
   <form method="get" class="hs-toolbar">
@@ -14,22 +13,29 @@
   </form>
 
   {% if search and not lot and not candidates %}
-  <div class="hs-card"><div class="hs-empty">No lot found for <strong>{{ search }}</strong>.</div></div>
+  <div class="hs-card"><div class="hs-empty">No lot found for <strong>{{ search }}</strong>. Try the full WWI lot # (usually 8 digits) or vendor lot #.</div></div>
   {% endif %}
 
   {% if candidates %}
   <div class="hs-card" style="margin-bottom:1rem">
-    <div class="hs-card-header"><h3>Multiple matches</h3></div>
+    <div class="hs-card-header">
+      <h3>{% if suggestions_only %}Nearby lot numbers{% else %}Multiple matches{% endif %}</h3>
+    </div>
+    {% if suggestions_only %}
+    <p class="hs-section-note" style="margin:0.65rem 0.85rem 0">
+      No exact match for <strong>{{ search }}</strong> — pick a lot from the same number family.
+    </p>
+    {% endif %}
     <div class="hs-card-body tight">
       <table class="hs-table">
-        <thead><tr><th>Lot</th><th>Vendor</th><th>SKU</th><th>Remaining</th><th></th></tr></thead>
+        <thead><tr><th>Lot</th><th>Vendor lot</th><th>SKU</th><th>Remaining</th><th></th></tr></thead>
         <tbody>
           {% for c in candidates %}
           <tr>
             <td>{{ c.lot_number }}</td>
             <td>{{ c.vendor_lot_number|default:"—" }}</td>
             <td>{{ c.item.sku }}</td>
-            <td>{{ c.quantity_remaining|floatformat:2 }}</td>
+            <td>{{ c.quantity_remaining|floatformat:2 }}{% if c.item.unit_of_measure %} {{ c.item.unit_of_measure }}{% endif %}</td>
             <td><a class="hs-btn hs-btn-sm" href="?q={{ search|urlencode }}&amp;lot={{ c.id }}">Open</a></td>
           </tr>
           {% endfor %}
@@ -40,176 +46,323 @@
   {% endif %}
 
   {% if lot and balance %}
+  {# ——— Mass balance (primary) ——— #}
   <div class="hs-card" style="margin-bottom:1rem;border:2px solid {% if balance.balanced %}#059669{% else %}#dc2626{% endif %}">
     <div class="hs-card-header">
       <h3>
         Mass balance
         {% if balance.balanced %}
-        <span class="hs-badge" style="background:#ecfdf5;color:#065f46">Green — balanced</span>
+        <span class="hs-badge" style="background:#ecfdf5;color:#065f46">OK — on hand matches ledger</span>
         {% else %}
-        <span class="hs-badge" style="background:#fef2f2;color:#991b1b">Red — drift {{ balance.drift|floatformat:2 }}</span>
+        <span class="hs-badge" style="background:#fef2f2;color:#991b1b">Off by {{ balance.drift|floatformat:2 }}{% if balance.uom %} {{ balance.uom }}{% endif %}</span>
         {% endif %}
       </h3>
     </div>
     <div class="hs-card-body">
-      <div class="hs-form-grid">
-        <div><span class="hs-muted">Book remaining</span><div class="hs-list-title">{{ balance.remaining|floatformat:2 }}</div></div>
-        <div><span class="hs-muted">Ledger last after</span><div class="hs-list-title">{% if balance.ledger_after != None %}{{ balance.ledger_after|floatformat:2 }}{% else %}—{% endif %}</div></div>
-        <div><span class="hs-muted">Brought in</span><div class="hs-list-title">{{ balance.brought_in|floatformat:2 }}</div></div>
-        <div><span class="hs-muted">Used out</span><div class="hs-list-title">{{ balance.used_out|floatformat:2 }}</div></div>
-        <div><span class="hs-muted">Adjustments (net)</span><div class="hs-list-title">{{ balance.adjustments|floatformat:2 }}</div></div>
-        <div><span class="hs-muted">Original qty</span><div class="hs-list-title">{{ balance.original_qty|floatformat:2 }}</div></div>
-      </div>
-    </div>
-  </div>
-
-  <div class="hs-card" style="margin-bottom:1rem">
-    <div class="hs-card-header"><h3>Lot information</h3></div>
-    <div class="hs-card-body">
-      <div class="hs-form-grid">
-        <div><span class="hs-muted">Internal lot</span><div class="hs-list-title">{{ lot.lot_number|default:"—" }}</div></div>
-        <div><span class="hs-muted">Vendor lot</span><div class="hs-list-title">{{ lot.vendor_lot_number|default:"—" }}</div></div>
-        <div><span class="hs-muted">Item</span><div class="hs-list-title">{{ lot.item.name }} ({{ lot.item.sku }})</div></div>
-        <div><span class="hs-muted">Type</span><div class="hs-list-title">{{ lot.item.get_item_type_display }}</div></div>
-        <div><span class="hs-muted">PO</span><div class="hs-list-title">{{ balance.po_number|default:"—" }}</div></div>
-        <div><span class="hs-muted">RMA</span><div class="hs-list-title">{{ balance.rma_number|default:"—" }}</div></div>
-        <div><span class="hs-muted">Received</span><div class="hs-list-title">{{ lot.received_date|date:"M j, Y" }}</div></div>
-      </div>
-      <p style="margin:1rem 0 0">
-        <a class="hs-btn hs-btn-secondary" href="{% url 'slurp_ui:inventory_lot_detail' lot.id %}">Lot detail</a>
+      <p class="hs-section-note" style="margin:0 0 0.85rem">
+        Green = inventory on hand matches the last ledger balance (within 0.05).
+        Adjustments can make In and Out look different even when the lot is fine.
       </p>
+
+      <div class="hs-form-grid" style="margin-bottom:1rem">
+        <div>
+          <span class="hs-muted">On hand now</span>
+          <div class="hs-list-title">{{ balance.remaining|floatformat:2 }}{% if balance.uom %} {{ balance.uom }}{% endif %}</div>
+        </div>
+        <div>
+          <span class="hs-muted">Last ledger balance</span>
+          <div class="hs-list-title">{% if balance.ledger_after != None %}{{ balance.ledger_after|floatformat:2 }}{% if balance.uom %} {{ balance.uom }}{% endif %}{% else %}—{% endif %}</div>
+        </div>
+        <div>
+          <span class="hs-muted">Difference</span>
+          <div class="hs-list-title" style="color:{% if balance.balanced %}#065f46{% else %}#991b1b{% endif %}">
+            {{ balance.drift|floatformat:2 }}{% if balance.uom %} {{ balance.uom }}{% endif %}
+          </div>
+        </div>
+      </div>
+
+      <div style="padding-top:0.75rem;border-top:1px solid var(--hs-border-soft, #eaf0f6)">
+        <div class="hs-section-note" style="margin:0 0 0.55rem">How this lot moved</div>
+        <table class="hs-table" style="max-width:28rem">
+          <tbody>
+            <tr>
+              <td>Started / made / received</td>
+              <td style="text-align:right">{{ balance.brought_in|floatformat:2 }}{% if balance.uom %} {{ balance.uom }}{% endif %}</td>
+            </tr>
+            <tr>
+              <td>+ Adjustments / reversals</td>
+              <td style="text-align:right">{% if balance.adjustments >= 0 %}+{% endif %}{{ balance.adjustments|floatformat:2 }}{% if balance.uom %} {{ balance.uom }}{% endif %}</td>
+            </tr>
+            <tr>
+              <td>− Used / sold / lab</td>
+              <td style="text-align:right">−{{ balance.used_out|floatformat:2 }}{% if balance.uom %} {{ balance.uom }}{% endif %}</td>
+            </tr>
+            <tr>
+              <td><strong>= Expected on hand</strong></td>
+              <td style="text-align:right"><strong>{{ balance.story_expected|floatformat:2 }}{% if balance.uom %} {{ balance.uom }}{% endif %}</strong></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </div>
   </div>
 
+  {# ——— Lot identity (compact) ——— #}
   <div class="hs-card" style="margin-bottom:1rem">
-    <div class="hs-card-header"><h3>PO / receipts</h3></div>
-    <div class="hs-card-body tight">
-      {% if balance.po_rows %}
-      <table class="hs-table"><thead><tr><th>Date</th><th>PO</th><th>Qty</th></tr></thead>
-        <tbody>{% for r in balance.po_rows %}<tr><td>{{ r.date|date:"Y-m-d" }}</td><td>{{ r.po|default:"—" }}</td><td>{{ r.qty|floatformat:2 }}</td></tr>{% endfor %}</tbody>
-      </table>
-      {% else %}<div class="hs-empty">No receipt rows.</div>{% endif %}
+    <div class="hs-card-body" style="display:flex;flex-wrap:wrap;gap:0.75rem 1.5rem;align-items:baseline;justify-content:space-between">
+      <div>
+        <div class="hs-list-title" style="margin:0">{{ lot.lot_number }}</div>
+        <div class="hs-section-note" style="margin:0.2rem 0 0">
+          {{ lot.item.sku }} — {{ lot.item.name }}
+          {% if lot.vendor_lot_number %} · Vendor lot {{ lot.vendor_lot_number }}{% endif %}
+          {% if balance.vendor_name %} · {{ balance.vendor_name }}{% endif %}
+          {% if balance.po_number %} · PO {{ balance.po_number }}{% endif %}
+        </div>
+      </div>
+      <div style="display:flex;gap:0.5rem;flex-wrap:wrap">
+        <a class="hs-btn hs-btn-secondary" href="{% url 'slurp_ui:inventory_lot_detail' lot.id %}">Lot detail</a>
+        <a class="hs-btn hs-btn-secondary" href="{% url 'slurp_ui:production_archive' %}?q={{ lot.lot_number|urlencode }}&amp;lot={{ lot.id }}">Archives</a>
+      </div>
     </div>
   </div>
 
+  {# ——— What happened (only rows with data) ——— #}
   <div class="hs-card" style="margin-bottom:1rem">
-    <div class="hs-card-header"><h3>Production (where used)</h3></div>
+    <div class="hs-card-header"><h3>What happened</h3></div>
     <div class="hs-card-body tight">
-      {% if balance.production_uses %}
       <table class="hs-table">
-        <thead><tr><th>Batch</th><th>Type</th><th>Finished good</th><th>Qty used</th><th>Date</th></tr></thead>
+        <thead>
+          <tr>
+            <th style="width:6.5rem">When</th>
+            <th style="width:7rem">Kind</th>
+            <th>Detail</th>
+            <th style="width:7rem;text-align:right">Qty</th>
+          </tr>
+        </thead>
         <tbody>
+          {% for batch in balance.produced_from %}
+          <tr>
+            <td>{{ batch.date|date:"Y-m-d" }}</td>
+            <td>Made here</td>
+            <td>
+              {% if batch.batch_id %}
+              <a href="{% url 'slurp_ui:production_batch_detail' batch.batch_id %}">{{ batch.batch_number }}</a>
+              · {{ batch.batch_type }}
+              <a class="hs-btn hs-btn-sm" style="margin-left:0.35rem" href="{% url 'slurp_ui:production_batch_pdf' batch.batch_id %}" target="_blank" rel="noopener">PDF</a>
+              {% else %}
+              {{ batch.batch_number }} · {{ batch.batch_type }}
+              {% endif %}
+            </td>
+            <td style="text-align:right">+{{ batch.quantity_produced|floatformat:2 }}{% if batch.uom %} {{ batch.uom }}{% elif balance.uom %} {{ balance.uom }}{% endif %}</td>
+          </tr>
+          {% endfor %}
+
+          {% for r in balance.po_rows %}
+          <tr>
+            <td>{{ r.date|date:"Y-m-d" }}</td>
+            <td>Received</td>
+            <td>PO {{ r.po|default:"—" }}</td>
+            <td style="text-align:right">+{{ r.qty|floatformat:2 }}{% if r.uom %} {{ r.uom }}{% endif %}</td>
+          </tr>
+          {% endfor %}
+
           {% for row in balance.production_uses %}
           <tr>
-            <td>{{ row.batch_number }}</td>
-            <td>{{ row.batch_type }}</td>
-            <td>{{ row.finished_good }} ({{ row.sku }})</td>
-            <td>{{ row.quantity_used|floatformat:2 }}</td>
-            <td>{{ row.date|date:"M j, Y" }}</td>
+            <td>{{ row.date|date:"Y-m-d" }}</td>
+            <td>Used in ticket</td>
+            <td>
+              {% if row.batch_id %}
+              <a href="{% url 'slurp_ui:production_batch_detail' row.batch_id %}">{{ row.batch_number }}</a>
+              {% else %}{{ row.batch_number }}{% endif %}
+              · {{ row.batch_type }}
+              {% if row.sku %} → {{ row.sku }}{% endif %}
+              {% for ol in row.output_lots %}
+                {% if forloop.first %} · out {% endif %}{{ ol.lot_number }}{% if not forloop.last %}, {% endif %}
+              {% endfor %}
+              {% if row.batch_id %}
+              <a class="hs-btn hs-btn-sm" style="margin-left:0.35rem" href="{% url 'slurp_ui:production_batch_pdf' row.batch_id %}" target="_blank" rel="noopener">PDF</a>
+              {% endif %}
+            </td>
+            <td style="text-align:right">−{{ row.quantity_used|floatformat:2 }}{% if row.uom %} {{ row.uom }}{% elif balance.uom %} {{ balance.uom }}{% endif %}</td>
+          </tr>
+          {% endfor %}
+
+          {% for a in balance.production_allocs %}
+          <tr>
+            <td>{{ a.date|date:"Y-m-d" }}</td>
+            <td>Staged</td>
+            <td>
+              {% if a.batch_id %}
+              <a href="{% url 'slurp_ui:production_batch_detail' a.batch_id %}">{{ a.batch_number }}</a>
+              {% else %}{{ a.batch_number }}{% endif %}
+              · {{ a.batch_type }} · {{ a.status }}
+              {% if a.sku %} → {{ a.sku }}{% endif %}
+            </td>
+            <td style="text-align:right">−{{ a.qty|floatformat:2 }}{% if a.uom %} {{ a.uom }}{% endif %} (open)</td>
+          </tr>
+          {% endfor %}
+
+          {% for r in balance.sales_rows %}
+          <tr>
+            <td>{{ r.date|date:"Y-m-d" }}</td>
+            <td>Shipped</td>
+            <td>
+              {% if r.sales_order_id %}
+              <a href="{% url 'slurp_ui:sales_order_detail' r.sales_order_id %}">{{ r.so|default:"—" }}</a>
+              {% else %}{{ r.so|default:"—" }}{% endif %}
+              {% if r.customer or r.ship_to %}
+              <span class="hs-section-note" style="display:inline;margin:0">
+                · {% if r.customer %}{{ r.customer }}{% endif %}{% if r.customer and r.ship_to %} / {% endif %}{% if r.ship_to %}{{ r.ship_to }}{% endif %}
+              </span>
+              {% endif %}
+            </td>
+            <td style="text-align:right">−{{ r.qty|floatformat:2 }}{% if r.uom %} {{ r.uom }}{% endif %}</td>
+          </tr>
+          {% endfor %}
+
+          {% for a in balance.open_allocs %}
+          <tr>
+            <td>—</td>
+            <td>Sales hold</td>
+            <td>
+              {% if a.sales_order_id %}
+              <a href="{% url 'slurp_ui:sales_order_detail' a.sales_order_id %}">{{ a.so_number }}</a>
+              {% else %}{{ a.so_number }}{% endif %}
+              {% if a.customer or a.ship_to %}
+              <span class="hs-section-note" style="display:inline;margin:0">
+                · {% if a.customer %}{{ a.customer }}{% endif %}{% if a.customer and a.ship_to %} / {% endif %}{% if a.ship_to %}{{ a.ship_to }}{% endif %}
+              </span>
+              {% endif %}
+              · {{ a.status }}
+            </td>
+            <td style="text-align:right">−{{ a.qty|floatformat:2 }}{% if a.uom %} {{ a.uom }}{% endif %} (open)</td>
+          </tr>
+          {% endfor %}
+
+          {% for r in balance.downstream_sales_rows %}
+          <tr>
+            <td>{{ r.date|date:"Y-m-d" }}</td>
+            <td>FG shipped</td>
+            <td>
+              {% if r.sales_order_id %}
+              <a href="{% url 'slurp_ui:sales_order_detail' r.sales_order_id %}">{{ r.so|default:"—" }}</a>
+              {% else %}{{ r.so|default:"—" }}{% endif %}
+              {% if r.customer or r.ship_to %}
+              <span class="hs-section-note" style="display:inline;margin:0">
+                · {% if r.customer %}{{ r.customer }}{% endif %}{% if r.customer and r.ship_to %} / {% endif %}{% if r.ship_to %}{{ r.ship_to }}{% endif %}
+              </span>
+              {% endif %}
+              · FG {{ r.fg_lot }}{% if r.fg_sku %} ({{ r.fg_sku }}){% endif %}
+              {% if r.batch_number %} via {{ r.batch_number }}{% endif %}
+            </td>
+            <td style="text-align:right">
+              {% if r.this_lot_used != None %}
+              −{{ r.this_lot_used|floatformat:2 }}{% if r.this_lot_uom %} {{ r.this_lot_uom }}{% endif %}
+              {% else %}
+              FG −{{ r.qty|floatformat:2 }}{% if r.uom %} {{ r.uom }}{% endif %}
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+
+          {% for a in balance.downstream_open_allocs %}
+          <tr>
+            <td>—</td>
+            <td>FG sales hold</td>
+            <td>
+              {% if a.sales_order_id %}
+              <a href="{% url 'slurp_ui:sales_order_detail' a.sales_order_id %}">{{ a.so_number }}</a>
+              {% else %}{{ a.so_number }}{% endif %}
+              {% if a.customer or a.ship_to %}
+              <span class="hs-section-note" style="display:inline;margin:0">
+                · {% if a.customer %}{{ a.customer }}{% endif %}{% if a.customer and a.ship_to %} / {% endif %}{% if a.ship_to %}{{ a.ship_to }}{% endif %}
+              </span>
+              {% endif %}
+              · FG {{ a.fg_lot }}{% if a.fg_sku %} ({{ a.fg_sku }}){% endif %}
+            </td>
+            <td style="text-align:right">
+              {% if a.this_lot_used != None %}
+              −{{ a.this_lot_used|floatformat:2 }}{% if a.this_lot_uom %} {{ a.this_lot_uom }}{% endif %} (open)
+              {% else %}
+              FG −{{ a.qty|floatformat:2 }}{% if a.uom %} {{ a.uom }}{% endif %} (open)
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+
+          {% for r in balance.lab_rows %}
+          <tr>
+            <td>{{ r.date|date:"Y-m-d" }}</td>
+            <td>Lab</td>
+            <td>{{ r.notes|default:"Lab stock" }}</td>
+            <td style="text-align:right">−{{ r.qty|floatformat:2 }}{% if r.uom %} {{ r.uom }}{% endif %}</td>
+          </tr>
+          {% endfor %}
+
+          {% for r in balance.return_rows %}
+          <tr>
+            <td>{{ r.date|date:"Y-m-d" }}</td>
+            <td>Return</td>
+            <td>{{ r.ref|default:"—" }}{% if r.notes %} · {{ r.notes }}{% endif %}</td>
+            <td style="text-align:right">{{ r.qty|floatformat:2 }}{% if r.uom %} {{ r.uom }}{% endif %}</td>
+          </tr>
+          {% endfor %}
+
+          {% for s in balance.rma_staging %}
+          <tr>
+            <td>—</td>
+            <td>RMA staging</td>
+            <td>{{ s.lot_number }}</td>
+            <td style="text-align:right">{{ s.quantity_remaining|floatformat:2 }}{% if s.item.unit_of_measure %} {{ s.item.unit_of_measure }}{% endif %} rem</td>
+          </tr>
+          {% endfor %}
+
+          {% if not balance.produced_from and not balance.po_rows and not balance.production_uses and not balance.production_allocs and not balance.sales_rows and not balance.open_allocs and not balance.downstream_sales_rows and not balance.downstream_open_allocs and not balance.lab_rows and not balance.return_rows and not balance.rma_staging %}
+          <tr><td colspan="4"><div class="hs-empty">No production, sales, lab, or return activity yet.</div></td></tr>
+          {% endif %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  {# ——— Inputs used when this lot was made (optional detail) ——— #}
+  {% if balance.produced_from %}
+  {% for batch in balance.produced_from %}
+  {% if batch.inputs %}
+  <details class="hs-card" style="margin-bottom:1rem;padding:0">
+    <summary class="hs-card-header" style="cursor:pointer;list-style:none">
+      <h3 style="display:inline">Inputs that made this lot</h3>
+      <span class="hs-section-note" style="margin-left:0.5rem">{{ batch.batch_number }} · click to expand</span>
+    </summary>
+    <div class="hs-card-body tight">
+      <table class="hs-table">
+        <thead><tr><th>Input lot</th><th>Item</th><th>Qty used</th></tr></thead>
+        <tbody>
+          {% for inp in batch.inputs %}
+          <tr>
+            <td>
+              {% if inp.lot_id %}
+              <a href="?q={{ inp.lot.lot_number|urlencode }}&amp;lot={{ inp.lot_id }}">{{ inp.lot.lot_number|default:inp.lot.vendor_lot_number }}</a>
+              {% else %}—{% endif %}
+            </td>
+            <td>{% if inp.lot and inp.lot.item %}{{ inp.lot.item.sku }}{% else %}—{% endif %}</td>
+            <td>{{ inp.quantity_used|floatformat:2 }}{% if inp.lot.item.unit_of_measure %} {{ inp.lot.item.unit_of_measure }}{% endif %}</td>
           </tr>
           {% endfor %}
         </tbody>
       </table>
-      {% else %}<div class="hs-empty">Not used as a production input.</div>{% endif %}
     </div>
-  </div>
+  </details>
+  {% endif %}
+  {% endfor %}
+  {% endif %}
 
-  <div class="hs-card" style="margin-bottom:1rem">
-    <div class="hs-card-header"><h3>Produced from (backward)</h3></div>
-    <div class="hs-card-body">
-      {% if balance.produced_from %}
-      {% for batch in balance.produced_from %}
-      <div style="margin-bottom:1rem;padding-bottom:1rem;border-bottom:1px solid var(--hs-border-soft, #eaf0f6)">
-        <p class="hs-list-title" style="margin:0 0 0.5rem">
-          {{ batch.batch_type|title }} {{ batch.batch_number }}
-          <span class="hs-list-sub">produced {{ batch.quantity_produced|floatformat:2 }} · {{ batch.date|date:"M j, Y" }}</span>
-        </p>
-        {% if batch.inputs %}
-        <table class="hs-table">
-          <thead><tr><th>Input lot</th><th>Item</th><th>Qty used</th></tr></thead>
-          <tbody>
-            {% for inp in batch.inputs %}
-            <tr>
-              <td>{{ inp.lot.lot_number|default:inp.lot.vendor_lot_number }}</td>
-              <td>{{ inp.lot.item.sku }}</td>
-              <td>{{ inp.quantity_used|floatformat:2 }}</td>
-            </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-        {% endif %}
-      </div>
-      {% endfor %}
-      {% else %}<div class="hs-empty">No production/rework output pedigree.</div>{% endif %}
-    </div>
-  </div>
-
-  <div class="hs-card" style="margin-bottom:1rem">
-    <div class="hs-card-header"><h3>Shipments / sales</h3></div>
-    <div class="hs-card-body tight">
-      {% if balance.sales_rows or balance.open_allocs %}
-      {% if balance.sales_rows %}
-      <table class="hs-table" style="margin-bottom:0.75rem">
-        <thead><tr><th>Date</th><th>SO</th><th>Qty shipped</th></tr></thead>
-        <tbody>
-          {% for r in balance.sales_rows %}
-          <tr><td>{{ r.date|date:"Y-m-d" }}</td><td>{{ r.so|default:"—" }}</td><td>{{ r.qty|floatformat:2 }}</td></tr>
-          {% endfor %}
-        </tbody>
-      </table>
-      {% endif %}
-      {% if balance.open_allocs %}
-      <div class="hs-section-note">Open allocations</div>
-      <ul style="margin:0;padding-left:1.2rem">
-        {% for a in balance.open_allocs %}
-        <li>{{ a.sales_order_item.sales_order.so_number }} — {{ a.quantity_allocated|floatformat:2 }}</li>
-        {% endfor %}
-      </ul>
-      {% endif %}
-      {% else %}<div class="hs-empty">No sales / allocations.</div>{% endif %}
-    </div>
-  </div>
-
-  <div class="hs-card" style="margin-bottom:1rem">
-    <div class="hs-card-header"><h3>Returns / RMA</h3></div>
-    <div class="hs-card-body tight">
-      {% if balance.return_rows or balance.rma_staging or balance.rma_as_staging %}
-      {% if balance.return_rows %}
-      <table class="hs-table">
-        <thead><tr><th>Date</th><th>Ref</th><th>Qty</th><th>Notes</th></tr></thead>
-        <tbody>
-          {% for r in balance.return_rows %}
-          <tr><td>{{ r.date|date:"Y-m-d" }}</td><td>{{ r.ref|default:"—" }}</td><td>{{ r.qty|floatformat:2 }}</td><td>{{ r.notes|default:"" }}</td></tr>
-          {% endfor %}
-        </tbody>
-      </table>
-      {% endif %}
-      {% if balance.rma_staging %}
-      <p class="hs-section-note">RMA staging lots from this source</p>
-      <ul>{% for s in balance.rma_staging %}<li>{{ s.lot_number }} ({{ s.quantity_remaining|floatformat:2 }} rem)</li>{% endfor %}</ul>
-      {% endif %}
-      {% else %}<div class="hs-empty">No return / RMA activity.</div>{% endif %}
-    </div>
-  </div>
-
-  <div class="hs-card" style="margin-bottom:1rem">
-    <div class="hs-card-header"><h3>Lab stock</h3></div>
-    <div class="hs-card-body tight">
-      {% if balance.lab_rows %}
-      <table class="hs-table">
-        <thead><tr><th>Date</th><th>Qty out</th><th>Notes</th></tr></thead>
-        <tbody>
-          {% for r in balance.lab_rows %}
-          <tr><td>{{ r.date|date:"Y-m-d" }}</td><td>{{ r.qty|floatformat:2 }}</td><td>{{ r.notes|default:"" }}</td></tr>
-          {% endfor %}
-        </tbody>
-      </table>
-      {% else %}<div class="hs-empty">No lab-stock pulls.</div>{% endif %}
-    </div>
-  </div>
-
-  <div class="hs-card">
-    <div class="hs-card-header"><h3>Full ledger</h3></div>
+  {# ——— Full ledger (collapsed) ——— #}
+  <details class="hs-card" style="padding:0">
+    <summary class="hs-card-header" style="cursor:pointer;list-style:none">
+      <h3 style="display:inline">Full ledger</h3>
+      <span class="hs-section-note" style="margin-left:0.5rem">{{ balance.ledger|length }} row{{ balance.ledger|length|pluralize }} · click to expand</span>
+    </summary>
     <div class="hs-card-body tight">
       {% if balance.ledger %}
       <table class="hs-table">
@@ -219,17 +372,19 @@
           <tr>
             <td>{{ row.date|date:"Y-m-d H:i" }}</td>
             <td>{{ row.type_display }}{% if row.synthetic %} *{% endif %}</td>
-            <td>{{ row.change|floatformat:2 }}</td>
-            <td>{% if row.after != None %}{{ row.after|floatformat:2 }}{% else %}—{% endif %}</td>
+            <td>{{ row.change|floatformat:2 }}{% if row.uom %} {{ row.uom }}{% endif %}</td>
+            <td>{% if row.after != None %}{{ row.after|floatformat:2 }}{% if row.uom %} {{ row.uom }}{% endif %}{% else %}—{% endif %}</td>
             <td>{{ row.ref|default:"—" }}</td>
             <td style="max-width:14rem;overflow:hidden;text-overflow:ellipsis">{{ row.notes|default:"" }}</td>
           </tr>
           {% endfor %}
         </tbody>
       </table>
-      {% else %}<div class="hs-empty">No transaction log rows.</div>{% endif %}
+      {% else %}
+      <div class="hs-empty">No transaction log rows.</div>
+      {% endif %}
     </div>
-  </div>
+  </details>
   {% endif %}
 </div>
 {% endblock %}

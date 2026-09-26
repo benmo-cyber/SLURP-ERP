@@ -133,3 +133,38 @@ def convert_mass_uom(
     if src == "kg" and dst == "lbs":
         return normalize_mass_quantity(q * LBS_PER_KG)
     raise ValueError(f"Unsupported mass conversion {from_uom!r} → {to_uom!r}")
+
+
+def convert_unit_price(
+    price: float | int | None,
+    from_uom: str | None,
+    to_uom: str | None,
+) -> float:
+    """
+    Convert a per-unit money price between mass UoMs (inverse of quantity).
+
+    Example: $28.50 / lb → $/kg = 28.50 × LBS_PER_KG (2.2) = $62.70 / kg.
+    """
+    if price is None:
+        return 0.0
+    src = (from_uom or "").strip().lower()
+    dst = (to_uom or "").strip().lower()
+    p = float(price)
+    if not math.isfinite(p):
+        return p
+    if src in ("lb", "lbs"):
+        src = "lbs"
+    if dst in ("lb", "lbs"):
+        dst = "lbs"
+    if src == dst or not src or not dst:
+        return p
+    if src == "ea" or dst == "ea":
+        if src == dst:
+            return p
+        raise ValueError(f"Cannot convert unit price between '{from_uom}' and '{to_uom}'")
+    # price_to = price_from × (mass of 1 to-unit measured in from-units)
+    if src == "lbs" and dst == "kg":
+        return p * LBS_PER_KG
+    if src == "kg" and dst == "lbs":
+        return p / LBS_PER_KG
+    raise ValueError(f"Unsupported unit-price conversion {from_uom!r} → {to_uom!r}")

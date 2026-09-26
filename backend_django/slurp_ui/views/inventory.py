@@ -175,6 +175,12 @@ def _item_from_post(post, *, item=None):
     if vendor and Item.objects.filter(sku=sku, vendor=vendor).exclude(pk=getattr(item, "pk", None)).exists():
         errors.append(f'Item "{sku}" already exists for vendor {vendor}.')
 
+    product_category = (post.get("product_category") or "").strip() or None
+    if not product_category:
+        errors.append("Product category is required.")
+    elif product_category not in dict(Item.PRODUCT_CATEGORY_CHOICES):
+        errors.append("Invalid product category.")
+
     pack_unit = (post.get("pack_size_unit") or "").strip().lower()
     # Create form no longer collects item UoM — derive from pack unit when provided.
     posted_uom = (post.get("unit_of_measure") or "").strip().lower()
@@ -194,7 +200,7 @@ def _item_from_post(post, *, item=None):
         "item_type": post.get("item_type") or getattr(item, "item_type", "raw_material"),
         "unit_of_measure": uom,
         "vendor": vendor,
-        "product_category": (post.get("product_category") or "").strip() or None,
+        "product_category": product_category,
         "hts_code": (post.get("hts_code") or "").strip() or None,
         "country_of_origin": (post.get("country_of_origin") or "").strip() or None,
         "on_order": float(getattr(item, "on_order", 0) or 0),
@@ -309,6 +315,7 @@ def inventory_table(request: HttpRequest) -> HttpResponse:
     from erp_core.models import ProductionBatchOutput, PurchaseOrder
     from erp_core.pack_display import (
         format_pack_label,
+        lot_remnant_slices,
         pack_quantity_breakdown,
         resolve_pack_size,
     )
@@ -316,7 +323,8 @@ def inventory_table(request: HttpRequest) -> HttpResponse:
     raw_rows = fetch_inventory_details(request.user, tab)
 
     # Split each on-hand lot into full-pack mass vs remnant mass.
-    # Main FG / RM / Indirect = full packs; Partials = remnants only.
+    # Main FG / RM / Indirect = full packs; Partials = remnant (free or allocated
+    # to open production/sales — like FG keeps allocated packs until close).
     # Lot set MUST match inventory_details / lots_by_sku_vendor for this tab
     # (gated natural_colors receipts live on Raw, not FG — do not count them on FG).
     if tab == "finished_good":
@@ -395,10 +403,34 @@ def inventory_table(request: HttpRequest) -> HttpResponse:
         return "MFG" if item_type == "finished_good" else "Unknown"
 
     pack_by_sku: dict[str, dict] = defaultdict(
-        lambda: {"full": 0.0, "rem": 0.0, "full_lots": 0, "rem_lots": 0, "uom": "lbs"}
+        lambda: {
+            "full": 0.0,
+            "rem": 0.0,
+            "full_lots": 0,
+            "rem_lots": 0,
+            "full_sales": 0.0,
+            "full_prod": 0.0,
+            "full_hold": 0.0,
+            "rem_sales": 0.0,
+            "rem_prod": 0.0,
+            "rem_hold": 0.0,
+            "uom": "lbs",
+        }
     )
     pack_by_sku_vendor: dict[tuple[str, str], dict] = defaultdict(
-        lambda: {"full": 0.0, "rem": 0.0, "full_lots": 0, "rem_lots": 0, "uom": "lbs"}
+        lambda: {
+            "full": 0.0,
+            "rem": 0.0,
+            "full_lots": 0,
+            "rem_lots": 0,
+            "full_sales": 0.0,
+            "full_prod": 0.0,
+            "full_hold": 0.0,
+            "rem_sales": 0.0,
+            "rem_prod": 0.0,
+            "rem_hold": 0.0,
+            "uom": "lbs",
+        }
     )
     for lot in cand_lots:
         item = lot.item
@@ -416,38 +448,69 @@ def inventory_table(request: HttpRequest) -> HttpResponse:
             continue
         bd = compute_lot_quantity_breakdown(lot)
         avail = float(bd.get("quantity_available_for_use") or 0)
+        sales_n = float(bd.get("allocated_to_sales") or 0)
+        prod_n = float(bd.get("committed_to_production") or 0)
+        hold_n = float(bd.get("quantity_on_hold") or 0)
         pq, pu = resolve_pack_size(item=item, lot=lot)
         brk_phys = pack_quantity_breakdown(phys, lu, pq, pu)
-        brk_avail = (
-            pack_quantity_breakdown(avail, lu, pq, pu) if avail > 0 else None
-        )
+        slices = lot_remnant_slices(lot, breakdown=bd)
         vkey = _lot_vendor_key(lot)
         sku_agg = pack_by_sku[sku]
         ven_agg = pack_by_sku_vendor[(sku, vkey)]
         sku_agg["uom"] = lu
         ven_agg["uom"] = lu
-        if brk_phys is None:
-            # No pack size — keep qty on the main (full-pack) side only.
+        if brk_phys is None or slices is None:
+            # No pack size — keep qty + commitments on the main (full-pack) side only.
             sku_agg["full"] += avail
             ven_agg["full"] += avail
             sku_agg["full_lots"] += 1
             ven_agg["full_lots"] += 1
+            sku_agg["full_sales"] += sales_n
+            sku_agg["full_prod"] += prod_n
+            sku_agg["full_hold"] += hold_n
+            ven_agg["full_sales"] += sales_n
+            ven_agg["full_prod"] += prod_n
+            ven_agg["full_hold"] += hold_n
             continue
-        full_phys = float(brk_phys.get("full_mass") or 0)
-        rem_phys = float(brk_phys.get("remainder") or 0)
-        full_avail = float(brk_avail.get("full_mass") or 0) if brk_avail else 0.0
-        rem_avail = float(brk_avail.get("remainder") or 0) if brk_avail else 0.0
-        # Tab membership from physical packs; Available columns from free qty only.
+        full_phys = float(slices.get("full_phys") or 0)
+        rem_phys = float(slices.get("rem_phys") or 0)
+        full_avail = float(slices.get("full_avail") or 0)
+        rem_avail = float(slices.get("rem_avail") or 0)
+        rem_sales = float(slices.get("rem_sales") or 0)
+        rem_prod = float(slices.get("rem_prod") or 0)
+        rem_hold = float(slices.get("rem_hold") or 0)
+        full_sales = max(0.0, sales_n - rem_sales)
+        full_prod = max(0.0, prod_n - rem_prod)
+        full_hold = max(0.0, hold_n - rem_hold)
+        # Tab membership: full packs from physical. Partials = physical remnant
+        # that is still free OR committed to sales/production (same idea as FG
+        # keeping allocated full packs visible until close/ship). Fully held FG
+        # with no rem commitment stays off Partials.
         if full_phys >= 0.01:
             sku_agg["full"] += full_avail
             ven_agg["full"] += full_avail
             sku_agg["full_lots"] += 1
             ven_agg["full_lots"] += 1
-        if rem_phys >= 0.01:
+            sku_agg["full_sales"] += full_sales
+            sku_agg["full_prod"] += full_prod
+            sku_agg["full_hold"] += full_hold
+            ven_agg["full_sales"] += full_sales
+            ven_agg["full_prod"] += full_prod
+            ven_agg["full_hold"] += full_hold
+        show_on_partials = rem_phys >= 0.01 and (
+            rem_avail >= 0.01 or rem_prod >= 0.01 or rem_sales >= 0.01
+        )
+        if show_on_partials:
             sku_agg["rem"] += rem_avail
             ven_agg["rem"] += rem_avail
             sku_agg["rem_lots"] += 1
             ven_agg["rem_lots"] += 1
+            sku_agg["rem_sales"] += rem_sales
+            sku_agg["rem_prod"] += rem_prod
+            sku_agg["rem_hold"] += rem_hold
+            ven_agg["rem_sales"] += rem_sales
+            ven_agg["rem_prod"] += rem_prod
+            ven_agg["rem_hold"] += rem_hold
 
     rows = []
     for master in raw_rows:
@@ -483,6 +546,7 @@ def inventory_table(request: HttpRequest) -> HttpResponse:
         vendors_out = []
         vendor_names = []
         vendor_pack_labels = []
+        seen_vendor_keys: set[str] = set()
         for v in master.get("vendors") or []:
             vname = v.get("vendor")
             item_type = v.get("item_type") or master.get("item_type")
@@ -507,6 +571,10 @@ def inventory_table(request: HttpRequest) -> HttpResponse:
             if v_pack_label and v_pack_label not in vendor_pack_labels:
                 vendor_pack_labels.append(v_pack_label)
             if is_expanded:
+                # API may emit both MFG and Unknown for plant FG lots; after remap
+                # they share one key — only render one vendor row.
+                if key in seen_vendor_keys:
+                    continue
                 v_expanded = expand_vendor is not None and (
                     (expand_vendor in ("Unknown", "MFG") and key == expand_vendor)
                     or (expand_vendor == key)
@@ -528,6 +596,16 @@ def inventory_table(request: HttpRequest) -> HttpResponse:
                     if v_lots < 1:
                         # Vendor only has remnant (or nothing) — not on main tab.
                         continue
+                seen_vendor_keys.add(key)
+                if remainder_only:
+                    v_sales = float(ven_pack.get("rem_sales") or 0)
+                    v_prod = float(ven_pack.get("rem_prod") or 0)
+                    v_hold = float(ven_pack.get("rem_hold") or 0)
+                else:
+                    # Full-pack commitments only — remnant commitments live on Partials.
+                    v_sales = float(ven_pack.get("full_sales") or 0)
+                    v_prod = float(ven_pack.get("full_prod") or 0)
+                    v_hold = float(ven_pack.get("full_hold") or 0)
                 vendors_out.append(
                     {
                         "vendor": key,
@@ -542,13 +620,11 @@ def inventory_table(request: HttpRequest) -> HttpResponse:
                         "qty_uom": qty_label_uom(vu, display_uom),
                         "available": format_qty_for_display(v_avail_native, vu, display_uom),
                         "on_order": format_qty_for_display(v.get("on_order"), vu, display_uom),
-                        "allocated_to_sales": format_qty_for_display(
-                            v.get("allocated_to_sales"), vu, display_uom
-                        ),
+                        "allocated_to_sales": format_qty_for_display(v_sales, vu, display_uom),
                         "allocated_to_production": format_qty_for_display(
-                            v.get("allocated_to_production"), vu, display_uom
+                            v_prod, vu, display_uom
                         ),
-                        "on_hold": format_qty_for_display(v.get("on_hold"), vu, display_uom),
+                        "on_hold": format_qty_for_display(v_hold, vu, display_uom),
                         "lot_count": v_lots,
                         "expanded": v_expanded,
                     }
@@ -600,32 +676,45 @@ def inventory_table(request: HttpRequest) -> HttpResponse:
         else:
             sole_vendor = None
 
+        if remainder_only:
+            row_sales = float(sku_pack.get("rem_sales") or 0)
+            row_prod = float(sku_pack.get("rem_prod") or 0)
+            row_hold = float(sku_pack.get("rem_hold") or 0)
+        else:
+            # Full-pack commitments only — do not double-count Partials.
+            row_sales = float(sku_pack.get("full_sales") or 0)
+            row_prod = float(sku_pack.get("full_prod") or 0)
+            row_hold = float(sku_pack.get("full_hold") or 0)
+
         rows.append(
             {
                 "sku": sku,
                 "description": master.get("description") or "",
                 "item_type": master.get("item_type") or "",
                 "product_category": master.get("product_category") or "",
+                "product_category_label": (
+                    dict(Item.PRODUCT_CATEGORY_CHOICES).get(master.get("product_category") or "", "")
+                    if master.get("product_category")
+                    else ""
+                ),
                 "vendors_label": ", ".join(vendor_names) if vendor_names else "—",
                 "pack_size_unit": uom,
                 "pack_label": master_pack_label,
                 "qty_uom": qty_uom,
                 "available": format_qty_for_display(view_avail_native, uom, display_uom),
                 "on_order": format_qty_for_display(master.get("on_order"), uom, display_uom),
-                "allocated_to_sales": format_qty_for_display(
-                    master.get("allocated_to_sales"), uom, display_uom
-                ),
-                "allocated_to_production": format_qty_for_display(
-                    master.get("allocated_to_production"), uom, display_uom
-                ),
-                "on_hold": format_qty_for_display(master.get("on_hold"), uom, display_uom),
+                "allocated_to_sales": format_qty_for_display(row_sales, uom, display_uom),
+                "allocated_to_production": format_qty_for_display(row_prod, uom, display_uom),
+                "on_hold": format_qty_for_display(row_hold, uom, display_uom),
                 "lot_count": view_lot_count,
-                "vendor_count": master.get("vendor_count") or len(vendor_names),
+                # Count vendors that actually have lots in this tab/view (not raw API
+                # buckets — FG remaps Unknown→MFG and can double-count).
+                "vendor_count": len(lot_vendors) if lot_vendors else len(vendor_names),
                 "sole_vendor": sole_vendor,
                 "expanded": is_expanded,
                 "vendors": vendors_out,
-                "on_hold_flag": float(master.get("on_hold") or 0) > 0,
-                "has_partials": float(sku_pack["rem"]) >= 0.01,
+                "on_hold_flag": row_hold > 0,
+                "has_partials": int(sku_pack.get("rem_lots") or 0) >= 1,
             }
         )
 
@@ -655,6 +744,31 @@ def inventory_table(request: HttpRequest) -> HttpResponse:
             .select_related("item", "pack_size")
             .prefetch_related("item__pack_sizes")
         }
+        # lot_id → campaign_code (multi-batch campaigns only)
+        campaign_by_lot: dict[int, str] = {}
+        if lot_ids:
+            from erp_core.campaign_lots import campaign_member_batch_counts
+
+            raw_camp = list(
+                ProductionBatchOutput.objects.filter(lot_id__in=lot_ids)
+                .exclude(batch__campaign_id__isnull=True)
+                .values_list(
+                    "lot_id",
+                    "batch__campaign__campaign_code",
+                    "batch__campaign_id",
+                )
+            )
+            member_counts = campaign_member_batch_counts(
+                list({int(cid) for _lid, _code, cid in raw_camp if cid})
+            )
+            for lot_id, code, camp_id in raw_camp:
+                if not lot_id or not code or not camp_id:
+                    continue
+                if member_counts.get(int(camp_id), 0) < 2:
+                    continue
+                lid = int(lot_id)
+                if lid not in campaign_by_lot:
+                    campaign_by_lot[lid] = code
         from erp_core.coa_template import resolve_coa_template_item
         from erp_core.models import ItemCoaTestLine, LotCoaCertificate
 
@@ -764,6 +878,9 @@ def inventory_table(request: HttpRequest) -> HttpResponse:
             rem_phys = 0.0
             full_avail = 0.0
             rem_avail = 0.0
+            rem_prod = 0.0
+            rem_sales = 0.0
+            rem_hold = 0.0
             full_packs = 0
 
             def _fmt_rem(v: float) -> str:
@@ -775,26 +892,26 @@ def inventory_table(request: HttpRequest) -> HttpResponse:
             if lot_obj is not None and phys_native > 0:
                 pq, pu = resolve_pack_size(item=lot_obj.item, lot=lot_obj)
                 brk_phys = pack_quantity_breakdown(phys_native, lu, pq, pu)
-                brk_avail = (
-                    pack_quantity_breakdown(avail_native, lu, pq, pu)
-                    if avail_native > 0
-                    else None
-                )
-                if brk_phys:
-                    full_phys = float(brk_phys.get("full_mass") or 0)
-                    rem_phys = float(brk_phys.get("remainder") or 0)
+                slices = lot_remnant_slices(lot_obj)
+                if brk_phys and slices:
+                    full_phys = float(slices.get("full_phys") or 0)
+                    rem_phys = float(slices.get("rem_phys") or 0)
                     full_packs = int(brk_phys.get("full_packs") or 0)
                     has_remainder = bool(brk_phys.get("has_remainder"))
-                    if brk_avail:
-                        full_avail = float(brk_avail.get("full_mass") or 0)
-                        rem_avail = float(brk_avail.get("remainder") or 0)
+                    full_avail = float(slices.get("full_avail") or 0)
+                    rem_avail = float(slices.get("rem_avail") or 0)
+                    rem_prod = float(slices.get("rem_prod") or 0)
+                    rem_sales = float(slices.get("rem_sales") or 0)
+                    rem_hold = float(slices.get("rem_hold") or 0)
                     if remainder_only:
-                        pack_breakout = (
-                            f"{_fmt_rem(rem_phys)} {display_label} partial "
-                            f"(of {phys_native:g} {display_label})"
-                            if rem_phys >= 0.01
-                            else ""
-                        )
+                        shown_rem = rem_avail if rem_avail >= 0.01 else rem_phys
+                        if shown_rem >= 0.01:
+                            pack_breakout = (
+                                f"{_fmt_rem(shown_rem)} {display_label} partial "
+                                f"(of {phys_native:g} {display_label})"
+                            )
+                        else:
+                            pack_breakout = ""
                     elif full_packs > 0:
                         # FG / RM: full packs only — same compact label for every SKU
                         pack_breakout = f"{full_packs} × {brk_phys.get('pack_label')}"
@@ -807,22 +924,42 @@ def inventory_table(request: HttpRequest) -> HttpResponse:
                     pack_breakout = ""
 
             # Main tabs = lots with physical full packs (incl. when those packs are
-            # committed to sales). Partials = physical remnant. Available columns use
-            # free qty only; committed sales stay visible on the FG side.
+            # committed to sales). Partials = physical remnant still free or
+            # allocated to sales/production (like FG keeps allocated packs visible).
+            # Remnant commitments are shown only on Partials — never on FG/RM.
+            prod_native = float(lot.get("committed_to_production_qty") or 0)
             if not deeper:
                 if remainder_only:
-                    if rem_phys < 0.01:
+                    if full_phys < 0.01:
+                        show_sales = sales_native
+                        show_prod = prod_native
+                        show_hold = float(lot.get("quantity_on_hold") or 0)
+                    else:
+                        show_sales = rem_sales
+                        show_prod = rem_prod
+                        show_hold = rem_hold
+                    # Keep allocated remnant rows visible (Available may be 0).
+                    if rem_phys < 0.01 or (
+                        rem_avail < 0.01
+                        and show_prod < 0.01
+                        and show_sales < 0.01
+                    ):
                         continue
                     view_avail = rem_avail
-                    show_sales = sales_native if full_phys < 0.01 else 0.0
                 else:
                     if full_phys < 0.01:
                         continue
                     view_avail = full_avail
-                    show_sales = sales_native
+                    show_sales = max(0.0, sales_native - rem_sales)
+                    show_prod = max(0.0, prod_native - rem_prod)
+                    show_hold = max(
+                        0.0, float(lot.get("quantity_on_hold") or 0) - rem_hold
+                    )
             else:
                 view_avail = avail_native
                 show_sales = sales_native
+                show_prod = prod_native
+                show_hold = float(lot.get("quantity_on_hold") or 0)
 
             qty_display = format_qty_for_display(phys_native, lu, display_uom)
             avail_display = format_qty_for_display(view_avail, lu, display_uom)
@@ -869,6 +1006,7 @@ def inventory_table(request: HttpRequest) -> HttpResponse:
                 {
                     "id": lot_id,
                     "lot_number": lot.get("lot_number") or "—",
+                    "campaign_code": campaign_by_lot.get(lot_id) or "",
                     "vendor_lot_number": lot.get("vendor_lot_number") or "—",
                     "po_number": lot.get("po_number") or "—",
                     "tracking": lot.get("po_tracking_number") or "—",
@@ -877,19 +1015,26 @@ def inventory_table(request: HttpRequest) -> HttpResponse:
                     "expiration_date": exp_date,
                     "quantity": qty_display,
                     "available": avail_display,
-                    "on_hold": format_qty_for_display(
-                        lot.get("quantity_on_hold") or 0, lu, display_uom
-                    ),
+                    "on_hold": format_qty_for_display(show_hold, lu, display_uom),
                     "status": lot.get("status") or "",
                     "committed_sales": format_qty_for_display(show_sales, lu, display_uom),
-                    "committed_prod": format_qty_for_display(
-                        lot.get("committed_to_production_qty") or 0, lu, display_uom
-                    ),
+                    "committed_prod": format_qty_for_display(show_prod, lu, display_uom),
                     "sales_allocs": sales_allocs,
                     "uom": display_label,
                     "pack_breakout": pack_breakout,
-                    "has_remainder": bool(remainder_only and has_remainder),
-                    "also_has_remnant": bool(not remainder_only and rem_phys >= 0.01),
+                    "has_remainder": bool(
+                        rem_phys >= 0.01
+                        and (
+                            remainder_only
+                            and (
+                                rem_avail >= 0.01
+                                or show_prod >= 0.01
+                                or show_sales >= 0.01
+                            )
+                            or (not remainder_only and rem_avail >= 0.01)
+                        )
+                    ),
+                    "also_has_remnant": bool(not remainder_only and rem_avail >= 0.01),
                     "avail_native": avail_native,
                     "hold_native": float(lot.get("quantity_on_hold") or 0),
                     "remaining_native": phys_native,
@@ -3283,6 +3428,7 @@ def inventory_lot_extend_shelf_life(request: HttpRequest, pk: int) -> HttpRespon
     """Extend FG/DI lot shelf life from a re-QC date; refresh master COA."""
     from datetime import datetime
 
+    from erp_core.campaign_coa import lot_campaign
     from erp_core.formula_resolve import formula_for_lot
     from erp_core.models import LotCoaCertificate
     from erp_core.shelf_life_extension import (
@@ -3292,6 +3438,18 @@ def inventory_lot_extend_shelf_life(request: HttpRequest, pk: int) -> HttpRespon
 
     lot = get_object_or_404(Lot.objects.select_related("item"), pk=pk)
     library_url = reverse("slurp_ui:quality_coa_library") + "?tab=master"
+
+    camp = lot_campaign(lot)
+    if camp is not None:
+        messages.error(
+            request,
+            f"Lot is in campaign {camp.campaign_code}. "
+            "Extend shelf life on the campaign COA (Quality → COA Library), not a single batch.",
+        )
+        return redirect(
+            "slurp_ui:quality_campaign_extend_shelf_life", campaign_id=camp.id
+        )
+
     rem = float(getattr(lot, "quantity_remaining", 0) or 0)
     item_type = (getattr(lot.item, "item_type", None) or "").strip()
     can_extend = item_type in ("finished_good", "distributed_item") and rem > 0

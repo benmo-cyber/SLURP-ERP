@@ -3,21 +3,19 @@
 {% block title %}{{ archive_root_label }} — SLURP{% endblock %}
 {% block module_title %}{{ archive_root_label }}{% endblock %}
 {% block extra_css %}
-<link rel="stylesheet" href="{% static 'slurp_ui/css/ProductionArchive.css' %}?v=20260922a" />
+<link rel="stylesheet" href="{% static 'slurp_ui/css/ProductionArchive.css' %}?v=20260926b" />
 {% endblock %}
 {% block header_actions %}
-  <a href="{% url dash_url_name %}" class="btn btn-secondary">
-    {% if batch_type == 'repack' %}Repacks{% else %}Batch tickets{% endif %}
-  </a>
+  <a href="{% url 'slurp_ui:production' %}" class="btn btn-secondary">Production</a>
 {% endblock %}
 {% block main %}
 <div class="prod-arch">
   <div class="prod-arch-toolbar">
     <div class="prod-arch-browse" aria-label="Browse mode">
       <a class="{% if browse == 'date' and not q %}is-active{% endif %}"
-         href="?browse=date{% if not locked_batch_type and batch_type != 'all' %}&amp;batch_type={{ batch_type }}{% endif %}">By date</a>
+         href="?browse=date{% if batch_type != 'all' %}&amp;flow={{ batch_type }}{% endif %}">By date</a>
       <a class="{% if browse == 'product' and not q %}is-active{% endif %}"
-         href="?browse=product{% if not locked_batch_type and batch_type != 'all' %}&amp;batch_type={{ batch_type }}{% endif %}">By product</a>
+         href="?browse=product{% if batch_type != 'all' %}&amp;flow={{ batch_type }}{% endif %}">By product</a>
     </div>
 
     <form method="get" class="prod-arch-search">
@@ -27,24 +25,29 @@
       {% if product_id %}<input type="hidden" name="product" value="{{ product_id }}" />{% endif %}
       <div class="form-row" style="min-width:14rem;flex:1">
         <label for="q">Search</label>
-        <input id="q" name="q" value="{{ q }}" placeholder="Batch #, SKU, name, notes…" />
+        <input id="q" name="q" value="{{ q }}" placeholder="Batch #, lot #, vendor lot, SKU…" />
       </div>
-      {% if not locked_batch_type %}
-      <div class="form-row" style="min-width:8.5rem">
-        <label for="batch_type">Type</label>
-        <select id="batch_type" name="batch_type">
-          <option value="all" {% if batch_type == 'all' %}selected{% endif %}>All</option>
-          <option value="production" {% if batch_type == 'production' %}selected{% endif %}>Production</option>
-          <option value="repack" {% if batch_type == 'repack' %}selected{% endif %}>Repack</option>
+      <div class="form-row" style="min-width:9rem">
+        <label for="flow">Flow</label>
+        <select id="flow" name="flow">
+          <option value="all" {% if batch_type == 'all' %}selected{% endif %}>All tickets</option>
+          <option value="production" {% if batch_type == 'production' %}selected{% endif %}>Batch tickets</option>
+          <option value="repack" {% if batch_type == 'repack' %}selected{% endif %}>Repacks</option>
+          <option value="rework" {% if batch_type == 'rework' %}selected{% endif %}>Rework</option>
         </select>
       </div>
-      {% endif %}
       <button type="submit" class="btn btn-primary">Search</button>
-      {% if q or year or month or product_id or batch_type != 'all' and not locked_batch_type %}
-      <a class="btn btn-secondary" href="{% url archive_url_name %}?browse={{ browse }}">Clear</a>
+      {% if q or year or month or product_id or batch_type != 'all' %}
+      <a class="btn btn-secondary" href="{% url 'slurp_ui:production_archive' %}?browse={{ browse }}">Clear</a>
       {% endif %}
     </form>
   </div>
+
+  {% if q %}
+  <p class="prod-arch-hint" style="margin-top:-0.35rem">
+    Search covers <strong>all</strong> archived tickets (batch, rework, and repack).
+  </p>
+  {% endif %}
 
   <nav class="prod-arch-crumbs" aria-label="Archive path">
     {% for c in crumbs %}
@@ -64,12 +67,85 @@
       Open a month folder to see archived tickets.
     {% elif folder_level == 'products' %}
       Open a product folder to see its archived tickets.
+    {% elif lot_focus %}
+      Archived tickets for lot {{ lot_focus.lot_number }}
+      {% if lot_focus.item %}· {{ lot_focus.item.sku }}{% endif %}.
+      Search also matches vendor lot #.
     {% elif q %}
       {{ result_count }} result{{ result_count|pluralize }} for “{{ q }}”.
     {% else %}
-      {{ result_count }} {% if batch_type == 'repack' %}repack{{ result_count|pluralize }}{% else %}batch{{ result_count|pluralize }}{% endif %} in this folder.
+      {{ result_count }} ticket{{ result_count|pluralize }} in this folder.
     {% endif %}
   </p>
+
+  {% if lot_candidates %}
+  <div class="prod-arch-lot-card">
+    <h3>{% if lot_suggestions_only %}Nearby lot numbers{% else %}Multiple lot matches{% endif %}</h3>
+    {% if lot_suggestions_only %}
+    <p class="prod-arch-lot-note">No exact match for <strong>{{ q }}</strong> — pick a lot, then open its archived tickets.</p>
+    {% else %}
+    <p class="prod-arch-lot-note">Pick a lot to break out archived tickets (used as input vs produced as output).</p>
+    {% endif %}
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Lot</th>
+          <th>Vendor lot</th>
+          <th>SKU</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for c in lot_candidates %}
+        <tr>
+          <td>{{ c.lot_number }}</td>
+          <td>{{ c.vendor_lot_number|default:"—" }}</td>
+          <td>{% if c.item %}{{ c.item.sku }}{% else %}—{% endif %}</td>
+          <td>
+            <a class="btn btn-secondary" style="padding:0.35rem 0.7rem;font-size:0.85rem"
+               href="?browse={{ browse }}&amp;q={{ q|urlencode }}&amp;lot={{ c.id }}{% if batch_type != 'all' %}&amp;flow={{ batch_type }}{% endif %}">Open</a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+
+  {% if lot_focus %}
+  <div class="prod-arch-lot-card">
+    <h3>Lot {{ lot_focus.lot_number|default:lot_focus.id }}</h3>
+    <div class="prod-arch-lot-meta">
+      <div>
+        <span class="k">Item</span>
+        <span class="v">{% if lot_focus.item %}{{ lot_focus.item.sku }} — {{ lot_focus.item.name }}{% else %}—{% endif %}</span>
+      </div>
+      <div>
+        <span class="k">Vendor lot</span>
+        <span class="v">{{ lot_focus.vendor_lot_number|default:"—" }}</span>
+      </div>
+      <div>
+        <span class="k">Archived tickets</span>
+        <span class="v">{{ lot_input_rows|length }} as input · {{ lot_output_rows|length }} as output</span>
+      </div>
+    </div>
+    {% if lot_flow_ignored %}
+    <p class="prod-arch-lot-note">
+      Related tickets include other flows (repack/rework). Showing all flows for this lot.
+      <a href="?browse={{ browse }}&amp;q={{ q|urlencode }}&amp;lot={{ lot_focus.id }}&amp;flow=all">Set Flow to All</a>
+    </p>
+    {% endif %}
+    <p class="prod-arch-lot-actions">
+      <a class="btn btn-secondary" href="{% url 'slurp_ui:quality_lot_tracking' %}?q={{ lot_focus.lot_number|urlencode }}&amp;lot={{ lot_focus.id }}">Lot tracking</a>
+      <a class="btn btn-secondary" href="{% url 'slurp_ui:inventory_lot_detail' lot_focus.id %}">Lot detail</a>
+      {% if lot_other_open_count %}
+      <span class="prod-arch-lot-note" style="margin:0">
+        {{ lot_other_open_count }} non-archived ticket{{ lot_other_open_count|pluralize }} also listed below.
+      </span>
+      {% endif %}
+    </p>
+  </div>
+  {% endif %}
 
   {% if folders %}
   <div class="prod-arch-folders" role="list">
@@ -86,68 +162,18 @@
   </div>
   {% endif %}
 
-  {% if folder_level == 'list' %}
-  <table class="data-table">
-    <thead>
-      <tr>
-        <th>Batch #</th>
-        <th>Type</th>
-        <th>Finished good</th>
-        <th>Ticket / Yield</th>
-        <th>Closed</th>
-        <th>Archived</th>
-        <th>Actions</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for row in archive_batch_rows %}
-      {% with b=row.batch %}
-      <tr>
-        <td><a href="{% url 'slurp_ui:production_batch_detail' b.id %}">{{ b.batch_number }}</a></td>
-        <td>{{ b.batch_type }}</td>
-        <td>
-          {{ b.finished_good_item.sku }}
-          <div style="color:#64748b;font-size:0.82rem">{{ b.finished_good_item.name }}</div>
-        </td>
-        <td>
-          {{ row.ticket_display|floatformat:2 }} {{ row.display_uom }}
-          {% if row.yield_display != None %}
-          · yield {{ row.yield_display|floatformat:2 }}
-          {% endif %}
-        </td>
-        <td>{% if b.closed_date %}{{ b.closed_date|date:"Y-m-d" %}{% else %}—{% endif %}</td>
-        <td>{% if b.archived_at %}{{ b.archived_at|date:"Y-m-d" %}{% else %}—{% endif %}</td>
-        <td style="white-space:nowrap">
-          <a class="btn btn-secondary" style="padding:0.35rem 0.7rem;font-size:0.85rem"
-             href="{% url 'slurp_ui:production_batch_detail' b.id %}">Detail</a>
-          <a class="btn btn-secondary" style="padding:0.35rem 0.7rem;font-size:0.85rem"
-             href="{% url 'slurp_ui:production_batch_pdf' b.id %}" target="_blank">PDF</a>
-          <form method="post" action="{% url 'slurp_ui:production_unarchive_batch' b.id %}" style="display:inline">
-            {% csrf_token %}
-            <input type="hidden" name="next" value="{% url archive_url_name %}?{% for k,v in restore_params.items %}{{ k }}={{ v|urlencode }}{% if not forloop.last %}&amp;{% endif %}{% endfor %}" />
-            <button type="submit" class="btn btn-primary" style="padding:0.35rem 0.7rem;font-size:0.85rem"
-                    onclick="return confirm('Restore {{ b.batch_number }} to the {% if batch_type == 'repack' %}repacks{% else %}batch tickets{% endif %} dash?');">Restore</button>
-          </form>
-        </td>
-      </tr>
-      {% endwith %}
-      {% empty %}
-      <tr>
-        <td colspan="7">
-          {% if q %}
-            No archived {% if batch_type == 'repack' %}repacks{% else %}batches{% endif %} match that search.
-          {% else %}
-            This folder is empty.
-          {% endif %}
-        </td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+  {% if show_lot_breakout %}
+    {% include "slurp_ui/production/_archive_batch_table.html" with section_title="Where used (input)" section_rows=lot_input_rows empty_msg="Not used as an input on any archived ticket." show_lot_qty=True lot_qty_label="Qty used" %}
+    {% include "slurp_ui/production/_archive_batch_table.html" with section_title="Produced as output" section_rows=lot_output_rows empty_msg="Not an output lot on any archived ticket." show_lot_qty=True lot_qty_label="Qty produced" %}
+    {% if lot_open_rows %}
+    {% include "slurp_ui/production/_archive_batch_table.html" with section_title="Not yet archived (still on Production)" section_rows=lot_open_rows empty_msg="" show_lot_qty=True lot_qty_label="Lot qty" %}
+    {% endif %}
+  {% elif folder_level == 'list' %}
+    {% include "slurp_ui/production/_archive_batch_table.html" with section_title="" section_rows=archive_batch_rows empty_msg="" show_lot_qty=False %}
   {% elif not folders %}
   <div style="padding:1.5rem;color:#64748b;background:#fff;border:1px dashed #cbd5e1;border-radius:12px">
-    No archived {% if batch_type == 'repack' %}repacks{% else %}batches{% endif %} yet.
-    Archive a closed ticket from the {% if batch_type == 'repack' %}repacks{% else %}batch tickets{% endif %} dash or batch detail.
+    No archived tickets yet.
+    Archive a closed ticket from Production or batch detail.
   </div>
   {% endif %}
 </div>

@@ -336,13 +336,24 @@ def allocate_sales_order(sales_order: SalesOrder, data: dict) -> SalesOrder:
                 distributed_item = so_item.item
                 total_quantity = 0.0
                 raw_material_lots = []
+                seen_rm_lots: set[int] = set()
 
                 for rm_data in raw_materials:
                     lot_id = rm_data.get("lot_id")
                     quantity = float(rm_data.get("quantity", 0))
+                    try:
+                        lot_id_int = int(lot_id)
+                    except (TypeError, ValueError):
+                        raise SellFlowError(f"Invalid lot id on order line for item {item_id}.")
+                    if lot_id_int in seen_rm_lots:
+                        raise SellFlowError(
+                            "The same lot was selected more than once on one order line. "
+                            "Combine quantities into a single lot pick, or choose different lots."
+                        )
+                    seen_rm_lots.add(lot_id_int)
 
                     try:
-                        lot = Lot.objects.get(id=lot_id, status="accepted")
+                        lot = Lot.objects.get(id=lot_id_int, status="accepted")
                     except Lot.DoesNotExist as e:
                         raise SellFlowError(
                             f"Lot {lot_id} not found or not accepted", status_code=404
@@ -440,13 +451,25 @@ def allocate_sales_order(sales_order: SalesOrder, data: dict) -> SalesOrder:
 
             else:
                 # Regular items - allocate from existing lots
+                seen_lot_ids: set[int] = set()
                 for allocation in allocations:
                     lot_id = allocation.get("lot_id")
                     quantity = float(allocation.get("quantity", 0))
+                    try:
+                        lot_id_int = int(lot_id)
+                    except (TypeError, ValueError):
+                        raise SellFlowError(f"Invalid lot id on order line for item {item_id}.")
+
+                    if lot_id_int in seen_lot_ids:
+                        raise SellFlowError(
+                            "The same lot was selected more than once on one order line. "
+                            "Combine quantities into a single lot pick, or choose different lots."
+                        )
+                    seen_lot_ids.add(lot_id_int)
 
                     lot = (
                         Lot.objects.select_related("item")
-                        .filter(id=lot_id, status__in=["accepted", "on_hold"])
+                        .filter(id=lot_id_int, status__in=["accepted", "on_hold"])
                         .first()
                     )
                     if not lot:
@@ -501,11 +524,17 @@ def allocate_sales_order(sales_order: SalesOrder, data: dict) -> SalesOrder:
                                 f'or enable "include raw / pre-repack lots" when saving allocations.'
                             )
 
-                    SalesOrderLot.objects.create(
-                        sales_order_item=so_item,
-                        lot=lot,
-                        quantity_allocated=quantity,
-                    )
+                    try:
+                        SalesOrderLot.objects.create(
+                            sales_order_item=so_item,
+                            lot=lot,
+                            quantity_allocated=quantity,
+                        )
+                    except IntegrityError:
+                        raise SellFlowError(
+                            f"Lot {lot.lot_number} is already allocated on this order line. "
+                            "Use one pick per lot (combine quantities if needed)."
+                        )
                     so_item.quantity_allocated += quantity
 
             so_item.save()
@@ -530,6 +559,17 @@ def allocate_sales_order(sales_order: SalesOrder, data: dict) -> SalesOrder:
                 if sales_order.status != "issued":
                     sales_order.status = "draft"
         sales_order.save()
+
+    # Collapse campaign-member customer COAs into one PDF per campaign on this SO.
+    try:
+        from .coa_allocation import consolidate_customer_coas_for_sales_order
+
+        consolidate_customer_coas_for_sales_order(sales_order)
+    except Exception:
+        logger.exception(
+            "consolidate_customer_coas_for_sales_order failed for SO id=%s",
+            getattr(sales_order, "id", None),
+        )
 
     return sales_order
 
@@ -808,11 +848,15 @@ def ship_sales_order(
         sales_order.save()
 
         # Ensure customer COA copies exist for packing/docs on the workqueue
-        from .coa_allocation import sync_customer_coa_for_sales_order_lot
+        from .coa_allocation import (
+            consolidate_customer_coas_for_sales_order,
+            sync_customer_coa_for_sales_order_lot,
+        )
 
         for so_item in sales_order.items.all():
             for sol in so_item.allocated_lots.all():
                 sync_customer_coa_for_sales_order_lot(sol.id)
+        consolidate_customer_coas_for_sales_order(sales_order)
 
     response_payload = {
         "sales_order": SalesOrderSerializer(sales_order, context=context).data,

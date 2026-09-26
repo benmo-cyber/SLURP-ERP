@@ -42,6 +42,8 @@ def pick_list_has_rows(sales_order) -> bool:
 
 
 def _pick_list_rows(sales_order):
+    from .campaign_coa import lot_campaign
+
     rows = []
     for so_item in sales_order.items.all().order_by('id'):
         it = getattr(so_item, 'item', None)
@@ -58,12 +60,15 @@ def _pick_list_rows(sales_order):
             if not lot:
                 continue
             ln = (lot.lot_number or lot.vendor_lot_number or str(lot.pk)).strip()[:40]
+            camp = lot_campaign(lot)
+            camp_code = ((camp.campaign_code if camp else '') or '').strip()[:40]
             qty_s = _format_pick_quantity_for_display(qty, uom)
             qty_uom = f"{qty_s} {uom}".strip() if uom else qty_s
             rows.append(
                 {
                     'sku': sku,
                     'description': name,
+                    'campaign_code': camp_code,
                     'lot_number': ln,
                     'quantity': qty_uom[:36],
                 }

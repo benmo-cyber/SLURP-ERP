@@ -538,6 +538,21 @@ urlpatterns = [
         name="quality_coa_pdf",
     ),
     path(
+        "quality/coa-library/campaign/<int:pk>/pdf/",
+        views.quality_campaign_coa_pdf,
+        name="quality_campaign_coa_pdf",
+    ),
+    path(
+        "quality/coa-library/campaign/<int:campaign_id>/issue/",
+        views.quality_campaign_coa_issue,
+        name="quality_campaign_coa_issue",
+    ),
+    path(
+        "quality/coa-library/campaign/<int:campaign_id>/extend-shelf-life/",
+        views.quality_campaign_extend_shelf_life,
+        name="quality_campaign_extend_shelf_life",
+    ),
+    path(
         "quality/coa-library/customer/<int:pk>/pdf/",
         views.quality_coa_customer_pdf,
         name="quality_coa_customer_pdf",

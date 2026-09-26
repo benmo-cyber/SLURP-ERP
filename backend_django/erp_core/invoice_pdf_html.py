@@ -8,6 +8,7 @@ import logging
 from .html_pdf_common import html_string_to_pdf_bytes
 from .invoice_helpers import (
     format_invoice_quantity_display,
+    format_invoice_unit_price_display,
     resolve_payment_terms_for_invoice,
     unit_of_measure_for_invoice_line,
 )
@@ -50,6 +51,40 @@ def _build_invoice_context(invoice):
     inv_num = (getattr(invoice, 'invoice_number', None) or '').strip()
     inv_date = invoice.invoice_date.strftime('%m/%d/%Y') if getattr(invoice, 'invoice_date', None) else ''
 
+    is_credit = (getattr(invoice, 'invoice_type', None) or '') == 'credit'
+    source_invoice_number = ''
+    rma_number = ''
+    if is_credit:
+        import re
+        m = re.match(r'^(.+)-CM\d{3}$', inv_num, re.IGNORECASE)
+        if m:
+            source_invoice_number = m.group(1)
+        try:
+            from .models import CustomerRma
+
+            rma = (
+                CustomerRma.objects.filter(credit_invoice_id=invoice.pk)
+                .order_by('-id')
+                .values_list('rma_number', flat=True)
+                .first()
+            )
+            rma_number = (rma or '').strip()
+        except Exception:
+            pass
+        # Drop redundant "CREDIT MEMO…" lead-in from comments; keep RMA / reason notes.
+        if comments_text:
+            cleaned = []
+            for part in re.split(r'[\n;]+', comments_text):
+                p = part.strip()
+                if not p:
+                    continue
+                if re.match(r'^CREDIT MEMO\b', p, re.I):
+                    continue
+                if re.match(r'^Credit memo against invoice\b', p, re.I):
+                    continue
+                cleaned.append(p)
+            comments_text = ' · '.join(cleaned)
+
     items = []
     try:
         for it in invoice.items.select_related('item', 'sales_order_item__item').all():
@@ -65,7 +100,7 @@ def _build_invoice_context(invoice):
             items.append({
                 'qty': format_invoice_quantity_display(qty, uom),
                 'description': desc or '—',
-                'unit_price': f"${up:,.2f}" if up is not None else '—',
+                'unit_price': format_invoice_unit_price_display(up, uom),
                 'total': f"${total:,.2f}" if total is not None else '—',
             })
     except Exception:
@@ -92,6 +127,12 @@ def _build_invoice_context(invoice):
     return {
         'invoice_number': inv_num,
         'invoice_date': inv_date,
+        'is_credit': is_credit,
+        'doc_title': 'CREDIT MEMO' if is_credit else 'INVOICE',
+        'doc_number_label': 'CREDIT MEMO #' if is_credit else 'INVOICE #',
+        'total_label': 'CREDIT TOTAL' if is_credit else 'TOTAL DUE',
+        'source_invoice_number': source_invoice_number or '—',
+        'rma_number': rma_number or '—',
         'bill_to_html': bill_text,
         'ship_to_html': ship_text,
         'comments_text': comments_text.replace('&', '&amp;'),

@@ -774,4 +774,40 @@
   font-variant-numeric: tabular-nums;
 }
 
+.create-batch-page .btn-fill-remnant {
+  border: 1px solid #f59e0b;
+  background: #fffbeb;
+  color: #92400e;
+  border-radius: 6px;
+  padding: 0.25rem 0.55rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.create-batch-page .btn-fill-remnant:hover {
+  background: #fef3c7;
+  border-color: #d97706;
+}
+
+.create-batch-page .lot-remnant-qty {
+  margin-top: 0.45rem;
+  padding-top: 0.4rem;
+  border-top: 1px dashed #fcd34d;
+}
+
+.create-batch-page .lot-remnant-qty > label {
+  display: block;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #92400e;
+  margin-bottom: 0.25rem;
+}
+
+.create-batch-page .lot-remnant-input {
+  max-width: 7.5rem;
+  font-size: 0.85rem;
+  padding: 0.25rem 0.4rem;
+}
+
 

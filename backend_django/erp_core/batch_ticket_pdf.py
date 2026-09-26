@@ -1428,15 +1428,35 @@ def build_batch_ticket_pdf(batch):
                 qty_base = convert_from_lbs_to_base(qty)
                 qty_str = f"{int(round(qty_base))}" if abs(qty_base - round(qty_base)) <= 0.01 else f"{qty_base:.2f}"
                 raw_material = (getattr(item, 'description', None) or item.name or item.sku or '').strip()
+                if (
+                    getattr(item, 'item_type', None) == 'finished_good'
+                    and batch.finished_good_item_id
+                    and (
+                        item.id == batch.finished_good_item_id
+                        or (
+                            (getattr(item, 'sku_parent_code', None) or '')
+                            and (getattr(batch.finished_good_item, 'sku_parent_code', None) or '')
+                            and (item.sku_parent_code or '').upper()
+                            == (batch.finished_good_item.sku_parent_code or '').upper()
+                        )
+                    )
+                ):
+                    raw_material = f"Work-in: {raw_material}"
                 uom = (getattr(item, 'unit_of_measure', None) or 'lbs').strip() or 'lbs'
-                from .pack_display import format_packs_partial_note, resolve_pack_size
+                from .pack_display import format_batch_input_packs_note, resolve_pack_size
                 if packs_note is None:
                     pack_qty, pack_uom = resolve_pack_size(item=item, lot=lot)
                     try:
                         qty_num = float(qty_str)
                     except (TypeError, ValueError):
                         qty_num = float(qty_base)
-                    packs_note = format_packs_partial_note(qty_num, base_unit or uom, pack_qty, pack_uom)
+                    packs_note = format_batch_input_packs_note(
+                        batch_input,
+                        qty_display=qty_num,
+                        qty_uom=base_unit or uom,
+                        pack_qty=pack_qty,
+                        pack_uom=pack_uom,
+                    )
                 qty_cell = qty_str
                 if packs_note:
                     qty_cell = f"{qty_str} ({packs_note})"
@@ -1622,7 +1642,7 @@ def build_batch_ticket_pdf(batch):
     elements.append(Spacer(1, 0.06 * inch))
     pick_headers = ['Raw Material SKU', 'Vendor', 'Vendor Lot', 'Quantity', 'Pick Initials', 'Production Initials', 'Wildwood Lot']
     pick_rows = [pick_headers]
-    from .pack_display import format_packs_partial_note, resolve_pack_size
+    from .pack_display import format_batch_input_packs_note, resolve_pack_size
     for batch_input in batch.inputs.select_related('lot__item', 'lot__pack_size', 'item').prefetch_related(
         'lot__item__pack_sizes', 'item__pack_sizes'
     ).all():
@@ -1652,7 +1672,13 @@ def build_batch_ticket_pdf(batch):
                 qty_num = float(qty_str)
             except (TypeError, ValueError):
                 qty_num = float(qty_base)
-            packs_note = format_packs_partial_note(qty_num, base_unit or 'lbs', pack_qty, pack_uom)
+            packs_note = format_batch_input_packs_note(
+                batch_input,
+                qty_display=qty_num,
+                qty_uom=base_unit or 'lbs',
+                pack_qty=pack_qty,
+                pack_uom=pack_uom,
+            )
         if packs_note:
             qty_str = f"{qty_str} ({packs_note})"
         pick_rows.append([item.sku or '', vendor[:14], vendor_lot[:12], qty_str, '', '', wildwood])

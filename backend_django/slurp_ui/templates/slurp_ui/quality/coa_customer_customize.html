@@ -21,12 +21,39 @@
       </div>
       <p class="hs-muted" style="margin:0.75rem 0 0;font-size:0.85rem">
         Master COA keeps actual lab values. This page controls what appears on the <strong>customer</strong> PDF.
+        {% if copy.coa_pdf %}
+        Saving creates a <strong>new</strong> customer COA copy (prior PDF stays on file).
+        {% endif %}
       </p>
     </div>
   </div>
 
   <form method="post">
     {% csrf_token %}
+    {% if can_choose_campaign %}
+    <div class="hs-card" style="margin-bottom:1rem">
+      <div class="hs-card-header"><h3>COA basis</h3></div>
+      <div class="hs-card-body">
+        <label style="display:flex;gap:0.5rem;align-items:flex-start;margin-bottom:0.65rem">
+          <input type="radio" name="coa_basis" value="campaign" {% if copy.coa_basis == 'campaign' %}checked{% endif %} />
+          <span>
+            <strong>Campaign COA</strong> ({{ campaign_code }}) —
+            weighted QC / highest micros; lot prints as campaign code with batch lot in 8pt footer.
+          </span>
+        </label>
+        <label style="display:flex;gap:0.5rem;align-items:flex-start">
+          <input type="radio" name="coa_basis" value="batch" {% if copy.coa_basis != 'campaign' %}checked{% endif %} />
+          <span>
+            <strong>Batch lot COA</strong> —
+            this lot’s master results (still shows campaign code + batch lot footer when linked).
+          </span>
+        </label>
+      </div>
+    </div>
+    {% else %}
+    <input type="hidden" name="coa_basis" value="batch" />
+    {% endif %}
+
     <div class="hs-card" style="margin-bottom:1rem">
       <div class="hs-card-header"><h3>Result display</h3></div>
       <div class="hs-card-body">

@@ -277,6 +277,76 @@ def create_batch_ticket(user, data: dict) -> ProductionBatch:
         total_input_quantity_native += quantity_used
         resolved_inputs.append((lot, item, quantity_used))
 
+    # Work-in FG remnants: blend into the batch (grow ticket size + pick-list inputs).
+    resolved_work_ins: list[tuple] = []
+    work_in_lbs = 0.0
+    if batch_type != "repack" and work_in_partials_data:
+        from .formula_ingredient import parent_code_for_item
+        from .pack_display import lot_available_remnant_quantity
+
+        fg_item = None
+        fg_id = payload.get("finished_good_item_id")
+        if fg_id:
+            try:
+                fg_item = Item.objects.get(pk=int(fg_id))
+            except (Item.DoesNotExist, TypeError, ValueError):
+                fg_item = None
+        fg_parent = parent_code_for_item(fg_item) if fg_item else ""
+        seen_work_in: set[int] = set()
+        for partial_data in work_in_partials_data:
+            try:
+                lot_id = int(partial_data.get("lot_id"))
+            except (TypeError, ValueError):
+                continue
+            if lot_id in seen_work_in:
+                continue
+            seen_work_in.add(lot_id)
+            try:
+                lot = Lot.objects.select_related("item").get(id=lot_id, status="accepted")
+            except Lot.DoesNotExist as e:
+                raise MakeFlowError(
+                    f"Work-in partial lot {lot_id} not found", status_code=404
+                ) from e
+            item = lot.item
+            if item is None:
+                continue
+            same_item = bool(fg_item and lot.item_id == fg_item.id)
+            same_parent = bool(
+                fg_parent and parent_code_for_item(item) == fg_parent
+            )
+            if not same_item and not same_parent:
+                raise MakeFlowError(
+                    f"Work-in lot {lot.lot_number} is not in the finished-good parent family"
+                )
+            if (getattr(item, "item_type", None) or "") != "finished_good":
+                raise MakeFlowError(
+                    f"Work-in lot {lot.lot_number} must be a finished-good remnant"
+                )
+            rem_qty = lot_available_remnant_quantity(lot)
+            requested = partial_data.get("quantity_used")
+            try:
+                requested_f = float(requested) if requested is not None else rem_qty
+            except (TypeError, ValueError):
+                requested_f = rem_qty
+            qty = round(
+                min(
+                    requested_f,
+                    rem_qty,
+                    float(lot.quantity_remaining or 0),
+                ),
+                2,
+            )
+            if qty < 0.01:
+                raise MakeFlowError(
+                    f"Work-in lot {lot.lot_number} has no available remnant to blend"
+                )
+            qty_lbs = qty
+            if (item.unit_of_measure or "").lower() == "kg":
+                qty_lbs = convert_mass_uom(qty, "kg", "lbs")
+            work_in_lbs += qty_lbs
+            resolved_work_ins.append((lot, item, qty))
+        work_in_lbs = normalize_mass_quantity(round(work_in_lbs, 2))
+
     if batch_type == "repack":
         target_item = Item.objects.get(id=payload["finished_good_item_id"])
         target_uom = target_item.unit_of_measure or "lbs"
@@ -305,17 +375,46 @@ def create_batch_ticket(user, data: dict) -> ProductionBatch:
             existing_notes = (payload.get("notes") or "").strip()
             payload["notes"] = f"{existing_notes}\n{note}".strip() if existing_notes else note
     else:
+        # Formula ingredient allocations must match the formula (ticket) size.
+        formula_qty = quantity_produced_from_request
         total_rounded = normalize_mass_quantity(round(total_input_quantity_in_lbs, 2))
-        if abs(total_input_quantity_in_lbs - quantity_produced_from_request) > _QUANTITY_TOLERANCE:
+        if abs(total_input_quantity_in_lbs - formula_qty) > _QUANTITY_TOLERANCE:
             raise MakeFlowError(
                 f"Quantity mismatch: Total quantity used ({total_input_quantity_in_lbs:.2f} lbs) "
-                f"must equal quantity to produce ({quantity_produced_from_request:.2f} lbs)"
+                f"must equal formula quantity ({formula_qty:.2f} lbs)"
             )
-        quantity_produced = total_rounded
+        # Work-in remnants grow the batch and join the pick list.
+        for lot, item, qty in resolved_work_ins:
+            qty_lbs = qty
+            if (item.unit_of_measure or "").lower() == "kg":
+                qty_lbs = convert_mass_uom(qty, "kg", "lbs")
+            total_input_quantity_in_lbs += qty_lbs
+            total_input_quantity_native += qty
+            resolved_inputs.append((lot, item, qty))
+        quantity_produced = normalize_mass_quantity(round(formula_qty + work_in_lbs, 2))
+        if abs(total_input_quantity_in_lbs - quantity_produced) > _QUANTITY_TOLERANCE:
+            raise MakeFlowError(
+                f"Quantity mismatch: Total quantity used ({total_input_quantity_in_lbs:.2f} lbs) "
+                f"must equal batch size ({quantity_produced:.2f} lbs)"
+            )
+        if work_in_lbs > 0:
+            baseline_tag = f"[FORMULA_BASELINE_QTY:{formula_qty}]"
+            existing_notes = (payload.get("notes") or "").strip()
+            if "[FORMULA_BASELINE_QTY:" not in existing_notes:
+                payload["notes"] = (
+                    f"{existing_notes}\n{baseline_tag}".strip()
+                    if existing_notes
+                    else baseline_tag
+                )
     payload["quantity_produced"] = quantity_produced
 
     if work_in_partials_data:
-        partials_json = json.dumps(work_in_partials_data)
+        # Persist selection for UI/legacy; close skips output boost when these are inputs.
+        partials_payload = [
+            {"lot_id": lot.id, "quantity_used": qty}
+            for lot, _item, qty in resolved_work_ins
+        ] or work_in_partials_data
+        partials_json = json.dumps(partials_payload)
         if payload.get("notes"):
             payload["notes"] = f"{payload['notes']}\n[WORK_IN_PARTIALS:{partials_json}]"
         else:
@@ -330,11 +429,33 @@ def create_batch_ticket(user, data: dict) -> ProductionBatch:
 
     try:
         for lot, item, quantity_used in resolved_inputs:
+            packs_qty = None
+            remnant_qty = None
+            if lot is not None:
+                for src in inputs_data:
+                    try:
+                        if int(src.get("lot_id") or 0) != lot.id:
+                            continue
+                    except (TypeError, ValueError):
+                        continue
+                    if src.get("quantity_packs") is not None:
+                        try:
+                            packs_qty = float(src.get("quantity_packs"))
+                        except (TypeError, ValueError):
+                            packs_qty = None
+                    if src.get("quantity_remnant") is not None:
+                        try:
+                            remnant_qty = float(src.get("quantity_remnant"))
+                        except (TypeError, ValueError):
+                            remnant_qty = None
+                    break
             ProductionBatchInput.objects.create(
                 batch=batch,
                 lot=lot,
                 item=item,
                 quantity_used=quantity_used,
+                quantity_packs=packs_qty,
+                quantity_remnant=remnant_qty,
             )
 
         if batch_type == "repack":
@@ -602,13 +723,16 @@ def _extract_work_in_partials(batch: ProductionBatch, work_in_partials_data: lis
         return work_in_partials_data
     if not batch.notes:
         return []
-    match = re.search(r"\[WORK_IN_PARTIALS:(.*?)\]", batch.notes)
-    if not match:
+    marker = "[WORK_IN_PARTIALS:"
+    start = batch.notes.find(marker)
+    if start < 0:
         return []
+    payload_start = start + len(marker)
     try:
-        return json.loads(match.group(1))
+        data, _end = json.JSONDecoder().raw_decode(batch.notes[payload_start:])
     except json.JSONDecodeError:
         return []
+    return data if isinstance(data, list) else []
 
 
 def _batch_is_relabel(batch: ProductionBatch) -> bool:
@@ -737,11 +861,28 @@ def close_batch_ticket(batch: ProductionBatch, user, data: dict) -> ProductionBa
 
     work_in_partials_data = data.get("work_in_partials")
     final_work_in_partials = _extract_work_in_partials(batch, work_in_partials_data)
+    # New path: work-in lots are normal batch inputs (pick list + ticket size).
+    # Skip legacy "add remnant to output on close" for those lots to avoid double-count.
+    input_lot_ids = set(
+        batch.inputs.exclude(lot_id=None).values_list("lot_id", flat=True)
+    )
+    final_work_in_partials = [
+        p
+        for p in (final_work_in_partials or [])
+        if int(p.get("lot_id") or 0) not in input_lot_ids
+    ]
 
     log_production_batch_closure(batch, notes=f"Batch {batch.batch_number} closed")
 
-    batch_type_label = "repack" if batch.batch_type == "repack" else "production"
-    input_transaction_type = "repack_input" if batch.batch_type == "repack" else "production_input"
+    if batch.batch_type == "repack":
+        batch_type_label = "repack"
+        input_transaction_type = "repack_input"
+    elif batch.batch_type == "rework":
+        batch_type_label = "rework"
+        input_transaction_type = "production_input"
+    else:
+        batch_type_label = "production"
+        input_transaction_type = "production_input"
 
     for batch_input in batch.inputs.select_related("lot__item", "item").all():
         lot = batch_input.lot
@@ -829,10 +970,17 @@ def close_batch_ticket(batch: ProductionBatch, user, data: dict) -> ProductionBa
                         )
                         if not same_item and not same_parent:
                             continue
-                        if partial_lot.quantity_remaining > 0:
-                            partial_qty = partial_lot.quantity_remaining
-                            partial_quantities.append(partial_qty)
-                            partial_lots_to_delete.append(partial_lot)
+                        from .pack_display import lot_available_remnant_quantity
+
+                        # Work in free remnant only (Inventory Partials semantics).
+                        rem_qty = lot_available_remnant_quantity(partial_lot)
+                        partial_qty = round(
+                            min(rem_qty, float(partial_lot.quantity_remaining or 0)), 2
+                        )
+                        if partial_qty < 0.01:
+                            continue
+                        partial_quantities.append(partial_qty)
+                        partial_lots_to_delete.append(partial_lot)
                     except Lot.DoesNotExist:
                         pass
 
@@ -937,7 +1085,21 @@ def close_batch_ticket(batch: ProductionBatch, user, data: dict) -> ProductionBa
                 notes=f"Worked into batch {batch.batch_number}",
                 reference_number=batch.batch_number,
             )
-            partial_lot.delete()
+            new_rem = round(float(partial_lot.quantity_remaining or 0) - partial_qty, 2)
+            if new_rem <= 0.009:
+                partial_lot.quantity_remaining = 0
+                partial_lot.save(update_fields=["quantity_remaining"])
+                # Deplete pure remnant lots; keep rows that still have full packs.
+                try:
+                    partial_lot.delete()
+                except Exception:
+                    logger.exception(
+                        "Failed to delete depleted work-in lot %s",
+                        partial_lot.lot_number,
+                    )
+            else:
+                partial_lot.quantity_remaining = new_rem
+                partial_lot.save(update_fields=["quantity_remaining"])
 
         work_in_note = (
             f", worked in {total_partial_qty} lbs from partials" if total_partial_qty > 0 else ""
@@ -952,6 +1114,93 @@ def close_batch_ticket(batch: ProductionBatch, user, data: dict) -> ProductionBa
             main_output_qty,
             work_in_note,
             new_lot.status,
+        )
+
+    elif batch.batch_type == "rework":
+        # Rework: consume allocated partials/adjust (handled above) and create
+        # on-hold blend output awaiting micro.
+        from .hold_services import ensure_open_hold_case
+
+        net = net_yield_native(batch)
+        if net is not None:
+            output_qty = round(max(0.0, float(net)), 2)
+        else:
+            base_quantity = (
+                batch.quantity_actual
+                if batch.quantity_actual and batch.quantity_actual > 0
+                else batch.quantity_produced
+            )
+            output_qty = round(max(0.0, float(base_quantity or 0)), 2)
+        if output_qty < 0.01:
+            raise MakeFlowError("Rework close quantity must be greater than zero.")
+
+        item = batch.finished_good_item
+        if item is None:
+            raise MakeFlowError("Rework batch has no target finished good.")
+        closed_dt = batch.closed_date or timezone.now()
+        pack_size = ItemPackSize.objects.filter(
+            item=item, is_default=True, is_active=True
+        ).first()
+        lot_number = generate_lot_number()
+        new_lot = Lot.objects.create(
+            lot_number=lot_number,
+            item=item,
+            pack_size=pack_size,
+            quantity=output_qty,
+            quantity_remaining=output_qty,
+            quantity_on_hold=output_qty,
+            received_date=closed_dt,
+            manufacture_date=closed_dt,
+            status="on_hold",
+            on_hold=True,
+            short_reason=f"Rework {batch.batch_number}"[:255],
+        )
+        ProductionBatchOutput.objects.create(
+            batch=batch,
+            lot=new_lot,
+            quantity_produced=output_qty,
+        )
+        InventoryTransaction.objects.create(
+            transaction_type="production_output",
+            lot=new_lot,
+            quantity=output_qty,
+            notes=f"Rework batch {batch.batch_number} output",
+            reference_number=batch.batch_number,
+        )
+        log_lot_transaction(
+            lot=new_lot,
+            quantity_before=0.0,
+            quantity_change=output_qty,
+            transaction_type="production_output",
+            reference_number=batch.batch_number,
+            reference_type="batch_number",
+            transaction_id=None,
+            batch_id=batch.id,
+            notes=f"Rework {batch.batch_number} output",
+        )
+        parent = ""
+        try:
+            from .formula_ingredient import parent_code_for_item
+
+            parent = parent_code_for_item(item) or ""
+        except Exception:
+            parent = ""
+        ensure_open_hold_case(
+            new_lot,
+            user=user,
+            kind="awaiting_micro",
+            summary=f"Rework {batch.batch_number} — awaiting micro/QC",
+            initial_note=(
+                f"Rework blend into {item.sku}. "
+                f"Parent family {parent}. Qty {output_qty}."
+            ),
+        )
+        logger.info(
+            "Created rework output lot %s for batch %s: item=%s, quantity=%s",
+            new_lot.lot_number,
+            batch.batch_number,
+            item.sku,
+            output_qty,
         )
 
     elif batch.batch_type == "repack":

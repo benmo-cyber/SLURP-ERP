@@ -38,7 +38,8 @@
         {% if ready_shipment %}
         <a class="hs-btn" href="{% url 'slurp_ui:sales_packing_list_pdf' order.id %}" target="_blank">Packing list</a>
         {% for copy in coa_copies %}
-        <a class="hs-btn" href="{% url 'slurp_ui:quality_coa_customer_pdf' copy.id %}" target="_blank">COA</a>
+        <a class="hs-btn" href="{% url 'slurp_ui:quality_coa_customer_pdf' copy.id %}" target="_blank"
+           title="{{ copy.button_label|default:'COA' }}">{{ copy.button_label|default:"COA" }}</a>
         {% empty %}
           {% for cert in coa_master_certs %}
           <a class="hs-btn" href="{% url 'slurp_ui:quality_coa_pdf' cert.id %}" target="_blank">COA</a>
@@ -118,7 +119,10 @@
     <div class="hs-card-header"><h3>Open RMA / credit</h3></div>
     <div class="hs-card-body">
       <p class="hs-section-note" style="margin-top:0">
-        Select quantities by lot (or return all available). Issues a credit memo now; inventory returns only after check-in (Inventory → Check-In → Customer return).
+        Enter return quantities (item UoM) — the credit memo is only for those qty × unit price (partial returns are fine).
+        <strong>Apply credit to invoice</strong> is optional: it only chooses which open AR bill to reduce.
+        It does not credit the full invoice unless you return the full shipped qty.
+        Inventory still checks in later under Inventory → Check-In → Customer return.
       </p>
       {% if rma_lot_rows %}
       <form method="post" action="{% url 'slurp_ui:sales_create_return' order.id %}">
@@ -135,14 +139,17 @@
                 <div class="hs-list-sub">{{ row.sales_order_item.item.name }}</div>
               </td>
               <td>{{ row.lot.lot_number }}</td>
-              <td>{{ row.shipped_qty|floatformat:2 }}</td>
-              <td>{{ row.already_rma_qty|floatformat:2 }}</td>
-              <td>{{ row.available_qty|floatformat:2 }}</td>
+              <td>{{ row.shipped_qty|floatformat:2 }} {{ row.sales_order_item.item.unit_of_measure }}</td>
+              <td>{{ row.already_rma_qty|floatformat:2 }} {{ row.sales_order_item.item.unit_of_measure }}</td>
+              <td>{{ row.available_qty|floatformat:2 }} {{ row.sales_order_item.item.unit_of_measure }}</td>
               <td>
                 {% if row.available_qty > 0 %}
-                <input name="return_qty_{{ row.sales_order_item.id }}_{{ row.lot.id }}"
-                       type="number" step="any" min="0" max="{{ row.available_qty }}"
-                       placeholder="0" style="max-width:8rem" />
+                <div class="cso-qty-wrap" style="display:inline-flex;align-items:center;gap:0.35rem">
+                  <input name="return_qty_{{ row.sales_order_item.id }}_{{ row.lot.id }}"
+                         type="number" step="any" min="0" max="{{ row.available_qty }}"
+                         placeholder="0" style="max-width:8rem" />
+                  <span class="hs-muted">{{ row.sales_order_item.item.unit_of_measure }}</span>
+                </div>
                 {% else %}
                 —
                 {% endif %}
@@ -153,11 +160,11 @@
         </table>
         <div class="hs-form-grid">
           <div class="form-row" style="margin:0">
-            <label>Apply credit to invoice</label>
+            <label>Apply credit against (AR)</label>
             <select name="source_invoice_id">
-              <option value="">— Optional —</option>
+              <option value="">— Default: latest invoice on this SO —</option>
               {% for inv in returnable_invoices %}
-              <option value="{{ inv.id }}">{{ inv.invoice_number }} ({{ inv.status }}) — {{ inv.grand_total|money:2 }}</option>
+              <option value="{{ inv.id }}">{{ inv.invoice_number }} ({{ inv.status }}) · open bill {{ inv.grand_total|money:2 }}</option>
               {% endfor %}
             </select>
           </div>

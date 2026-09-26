@@ -1594,6 +1594,64 @@ def generate_invoice_number():
     
     return invoice_number
 
+
+def generate_credit_memo_number(source_invoice=None, *, sales_order=None) -> str:
+    """
+    Credit memo # tied to the source customer invoice: ``{invoice#}-CM001``.
+
+    Sequence is per source invoice (3 digits) so multiple RMAs / credits against
+    the same bill stay readable without a separate number series. Falls back to
+    the latest customer invoice on the SO, then a fresh invoice # + ``-CM001``.
+    """
+    import re
+    from django.db import transaction
+
+    from .models import Invoice
+
+    base = ""
+    if source_invoice is not None:
+        base = (getattr(source_invoice, "invoice_number", None) or "").strip()
+    if not base and sales_order is not None:
+        so_id = getattr(sales_order, "pk", None) or sales_order
+        prior = (
+            Invoice.objects.filter(sales_order_id=so_id, invoice_type="customer")
+            .exclude(status="cancelled")
+            .order_by("-invoice_date", "-id")
+            .values_list("invoice_number", flat=True)
+            .first()
+        )
+        base = (prior or "").strip()
+    # Never nest -CM on an existing credit number
+    base = re.sub(r"-CM\d{3}$", "", base, flags=re.IGNORECASE).strip()
+    if not base:
+        base = generate_invoice_number()
+
+    prefix = f"{base}-CM"
+    with transaction.atomic():
+        existing = list(
+            Invoice.objects.select_for_update()
+            .filter(invoice_number__startswith=prefix)
+            .values_list("invoice_number", flat=True)
+        )
+        max_n = 0
+        for num in existing:
+            m = re.search(r"-CM(\d{3})$", num or "", re.IGNORECASE)
+            if m:
+                max_n = max(max_n, int(m.group(1)))
+        n = max_n + 1
+        while n < 1000:
+            candidate = f"{base}-CM{n:03d}"
+            if len(candidate) > 100:
+                # Invoice.invoice_number max_length=100
+                raise ValueError(
+                    f"Credit memo number too long for invoice base {base!r}."
+                )
+            if not Invoice.objects.filter(invoice_number=candidate).exists():
+                return candidate
+            n += 1
+    raise ValueError(f"Could not allocate credit memo number under {base}.")
+
+
 def generate_batch_number(batch_type='production'):
     """Generate a unique batch number in format BT-YYYYMMDD-001 or R-YYYYMMDD-001"""
     from django.db import transaction

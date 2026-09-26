@@ -1,86 +1,97 @@
-{% extends "slurp_ui/base.html" %}
+{% extends "slurp_ui/base_module.html" %}
 {% block title %}Invoice {{ invoice.invoice_number }} — SLURP{% endblock %}
-{% block content %}
-<div class="modal-page" style="max-width:900px">
-  <div style="display:flex;justify-content:space-between;align-items:start;gap:1rem;flex-wrap:wrap">
-    <div>
-      <h2>{% if invoice.invoice_type == 'credit' %}Credit memo{% else %}Invoice{% endif %} {{ invoice.invoice_number }}</h2>
-      <p style="color:#64748b;margin:0.25rem 0 0">
-        {{ status_label }} · {{ invoice.customer_vendor_name }}
-        {% if invoice.invoice_type == 'credit' %} · Credit memo{% endif %}
-        {% if invoice.sales_order %} · SO {{ invoice.sales_order.so_number }}{% endif %}
-      </p>
-    </div>
-    <div style="display:flex;gap:0.5rem;flex-wrap:wrap">
-      <a class="hs-btn" href="{% url 'slurp_ui:finance_invoice_pdf' invoice.id %}">View PDF</a>
-      <a class="hs-btn" href="{% url 'slurp_ui:finance_invoice_pdf' invoice.id %}?download=1">Download PDF</a>
-      {% if invoice.invoice_type != 'credit' and invoice.status == 'draft' %}
-      <a class="hs-btn hs-btn-primary" href="{% url 'slurp_ui:finance_invoice_issue' invoice.id %}">Issue</a>
-      {% endif %}
-      {% if invoice.invoice_type != 'credit' and invoice.status == 'sent' or invoice.invoice_type != 'credit' and invoice.status == 'overdue' %}
-      <form method="post" action="{% url 'slurp_ui:finance_invoice_mark_paid' invoice.id %}" style="display:inline">
-        {% csrf_token %}
-        <button type="submit" class="hs-btn hs-btn-primary" onclick="return confirm('Mark invoice paid?');">Mark paid</button>
-      </form>
-      {% endif %}
-      {% if invoice.invoice_type != 'credit' and invoice.status != 'cancelled' and invoice.status != 'paid' %}
-      <form method="post" action="{% url 'slurp_ui:finance_invoice_cancel' invoice.id %}" style="display:inline">
-        {% csrf_token %}
-        <button type="submit" class="hs-btn hs-btn-danger"
-                onclick="return confirm('Void {{ invoice.invoice_number }}? Required before reversing an issued-invoice shipment.');">
-          Void
-        </button>
-      </form>
-      {% endif %}
-      <a class="hs-btn" href="{% url 'slurp_ui:finance_invoices' %}">Back to list</a>
-    </div>
-  </div>
+{% block module_title %}{% if invoice.invoice_type == 'credit' %}Credit memo{% else %}Invoice{% endif %} {{ invoice.invoice_number }}{% endblock %}
+{% block header_actions %}
+  <a class="hs-btn" href="{% url 'slurp_ui:finance_invoice_pdf' invoice.id %}">View PDF</a>
+  <a class="hs-btn" href="{% url 'slurp_ui:finance_invoice_pdf' invoice.id %}?download=1">Download</a>
+  {% if invoice.invoice_type != 'credit' and invoice.status == 'draft' %}
+  <a class="hs-btn hs-btn-primary" href="{% url 'slurp_ui:finance_invoice_issue' invoice.id %}">Issue</a>
+  {% endif %}
+  {% if invoice.invoice_type != 'credit' and invoice.status == 'sent' or invoice.invoice_type != 'credit' and invoice.status == 'overdue' %}
+  <form method="post" action="{% url 'slurp_ui:finance_invoice_mark_paid' invoice.id %}" style="display:inline">
+    {% csrf_token %}
+    <button type="submit" class="hs-btn hs-btn-primary" onclick="return confirm('Mark invoice paid?');">Mark paid</button>
+  </form>
+  {% endif %}
+  {% if invoice.invoice_type != 'credit' and invoice.status != 'cancelled' and invoice.status != 'paid' %}
+  <form method="post" action="{% url 'slurp_ui:finance_invoice_cancel' invoice.id %}" style="display:inline">
+    {% csrf_token %}
+    <button type="submit" class="hs-btn hs-btn-danger"
+            onclick="return confirm('Void {{ invoice.invoice_number }}? Required before reversing an issued-invoice shipment.');">
+      Void
+    </button>
+  </form>
+  {% endif %}
+  <a class="hs-btn" href="{% url 'slurp_ui:finance_invoices' %}">Back to list</a>
+{% endblock %}
+{% block main %}
+<div class="hs-bleed" style="padding:1.25rem 1.5rem 2rem;max-width:56rem">
+  <p class="hs-muted" style="margin:0 0 1rem">
+    {{ status_label }} · {{ invoice.customer_vendor_name }}
+    {% if invoice.invoice_type == 'credit' %} · <span class="hs-badge warn">Credit memo</span>{% endif %}
+    {% if invoice.sales_order %} · SO {{ invoice.sales_order.so_number }}{% endif %}
+  </p>
 
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem;margin:1.25rem 0">
-    <div><strong>Invoice date</strong><br>{{ invoice.invoice_date }}</div>
-    <div><strong>Due date</strong><br>{{ invoice.due_date|default:"—" }}</div>
-    <div><strong>Subtotal</strong><br>{{ invoice.subtotal|money:2 }}</div>
-    <div><strong>Freight</strong><br>{{ invoice.freight|money:2 }}</div>
-    <div><strong>Tax</strong><br>{{ invoice.tax|money:2 }}</div>
-    <div><strong>Discount</strong><br>{{ invoice.discount|money:2 }}</div>
-    <div><strong>Grand total</strong><br>{{ invoice.grand_total|money:2 }}</div>
-    {% if invoice.sales_order %}
-    <div>
-      <strong>Carrier / tracking</strong><br>
-      {{ invoice.sales_order.carrier|default:"—" }} /
-      {{ invoice.sales_order.tracking_number|default:"—" }}
+  <div class="hs-card" style="margin-bottom:1rem">
+    <div class="hs-card-body">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem">
+        <div><strong>Invoice date</strong><br>{{ invoice.invoice_date }}</div>
+        <div><strong>Due date</strong><br>{{ invoice.due_date|default:"—" }}</div>
+        <div><strong>Subtotal</strong><br>{{ invoice.subtotal|money:2 }}</div>
+        <div><strong>Freight (PPA)</strong><br>{{ invoice.freight|money:2 }}</div>
+        <div><strong>Tax</strong><br>{{ invoice.tax|money:2 }}</div>
+        <div><strong>Discount</strong><br>{{ invoice.discount|money:2 }}</div>
+        <div><strong>Grand total</strong><br>{{ invoice.grand_total|money:2 }}</div>
+        {% if invoice.sales_order %}
+        <div>
+          <strong>Carrier / tracking</strong><br>
+          {{ invoice.sales_order.carrier|default:"—" }} /
+          {{ invoice.sales_order.tracking_number|default:"—" }}
+        </div>
+        {% endif %}
+      </div>
+      {% if invoice.status == 'draft' and invoice.invoice_type != 'credit' %}
+      <p class="hs-muted" style="margin:0.85rem 0 0;font-size:0.85rem">
+        Set carrier, tracking, and any PPA freight on
+        <a href="{% url 'slurp_ui:finance_invoice_issue' invoice.id %}">Issue</a>
+        before sending.
+      </p>
+      {% endif %}
     </div>
-    {% endif %}
   </div>
 
   {% if invoice.notes %}
-  <p style="color:#64748b;font-size:0.9rem;margin-bottom:1rem">{{ invoice.notes }}</p>
+  <p class="hs-muted" style="margin-bottom:1rem">{{ invoice.notes }}</p>
   {% endif %}
 
-  <h3 style="margin-bottom:0.5rem">Lines</h3>
-  <table class="data-table">
-    <thead>
-      <tr>
-        <th>Item</th>
-        <th>Description</th>
-        <th>Qty</th>
-        <th>Unit price</th>
-        <th>Total</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for line in invoice.items.all %}
-      <tr>
-        <td>{% if line.item %}{{ line.item.sku }}{% else %}—{% endif %}</td>
-        <td>{{ line.description|default:"—" }}</td>
-        <td>{{ line.quantity|floatformat:2 }}{% if line.item %} {{ line.item.unit_of_measure }}{% endif %}</td>
-        <td>{{ line.unit_price|money:2 }}</td>
-        <td>{{ line.total|money:2 }}</td>
-      </tr>
-      {% empty %}
-      <tr><td colspan="5">No lines.</td></tr>
-      {% endfor %}
-    </tbody>
-  </table>
+  <div class="hs-card">
+    <div class="hs-card-header"><h3>Lines</h3></div>
+    <div class="hs-card-body tight">
+      <table class="hs-table">
+        <thead>
+          <tr>
+            <th>Item</th>
+            <th>Description</th>
+            <th>Qty</th>
+            <th>Unit price</th>
+            <th>Total</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for line in invoice.items.all %}
+          <tr>
+            <td>{% if line.item %}{{ line.item.sku }}{% else %}—{% endif %}</td>
+            <td>{{ line.description|default:"—" }}</td>
+            <td>{{ line.quantity|floatformat:2 }}{% if line.item %} {{ line.item.unit_of_measure }}{% endif %}</td>
+            <td>{{ line.unit_price|money:2 }}{% if line.item and line.item.unit_of_measure %} / {{ line.item.unit_of_measure }}{% endif %}</td>
+            <td>{{ line.total|money:2 }}</td>
+          </tr>
+          {% empty %}
+          <tr><td colspan="5"><div class="hs-empty">No lines.</div></td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
 </div>
 {% endblock %}

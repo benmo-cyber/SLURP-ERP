@@ -125,9 +125,9 @@
             </span>
           </div>
           <div class="form-group">
-            <label>Product category</label>
-            <select name="product_category">
-              <option value="">—</option>
+            <label>Product category *</label>
+            <select name="product_category" required>
+              <option value="" disabled selected>— Select category —</option>
               {% for val, label in product_category_choices %}
               <option value="{{ val }}">{{ label }}</option>
               {% endfor %}

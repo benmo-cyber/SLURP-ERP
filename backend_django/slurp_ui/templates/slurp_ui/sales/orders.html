@@ -225,7 +225,7 @@
                   <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:sales_packing_list_pdf' o.id %}" target="_blank">Pack list</a>
                   {% for copy in o.coa_copies %}
                   <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:quality_coa_customer_pdf' copy.id %}" target="_blank"
-                     title="COA {{ copy.sales_order_lot.lot.lot_number }}">COA</a>
+                     title="{{ copy.button_label|default:'COA' }}">{{ copy.button_label|default:"COA" }}</a>
                   {% empty %}
                     {% for cert in o.coa_master_certs %}
                     <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:quality_coa_pdf' cert.id %}" target="_blank"

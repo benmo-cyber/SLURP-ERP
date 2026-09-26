@@ -5,18 +5,21 @@ Finished Good vs Raw inventory visibility for gated product categories.
 - finished_good with product_category in natural_colors / synthetic_colors / antioxidants:
   FG tab = closed batch outputs (repack or production) only, unless allocation uses allow_prerepack_allocation override.
   Raw tab = receipt / WIP lots for that item until a batch closes.
+- RMA staging (-R) lots: customer-returned product. When the source lot was FG-visible
+  (closed repack / closed batch output), the staging lot stays on the FG tab (on hold),
+  not Raw — even though the -R lot itself is not a batch output.
 """
 from __future__ import annotations
 
 GATED_PRODUCT_CATEGORIES = frozenset(
-    {'natural_colors', 'synthetic_colors', 'antioxidants'}
+    {"natural_colors", "synthetic_colors", "antioxidants"}
 )
 
 
 def item_is_gated_finished_good(item) -> bool:
     return (
-        getattr(item, 'item_type', None) == 'finished_good'
-        and (getattr(item, 'product_category', None) or '') in GATED_PRODUCT_CATEGORIES
+        getattr(item, "item_type", None) == "finished_good"
+        and (getattr(item, "product_category", None) or "") in GATED_PRODUCT_CATEGORIES
     )
 
 
@@ -25,52 +28,87 @@ def build_item_meta(sku_items: list) -> dict:
     meta = {}
     for si in sku_items:
         meta[si.id] = {
-            'item_type': si.item_type,
-            'product_category': si.product_category or '',
+            "item_type": si.item_type,
+            "product_category": si.product_category or "",
         }
     return meta
 
 
-def filter_lots_finished_good_tab(lots: list, item_meta: dict, repack_output_lot_ids: set, closed_batch_output_lot_ids: set) -> list:
+def _is_rma_staging_from_fg_source(
+    lot, repack_output_lot_ids: set, closed_batch_output_lot_ids: set
+) -> bool:
+    """True when this is an RMA -R staging lot of previously FG-visible stock."""
+    rma = (getattr(lot, "rma_number", None) or "").strip()
+    src_id = getattr(lot, "source_lot_id", None)
+    if not rma and not src_id:
+        return False
+    if src_id and (
+        src_id in repack_output_lot_ids or src_id in closed_batch_output_lot_ids
+    ):
+        return True
+    # Distributed / gated returns always came from sellable FG; keep on FG even if
+    # source linkage is missing (legacy) as long as rma_number is set.
+    return bool(rma)
+
+
+def filter_lots_finished_good_tab(
+    lots: list, item_meta: dict, repack_output_lot_ids: set, closed_batch_output_lot_ids: set
+) -> list:
     out = []
     for lot in lots:
         m = item_meta.get(lot.item_id)
         if not m:
             out.append(lot)
             continue
-        it = m['item_type']
-        if it == 'distributed_item':
-            if lot.id in repack_output_lot_ids:
+        it = m["item_type"]
+        if it == "distributed_item":
+            if lot.id in repack_output_lot_ids or _is_rma_staging_from_fg_source(
+                lot, repack_output_lot_ids, closed_batch_output_lot_ids
+            ):
                 out.append(lot)
-        elif it == 'finished_good':
-            cat = m.get('product_category') or ''
+        elif it == "finished_good":
+            cat = m.get("product_category") or ""
             if cat not in GATED_PRODUCT_CATEGORIES:
                 out.append(lot)
-            elif lot.id in closed_batch_output_lot_ids:
+            elif lot.id in closed_batch_output_lot_ids or _is_rma_staging_from_fg_source(
+                lot, repack_output_lot_ids, closed_batch_output_lot_ids
+            ):
                 out.append(lot)
         else:
             out.append(lot)
     return out
 
 
-def filter_lots_raw_material_tab(lots: list, item_meta: dict, repack_output_lot_ids: set, closed_batch_output_lot_ids: set) -> list:
+def filter_lots_raw_material_tab(
+    lots: list, item_meta: dict, repack_output_lot_ids: set, closed_batch_output_lot_ids: set
+) -> list:
     out = []
     for lot in lots:
         m = item_meta.get(lot.item_id)
         if not m:
             continue
-        it = m['item_type']
-        if it == 'raw_material':
+        it = m["item_type"]
+        if it == "raw_material":
             out.append(lot)
-        elif it == 'distributed_item':
-            if lot.id not in repack_output_lot_ids:
-                out.append(lot)
-        elif it == 'finished_good':
-            cat = m.get('product_category') or ''
+        elif it == "distributed_item":
+            if lot.id in repack_output_lot_ids:
+                continue
+            if _is_rma_staging_from_fg_source(
+                lot, repack_output_lot_ids, closed_batch_output_lot_ids
+            ):
+                continue
+            out.append(lot)
+        elif it == "finished_good":
+            cat = m.get("product_category") or ""
             if cat not in GATED_PRODUCT_CATEGORIES:
                 continue
-            if lot.id not in closed_batch_output_lot_ids:
-                out.append(lot)
+            if lot.id in closed_batch_output_lot_ids:
+                continue
+            if _is_rma_staging_from_fg_source(
+                lot, repack_output_lot_ids, closed_batch_output_lot_ids
+            ):
+                continue
+            out.append(lot)
     return out
 
 
@@ -99,12 +137,12 @@ def build_repack_output_vendor_map(candidate_lot_ids) -> dict:
     out = {}
     for pbo in ProductionBatchOutput.objects.filter(
         lot_id__in=ids,
-        batch__batch_type='repack',
-        batch__status='closed',
-    ).select_related('batch'):
+        batch__batch_type="repack",
+        batch__status="closed",
+    ).select_related("batch"):
         batch = pbo.batch
         inputs = list(
-            ProductionBatchInput.objects.filter(batch=batch).select_related('lot').order_by('id')
+            ProductionBatchInput.objects.filter(batch=batch).select_related("lot").order_by("id")
         )
         po_nums = [inp.lot.po_number for inp in inputs if inp.lot_id and inp.lot and inp.lot.po_number]
         if not po_nums:
@@ -114,7 +152,7 @@ def build_repack_output_vendor_map(candidate_lot_ids) -> dict:
             if not inp.lot or not inp.lot.po_number:
                 continue
             po = pos.get(inp.lot.po_number)
-            vn = (getattr(po, 'vendor_customer_name', None) or '')
+            vn = getattr(po, "vendor_customer_name", None) or ""
             if isinstance(vn, str):
                 vn = vn.strip()
             if vn:

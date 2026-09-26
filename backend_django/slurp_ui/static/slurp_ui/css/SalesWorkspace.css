@@ -375,6 +375,24 @@
   box-shadow: var(--hs-shadow);
 }
 
+a.hs-stat {
+  display: block;
+  text-decoration: none;
+  color: inherit;
+  cursor: pointer;
+  transition: border-color 0.12s ease, box-shadow 0.12s ease;
+}
+
+a.hs-stat:hover {
+  border-color: #94a3b8;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
+}
+
+a.hs-stat.is-active {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.25);
+}
+
 .hs-stat .label {
   font-size: 0.72rem;
   text-transform: uppercase;

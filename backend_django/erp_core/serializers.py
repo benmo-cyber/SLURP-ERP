@@ -100,6 +100,13 @@ class ItemSerializer(serializers.ModelSerializer):
         if sku is None and inst:
             sku = inst.sku
 
+        # Required on create (and when explicitly cleared on update).
+        if not product_category:
+            if inst is None or 'product_category' in data:
+                raise DRFValidationError(
+                    {'product_category': 'Product category is required.'}
+                )
+
         if item_type == 'indirect_material':
             return data
 
@@ -780,12 +787,11 @@ class SalesOrderLotSerializer(serializers.ModelSerializer):
         ]
 
     def get_coa_customer_pdf_url(self, obj):
+        from .coa_allocation import current_customer_coa
+
         req = self.context.get('request')
-        try:
-            cc = obj.coa_customer_copy
-        except LotCoaCustomerCopy.DoesNotExist:
-            return None
-        if not cc.coa_pdf:
+        cc = current_customer_coa(obj)
+        if not cc or not cc.coa_pdf:
             return None
         url = cc.coa_pdf.url
         if req:
@@ -794,11 +800,10 @@ class SalesOrderLotSerializer(serializers.ModelSerializer):
 
     def get_coa_pdf_url(self, obj):
         """Prefer customer COA for this allocation; else master COA on the lot."""
+        from .coa_allocation import current_customer_coa
+
         req = self.context.get('request')
-        try:
-            cc = obj.coa_customer_copy
-        except LotCoaCustomerCopy.DoesNotExist:
-            cc = None
+        cc = current_customer_coa(obj)
         if cc and cc.coa_pdf:
             url = cc.coa_pdf.url
             return req.build_absolute_uri(url) if req else url

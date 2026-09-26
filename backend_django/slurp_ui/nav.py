@@ -113,15 +113,8 @@ PRODUCTION_NAV = [
     {
         "label": "Production",
         "items": [
-            {"id": "batches", "label": "Batch Tickets", "url_name": "slurp_ui:production"},
-            {"id": "rework", "label": "Rework", "url_name": "slurp_ui:production_rework"},
-            {"id": "archive", "label": "Batch Archive", "url_name": "slurp_ui:production_archive"},
-            {"id": "repacks", "label": "Repacks", "url_name": "slurp_ui:production_repacks"},
-            {
-                "id": "repack-archive",
-                "label": "Repack Archive",
-                "url_name": "slurp_ui:production_repack_archive",
-            },
+            {"id": "batches", "label": "Production", "url_name": "slurp_ui:production"},
+            {"id": "archive", "label": "Archives", "url_name": "slurp_ui:production_archive"},
         ],
     },
 ]

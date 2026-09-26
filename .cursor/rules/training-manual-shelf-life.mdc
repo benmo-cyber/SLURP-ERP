@@ -1,0 +1,27 @@
+---
+description: Training manual — shelf life extension math and campaign vs lot
+alwaysApply: true
+---
+
+# Training manual note: Shelf life extension
+
+When building the **end-of-project training manual**, include a short section on **Quality → COA Library → Extend shelf life**.
+
+## Math (critical)
+**New expiration = QC date + extension months** — **not** current expiration + months.
+
+Example: current exp 2027-09-23, QC date 2026-09-26, months 12 → new exp **2027-09-26**.
+
+The form prefills months from formula/FPS shelf life; user can change if re-QC grants a different term.
+
+## Where to extend
+- **Campaign lots** — Extend only on the **campaign** header (composite sample). Trickles to every member lot expiration, regenerates batch master COAs, re-issues campaign COA. Lot-level Extend is blocked for campaign members.
+- **Non-campaign lots** — Extend on the individual master row.
+
+## Soft rule
+Generally only **one** extension. UI soft-warns and requires confirm for a second.
+
+## Badge
+Library shows “Shelf life extended” when an SLE exists (campaign header and/or lot rows).
+
+After the training section is written, **delete or cancel this rule**.

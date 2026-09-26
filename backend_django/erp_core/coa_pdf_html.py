@@ -34,6 +34,18 @@ def _format_qty_display(qty, uom: str) -> str:
     return f"{qty_s} {(uom or 'lbs')}".strip()
 
 
+def _to_display_date(val):
+    if val is None:
+        return None
+    if isinstance(val, datetime):
+        return val.date()
+    if isinstance(val, date):
+        return val
+    if hasattr(val, "date"):
+        return val.date()
+    return val
+
+
 def _test_rows_from_certificate(
     certificate,
     *,
@@ -122,18 +134,6 @@ def _dates_from_lot(lot):
     is unset (Master COA must still print a date). Shelf-life extensions write
     expiration_date explicitly, so those take precedence.
     """
-
-    def _to_display_date(val):
-        if val is None:
-            return None
-        if isinstance(val, datetime):
-            return val.date()
-        if isinstance(val, date):
-            return val
-        if hasattr(val, "date"):
-            return val.date()
-        return val
-
     md = getattr(lot, "manufacture_date", None)
     if md is None and lot is not None:
         try:
@@ -191,6 +191,7 @@ def build_coa_template_context(
     test_rows: list,
     is_example: bool = False,
     shelf_life_extension=None,
+    batch_lot_trace: str = "",
 ):
     logo_base64 = get_batch_ticket_logo_base64_cached()
     sle = None
@@ -228,11 +229,18 @@ def build_coa_template_context(
         "test_rows": test_rows,
         "is_example": bool(is_example),
         "shelf_life_extension": sle,
+        "batch_lot_trace": _s(batch_lot_trace),
     }
 
 
 def build_master_coa_context(certificate):
-    """Master COA: no customer/PO; quantity from quantity_snapshot or lot."""
+    """Master COA: no customer/PO; quantity from quantity_snapshot or lot.
+
+    Batch lots in a multi-batch campaign: Lot No = campaign code; 8pt footer
+    shows the batch lot number. Campaign master COA has no batch footer.
+    """
+    from .campaign_coa import lot_campaign
+
     lot = certificate.lot
     item = lot.item
     uom = _s(getattr(item, "unit_of_measure", "") or "lbs")
@@ -255,9 +263,17 @@ def build_master_coa_context(certificate):
         )
     except Exception:
         latest_sle = None
+
+    display_lot = lot.lot_number or lot.vendor_lot_number or ""
+    batch_trace = ""
+    camp = lot_campaign(lot)
+    if camp is not None:
+        display_lot = camp.campaign_code
+        batch_trace = lot.lot_number or str(lot.id)
+
     return build_coa_template_context(
         product_name=item.name,
-        lot_number=lot.lot_number or lot.vendor_lot_number or "",
+        lot_number=display_lot,
         quantity_display=quantity_display,
         customer_name="—",
         customer_po="—",
@@ -266,20 +282,76 @@ def build_master_coa_context(certificate):
         issue_date=issue_date,
         test_rows=test_rows,
         shelf_life_extension=latest_sle,
+        batch_lot_trace=batch_trace,
     )
 
 
 def build_customer_copy_coa_context(certificate, copy):
     """Customer-facing COA for one SalesOrderLot allocation."""
+    from .campaign_coa import current_campaign_coa, lot_campaign
     from .coa_customer_options import resolve_customer_coa_row_options
 
     lot = certificate.lot
     item = lot.item
     uom = _s(getattr(item, "unit_of_measure", "") or "lbs")
     quantity_display = _format_qty_display(copy.quantity_snapshot, uom)
-    manufacture_date, expiration_date = _dates_from_lot(lot)
     issue_dt = copy.updated_at or copy.created_at or timezone.now()
     issue_date = issue_dt.strftime("%B %d, %Y") if issue_dt else ""
+
+    basis = (getattr(copy, "coa_basis", None) or "batch").strip().lower()
+    camp_cert = getattr(copy, "campaign_certificate", None)
+    if basis == "campaign" and camp_cert is None:
+        camp = lot_campaign(lot)
+        if camp is not None:
+            camp_cert = current_campaign_coa(camp)
+
+    if basis == "campaign" and camp_cert is not None:
+        manufacture_date, expiration_date = _dates_from_campaign_cert(camp_cert)
+        test_rows = _test_rows_from_campaign_certificate(
+            camp_cert,
+            include_qc=bool(getattr(copy, "include_qc_row", True)),
+            display_mode=getattr(copy, "result_display_mode", None) or "per_line",
+        )
+        display_lot = camp_cert.campaign.campaign_code
+        batch_trace = lot.lot_number or str(lot.id)
+        # Rolled-up campaign qty (multiple batch allocations on one SO) — no single batch footer.
+        try:
+            so_id = copy.sales_order_lot.sales_order_item.sales_order_id
+            from .models import SalesOrderLot
+            from .campaign_coa import lot_campaign as _lc
+
+            sibling_n = 0
+            for sib in SalesOrderLot.objects.filter(
+                sales_order_item__sales_order_id=so_id
+            ).select_related("lot"):
+                sc = _lc(sib.lot)
+                if sc and camp_cert.campaign_id and sc.id == camp_cert.campaign_id:
+                    sibling_n += 1
+            if sibling_n > 1:
+                batch_trace = ""
+        except Exception:
+            pass
+        product_name = camp_cert.campaign.item.name if camp_cert.campaign.item_id else item.name
+        sle = (
+            camp_cert.campaign.shelf_life_extensions.order_by("-created_at").first()
+            if camp_cert.campaign_id
+            else None
+        )
+        return build_coa_template_context(
+            product_name=product_name,
+            lot_number=display_lot,
+            quantity_display=quantity_display,
+            customer_name=(copy.customer_name or "").strip() or "—",
+            customer_po=(copy.customer_po or "").strip() or "—",
+            manufacture_date=manufacture_date,
+            expiration_date=expiration_date,
+            issue_date=issue_date,
+            test_rows=test_rows,
+            shelf_life_extension=sle,
+            batch_lot_trace=batch_trace,
+        )
+
+    manufacture_date, expiration_date = _dates_from_lot(lot)
     opts = resolve_customer_coa_row_options(copy, certificate)
     test_rows = _test_rows_from_certificate(
         certificate,
@@ -289,9 +361,15 @@ def build_customer_copy_coa_context(certificate, copy):
         line_overrides=opts["line_overrides"],
         spec_overrides=opts.get("spec_overrides") or {},
     )
+    display_lot = lot.lot_number or lot.vendor_lot_number or ""
+    batch_trace = ""
+    camp = lot_campaign(lot)
+    if camp is not None:
+        display_lot = camp.campaign_code
+        batch_trace = lot.lot_number or str(lot.id)
     return build_coa_template_context(
         product_name=item.name,
-        lot_number=lot.lot_number or lot.vendor_lot_number or "",
+        lot_number=display_lot,
         quantity_display=quantity_display,
         customer_name=(copy.customer_name or "").strip() or "—",
         customer_po=(copy.customer_po or "").strip() or "—",
@@ -299,6 +377,82 @@ def build_customer_copy_coa_context(certificate, copy):
         expiration_date=expiration_date,
         issue_date=issue_date,
         test_rows=test_rows,
+        batch_lot_trace=batch_trace,
+    )
+
+
+def _dates_from_campaign_cert(camp_cert):
+    mfg = getattr(camp_cert, "manufacture_date", None)
+    manufacture_date = mfg.strftime("%B %d, %Y") if mfg else "—"
+    ed = getattr(camp_cert, "expiration_date", None)
+    d_exp = _to_display_date(ed)
+    expiration_date = d_exp.strftime("%B %d, %Y") if d_exp else "—"
+    return manufacture_date, expiration_date
+
+
+def _test_rows_from_campaign_certificate(camp_cert, *, include_qc=True, display_mode="per_line"):
+    rows = []
+    if include_qc and (camp_cert.qc_parameter_name_snapshot or "").strip():
+        qname = camp_cert.qc_parameter_name_snapshot
+        spec_bits = []
+        if camp_cert.qc_spec_min_snapshot is not None:
+            spec_bits.append(f"min {camp_cert.qc_spec_min_snapshot:g}")
+        if camp_cert.qc_spec_max_snapshot is not None:
+            spec_bits.append(f"max {camp_cert.qc_spec_max_snapshot:g}")
+        spec = ", ".join(spec_bits) if spec_bits else "Formula QC"
+        if display_mode == "pass_fail":
+            if camp_cert.qc_result_pass is True:
+                res = "Pass"
+            elif camp_cert.qc_result_pass is False:
+                res = "Fail"
+            else:
+                res = "—"
+        else:
+            res = (
+                f"{float(camp_cert.qc_result_value):g}"
+                if camp_cert.qc_result_value is not None
+                else "—"
+            )
+        rows.append({"test": qname, "specification": spec, "result": res})
+    for lr in camp_cert.line_results.all():
+        rows.append(
+            {
+                "test": lr.test_name,
+                "specification": lr.specification_text or "",
+                "result": lr.result_text or "",
+            }
+        )
+    return rows
+
+
+def build_campaign_coa_context(camp_cert):
+    """Master campaign COA — campaign code only (no batch-lot footer)."""
+    camp = camp_cert.campaign
+    item = camp.item
+    uom = _s(getattr(item, "unit_of_measure", "") or "lbs") if item else "lbs"
+    qty = float(camp_cert.quantity_snapshot or 0)
+    quantity_display = _format_qty_display(qty, uom)
+    manufacture_date, expiration_date = _dates_from_campaign_cert(camp_cert)
+    issue_dt = camp_cert.issued_at or timezone.now()
+    issue_date = issue_dt.strftime("%B %d, %Y") if issue_dt else ""
+    test_rows = _test_rows_from_campaign_certificate(camp_cert)
+    sle = None
+    try:
+        sle = camp.shelf_life_extensions.order_by("-created_at").first()
+    except Exception:
+        sle = None
+    return build_coa_template_context(
+        product_name=item.name if item else camp.campaign_code,
+        lot_number=camp.campaign_code,
+        quantity_display=quantity_display,
+        customer_name="—",
+        customer_po="—",
+        manufacture_date=manufacture_date,
+        expiration_date=expiration_date,
+        issue_date=issue_date,
+        test_rows=test_rows,
+        shelf_life_extension=sle,
+        batch_lot_trace="",
     )
 
 
@@ -346,9 +500,16 @@ def generate_customer_copy_coa_pdf_bytes(copy):
         LotCoaCustomerCopy.objects.select_related(
             "certificate",
             "certificate__lot__item",
+            "campaign_certificate",
+            "campaign_certificate__campaign",
+            "campaign_certificate__campaign__item",
             "sales_order_lot__sales_order_item__sales_order__customer",
         )
-        .prefetch_related("certificate__line_results")
+        .prefetch_related(
+            "certificate__line_results",
+            "campaign_certificate__line_results",
+            "campaign_certificate__campaign__shelf_life_extensions",
+        )
         .get(pk=copy.pk)
     )
     cert = copy.certificate
@@ -494,6 +655,33 @@ def save_coa_pdf_to_certificate(certificate) -> bool:
     return True
 
 
+def generate_campaign_coa_pdf_bytes(camp_cert):
+    from .models import CampaignCoaCertificate
+
+    camp_cert = (
+        CampaignCoaCertificate.objects.select_related("campaign", "campaign__item")
+        .prefetch_related("line_results", "campaign__shelf_life_extensions")
+        .get(pk=camp_cert.pk)
+    )
+    context = build_campaign_coa_context(camp_cert)
+    code = camp_cert.campaign.campaign_code
+    return _render_coa_pdf_bytes(context, log_label=f"COA campaign {code} v{camp_cert.version}")
+
+
+def save_campaign_coa_pdf(camp_cert) -> bool:
+    from django.core.files.base import ContentFile
+
+    pdf = generate_campaign_coa_pdf_bytes(camp_cert)
+    if not pdf:
+        return False
+    code = camp_cert.campaign.campaign_code
+    safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in code)
+    fname = f"COA_campaign_{safe}_v{camp_cert.version}_{timezone.now().strftime('%Y%m%d')}.pdf"
+    camp_cert.coa_pdf.save(fname, ContentFile(pdf), save=False)
+    camp_cert.save(update_fields=["coa_pdf"])
+    return True
+
+
 def refresh_lot_coa_pdf_if_exists(lot) -> bool:
     """Regenerate stored master COA PDF when lot data (e.g. expiration) changes."""
     from .models import LotCoaCertificate
@@ -505,18 +693,19 @@ def refresh_lot_coa_pdf_if_exists(lot) -> bool:
 
 
 def refresh_all_coa_pdfs_for_lot(lot):
-    """Regenerate master COA and any customer allocation COAs for this lot (e.g. after expiration change)."""
-    from .models import LotCoaCustomerCopy
-
+    """Regenerate master COA for this lot. Customer copies with PDFs are immutable."""
     refresh_lot_coa_pdf_if_exists(lot)
-    for cc in LotCoaCustomerCopy.objects.filter(certificate__lot_id=lot.pk):
-        save_customer_copy_coa_pdf(cc)
 
 
 def save_customer_copy_coa_pdf(copy) -> bool:
-    """Generate customer COA PDF and save to copy.coa_pdf."""
+    """Generate customer COA PDF and save to copy.coa_pdf.
+
+    Never overwrites an existing PDF (issued copies are immutable).
+    """
     from django.core.files.base import ContentFile
 
+    if copy.coa_pdf:
+        return False
     pdf = generate_customer_copy_coa_pdf_bytes(copy)
     if not pdf:
         return False

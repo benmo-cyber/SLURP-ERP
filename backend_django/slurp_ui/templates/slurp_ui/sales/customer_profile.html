@@ -243,11 +243,11 @@
     <div class="hs-card" style="margin-bottom:1rem">
       <div class="hs-card-header">
         <h3>In-house orders</h3>
-        <a href="{% url 'slurp_ui:sales_create_order' %}?customer={{ customer.pk }}" class="hs-btn hs-btn-primary hs-btn-sm">+ Create SO</a>
       </div>
       <div class="hs-card-body tight">
+        <p class="hs-section-note" style="margin:0.75rem 0.75rem 0">History and documents only — allocate, ship, and invoice from Sales / Finance workqueues.</p>
         <table class="hs-table">
-          <thead><tr><th>SO #</th><th>Status</th><th>Order date</th><th>PO</th><th>Ordered</th><th>Allocated</th><th>Shipped</th><th></th></tr></thead>
+          <thead><tr><th>SO #</th><th>Status</th><th>Order date</th><th>PO</th><th>Ordered</th><th>Allocated</th><th>Shipped</th><th>Documents</th></tr></thead>
           <tbody>
             {% for o in open_orders %}
             <tr>
@@ -259,14 +259,19 @@
               <td>{{ o.total_allocated|default_if_none:0|floatformat:2 }}</td>
               <td>{{ o.total_shipped|default_if_none:0|floatformat:2 }}</td>
               <td>
-                <div class="hs-queue-actions">
-                  {% if o.status == 'issued' or o.status == 'allocated' or o.status == 'ready_for_shipment' %}
-                  <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:sales_allocate_order' o.id %}">{% if o.total_allocated %}Re-allocate{% else %}Allocate{% endif %}</a>
-                  {% endif %}
-                  {% if o.status == 'issued' or o.status == 'allocated' %}
-                  <a class="hs-btn hs-btn-sm hs-btn-primary" href="{% url 'slurp_ui:sales_checkout' %}?so={{ o.id }}">Mark Ready</a>
-                  {% endif %}
-                </div>
+                {% if o.total_allocated %}
+                <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:sales_pick_list_pdf' o.id %}" target="_blank" rel="noopener">Pick list</a>
+                {% endif %}
+                <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:sales_packing_list_pdf' o.id %}" target="_blank" rel="noopener">Packing list</a>
+                {% for copy in o.coa_copies %}
+                <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:quality_coa_customer_pdf' copy.id %}" target="_blank" rel="noopener"
+                   title="{{ copy.button_label|default:'COA' }}">{{ copy.button_label|default:"COA" }}</a>
+                {% empty %}
+                  {% for cert in o.coa_master_certs %}
+                  <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:quality_coa_pdf' cert.id %}" target="_blank" rel="noopener"
+                     title="Master COA">COA</a>
+                  {% endfor %}
+                {% endfor %}
               </td>
             </tr>
             {% empty %}<tr><td colspan="8"><div class="hs-empty">No in-house orders.</div></td></tr>{% endfor %}
@@ -275,12 +280,10 @@
       </div>
     </div>
     <div class="hs-card">
-      <div class="hs-card-header"><h3>Shipped / fulfilled</h3>
-        <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:sales_order_archive' %}?q={{ customer.name|urlencode }}">Order archive</a>
-      </div>
+      <div class="hs-card-header"><h3>Shipped / fulfilled</h3></div>
       <div class="hs-card-body tight">
         <table class="hs-table">
-          <thead><tr><th>SO #</th><th>Status</th><th>Ship date</th><th>PO</th><th>Shipped qty</th><th></th></tr></thead>
+          <thead><tr><th>SO #</th><th>Status</th><th>Ship date</th><th>PO</th><th>Shipped qty</th><th>Documents</th></tr></thead>
           <tbody>
             {% for o in recent_shipped %}
             <tr>
@@ -290,11 +293,73 @@
               <td>{{ o.customer_reference_number|default:"—" }}</td>
               <td>{{ o.total_shipped|default_if_none:0|floatformat:2 }}</td>
               <td>
-                <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:sales_order_detail' o.id %}">Open</a>
-                <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:sales_order_detail' o.id %}#rma">RMA</a>
+                <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:sales_packing_list_pdf' o.id %}" target="_blank" rel="noopener">Packing list</a>
+                {% for copy in o.coa_copies %}
+                <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:quality_coa_customer_pdf' copy.id %}" target="_blank" rel="noopener"
+                   title="{{ copy.button_label|default:'COA' }}">{{ copy.button_label|default:"COA" }}</a>
+                {% empty %}
+                  {% for cert in o.coa_master_certs %}
+                  <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:quality_coa_pdf' cert.id %}" target="_blank" rel="noopener"
+                     title="Master COA">COA</a>
+                  {% endfor %}
+                {% endfor %}
               </td>
             </tr>
             {% empty %}<tr><td colspan="6"><div class="hs-empty">No shipped orders.</div></td></tr>{% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    {% elif tab == "invoices" %}
+    <div class="hs-card">
+      <div class="hs-card-header"><h3>Invoices</h3></div>
+      <div class="hs-card-body tight">
+        <p class="hs-section-note" style="margin:0.75rem 0.75rem 0">Customer invoice history and PDFs. Issue, mark paid, and AR work stay in Finance.</p>
+        <table class="hs-table">
+          <thead>
+            <tr>
+              <th>Invoice #</th>
+              <th>Status</th>
+              <th>Date</th>
+              <th>Due</th>
+              <th>SO #</th>
+              <th>Total</th>
+              <th>Documents</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for inv in customer_invoices %}
+            <tr>
+              <td>
+                <a class="hs-entity-name" href="{% url 'slurp_ui:finance_invoice_detail' inv.id %}">{{ inv.invoice_number }}</a>
+                {% if inv.invoice_type == 'credit' %}<span class="hs-badge warn">Credit</span>{% endif %}
+              </td>
+              <td>
+                {% if inv.status == 'paid' %}<span class="hs-badge ok">{{ inv.status }}</span>
+                {% elif inv.status == 'cancelled' %}<span class="hs-badge danger">{{ inv.status }}</span>
+                {% elif inv.status == 'overdue' %}<span class="hs-badge danger">{{ inv.status }}</span>
+                {% elif inv.status == 'sent' %}<span class="hs-badge info">{{ inv.status }}</span>
+                {% else %}<span class="hs-badge">{{ inv.status }}</span>{% endif %}
+              </td>
+              <td>{{ inv.invoice_date|date:"Y-m-d" }}</td>
+              <td>{{ inv.due_date|date:"Y-m-d"|default:"—" }}</td>
+              <td>
+                {% if inv.sales_order_id %}
+                <a href="{% url 'slurp_ui:sales_order_detail' inv.sales_order_id %}">{{ inv.sales_order.so_number }}</a>
+                {% else %}—{% endif %}
+              </td>
+              <td>{{ inv.grand_total|money:2 }}</td>
+              <td>
+                <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:finance_invoice_pdf' inv.id %}" target="_blank" rel="noopener">Invoice PDF</a>
+                {% if inv.sales_order_id %}
+                <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:sales_packing_list_pdf' inv.sales_order_id %}" target="_blank" rel="noopener">Packing list</a>
+                {% endif %}
+              </td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="7"><div class="hs-empty">No invoices for this customer yet.</div></td></tr>
+            {% endfor %}
           </tbody>
         </table>
       </div>
@@ -311,10 +376,9 @@
     <div class="hs-card">
       <div class="hs-card-header">
         <h3>Payment timeliness</h3>
-        <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:finance_invoices' %}?tab=ar">Open AR</a>
       </div>
       <div class="hs-card-body tight">
-        <p class="hs-section-note" style="margin:0.75rem 0.75rem 0">Days vs due is from bank-cleared date (Mark as paid) relative to invoice due date. Negative = early.</p>
+        <p class="hs-section-note" style="margin:0.75rem 0.75rem 0">Days vs due is from bank-cleared date (Mark as paid) relative to invoice due date. Negative = early. Mark payments in Finance → Invoices &amp; AR.</p>
         <table class="hs-table">
           <thead>
             <tr>
@@ -324,6 +388,7 @@
               <th>Days vs due</th>
               <th>Amount</th>
               <th>Reference</th>
+              <th>Documents</th>
             </tr>
           </thead>
           <tbody>
@@ -344,9 +409,14 @@
               </td>
               <td>{{ row.amount|money:2 }}</td>
               <td>{{ row.reference|default:"—" }}</td>
+              <td>
+                {% if row.invoice_id %}
+                <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:finance_invoice_pdf' row.invoice_id %}" target="_blank" rel="noopener">Invoice PDF</a>
+                {% else %}—{% endif %}
+              </td>
             </tr>
             {% empty %}
-            <tr><td colspan="6"><div class="hs-empty">No payments recorded yet. Use Accounts Receivable → Mark as paid after bank verification.</div></td></tr>
+            <tr><td colspan="7"><div class="hs-empty">No payments recorded yet.</div></td></tr>
             {% endfor %}
           </tbody>
         </table>

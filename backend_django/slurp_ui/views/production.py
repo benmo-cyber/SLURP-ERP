@@ -7,6 +7,7 @@ from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.http import HttpRequest, HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
+from django.urls import reverse
 from django.utils import timezone
 from django.utils.dateparse import parse_date
 from django.views.decorators.http import require_http_methods, require_POST
@@ -28,8 +29,16 @@ from erp_core.models import (
     ItemPreferredPackaging,
     Lot,
     ProductionBatch,
+    ProductionBatchInput,
+    ProductionBatchOutput,
 )
-from erp_core.pack_display import format_pack_label, is_partial_lot, resolve_pack_size
+from erp_core.pack_display import (
+    format_pack_label,
+    is_partial_lot,
+    lot_available_remnant_quantity,
+    lot_remnant_quantity,
+    resolve_pack_size,
+)
 from erp_core.packaging_suggest import suggested_containers_for_item
 from erp_core.formula_ingredient import (
     lots_for_formula_ingredient,
@@ -155,8 +164,13 @@ def _prod_ctx(**extra):
 
 
 def _batch_type(request: HttpRequest) -> str:
-    bt = (request.GET.get("batch_type") or request.POST.get("batch_type") or "production").lower()
-    return bt if bt in ("production", "repack") else "production"
+    raw = (request.GET.get("batch_type") or request.POST.get("batch_type") or "").strip().lower()
+    if raw in ("production", "repack", "rework"):
+        return raw
+    # No type yet — Create Ticket chooser.
+    if not raw:
+        return "choose"
+    return "production"
 
 
 def _to_lbs(qty: float, uom: str) -> float:
@@ -441,28 +455,37 @@ def _close_before_production_blocked(batch: ProductionBatch, *, allow_early: boo
 
 
 def _dash_url_name(batch_type: str) -> str:
-    return (
-        "slurp_ui:production_repacks"
-        if batch_type == "repack"
-        else "slurp_ui:production"
-    )
+    return "slurp_ui:production"
 
 
 def _archive_url_name(batch_type: str) -> str:
-    return (
-        "slurp_ui:production_repack_archive"
-        if batch_type == "repack"
-        else "slurp_ui:production_archive"
-    )
+    return "slurp_ui:production_archive"
 
 
-def _batch_list(request: HttpRequest, *, batch_type: str, active_tab: str) -> HttpResponse:
-    batches = list(
-        ProductionBatch.objects.filter(is_archived=False, batch_type=batch_type)
+def _flow_label(batch_type: str) -> str:
+    return {
+        "production": "Batch ticket",
+        "repack": "Repack",
+        "rework": "Rework",
+    }.get(batch_type or "", batch_type or "—")
+
+
+def _batch_list(request: HttpRequest, *, flow: str | None = None, active_tab: str = "batches") -> HttpResponse:
+    """Open tickets table. ``flow`` = all | production | repack | rework."""
+    flow = (flow or request.GET.get("flow") or "all").strip().lower()
+    if flow not in ("all", "production", "repack", "rework"):
+        flow = "all"
+
+    qs = (
+        ProductionBatch.objects.filter(is_archived=False)
         .select_related("finished_good_item", "campaign")
         .prefetch_related("finished_good_item__pack_sizes")
-        .order_by("-created_at")[:200]
+        .order_by("-created_at")
     )
+    if flow != "all":
+        qs = qs.filter(batch_type=flow)
+    batches = list(qs[:300])
+
     allow_early = _god_mode_on(request)
     today = timezone.localdate()
     batch_rows = []
@@ -487,9 +510,12 @@ def _batch_list(request: HttpRequest, *, batch_type: str, active_tab: str) -> Ht
             campaign_code = b.campaign.campaign_code or ""
         prod_local = _production_date_local(b)
         early_blocked = bool(prod_local and prod_local > today and not allow_early)
+        # Rework stays open until Close (allocate now, consume + output then).
+        is_rework = b.batch_type == "rework"
         batch_rows.append(
             {
                 "batch": b,
+                "flow_label": _flow_label(b.batch_type),
                 "ticket_display": _native_to_display(
                     float(b.quantity_produced or 0), storage, display
                 ),
@@ -497,7 +523,8 @@ def _batch_list(request: HttpRequest, *, batch_type: str, active_tab: str) -> Ht
                 "display_uom": display,
                 "pack_breakout": pack_breakout,
                 "campaign_code": campaign_code,
-                "can_close": not early_blocked,
+                "can_close": (not early_blocked) and b.status != "closed",
+                "can_adjust": (not is_rework) and b.status != "closed",
                 "close_blocked_reason": (
                     f"Production date is {prod_local.isoformat()}. Enable God mode to close early."
                     if early_blocked and prod_local
@@ -505,6 +532,7 @@ def _batch_list(request: HttpRequest, *, batch_type: str, active_tab: str) -> Ht
                 ),
             }
         )
+    show_campaign = flow in ("all", "production")
     return render(
         request,
         "slurp_ui/production/batches.html",
@@ -512,7 +540,8 @@ def _batch_list(request: HttpRequest, *, batch_type: str, active_tab: str) -> Ht
             active_tab=active_tab,
             batches=batches,
             batch_rows=batch_rows,
-            list_batch_type=batch_type,
+            list_flow=flow,
+            show_campaign=show_campaign,
             port_status="full",
         ),
     )
@@ -520,12 +549,15 @@ def _batch_list(request: HttpRequest, *, batch_type: str, active_tab: str) -> Ht
 
 @login_required
 def production_batches(request: HttpRequest) -> HttpResponse:
-    return _batch_list(request, batch_type="production", active_tab="batches")
+    return _batch_list(request, active_tab="batches")
 
 
 @login_required
 def production_repacks(request: HttpRequest) -> HttpResponse:
-    return _batch_list(request, batch_type="repack", active_tab="repacks")
+    """Legacy URL — unified Production table filtered to repacks."""
+    from django.shortcuts import redirect
+
+    return redirect(f"{reverse('slurp_ui:production')}?flow=repack")
 
 
 @login_required
@@ -534,41 +566,38 @@ def production_archive(
 ) -> HttpResponse:
     """Archived tickets: search + year/month or product folders.
 
-    locked_batch_type: when set via URL kwargs, scopes the archive to that type
-    (Batch Archive → production, Repack Archive → repack).
+    locked_batch_type: legacy URL kwargs still accepted; prefer ?flow= filter.
+    Search also matches WWI / vendor lot # (input or output) and can break out
+    tickets for a resolved lot like Quality → Lot Tracking.
     """
     from calendar import month_name
     from django.db.models import Count
     from django.db.models.functions import Coalesce, TruncMonth, TruncYear
 
+    from erp_core.lot_mass_balance import resolve_lots_for_search
+
     q = (request.GET.get("q") or "").strip()
-    if locked_batch_type in ("production", "repack"):
-        batch_type = locked_batch_type
-    else:
-        batch_type = (request.GET.get("batch_type") or "all").strip().lower()
-        if batch_type not in ("all", "production", "repack"):
-            batch_type = "all"
+    lot_id_raw = (request.GET.get("lot") or "").strip()
+    # Prefer unified ?flow=; fall back to batch_type / locked kwargs.
+    flow = (request.GET.get("flow") or request.GET.get("batch_type") or "").strip().lower()
+    if locked_batch_type in ("production", "repack", "rework") and not flow:
+        flow = locked_batch_type
+    if flow not in ("all", "production", "repack", "rework", ""):
+        flow = "all"
+    if not flow:
+        flow = "all"
+    # Lot / free-text search always includes batch, rework, and repack.
+    if q:
+        flow = "all"
+    batch_type = flow  # template still uses batch_type
+    locked_batch_type = None  # always allow flow filter in unified Archives
     browse = (request.GET.get("browse") or "date").strip().lower()
     if browse not in ("date", "product"):
         browse = "date"
-    archive_root_label = (
-        "Repack archive"
-        if batch_type == "repack"
-        else "Batch archive"
-        if batch_type == "production"
-        else "Archive"
-    )
-    archive_url = (
-        "slurp_ui:production_repack_archive"
-        if locked_batch_type == "repack" or batch_type == "repack"
-        else "slurp_ui:production_archive"
-    )
-    dash_url = _dash_url_name(
-        "repack" if batch_type == "repack" else "production"
-    )
-    active_tab = (
-        "repack-archive" if batch_type == "repack" else "archive"
-    )
+    archive_root_label = "Archives"
+    archive_url = "slurp_ui:production_archive"
+    dash_url = "slurp_ui:production"
+    active_tab = "archive"
 
     year_raw = (request.GET.get("year") or "").strip()
     month_raw = (request.GET.get("month") or "").strip()
@@ -580,15 +609,52 @@ def production_archive(
     base = ProductionBatch.objects.filter(is_archived=True).select_related(
         "finished_good_item", "finished_good_item__product_family"
     )
-    if batch_type in ("production", "repack"):
+    if batch_type in ("production", "repack", "rework"):
         base = base.filter(batch_type=batch_type)
+
+    lot_candidates: list[Lot] = []
+    lot_focus: Lot | None = None
+    lot_suggestions_only = False
     if q:
-        base = base.filter(
+        lot_candidates = resolve_lots_for_search(q)
+        if lot_id_raw.isdigit():
+            lot_focus = next(
+                (c for c in lot_candidates if c.id == int(lot_id_raw)), None
+            )
+            if lot_focus is None:
+                lot_focus = (
+                    Lot.objects.select_related("item")
+                    .filter(pk=int(lot_id_raw))
+                    .first()
+                )
+                if lot_focus and lot_focus not in lot_candidates:
+                    lot_candidates = [lot_focus] + list(lot_candidates)
+        elif len(lot_candidates) == 1:
+            lot_focus = lot_candidates[0]
+        elif len(lot_candidates) > 1:
+            lot_suggestions_only = not any(
+                (c.lot_number or "").lower() == q.lower()
+                or (c.vendor_lot_number or "").lower() == q.lower()
+                or q.lower() in (c.lot_number or "").lower()
+                or q.lower() in (c.vendor_lot_number or "").lower()
+                for c in lot_candidates
+            )
+
+        text_match = (
             Q(batch_number__icontains=q)
             | Q(finished_good_item__sku__icontains=q)
             | Q(finished_good_item__name__icontains=q)
             | Q(notes__icontains=q)
         )
+        lot_ids = [c.id for c in lot_candidates]
+        if lot_focus is not None:
+            lot_ids = [lot_focus.id]
+        lot_match = Q(pk__in=[])  # empty
+        if lot_ids:
+            lot_match = Q(inputs__lot_id__in=lot_ids) | Q(
+                outputs__lot_id__in=lot_ids
+            )
+        base = base.filter(text_match | lot_match).distinct()
 
     # Prefer close date for filing; fall back to archive / production date.
     dated = base.annotate(
@@ -599,17 +665,21 @@ def production_archive(
     batches = []
     folder_level = "list"  # years | months | products | list
     crumbs = [{"label": archive_root_label, "url_params": {"browse": browse}}]
-    if batch_type != "all" and not locked_batch_type:
-        crumbs[0]["url_params"]["batch_type"] = batch_type
+    if batch_type != "all":
+        crumbs[0]["url_params"]["flow"] = batch_type
     if q:
         crumbs[0]["url_params"]["q"] = q
+    if lot_focus is not None:
+        crumbs[0]["url_params"]["lot"] = lot_focus.id
 
     def _qp(**extra):
         params = {"browse": browse}
-        if batch_type != "all" and not locked_batch_type:
-            params["batch_type"] = batch_type
+        if batch_type != "all":
+            params["flow"] = batch_type
         if q:
             params["q"] = q
+        if lot_focus is not None:
+            params["lot"] = lot_focus.id
         params.update({k: v for k, v in extra.items() if v not in (None, "")})
         return params
 
@@ -617,7 +687,10 @@ def production_archive(
         # Free search across archive — flat list, still respect browse filter chips.
         batches = list(dated.order_by("-folder_date", "-id")[:300])
         folder_level = "list"
-        crumbs.append({"label": f'Search “{q}”', "url_params": None})
+        crumb_label = f'Search “{q}”'
+        if lot_focus is not None:
+            crumb_label = f"Lot {lot_focus.lot_number or lot_focus.id}"
+        crumbs.append({"label": crumb_label, "url_params": None})
     elif browse == "product":
         if product_id:
             item = Item.objects.filter(pk=product_id).first()
@@ -758,25 +831,141 @@ def production_archive(
         # Empty archive root
         pass
 
-    archive_batch_rows = []
-    for b in batches:
+    def _archive_row(b: ProductionBatch) -> dict:
         storage = _close_storage_uom(b)
         display = _close_display_uom(b)
         yield_native = _net_yield_native(b)
-        archive_batch_rows.append(
-            {
-                "batch": b,
-                "ticket_display": _native_to_display(
-                    float(b.quantity_produced or 0), storage, display
-                ),
-                "yield_display": (
-                    _native_to_display(float(yield_native), storage, display)
-                    if yield_native is not None
-                    else None
-                ),
-                "display_uom": display,
-            }
+        return {
+            "batch": b,
+            "ticket_display": _native_to_display(
+                float(b.quantity_produced or 0), storage, display
+            ),
+            "yield_display": (
+                _native_to_display(float(yield_native), storage, display)
+                if yield_native is not None
+                else None
+            ),
+            "display_uom": display,
+            "lot_role": "",
+            "lot_qty": None,
+            "lot_uom": "",
+        }
+
+    archive_batch_rows = [_archive_row(b) for b in batches]
+
+    # Lot breakout (tickets where this lot was input or output).
+    # Ignore Flow filter here — a FG lot is often from rework/repack while the
+    # user still has Flow=Batch tickets selected.
+    lot_input_rows: list[dict] = []
+    lot_output_rows: list[dict] = []
+    lot_open_rows: list[dict] = []
+    lot_other_open_count = 0
+    lot_flow_ignored = False
+    show_lot_breakout = bool(lot_focus and folder_level == "list" and q)
+    if show_lot_breakout and lot_focus is not None:
+        lot_uom = (
+            (lot_focus.item.unit_of_measure or "").strip()
+            if lot_focus.item_id
+            else ""
         )
+        lot_archived = ProductionBatch.objects.filter(is_archived=True).filter(
+            Q(inputs__lot=lot_focus) | Q(outputs__lot=lot_focus)
+        ).distinct()
+        if batch_type in ("production", "repack", "rework"):
+            if lot_archived.exclude(batch_type=batch_type).exists():
+                lot_flow_ignored = True
+        archived_ids = set(lot_archived.values_list("id", flat=True))
+
+        for inp in (
+            ProductionBatchInput.objects.select_related(
+                "batch",
+                "batch__finished_good_item",
+                "batch__finished_good_item__product_family",
+            )
+            .filter(lot=lot_focus, batch_id__in=archived_ids)
+            .order_by("-batch__closed_date", "-batch_id")
+        ):
+            row = _archive_row(inp.batch)
+            row["lot_role"] = "input"
+            row["lot_qty"] = float(inp.quantity_used or 0)
+            row["lot_uom"] = lot_uom
+            lot_input_rows.append(row)
+        for out in (
+            ProductionBatchOutput.objects.select_related(
+                "batch",
+                "batch__finished_good_item",
+                "batch__finished_good_item__product_family",
+            )
+            .filter(lot=lot_focus, batch_id__in=archived_ids)
+            .order_by("-batch__closed_date", "-batch_id")
+        ):
+            row = _archive_row(out.batch)
+            row["lot_role"] = "output"
+            row["lot_qty"] = float(out.quantity_produced or 0)
+            row["lot_uom"] = lot_uom
+            lot_output_rows.append(row)
+
+        # Annotate flat rows when a lot is focused (Role column).
+        input_qty = {r["batch"].id: r["lot_qty"] for r in lot_input_rows}
+        output_qty = {r["batch"].id: r["lot_qty"] for r in lot_output_rows}
+        for row in archive_batch_rows:
+            bid = row["batch"].id
+            if bid in input_qty and bid in output_qty:
+                row["lot_role"] = "both"
+                row["lot_qty"] = input_qty[bid]
+                row["lot_uom"] = lot_uom
+            elif bid in input_qty:
+                row["lot_role"] = "input"
+                row["lot_qty"] = input_qty[bid]
+                row["lot_uom"] = lot_uom
+            elif bid in output_qty:
+                row["lot_role"] = "output"
+                row["lot_qty"] = output_qty[bid]
+                row["lot_uom"] = lot_uom
+
+        open_batches = list(
+            ProductionBatch.objects.filter(is_archived=False)
+            .filter(Q(inputs__lot=lot_focus) | Q(outputs__lot=lot_focus))
+            .select_related(
+                "finished_good_item", "finished_good_item__product_family"
+            )
+            .distinct()
+            .order_by("-production_date", "-id")[:50]
+        )
+        lot_other_open_count = len(open_batches)
+        open_ids = {b.id for b in open_batches}
+        open_input_qty = {
+            inp.batch_id: float(inp.quantity_used or 0)
+            for inp in ProductionBatchInput.objects.filter(
+                lot=lot_focus, batch_id__in=open_ids
+            )
+        }
+        open_output_qty = {
+            out.batch_id: float(out.quantity_produced or 0)
+            for out in ProductionBatchOutput.objects.filter(
+                lot=lot_focus, batch_id__in=open_ids
+            )
+        }
+        for b in open_batches:
+            row = _archive_row(b)
+            if b.id in open_input_qty and b.id in open_output_qty:
+                row["lot_role"] = "both"
+                row["lot_qty"] = open_input_qty[b.id]
+            elif b.id in open_input_qty:
+                row["lot_role"] = "input"
+                row["lot_qty"] = open_input_qty[b.id]
+            elif b.id in open_output_qty:
+                row["lot_role"] = "output"
+                row["lot_qty"] = open_output_qty[b.id]
+            row["lot_uom"] = lot_uom
+            lot_open_rows.append(row)
+
+    show_lot_picker = bool(
+        q
+        and folder_level == "list"
+        and lot_focus is None
+        and len(lot_candidates) > 1
+    )
 
     return render(
         request,
@@ -802,6 +991,15 @@ def production_archive(
             result_count=len(batches) if folder_level == "list" else sum(
                 f["count"] for f in folders
             ),
+            lot_focus=lot_focus,
+            lot_candidates=lot_candidates if show_lot_picker else [],
+            lot_suggestions_only=lot_suggestions_only and show_lot_picker,
+            lot_input_rows=lot_input_rows,
+            lot_output_rows=lot_output_rows,
+            lot_open_rows=lot_open_rows,
+            lot_other_open_count=lot_other_open_count,
+            lot_flow_ignored=lot_flow_ignored,
+            show_lot_breakout=show_lot_breakout,
             port_status="full",
             page_css=[
                 "Production.css",
@@ -819,9 +1017,7 @@ def production_archive_batch(request: HttpRequest, pk: int) -> HttpResponse:
     next_url = (request.POST.get("next") or "").strip() or None
     dash = _dash_url_name(batch.batch_type)
     archive = _archive_url_name(batch.batch_type)
-    archive_label = (
-        "Repack Archive" if batch.batch_type == "repack" else "Batch Archive"
-    )
+    archive_label = "Archives"
     if batch.status != "closed":
         messages.error(
             request,
@@ -849,9 +1045,7 @@ def production_unarchive_batch(request: HttpRequest, pk: int) -> HttpResponse:
     batch = get_object_or_404(ProductionBatch, pk=pk)
     next_url = (request.POST.get("next") or "").strip() or None
     dash = _dash_url_name(batch.batch_type)
-    dash_label = (
-        "repacks dash" if batch.batch_type == "repack" else "batch tickets dash"
-    )
+    dash_label = "Production"
     if not batch.is_archived:
         messages.info(request, f"{batch.batch_number} is not archived.")
         return redirect(next_url) if next_url else redirect(dash)
@@ -899,7 +1093,11 @@ def production_batch_detail(request: HttpRequest, pk: int) -> HttpResponse:
                 .prefetch_related("ingredients__item")
                 .first()
             )
-    can_adjust = batch.status not in ("closed", "cancelled") and not batch.is_archived
+    can_adjust = (
+        batch.batch_type != "rework"
+        and batch.status not in ("closed", "cancelled")
+        and not batch.is_archived
+    )
     early_msg = _close_before_production_blocked(
         batch, allow_early=_god_mode_on(request)
     )
@@ -940,7 +1138,7 @@ def production_batch_detail(request: HttpRequest, pk: int) -> HttpResponse:
         request,
         "slurp_ui/production/batch_detail.html",
         _prod_ctx(
-            active_tab="repacks" if batch.batch_type == "repack" else "batches",
+            active_tab="batches",
             batch=batch,
             formula=formula,
             recipe_label=recipe_label(formula),
@@ -1000,8 +1198,21 @@ def production_batch_pdf(request: HttpRequest, pk: int) -> HttpResponse:
 @login_required
 @require_http_methods(["GET", "POST"])
 def production_create_batch(request: HttpRequest) -> HttpResponse:
-    """Production or repack batch ticket create."""
+    """Create Ticket — choose Batch ticket / Repack / Rework, then fill the form."""
     batch_type = _batch_type(request)
+    if batch_type == "rework":
+        return redirect("slurp_ui:production_rework")
+    if batch_type == "choose":
+        return render(
+            request,
+            "slurp_ui/production/create_ticket_chooser.html",
+            _prod_ctx(
+                active_tab="batches",
+                batch_type="choose",
+                port_status="full",
+                page_css=["Production.css", "CreateBatchTicket.css"],
+            ),
+        )
     formulas = (
         Formula.objects.select_related("finished_good")
         .prefetch_related("ingredients__item")
@@ -1217,6 +1428,7 @@ def production_create_batch(request: HttpRequest) -> HttpResponse:
         fg_lots = (
             Lot.objects.filter(
                 item__sku__in=family_skus,
+                item__item_type="finished_good",
                 status="accepted",
                 quantity_remaining__gt=0,
             )
@@ -1225,22 +1437,25 @@ def production_create_batch(request: HttpRequest) -> HttpResponse:
             .order_by("-received_date")
         )
         for lot in fg_lots:
-            if is_partial_lot(lot):
-                avail = float(compute_lot_quantity_breakdown(lot)["quantity_available_for_use"])
-                if avail <= 0:
-                    continue
-                pack_qty, pack_uom = resolve_pack_size(item=lot.item, lot=lot)
-                work_in_partial_lots.append(
-                    {
-                        "lot": lot,
-                        "available": avail,
-                        "uom": (lot.item.unit_of_measure or "lbs"),
-                        "pack_label": format_pack_label(item=lot.item, lot=lot),
-                        "pack_qty": pack_qty,
-                        "pack_uom": pack_uom,
-                        "same_sku": bool(fg and lot.item_id == fg.id),
-                    }
-                )
+            # Free remnant only (excludes sales / hold / in-progress production).
+            rem_qty = lot_available_remnant_quantity(lot)
+            if rem_qty < 0.01:
+                continue
+            work_qty = rem_qty
+            pack_qty, pack_uom = resolve_pack_size(item=lot.item, lot=lot)
+            work_in_partial_lots.append(
+                {
+                    "lot": lot,
+                    "available": work_qty,
+                    "on_hand": float(lot.quantity_remaining or 0),
+                    "uom": (lot.item.unit_of_measure or "lbs"),
+                    "pack_label": format_pack_label(item=lot.item, lot=lot),
+                    "pack_qty": pack_qty,
+                    "pack_uom": pack_uom,
+                    "same_sku": bool(fg and lot.item_id == fg.id),
+                    "is_pure_partial": is_partial_lot(lot),
+                }
+            )
 
         for ing in selected_formula.ingredients.all():
             native = (ing.item.unit_of_measure or "lbs").lower()
@@ -1263,19 +1478,40 @@ def production_create_batch(request: HttpRequest) -> HttpResponse:
                         )
                     except ValueError:
                         avail_display = avail_native
-                    partial = is_partial_lot(lot)
+                    # Opened-bag remnant (Inventory → Partials style), not only
+                    # "pure partial" lots where rem < one full pack.
+                    remnant_native = float(lot_available_remnant_quantity(lot) or 0)
+                    try:
+                        remnant_display = (
+                            convert_mass_uom(remnant_native, lot_native, display_uom)
+                            if remnant_native > 0
+                            and lot_native in ("lbs", "kg")
+                            and display_uom in ("lbs", "kg")
+                            else remnant_native
+                        )
+                    except ValueError:
+                        remnant_display = remnant_native
+                    has_remnant = remnant_native >= 0.01
                     lot_rows.append(
                         {
                             "lot": lot,
                             "available_native": avail_native,
                             "available_display": avail_display,
                             "native_uom": lot_native,
-                            "is_partial": partial,
+                            "is_partial": has_remnant or is_partial_lot(lot),
+                            "remnant_native": remnant_native,
+                            "remnant_display": remnant_display,
                             "pack_label": format_pack_label(item=lot.item, lot=lot),
                         }
                     )
                 # Prefer opened/partial packs first so they get used up
-                lot_rows.sort(key=lambda r: (0 if r["is_partial"] else 1, -r["available_native"]))
+                lot_rows.sort(
+                    key=lambda r: (
+                        0 if r.get("is_partial") else 1,
+                        -float(r.get("remnant_native") or 0),
+                        -r["available_native"],
+                    )
+                )
             ingredient_lot_choices.append(
                 {
                     "ingredient": ing,
@@ -1475,19 +1711,48 @@ def production_create_batch(request: HttpRequest) -> HttpResponse:
             qty_lbs = _to_lbs(qty_display, display_uom) if qty_display > 0 else 0.0
 
             inputs = []
-            # Parse multi-lot allocations: ing_qty_<ingredient_id>_<lot_id>
+            qty_by_lot: dict[int, dict] = {}
+            # Packs: ing_qty_<ingredient_id>_<lot_id>
+            # Remnant: ing_remnant_qty_<ingredient_id>_<lot_id>
             for key, raw_qty in request.POST.items():
-                if not key.startswith("ing_qty_") or not raw_qty:
+                if not raw_qty:
                     continue
-                parts = key.split("_")
-                # ing_qty_{ingId}_{lotId}
-                if len(parts) != 4:
+                lot_id = None
+                kind = None
+                if key.startswith("ing_remnant_qty_"):
+                    parts = key.split("_")
+                    # ing_remnant_qty_{ingId}_{lotId}
+                    if len(parts) != 5:
+                        continue
+                    try:
+                        lot_id = int(parts[4])
+                        q_display = float(raw_qty)
+                    except (TypeError, ValueError):
+                        continue
+                    kind = "remnant"
+                elif key.startswith("ing_qty_"):
+                    parts = key.split("_")
+                    # ing_qty_{ingId}_{lotId}
+                    if len(parts) != 4:
+                        continue
+                    try:
+                        lot_id = int(parts[3])
+                        q_display = float(raw_qty)
+                    except (TypeError, ValueError):
+                        continue
+                    kind = "packs"
+                else:
                     continue
-                try:
-                    lot_id = int(parts[3])
-                    q_display = float(raw_qty)
-                except (TypeError, ValueError):
+                if q_display <= 0 or lot_id is None or not kind:
                     continue
+                row = qty_by_lot.setdefault(
+                    lot_id, {"packs": 0.0, "remnant": 0.0, "total": 0.0}
+                )
+                row[kind] = row.get(kind, 0.0) + q_display
+                row["total"] = row.get("packs", 0.0) + row.get("remnant", 0.0)
+
+            for lot_id, parts in qty_by_lot.items():
+                q_display = float(parts.get("total") or 0)
                 if q_display <= 0:
                     continue
                 try:
@@ -1496,7 +1761,22 @@ def production_create_batch(request: HttpRequest) -> HttpResponse:
                     continue
                 native = (lot.item.unit_of_measure or "lbs").lower()
                 q_native = _display_to_native(q_display, display_uom, native)
-                inputs.append({"lot_id": lot_id, "quantity_used": q_native})
+                packs_disp = float(parts.get("packs") or 0)
+                remnant_disp = float(parts.get("remnant") or 0)
+                entry = {"lot_id": lot_id, "quantity_used": q_native}
+                # Persist operator split when either field was used (so PDF keeps it)
+                if packs_disp > 0 or remnant_disp > 0:
+                    entry["quantity_packs"] = (
+                        _display_to_native(packs_disp, display_uom, native)
+                        if packs_disp > 0
+                        else 0.0
+                    )
+                    entry["quantity_remnant"] = (
+                        _display_to_native(remnant_disp, display_uom, native)
+                        if remnant_disp > 0
+                        else 0.0
+                    )
+                inputs.append(entry)
 
             # Plant utility qty: plant_utility_qty_<ingredient_id>
             for key, raw_qty in request.POST.items():
@@ -1534,6 +1814,33 @@ def production_create_batch(request: HttpRequest) -> HttpResponse:
                         qty_lbs += _to_lbs(float(row["quantity_used"]), uom)
                     qty_lbs = normalize_mass_quantity(qty_lbs)
 
+                work_in_partials = []
+                work_in_lbs = 0.0
+                for pid in request.POST.getlist("work_in_partial"):
+                    try:
+                        lot_id = int(pid)
+                    except (TypeError, ValueError):
+                        continue
+                    try:
+                        lot = Lot.objects.select_related("item").get(
+                            pk=lot_id, status="accepted"
+                        )
+                    except Lot.DoesNotExist:
+                        continue
+                    rem = lot_available_remnant_quantity(lot)
+                    if rem < 0.01:
+                        continue
+                    work_in_partials.append({"lot_id": lot_id, "quantity_used": rem})
+                    uom = (lot.item.unit_of_measure or "lbs").lower()
+                    work_in_lbs += _to_lbs(rem, uom)
+                work_in_lbs = normalize_mass_quantity(work_in_lbs)
+                batch_total_lbs = normalize_mass_quantity(qty_lbs + work_in_lbs)
+                batch_total_display = float(
+                    convert_mass_uom(batch_total_lbs, "lbs", display_uom)
+                    if display_uom in ("lbs", "kg")
+                    else batch_total_lbs
+                )
+
                 indirect_materials = _parse_production_packaging_post(request)
                 packaging_warned = (request.POST.get("packaging_warned") or "").strip() == "1"
                 if not indirect_materials and not packaging_warned:
@@ -1542,23 +1849,15 @@ def production_create_batch(request: HttpRequest) -> HttpResponse:
                         "No packaging selected. Add packaging lots, or create again to confirm "
                         "a batch with no packaging.",
                     )
-                    # Re-build preferred rows with suggest qty from this batch size
+                    # Re-build preferred rows with suggest qty from full batch size
                     preferred_packaging_rows = _preferred_packaging_rows(
                         selected_formula.finished_good,
                         display_uom,
-                        batch_qty=float(
-                            convert_mass_uom(qty_lbs, "lbs", display_uom)
-                            if display_uom in ("lbs", "kg")
-                            else qty_lbs
-                        ),
+                        batch_qty=batch_total_display,
                     )
                     packaging_suggest = suggested_containers_for_item(
                         selected_formula.finished_good,
-                        float(
-                            convert_mass_uom(qty_lbs, "lbs", display_uom)
-                            if display_uom in ("lbs", "kg")
-                            else qty_lbs
-                        ),
+                        batch_total_display,
                         display_uom,
                     )
                     packaging_lot_rows = _packaging_lot_rows()
@@ -1577,13 +1876,6 @@ def production_create_batch(request: HttpRequest) -> HttpResponse:
                                 status = "scheduled"
                         except ValueError:
                             pass
-
-                    work_in_partials = []
-                    for pid in request.POST.getlist("work_in_partial"):
-                        try:
-                            work_in_partials.append({"lot_id": int(pid)})
-                        except (TypeError, ValueError):
-                            continue
 
                     payload = {
                         "batch_type": "production",
@@ -1890,16 +2182,22 @@ def production_adjust_batch(request: HttpRequest, pk: int) -> HttpResponse:
                     continue
                 for lot_row in group.get("lots") or []:
                     lot = lot_row["lot"]
+                    q = 0.0
                     raw = request.POST.get(f"ing_qty_{ing_key}_{lot.id}")
                     if raw is None or raw == "":
                         # Flat fallback name used by repack-style cards
                         raw = request.POST.get(f"qty_{lot.id}")
-                    if not raw:
-                        continue
-                    try:
-                        q = float(raw)
-                    except ValueError:
-                        continue
+                    if raw:
+                        try:
+                            q += float(raw)
+                        except ValueError:
+                            pass
+                    raw_rem = request.POST.get(f"ing_remnant_qty_{ing_key}_{lot.id}")
+                    if raw_rem:
+                        try:
+                            q += float(raw_rem)
+                        except ValueError:
+                            pass
                     if q <= 0:
                         continue
                     if lot.id in seen_lots:
@@ -2293,19 +2591,31 @@ def production_rework(request: HttpRequest) -> HttpResponse:
     partial_rows = []
     if parent:
         for lot in partial_lots_for_parent(parent):
-            avail = float(compute_lot_quantity_breakdown(lot)["quantity_available_for_use"])
+            work = lot_available_remnant_quantity(lot)
+            if work < 0.01:
+                continue
             partial_rows.append(
                 {
                     "lot": lot,
-                    "available": avail,
+                    "available": work,
+                    "on_hand": float(lot.quantity_remaining or 0),
                     "uom": lot.item.unit_of_measure or "lbs",
                     "pack_label": format_pack_label(item=lot.item, lot=lot),
                     "same_sku": bool(target and lot.item_id == target.id),
+                    "is_pure_partial": is_partial_lot(lot),
                 }
             )
 
     adjust_lots = []
+    preferred_packaging_rows = []
+    packaging_lot_rows = []
+    packaging_suggest = None
+    packaging_needs_confirm = False
+    target_uom = "lbs"
     if target:
+        target_uom = (target.unit_of_measure or "lbs").lower()
+        if target_uom in ("lb", "lbs"):
+            target_uom = "lbs"
         rms = (
             Lot.objects.filter(
                 item__item_type="raw_material",
@@ -2318,7 +2628,16 @@ def production_rework(request: HttpRequest) -> HttpResponse:
         for lot in rms:
             avail = float(compute_lot_quantity_breakdown(lot)["quantity_available_for_use"])
             if avail > 1e-6:
-                adjust_lots.append({"lot": lot, "available": avail})
+                adjust_lots.append(
+                    {
+                        "lot": lot,
+                        "available": avail,
+                        "uom": (lot.item.unit_of_measure or "lbs").lower(),
+                    }
+                )
+        preferred_packaging_rows = _preferred_packaging_rows(target, target_uom, batch_qty=0.0)
+        packaging_lot_rows = _packaging_lot_rows()
+        packaging_suggest = suggested_containers_for_item(target, 0.0, target_uom)
 
     if request.method == "POST" and target:
         try:
@@ -2347,20 +2666,46 @@ def production_rework(request: HttpRequest) -> HttpResponse:
                     continue
                 if qty > 0:
                     adjust_lines.append({"lot_id": lid, "quantity": qty})
-            result = execute_rework(
-                target_item=target,
-                partial_lines=partial_lines,
-                adjust_lines=adjust_lines,
-                notes=(request.POST.get("notes") or "").strip(),
-                user=request.user,
-            )
-            out = result["output_lot"]
-            messages.success(
-                request,
-                f"Rework {result['batch'].batch_number}: {result['quantity']:.2f} "
-                f"→ lot {out.lot_number} on hold awaiting micro.",
-            )
-            return redirect("slurp_ui:inventory_lot_detail", pk=out.id)
+
+            packaging_lines = _parse_production_packaging_post(request)
+            packaging_warned = (request.POST.get("packaging_warned") or "").strip() == "1"
+            if not packaging_lines and not packaging_warned:
+                messages.warning(
+                    request,
+                    "No packaging selected. Add packaging lots, or create again to confirm "
+                    "a rework with no packaging.",
+                )
+                # Estimate total for suggest from posted partials/adjust
+                est = 0.0
+                for pl in partial_lines:
+                    est += float(pl.get("quantity") or 0)
+                for al in adjust_lines:
+                    est += float(al.get("quantity") or 0)
+                preferred_packaging_rows = _preferred_packaging_rows(
+                    target, target_uom, batch_qty=est
+                )
+                packaging_suggest = suggested_containers_for_item(
+                    target, est, target_uom
+                )
+                packaging_lot_rows = _packaging_lot_rows()
+                packaging_needs_confirm = True
+            else:
+                result = execute_rework(
+                    target_item=target,
+                    partial_lines=partial_lines,
+                    adjust_lines=adjust_lines,
+                    packaging_lines=packaging_lines,
+                    notes=(request.POST.get("notes") or "").strip(),
+                    user=request.user,
+                )
+                batch = result["batch"]
+                messages.success(
+                    request,
+                    f"Rework ticket {batch.batch_number} opened for "
+                    f"{result['quantity']:.2f} — close when blend is done "
+                    "(output goes on hold awaiting micro).",
+                )
+                return redirect("slurp_ui:production_batch_detail", pk=batch.id)
         except ReworkError as e:
             messages.error(request, e.message)
         except Exception as e:
@@ -2369,15 +2714,21 @@ def production_rework(request: HttpRequest) -> HttpResponse:
     return render(
         request,
         "slurp_ui/production/rework.html",
-        {
-            "module": "production",
-            "sidebar_nav": PRODUCTION_NAV,
-            "active_tab": "rework",
-            "fg_choices": fg_choices,
-            "target": target,
-            "parent": parent,
-            "partial_rows": partial_rows,
-            "adjust_lots": adjust_lots,
-            "port_status": "full",
-        },
+        _prod_ctx(
+            active_tab="batches",
+            fg_choices=fg_choices,
+            target=target,
+            parent=parent,
+            partial_rows=partial_rows,
+            adjust_lots=adjust_lots,
+            preferred_packaging_rows=preferred_packaging_rows,
+            packaging_lot_rows=packaging_lot_rows,
+            packaging_suggest=packaging_suggest,
+            packaging_needs_confirm=packaging_needs_confirm,
+            target_uom=target_uom,
+            lbs_per_kg=LBS_PER_KG,
+            batch_type="rework",
+            port_status="full",
+            page_css=["Production.css", "CreateBatchTicket.css"],
+        ),
     )

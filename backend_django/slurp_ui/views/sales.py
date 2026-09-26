@@ -15,9 +15,11 @@ from django.utils.dateparse import parse_date, parse_datetime
 from django.views.decorators.http import require_http_methods, require_POST
 
 from erp_core.lot_display_quantities import compute_lot_quantity_breakdown
+from erp_core.pack_display import pack_quantity_breakdown, resolve_pack_size
 from erp_core.models import (
     AccountsPayable,
     AccountsReceivable,
+    CampaignLot,
     Customer,
     CustomerContact,
     CustomerCoaRequirement,
@@ -37,6 +39,7 @@ from erp_core.models import (
     ShipToLocation,
     Shipment,
     CustomerRma,
+    Invoice,
 )
 from erp_core.rma_services import open_customer_rma, shipped_lot_quantities_for_so
 from erp_core.sell_services import (
@@ -83,6 +86,52 @@ def _sales_ctx(**extra):
 
 IN_HOUSE_SO_STATUSES = ("draft", "issued", "allocated", "ready_for_shipment")
 SHIPPED_SO_STATUSES = ("shipped", "completed", "received")
+
+
+def _so_allocated_lots_prefetch():
+    from erp_core.models import SalesOrderLot
+
+    return Prefetch(
+        "items__allocated_lots",
+        queryset=SalesOrderLot.objects.select_related(
+            "lot", "lot__coa_certificate"
+        ).prefetch_related("coa_customer_copies"),
+    )
+
+
+def _annotate_so_coa_docs(orders) -> None:
+    """Attach coa_copies / coa_master_certs for document links (view-only)."""
+    from erp_core.coa_allocation import (
+        consolidate_customer_coas_for_sales_order,
+        current_customer_coa,
+    )
+
+    for o in orders:
+        o.coa_copies = []
+        o.coa_master_certs = []
+        try:
+            o.coa_copies = consolidate_customer_coas_for_sales_order(o)
+        except Exception:
+            seen_copy = set()
+            for line in o.items.all():
+                for al in line.allocated_lots.all():
+                    copy = current_customer_coa(al)
+                    if copy and copy.id not in seen_copy:
+                        seen_copy.add(copy.id)
+                        o.coa_copies.append(copy)
+        from erp_core.coa_allocation import customer_coa_button_label
+
+        for copy in o.coa_copies:
+            copy.button_label = customer_coa_button_label(copy)
+        if o.coa_copies:
+            continue
+        seen_cert = set()
+        for line in o.items.all():
+            for al in line.allocated_lots.all():
+                cert = getattr(al.lot, "coa_certificate", None) if al.lot_id else None
+                if cert and cert.id not in seen_cert:
+                    seen_cert.add(cert.id)
+                    o.coa_master_certs.append(cert)
 
 
 def fulfilled_sales_orders_qs(base=None):
@@ -672,8 +721,8 @@ def sales_orders(request: HttpRequest) -> HttpResponse:
             Prefetch(
                 "items__allocated_lots",
                 queryset=SalesOrderLot.objects.select_related(
-                    "lot", "lot__coa_certificate", "coa_customer_copy"
-                ),
+                    "lot", "lot__coa_certificate"
+                ).prefetch_related("coa_customer_copies"),
             ),
         )
         .annotate(total_allocated=Sum("items__quantity_allocated"))
@@ -788,21 +837,35 @@ def sales_orders(request: HttpRequest) -> HttpResponse:
         o.coa_copies = []
         o.coa_master_certs = []
         o.coa_missing_lots = []
-        seen_cert = set()
-        seen_missing = set()
-        for line in o.items.all():
-            for al in line.allocated_lots.all():
-                copy = getattr(al, "coa_customer_copy", None)
-                if copy:
-                    o.coa_copies.append(copy)
-                    continue
-                cert = getattr(al.lot, "coa_certificate", None) if al.lot_id else None
-                if cert and cert.id not in seen_cert:
-                    seen_cert.add(cert.id)
-                    o.coa_master_certs.append(cert)
-                elif al.lot_id and al.lot_id not in seen_missing and not cert:
-                    seen_missing.add(al.lot_id)
-                    o.coa_missing_lots.append(al.lot)
+        from erp_core.coa_allocation import (
+            consolidate_customer_coas_for_sales_order,
+            current_customer_coa,
+            customer_coa_button_label,
+        )
+
+        try:
+            o.coa_copies = consolidate_customer_coas_for_sales_order(o)
+        except Exception:
+            o.coa_copies = []
+            for line in o.items.all():
+                for al in line.allocated_lots.all():
+                    copy = current_customer_coa(al)
+                    if copy:
+                        o.coa_copies.append(copy)
+        for copy in o.coa_copies:
+            copy.button_label = customer_coa_button_label(copy)
+        if not o.coa_copies:
+            seen_cert = set()
+            seen_missing = set()
+            for line in o.items.all():
+                for al in line.allocated_lots.all():
+                    cert = getattr(al.lot, "coa_certificate", None) if al.lot_id else None
+                    if cert and cert.id not in seen_cert:
+                        seen_cert.add(cert.id)
+                        o.coa_master_certs.append(cert)
+                    elif al.lot_id and al.lot_id not in seen_missing and not cert:
+                        seen_missing.add(al.lot_id)
+                        o.coa_missing_lots.append(al.lot)
 
     draft_by_so = {
         inv.sales_order_id: inv
@@ -1290,6 +1353,7 @@ def sales_customer_profile(request: HttpRequest, pk: int) -> HttpResponse:
 
     open_orders = list(
         SalesOrder.objects.filter(customer=customer, status__in=IN_HOUSE_SO_STATUSES)
+        .prefetch_related("items__item", _so_allocated_lots_prefetch())
         .annotate(
             total_allocated=Sum("items__quantity_allocated"),
             total_ordered=Sum("items__quantity_ordered"),
@@ -1299,6 +1363,7 @@ def sales_customer_profile(request: HttpRequest, pk: int) -> HttpResponse:
     )
     recent_shipped = list(
         fulfilled_sales_orders_qs(SalesOrder.objects.filter(customer=customer))
+        .prefetch_related("items__item", _so_allocated_lots_prefetch())
         .annotate(
             total_allocated=Sum("items__quantity_allocated"),
             total_ordered=Sum("items__quantity_ordered"),
@@ -1306,6 +1371,8 @@ def sales_customer_profile(request: HttpRequest, pk: int) -> HttpResponse:
         )
         .order_by("-actual_ship_date", "-order_date")[:50]
     )
+    _annotate_so_coa_docs(open_orders)
+    _annotate_so_coa_docs(recent_shipped)
     all_customer_orders = list(
         SalesOrder.objects.filter(customer=customer)
         .annotate(
@@ -1314,6 +1381,19 @@ def sales_customer_profile(request: HttpRequest, pk: int) -> HttpResponse:
             total_shipped=Sum("items__quantity_shipped"),
         )
         .order_by("-order_date")[:100]
+    )
+
+    # Invoice history for this customer (SO link and/or name match for legacy rows).
+    cust_name = (customer.name or "").strip()
+    customer_invoices = list(
+        Invoice.objects.filter(invoice_type__in=("customer", "credit"))
+        .filter(
+            models.Q(sales_order__customer_id=customer.id)
+            | models.Q(customer_vendor_name__iexact=cust_name)
+        )
+        .select_related("sales_order")
+        .distinct()
+        .order_by("-invoice_date", "-id")[:100]
     )
 
     ops_contacts = [
@@ -1337,6 +1417,7 @@ def sales_customer_profile(request: HttpRequest, pk: int) -> HttpResponse:
     tabs = [
         ("glance", "At a glance"),
         ("orders", "Orders"),
+        ("invoices", "Invoices"),
         ("payments", "Payments"),
         ("contacts", "Contacts"),
         ("pricing", "Pricing"),
@@ -1421,6 +1502,7 @@ def sales_customer_profile(request: HttpRequest, pk: int) -> HttpResponse:
             open_orders=open_orders,
             recent_shipped=recent_shipped,
             all_customer_orders=all_customer_orders,
+            customer_invoices=customer_invoices,
             coa_fps_items=coa_fps_items,
             coa_selected_item=coa_selected_item,
             coa_fps_lines=coa_fps_lines,
@@ -1785,15 +1867,25 @@ def sales_customer_quote(request: HttpRequest, customer_pk: int, pk: int = None)
             if not q_lines:
                 messages.error(request, "Quote has no lines to convert.")
                 return redirect("slurp_ui:sales_customer_quote_edit", customer_pk=customer_pk, pk=quote.pk)
+            from erp_core.customer_pricing_resolve import unit_price_in_item_uom
+
             so_items = []
             for ql in q_lines:
                 if not ql.item_id:
                     continue
+                # Quote lines may price in lbs while the pack SKU is kg (or reverse).
+                up = None
+                if ql.unit_price is not None:
+                    up = unit_price_in_item_uom(
+                        float(ql.unit_price),
+                        getattr(ql, "unit_of_measure", None),
+                        ql.item,
+                    )
                 so_items.append(
                     {
                         "item_id": ql.item_id,
                         "quantity_ordered": float(ql.quantity or 0),
-                        "unit_price": float(ql.unit_price) if ql.unit_price is not None else None,
+                        "unit_price": up,
                     }
                 )
             if not so_items:
@@ -1888,10 +1980,7 @@ def sales_customer_quote(request: HttpRequest, customer_pk: int, pk: int = None)
 @require_http_methods(["GET", "POST"])
 def sales_create_order(request: HttpRequest) -> HttpResponse:
     customers = Customer.objects.filter(is_active=True).order_by("name")[:300]
-    items = (
-        Item.objects.filter(item_type__in=["finished_good", "distributed_item", "raw_material"])
-        .order_by("sku")[:500]
-    )
+    items = Item.objects.none()
     selected_customer = None
     ship_tos = []
     customer_id = request.GET.get("customer") or request.POST.get("customer_id")
@@ -1905,29 +1994,24 @@ def sales_create_order(request: HttpRequest) -> HttpResponse:
             )
 
     if request.method == "POST" and selected_customer:
-        # Latest active customer price per item (native lookup for blank line prices)
-        pricing_by_item: dict[int, float] = {}
-        today_d = timezone.localdate()
-        for cp in (
-            CustomerPricing.objects.filter(customer=selected_customer, is_active=True)
-            .order_by("item_id", "-effective_date")
-            .only("item_id", "unit_price", "effective_date", "expiry_date")
-        ):
-            if cp.item_id in pricing_by_item:
-                continue
-            if cp.effective_date and cp.effective_date > today_d:
-                continue
-            if cp.expiry_date and cp.expiry_date < today_d:
-                continue
-            if cp.unit_price is None:
-                continue
-            pricing_by_item[cp.item_id] = float(cp.unit_price)
+        # Only items with current CustomerPricing may be ordered; price in item UoM.
+        from erp_core.customer_pricing_resolve import (
+            active_customer_pricing_by_item,
+            customer_pricing_unit_price_for_item,
+        )
+
+        pricing_rows = active_customer_pricing_by_item(selected_customer)
+        pricing_by_item: dict[int, float] = {
+            iid: customer_pricing_unit_price_for_item(cp)
+            for iid, cp in pricing_rows.items()
+        }
 
         try:
             line_count = int(request.POST.get("line_count") or 1)
         except ValueError:
             line_count = 1
         lines = []
+        skipped_unpriced = False
         for i in range(max(1, min(line_count, 20))):
             item_id = request.POST.get(f"item_id_{i}")
             qty = request.POST.get(f"qty_{i}")
@@ -1944,11 +2028,14 @@ def sales_create_order(request: HttpRequest) -> HttpResponse:
                 iid = int(item_id)
             except ValueError:
                 continue
+            if iid not in pricing_by_item:
+                skipped_unpriced = True
+                continue
             try:
                 p = float(price) if price not in (None, "") else None
             except ValueError:
                 p = None
-            if p is None and iid in pricing_by_item:
+            if p is None:
                 p = pricing_by_item[iid]
             lines.append(
                 {
@@ -1958,8 +2045,19 @@ def sales_create_order(request: HttpRequest) -> HttpResponse:
                 }
             )
         if not lines:
-            messages.error(request, "Add at least one line with item and quantity.")
+            if skipped_unpriced:
+                messages.error(
+                    request,
+                    "Only items with pricing on this customer’s profile can be ordered.",
+                )
+            else:
+                messages.error(request, "Add at least one line with item and quantity.")
         else:
+            if skipped_unpriced:
+                messages.warning(
+                    request,
+                    "Skipped line(s) without customer profile pricing.",
+                )
             payload = {
                 "customer_id": selected_customer.id,
                 "customer_name": selected_customer.name,
@@ -1993,21 +2091,21 @@ def sales_create_order(request: HttpRequest) -> HttpResponse:
 
     pricing_json = {}
     if selected_customer:
-        today_d = timezone.localdate()
-        for cp in (
-            CustomerPricing.objects.filter(customer=selected_customer, is_active=True)
-            .order_by("item_id", "-effective_date")
-            .only("item_id", "unit_price", "effective_date", "expiry_date")
-        ):
-            if str(cp.item_id) in pricing_json:
-                continue
-            if cp.effective_date and cp.effective_date > today_d:
-                continue
-            if cp.expiry_date and cp.expiry_date < today_d:
-                continue
-            if cp.unit_price is None:
-                continue
-            pricing_json[str(cp.item_id)] = float(cp.unit_price)
+        from erp_core.customer_pricing_resolve import (
+            active_customer_pricing_by_item,
+            customer_pricing_unit_price_for_item,
+        )
+
+        pricing_rows = active_customer_pricing_by_item(selected_customer)
+        # Picker: only SKUs with current profile pricing (avoids FG + distributed
+        # duplicates like D1307 when only one item_id is priced).
+        items = (
+            Item.objects.filter(id__in=list(pricing_rows.keys()))
+            .order_by("sku", "name", "id")
+        )
+        for iid, cp in pricing_rows.items():
+            # Prefill in item native UoM (matches qty column UoM on the form).
+            pricing_json[str(iid)] = round(customer_pricing_unit_price_for_item(cp), 4)
 
     today = timezone.localdate().isoformat()
     return render(
@@ -2129,9 +2227,21 @@ def sales_allocate_order(request: HttpRequest, pk: int) -> HttpResponse:
         or bool(ready_shipment)
     )
 
+    ALLOC_MAX_LOTS_PER_LINE = 20
+
+    from erp_core.inventory_fg_visibility import GATED_PRODUCT_CATEGORIES
+
+    closed_batch_output_lot_ids = set(
+        ProductionBatchOutput.objects.filter(batch__status="closed").values_list(
+            "lot_id", flat=True
+        )
+    )
+
     line_lot_choices = []
     for line in so.items.all():
         item_type = getattr(line.item, "item_type", "") or ""
+        product_category = (getattr(line.item, "product_category", None) or "").strip()
+        gated_fg = item_type == "finished_good" and product_category in GATED_PRODUCT_CATEGORIES
         own_by_lot = {
             al.lot_id: float(al.quantity_allocated or 0)
             for al in line.allocated_lots.all()
@@ -2139,16 +2249,17 @@ def sales_allocate_order(request: HttpRequest, pk: int) -> HttpResponse:
         }
         picks = [
             {"lot_id": al.lot_id, "qty": float(al.quantity_allocated or 0)}
-            for al in line.allocated_lots.all()[:3]
+            for al in line.allocated_lots.all()[:ALLOC_MAX_LOTS_PER_LINE]
             if al.lot_id
         ]
-        while len(picks) < 3:
-            picks.append(None)
+        if not picks:
+            picks = [None]
 
         qs = Lot.objects.filter(quantity_remaining__gt=0).exclude(status="rejected")
-        # Same-SKU lots; for distributed, include raw_material lots sharing the SKU
-        if item_type == "distributed_item":
-            qs = qs.filter(item__sku=line.item.sku)
+        # Same pack SKU (covers FG + twin distributed Item rows sharing a SKU).
+        line_sku = (getattr(line.item, "sku", None) or "").strip()
+        if line_sku:
+            qs = qs.filter(item__sku=line_sku)
         else:
             qs = qs.filter(item_id=line.item_id)
         lot_ids = set(qs.values_list("pk", flat=True)) | set(own_by_lot.keys())
@@ -2156,38 +2267,126 @@ def sales_allocate_order(request: HttpRequest, pk: int) -> HttpResponse:
             Lot.objects.filter(pk__in=lot_ids)
             .exclude(status="rejected")
             .select_related("item")
-            .order_by("-received_date")[:60]
+            .order_by("-received_date")[:120]
         )
+
+        # Multi-batch campaign membership (same rule as lot_campaign)
+        lot_campaign_code = {}
+        if lots:
+            outs = (
+                ProductionBatchOutput.objects.filter(
+                    lot_id__in=[lot.id for lot in lots],
+                    batch__campaign_id__isnull=False,
+                )
+                .select_related("batch__campaign")
+                .order_by("-id")
+            )
+            lot_to_camp_id = {}
+            camp_by_id = {}
+            for out in outs:
+                if out.lot_id in lot_to_camp_id:
+                    continue
+                camp = out.batch.campaign
+                if not camp:
+                    continue
+                lot_to_camp_id[out.lot_id] = camp.id
+                camp_by_id[camp.id] = camp
+            if camp_by_id:
+                multi_ids = set(
+                    CampaignLot.objects.filter(id__in=list(camp_by_id.keys()))
+                    .annotate(n=Count("batches"))
+                    .filter(n__gte=2)
+                    .values_list("id", flat=True)
+                )
+                for lid, cid in lot_to_camp_id.items():
+                    if cid in multi_ids:
+                        lot_campaign_code[lid] = camp_by_id[cid].campaign_code or ""
+
         sellable_rows = []
         raw_rows = []
         if item_type == "distributed_item":
-            repack_out_ids = set(
+            sellable_lot_ids = set(
                 ProductionBatchOutput.objects.filter(
                     lot_id__in=[lot.id for lot in lots],
                     batch__batch_type="repack",
                     batch__status="closed",
                 ).values_list("lot_id", flat=True)
             )
+        elif gated_fg:
+            sellable_lot_ids = {
+                lot.id for lot in lots if lot.id in closed_batch_output_lot_ids
+            }
         else:
-            repack_out_ids = None
+            sellable_lot_ids = None  # all lots are sellable
+
         for lot in lots:
             avail = float(compute_lot_quantity_breakdown(lot)["quantity_available_for_use"])
             avail += own_by_lot.get(lot.id, 0.0)
             if avail <= 0:
                 continue
-            row = {"lot": lot, "available": avail}
-            if item_type == "distributed_item":
-                if lot.id in repack_out_ids:
-                    sellable_rows.append(row)
-                else:
-                    raw_rows.append(row)
-            else:
+            item = lot.item
+            uom = (getattr(item, "unit_of_measure", None) or "lbs") if item else "lbs"
+            pack_qty, pack_uom = resolve_pack_size(item=item, lot=lot)
+            brk = pack_quantity_breakdown(avail, uom, pack_qty, pack_uom) or {}
+            is_partial = bool(brk.get("has_remainder"))
+            pack_note = (brk.get("display") or brk.get("note") or "").strip()
+            camp_code = lot_campaign_code.get(lot.id) or ""
+            is_campaign = bool(camp_code)
+            label_bits = [f"{lot.lot_number} — avail {avail:.2f} {uom}"]
+            if camp_code:
+                label_bits.append(f"camp {camp_code}")
+            if pack_note:
+                label_bits.append(pack_note)
+            label_bits.append(f"({lot.status})")
+            row = {
+                "lot": lot,
+                "available": avail,
+                "is_partial": is_partial,
+                "is_campaign": is_campaign,
+                "campaign_code": camp_code,
+                "pack_note": pack_note,
+                "uom": uom,
+                "label": " · ".join(label_bits),
+            }
+            if sellable_lot_ids is None or lot.id in sellable_lot_ids:
                 sellable_rows.append(row)
+            else:
+                raw_rows.append(row)
+
+        def _alloc_sort(r):
+            return (0 if r["is_partial"] else 1, -float(r["available"] or 0))
+
+        sellable_rows.sort(key=_alloc_sort)
+        raw_rows.sort(key=_alloc_sort)
+
+        def _split(rows):
+            regular = [r for r in rows if not r["is_campaign"]]
+            campaign = [r for r in rows if r["is_campaign"]]
+            return {
+                "regular": regular,
+                "campaign": campaign,
+                "partial_lots": [r for r in regular if r["is_partial"]],
+                "full_lots": [r for r in regular if not r["is_partial"]],
+                "campaign_partial_lots": [r for r in campaign if r["is_partial"]],
+                "campaign_full_lots": [r for r in campaign if not r["is_partial"]],
+            }
+
+        sell = _split(sellable_rows)
+        raw = _split(raw_rows)
         line_lot_choices.append(
             {
                 "line": line,
-                "lots": sellable_rows,
-                "raw_lots": raw_rows,
+                "lots": sell["regular"],
+                "campaign_lots": sell["campaign"],
+                "partial_lots": sell["partial_lots"],
+                "full_lots": sell["full_lots"],
+                "campaign_partial_lots": sell["campaign_partial_lots"],
+                "campaign_full_lots": sell["campaign_full_lots"],
+                "raw_lots": raw["regular"],
+                "raw_campaign_lots": raw["campaign"],
+                "raw_partial_lots": raw["partial_lots"],
+                "raw_full_lots": raw["full_lots"],
+                "has_campaign_lots": bool(sell["campaign"] or raw["campaign"]),
                 "picks": picks,
             }
         )
@@ -2209,8 +2408,8 @@ def sales_allocate_order(request: HttpRequest, pk: int) -> HttpResponse:
             items_payload = []
             for line in so.items.all():
                 picks = []
-                # Support up to 3 lots per line in simple UI
-                for slot in range(3):
+                seen_lots = set()
+                for slot in range(ALLOC_MAX_LOTS_PER_LINE):
                     lot_id = request.POST.get(f"lot_{line.id}_{slot}")
                     qty = request.POST.get(f"qty_{line.id}_{slot}")
                     if not lot_id or not qty:
@@ -2221,7 +2420,22 @@ def sales_allocate_order(request: HttpRequest, pk: int) -> HttpResponse:
                         continue
                     if q <= 0:
                         continue
-                    picks.append({"lot_id": int(lot_id), "quantity": q})
+                    try:
+                        lid = int(lot_id)
+                    except ValueError:
+                        continue
+                    if lid in seen_lots:
+                        messages.error(
+                            request,
+                            f"{line.item.sku}: same lot selected more than once. "
+                            "Combine quantities into one pick.",
+                        )
+                        picks = None
+                        break
+                    seen_lots.add(lid)
+                    picks.append({"lot_id": lid, "quantity": q})
+                if picks is None:
+                    break
                 is_distributed = getattr(line.item, "item_type", "") == "distributed_item"
                 create_from_rm = is_distributed and bool(
                     request.POST.get(f"create_from_rm_{line.id}")
@@ -2234,23 +2448,24 @@ def sales_allocate_order(request: HttpRequest, pk: int) -> HttpResponse:
                         "raw_materials": picks if create_from_rm else [],
                     }
                 )
-            try:
-                allocate_sales_order(
-                    so,
-                    {
-                        "items": items_payload,
-                        "allow_prerepack_allocation": allow_prerepack,
-                    },
-                )
-                msg = f"Allocations saved for {so.so_number}."
-                if ready_shipment:
-                    msg += " Mark Ready was cleared — Mark Ready again when packing dims are set."
-                messages.success(request, msg)
-                return redirect("slurp_ui:sales_orders")
-            except SellFlowError as e:
-                messages.error(request, e.message)
-            except Exception as e:
-                messages.error(request, str(e))
+            else:
+                try:
+                    allocate_sales_order(
+                        so,
+                        {
+                            "items": items_payload,
+                            "allow_prerepack_allocation": allow_prerepack,
+                        },
+                    )
+                    msg = f"Allocations saved for {so.so_number}."
+                    if ready_shipment:
+                        msg += " Mark Ready was cleared — Mark Ready again when packing dims are set."
+                    messages.success(request, msg)
+                    return redirect("slurp_ui:sales_orders")
+                except SellFlowError as e:
+                    messages.error(request, e.message)
+                except Exception as e:
+                    messages.error(request, str(e))
 
     return render(
         request,
@@ -2261,9 +2476,11 @@ def sales_allocate_order(request: HttpRequest, pk: int) -> HttpResponse:
             line_lot_choices=line_lot_choices,
             is_reallocate=is_reallocate,
             clears_ready=bool(ready_shipment),
+            alloc_max_lots=ALLOC_MAX_LOTS_PER_LINE,
             port_status="full",
         ),
     )
+
 
 
 @login_required
@@ -2633,7 +2850,7 @@ def sales_order_detail(request: HttpRequest, pk: int) -> HttpResponse:
             "items__item",
             "items__allocated_lots__lot",
             "items__allocated_lots__lot__coa_certificate",
-            "items__allocated_lots__coa_customer_copy",
+            "items__allocated_lots__coa_customer_copies",
             "shipments__items",
             "invoices",
         ),
@@ -2692,17 +2909,25 @@ def sales_order_detail(request: HttpRequest, pk: int) -> HttpResponse:
     )
     coa_copies = []
     coa_master_certs = []
-    seen_cert = set()
-    for line in so.items.all():
-        for al in line.allocated_lots.all():
-            copy = getattr(al, "coa_customer_copy", None)
-            if copy:
-                coa_copies.append(copy)
-                continue
-            cert = getattr(al.lot, "coa_certificate", None) if al.lot_id else None
-            if cert and cert.id not in seen_cert:
-                seen_cert.add(cert.id)
-                coa_master_certs.append(cert)
+    from erp_core.coa_allocation import (
+        consolidate_customer_coas_for_sales_order,
+        customer_coa_button_label,
+    )
+
+    try:
+        coa_copies = consolidate_customer_coas_for_sales_order(so)
+    except Exception:
+        coa_copies = []
+    for copy in coa_copies:
+        copy.button_label = customer_coa_button_label(copy)
+    if not coa_copies:
+        seen_cert = set()
+        for line in so.items.all():
+            for al in line.allocated_lots.all():
+                cert = getattr(al.lot, "coa_certificate", None) if al.lot_id else None
+                if cert and cert.id not in seen_cert:
+                    seen_cert.add(cert.id)
+                    coa_master_certs.append(cert)
     return render(
         request,
         "slurp_ui/sales/order_detail.html",

@@ -45,7 +45,7 @@
     </div>
   </div>
   {% else %}
-  <form method="post">
+  <form method="post" id="alloc-form" data-max-lots="{{ alloc_max_lots|default:20 }}">
     {% csrf_token %}
     <div class="hs-card" style="margin-bottom:1rem">
       <div class="hs-card-body">
@@ -57,7 +57,7 @@
     </div>
 
     {% for row in line_lot_choices %}
-    <div class="hs-card" style="margin-bottom:1rem">
+    <div class="hs-card alloc-line-card" style="margin-bottom:1rem" data-line="{{ row.line.id }}">
       <div class="hs-card-header">
         <h3>{{ row.line.item.sku }}</h3>
         <span class="hs-muted" style="font-size:0.8rem">{{ row.line.item.name }}</span>
@@ -65,7 +65,16 @@
       <div class="hs-card-body">
         <div class="hs-props" style="border:none;padding:0 0 0.75rem">
           <div class="hs-prop"><span class="k">Ordered</span><span class="v">{{ row.line.quantity_ordered|floatformat:2 }} {{ row.line.item.unit_of_measure }}</span></div>
-          <div class="hs-prop"><span class="k">Already allocated</span><span class="v">{{ row.line.quantity_allocated|floatformat:2 }} {{ row.line.item.unit_of_measure }}</span></div>
+          {% if is_reallocate %}
+          <div class="hs-prop"><span class="k">Currently held</span><span class="v">{{ row.line.quantity_allocated|floatformat:2 }} {{ row.line.item.unit_of_measure }}</span></div>
+          {% endif %}
+          <div class="hs-prop">
+            <span class="k">Remaining to allocate</span>
+            <span class="v alloc-remaining"
+                  data-line="{{ row.line.id }}"
+                  data-ordered="{{ row.line.quantity_ordered }}"
+                  data-uom="{{ row.line.item.unit_of_measure }}">—</span>
+          </div>
           <div class="hs-prop"><span class="k">Type</span><span class="v">{{ row.line.item.item_type|default:"—" }}</span></div>
         </div>
         {% if row.line.item.item_type == "distributed_item" %}
@@ -78,36 +87,85 @@
           Showing closed-repack (sellable) lots only. Check above or “Allow raw / pre-repack” to use vendor stock.
         </p>
         {% endif %}
-        {% for pick in row.picks %}
-        <div class="hs-form-grid" style="margin-top:0.5rem">
-          <div class="form-row" style="margin:0">
-            <label>Lot {% if not forloop.first %}#{{ forloop.counter }}{% endif %}</label>
-            <select name="lot_{{ row.line.id }}_{{ forloop.counter0 }}"
-                    class="alloc-lot-select"
-                    data-line="{{ row.line.id }}"
-                    data-sellable='[{% for lr in row.lots %}{"id":{{ lr.lot.id }},"label":"{{ lr.lot.lot_number|escapejs }} — avail {{ lr.available|floatformat:2 }} {{ row.line.item.unit_of_measure|escapejs }} ({{ lr.lot.status|escapejs }})"}{% if not forloop.last %},{% endif %}{% endfor %}]'
-                    data-raw='[{% for lr in row.raw_lots %}{"id":{{ lr.lot.id }},"label":"{{ lr.lot.lot_number|escapejs }} — avail {{ lr.available|floatformat:2 }} {{ row.line.item.unit_of_measure|escapejs }} ({{ lr.lot.status|escapejs }})"}{% if not forloop.last %},{% endif %}{% endfor %}]'>
-              <option value="">— {% if forloop.first %}Select lot{% else %}Optional{% endif %} —</option>
-              {% for lr in row.lots %}
-              <option value="{{ lr.lot.id }}"{% if pick and pick.lot_id == lr.lot.id %} selected{% endif %}>
-                {{ lr.lot.lot_number }} — avail {{ lr.available|floatformat:2 }} {{ row.line.item.unit_of_measure }} ({{ lr.lot.status }})
-              </option>
-              {% empty %}
-              {% if row.line.item.item_type == "distributed_item" %}
-              <option value="" disabled>No closed-repack lots available</option>
-              {% else %}
-              <option value="" disabled>No available lots</option>
-              {% endif %}
-              {% endfor %}
-            </select>
+        <div class="alloc-picks" data-line="{{ row.line.id }}" data-next-slot="{{ row.picks|length }}">
+          {% for pick in row.picks %}
+          <div class="hs-form-grid alloc-pick-row" style="margin-top:0.5rem" data-line="{{ row.line.id }}" data-slot="{{ forloop.counter0 }}">
+            <div class="form-row" style="margin:0">
+              <label>Lot {% if forloop.counter > 1 %}#{{ forloop.counter }}{% endif %}</label>
+              <select name="lot_{{ row.line.id }}_{{ forloop.counter0 }}"
+                      class="alloc-lot-select"
+                      data-line="{{ row.line.id }}"
+                      data-sellable='[{% for lr in row.lots %}{"id":{{ lr.lot.id }},"label":"{{ lr.label|escapejs }}","avail":{{ lr.available }},"partial":{% if lr.is_partial %}true{% else %}false{% endif %},"campaign":false}{% if not forloop.last %},{% endif %}{% endfor %}]'
+                      data-campaign='[{% for lr in row.campaign_lots %}{"id":{{ lr.lot.id }},"label":"{{ lr.label|escapejs }}","avail":{{ lr.available }},"partial":{% if lr.is_partial %}true{% else %}false{% endif %},"campaign":true}{% if not forloop.last %},{% endif %}{% endfor %}]'
+                      data-raw='[{% for lr in row.raw_lots %}{"id":{{ lr.lot.id }},"label":"{{ lr.label|escapejs }}","avail":{{ lr.available }},"partial":{% if lr.is_partial %}true{% else %}false{% endif %},"campaign":false}{% if not forloop.last %},{% endif %}{% endfor %}]'
+                      data-raw-campaign='[{% for lr in row.raw_campaign_lots %}{"id":{{ lr.lot.id }},"label":"{{ lr.label|escapejs }}","avail":{{ lr.available }},"partial":{% if lr.is_partial %}true{% else %}false{% endif %},"campaign":true}{% if not forloop.last %},{% endif %}{% endfor %}]'>
+                <option value="">— {% if forloop.first %}Select lot{% else %}Optional{% endif %} —</option>
+                {% if row.partial_lots %}
+                <optgroup label="Partials (prefer these)">
+                  {% for lr in row.partial_lots %}
+                  <option value="{{ lr.lot.id }}" data-avail="{{ lr.available }}"{% if pick and pick.lot_id == lr.lot.id %} selected{% endif %}>
+                    {{ lr.label }}
+                  </option>
+                  {% endfor %}
+                </optgroup>
+                {% endif %}
+                {% if row.full_lots %}
+                <optgroup label="Full packs">
+                  {% for lr in row.full_lots %}
+                  <option value="{{ lr.lot.id }}" data-avail="{{ lr.available }}"{% if pick and pick.lot_id == lr.lot.id %} selected{% endif %}>
+                    {{ lr.label }}
+                  </option>
+                  {% endfor %}
+                </optgroup>
+                {% endif %}
+                {% if row.campaign_partial_lots %}
+                <optgroup label="Campaign · Partials">
+                  {% for lr in row.campaign_partial_lots %}
+                  <option value="{{ lr.lot.id }}" data-avail="{{ lr.available }}"{% if pick and pick.lot_id == lr.lot.id %} selected{% endif %}>
+                    {{ lr.label }}
+                  </option>
+                  {% endfor %}
+                </optgroup>
+                {% endif %}
+                {% if row.campaign_full_lots %}
+                <optgroup label="Campaign · Full packs">
+                  {% for lr in row.campaign_full_lots %}
+                  <option value="{{ lr.lot.id }}" data-avail="{{ lr.available }}"{% if pick and pick.lot_id == lr.lot.id %} selected{% endif %}>
+                    {{ lr.label }}
+                  </option>
+                  {% endfor %}
+                </optgroup>
+                {% endif %}
+                {% if not row.partial_lots and not row.full_lots and not row.campaign_partial_lots and not row.campaign_full_lots %}
+                {% if row.line.item.item_type == "distributed_item" %}
+                <option value="" disabled>No closed-repack lots available</option>
+                {% else %}
+                <option value="" disabled>No available lots</option>
+                {% endif %}
+                {% endif %}
+              </select>
+            </div>
+            <div class="form-row" style="margin:0">
+              <label>Qty</label>
+              <div style="display:flex;gap:0.4rem;align-items:center">
+                <input name="qty_{{ row.line.id }}_{{ forloop.counter0 }}" type="number" step="any" min="0"
+                       class="alloc-qty-input" data-line="{{ row.line.id }}"
+                       style="flex:1;min-width:0"
+                       value="{% if pick %}{{ pick.qty|floatformat:2 }}{% else %}0{% endif %}" />
+                <button type="button" class="hs-btn hs-btn-sm alloc-fill-remaining" data-line="{{ row.line.id }}"
+                        title="Fill min(line remaining, lot available)">Fill rem.</button>
+              </div>
+            </div>
           </div>
-          <div class="form-row" style="margin:0">
-            <label>Qty</label>
-            <input name="qty_{{ row.line.id }}_{{ forloop.counter0 }}" type="number" step="any" min="0"
-                   value="{% if pick %}{{ pick.qty|floatformat:2 }}{% elif forloop.first %}{{ row.line.quantity_ordered|floatformat:2 }}{% endif %}" />
-          </div>
+          {% endfor %}
         </div>
-        {% endfor %}
+        <div style="margin-top:0.65rem">
+          <button type="button" class="hs-btn hs-btn-sm alloc-add-lot" data-line="{{ row.line.id }}">+ Add lot</button>
+        </div>
+        <p class="hs-muted alloc-dup-warn" data-line="{{ row.line.id }}" hidden
+           style="font-size:0.82rem;margin:0.5rem 0 0;color:#b45309">
+          Same lot selected more than once on this line — combine into one pick.
+        </p>
       </div>
     </div>
     {% empty %}
@@ -121,6 +179,9 @@
   </form>
   <script>
   (function () {
+    var form = document.getElementById('alloc-form');
+    var maxLots = form ? (parseInt(form.getAttribute('data-max-lots') || '20', 10) || 20) : 20;
+
     function fillSelect(sel, rows, placeholder) {
       var cur = sel.value;
       sel.innerHTML = '';
@@ -136,12 +197,37 @@
         sel.appendChild(dis);
         return;
       }
+      var partials = [];
+      var fulls = [];
+      var campPartials = [];
+      var campFulls = [];
       rows.forEach(function (r) {
-        var opt = document.createElement('option');
-        opt.value = String(r.id);
-        opt.textContent = r.label;
-        sel.appendChild(opt);
+        if (r.campaign) {
+          if (r.partial) campPartials.push(r);
+          else campFulls.push(r);
+        } else if (r.partial) {
+          partials.push(r);
+        } else {
+          fulls.push(r);
+        }
       });
+      function addGroup(label, list) {
+        if (!list.length) return;
+        var og = document.createElement('optgroup');
+        og.label = label;
+        list.forEach(function (r) {
+          var opt = document.createElement('option');
+          opt.value = String(r.id);
+          opt.textContent = r.label;
+          if (r.avail != null) opt.setAttribute('data-avail', String(r.avail));
+          og.appendChild(opt);
+        });
+        sel.appendChild(og);
+      }
+      addGroup('Partials (prefer these)', partials);
+      addGroup('Full packs', fulls);
+      addGroup('Campaign · Partials', campPartials);
+      addGroup('Campaign · Full packs', campFulls);
       if (cur && Array.prototype.some.call(sel.options, function (o) { return o.value === cur; })) {
         sel.value = cur;
       }
@@ -149,38 +235,201 @@
     function parse(el, key) {
       try { return JSON.parse(el.getAttribute(key) || '[]'); } catch (e) { return []; }
     }
+    function fmt(n) {
+      if (!isFinite(n)) return '—';
+      var t = Math.round(n * 100) / 100;
+      return (Math.abs(t - Math.round(t)) < 1e-9) ? String(Math.round(t)) : t.toFixed(2);
+    }
+    function lotAvail(sel) {
+      if (!sel || !sel.value) return 0;
+      var opt = sel.options[sel.selectedIndex];
+      var a = parseFloat(opt && opt.getAttribute('data-avail'));
+      return isFinite(a) ? a : 0;
+    }
+    function lineOrdered(lineId) {
+      var el = document.querySelector('.alloc-remaining[data-line="' + lineId + '"]');
+      return el ? (parseFloat(el.getAttribute('data-ordered') || '0') || 0) : 0;
+    }
+    function pickedExcluding(lineId, excludeInp) {
+      var picked = 0;
+      document.querySelectorAll('.alloc-qty-input[data-line="' + lineId + '"]').forEach(function (inp) {
+        if (inp === excludeInp) return;
+        var slot = inp.name && inp.name.replace(/^qty_/, 'lot_');
+        var lotSel = slot ? document.querySelector('select[name="' + slot + '"]') : null;
+        if (lotSel && !lotSel.value) return;
+        var q = parseFloat(inp.value || '0');
+        if (isFinite(q) && q > 0) picked += q;
+      });
+      return picked;
+    }
+    function fillRemainingForRow(btn) {
+      var row = btn.closest('.alloc-pick-row');
+      if (!row) return;
+      var lineId = btn.getAttribute('data-line');
+      var sel = row.querySelector('.alloc-lot-select');
+      var inp = row.querySelector('.alloc-qty-input');
+      if (!sel || !inp) return;
+      if (!sel.value) {
+        alert('Select a lot first.');
+        return;
+      }
+      var need = lineOrdered(lineId) - pickedExcluding(lineId, inp);
+      var avail = lotAvail(sel);
+      var qty = Math.max(0, Math.min(need, avail));
+      inp.value = fmt(qty);
+      updateLineRemaining(lineId);
+    }
+    function updateLineRemaining(lineId) {
+      var el = document.querySelector('.alloc-remaining[data-line="' + lineId + '"]');
+      if (!el) return;
+      var ordered = parseFloat(el.getAttribute('data-ordered') || '0') || 0;
+      var uom = el.getAttribute('data-uom') || '';
+      var picked = 0;
+      document.querySelectorAll('.alloc-qty-input[data-line="' + lineId + '"]').forEach(function (inp) {
+        var slot = inp.name && inp.name.replace(/^qty_/, 'lot_');
+        var lotSel = slot ? document.querySelector('select[name="' + slot + '"]') : null;
+        if (lotSel && !lotSel.value) return;
+        var q = parseFloat(inp.value || '0');
+        if (isFinite(q) && q > 0) picked += q;
+      });
+      var rem = ordered - picked;
+      el.textContent = fmt(rem) + (uom ? (' ' + uom) : '');
+      el.style.color = '';
+      el.style.fontWeight = '';
+      if (rem < -1e-6) {
+        el.style.color = '#b91c1c';
+        el.style.fontWeight = '600';
+        el.textContent = fmt(rem) + (uom ? (' ' + uom) : '') + ' (over)';
+      } else if (Math.abs(rem) <= 1e-6) {
+        el.style.color = '#15803d';
+        el.style.fontWeight = '600';
+      }
+      var warn = document.querySelector('.alloc-dup-warn[data-line="' + lineId + '"]');
+      var seen = {};
+      var dup = false;
+      document.querySelectorAll('.alloc-lot-select[data-line="' + lineId + '"]').forEach(function (sel) {
+        if (!sel.value) return;
+        if (seen[sel.value]) dup = true;
+        seen[sel.value] = true;
+      });
+      if (warn) warn.hidden = !dup;
+    }
+    function buildRowsForSelect(sel) {
+      var fromRm = document.querySelector('.alloc-create-from-rm[data-line="' + sel.getAttribute('data-line') + '"]');
+      var allow = document.querySelector('input[name="allow_prerepack_allocation"]');
+      var useRaw = (fromRm && fromRm.checked) || (allow && allow.checked);
+      // Always include campaign lots (separate optgroups in fillSelect).
+      var rows = parse(sel, 'data-sellable').concat(parse(sel, 'data-campaign'));
+      if (useRaw) {
+        rows = rows.concat(parse(sel, 'data-raw')).concat(parse(sel, 'data-raw-campaign'));
+      }
+      return rows;
+    }
     function refreshLine(lineId) {
       var fromRm = document.querySelector('.alloc-create-from-rm[data-line="' + lineId + '"]');
       var allow = document.querySelector('input[name="allow_prerepack_allocation"]');
       var useRaw = (fromRm && fromRm.checked) || (allow && allow.checked);
       document.querySelectorAll('.alloc-lot-select[data-line="' + lineId + '"]').forEach(function (sel, idx) {
-        var sellable = parse(sel, 'data-sellable');
-        var raw = parse(sel, 'data-raw');
-        var rows = useRaw ? sellable.concat(raw) : sellable;
         var ph = idx === 0 ? '— Select lot —' : '— Optional —';
-        fillSelect(sel, rows, ph);
+        fillSelect(sel, buildRowsForSelect(sel), ph);
       });
       var hint = document.querySelector('.alloc-di-hint[data-line="' + lineId + '"]');
       if (hint) {
         hint.style.display = useRaw ? 'none' : '';
       }
+      updateLineRemaining(lineId);
     }
+    function bindPickRow(row) {
+      var sel = row.querySelector('.alloc-lot-select');
+      var inp = row.querySelector('.alloc-qty-input');
+      var fillBtn = row.querySelector('.alloc-fill-remaining');
+      if (sel && !sel._bound) {
+        sel._bound = true;
+        sel.addEventListener('change', function () {
+          var lineId = sel.getAttribute('data-line');
+          if (!sel.value) {
+            updateLineRemaining(lineId);
+            return;
+          }
+          var clash = false;
+          document.querySelectorAll('.alloc-lot-select[data-line="' + lineId + '"]').forEach(function (other) {
+            if (other !== sel && other.value && other.value === sel.value) clash = true;
+          });
+          if (clash) {
+            alert('That lot is already selected on this line. Combine qty into one pick.');
+            sel.value = '';
+          }
+          updateLineRemaining(lineId);
+        });
+      }
+      if (inp && !inp._bound) {
+        inp._bound = true;
+        inp.addEventListener('input', function () {
+          updateLineRemaining(inp.getAttribute('data-line'));
+        });
+      }
+      if (fillBtn && !fillBtn._bound) {
+        fillBtn._bound = true;
+        fillBtn.addEventListener('click', function () { fillRemainingForRow(fillBtn); });
+      }
+    }
+    function addLotRow(lineId) {
+      var wrap = document.querySelector('.alloc-picks[data-line="' + lineId + '"]');
+      if (!wrap) return;
+      var rows = wrap.querySelectorAll('.alloc-pick-row');
+      if (rows.length >= maxLots) {
+        alert('Maximum ' + maxLots + ' lots per line.');
+        return;
+      }
+      var slot = parseInt(wrap.getAttribute('data-next-slot') || String(rows.length), 10) || rows.length;
+      var proto = rows[0];
+      if (!proto) return;
+      var clone = proto.cloneNode(true);
+      clone.setAttribute('data-slot', String(slot));
+      var sel = clone.querySelector('.alloc-lot-select');
+      var inp = clone.querySelector('.alloc-qty-input');
+      var label = clone.querySelector('label');
+      if (label) label.textContent = 'Lot #' + (rows.length + 1);
+      if (sel) {
+        sel.name = 'lot_' + lineId + '_' + slot;
+        sel.value = '';
+        sel._bound = false;
+      }
+      if (inp) {
+        inp.name = 'qty_' + lineId + '_' + slot;
+        inp.value = '0';
+        inp._bound = false;
+      }
+      var fillBtn = clone.querySelector('.alloc-fill-remaining');
+      if (fillBtn) fillBtn._bound = false;
+      wrap.appendChild(clone);
+      wrap.setAttribute('data-next-slot', String(slot + 1));
+      bindPickRow(clone);
+      fillSelect(sel, buildRowsForSelect(sel), '— Optional —');
+      updateLineRemaining(lineId);
+    }
+
     document.querySelectorAll('.alloc-create-from-rm').forEach(function (cb) {
       cb.addEventListener('change', function () { refreshLine(cb.getAttribute('data-line')); });
     });
     var allow = document.querySelector('input[name="allow_prerepack_allocation"]');
     if (allow) {
       allow.addEventListener('change', function () {
-        document.querySelectorAll('.alloc-create-from-rm').forEach(function (cb) {
-          refreshLine(cb.getAttribute('data-line'));
-        });
-        // Non-DI lines have no create-from-rm; still refresh any DI selects via all lines
-        document.querySelectorAll('.alloc-lot-select').forEach(function (sel) {
-          var lid = sel.getAttribute('data-line');
+        document.querySelectorAll('.alloc-line-card').forEach(function (card) {
+          var lid = card.getAttribute('data-line');
           if (lid) refreshLine(lid);
         });
       });
     }
+    document.querySelectorAll('.alloc-add-lot').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        addLotRow(btn.getAttribute('data-line'));
+      });
+    });
+    document.querySelectorAll('.alloc-pick-row').forEach(bindPickRow);
+    document.querySelectorAll('.alloc-remaining').forEach(function (el) {
+      updateLineRemaining(el.getAttribute('data-line'));
+    });
   })();
   </script>
   {% endif %}

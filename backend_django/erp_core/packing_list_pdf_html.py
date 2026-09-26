@@ -48,6 +48,40 @@ def _fmt_qty_uom(qty, uom):
     return f"{s} {uom}".strip() if (uom or "").strip() else s
 
 
+def _lot_campaign_and_number(lot, lot_number_for_display=None):
+    """Campaign code (if multi-batch) + batch lot # — same rule as pick list."""
+    from .campaign_coa import lot_campaign
+
+    ln = (lot_number_for_display or getattr(lot, "lot_number", None) or "").strip() or "—"
+    camp = lot_campaign(lot) if lot else None
+    camp_code = ((camp.campaign_code if camp else "") or "").strip()
+    return camp_code, ln
+
+
+def _lot_entry(lot, qty, uom, lot_number_for_display=None):
+    camp_code, ln = _lot_campaign_and_number(lot, lot_number_for_display)
+    q = float(qty or 0)
+    return {
+        "campaign_code": camp_code,
+        "lot_number": ln,
+        "qty": _fmt_qty_uom(q, uom),
+        "qty_value": q,
+        "uom": (uom or "").strip(),
+    }
+
+
+def _format_lot_entries_plain(entries):
+    """Fallback single-line text when structured lot_entries are empty/unused."""
+    parts = []
+    for e in entries or []:
+        camp = (e.get("campaign_code") or "").strip()
+        ln = (e.get("lot_number") or "").strip() or "—"
+        qty = (e.get("qty") or "").strip()
+        label = f"{camp} / {ln}" if camp else ln
+        parts.append(f"{label} ({qty})" if qty else label)
+    return "; ".join(parts)
+
+
 def _lots_maps_from_allocations(shipment):
     """
     Lot display from SalesOrderLot allocations (Mark Ready / awaiting pickup).
@@ -92,27 +126,22 @@ def _lots_maps_from_allocations(shipment):
                 if lot.item_id
                 else item_uom
             ) or item_uom
-            qty_part = _fmt_qty_uom(take, uom)
-            lot_part = (lot.lot_number or "").strip() or "—"
-            fragment = f"{lot_part} ({qty_part})"
+            entry = _lot_entry(lot, take, uom)
             if so_item.item_id:
-                by_item[so_item.item_id].append(fragment)
+                by_item[so_item.item_id].append(entry)
             if sku_key:
-                by_sku[sku_key].append(fragment)
+                by_sku[sku_key].append(entry)
             # Also key by lot's item id when it differs from SO line item
             if lot.item_id and lot.item_id != so_item.item_id:
-                by_item[lot.item_id].append(fragment)
+                by_item[lot.item_id].append(entry)
             remaining -= take
 
-    return (
-        {k: "; ".join(v) for k, v in by_item.items()},
-        {k: "; ".join(v) for k, v in by_sku.items()},
-    )
+    return dict(by_item), dict(by_sku)
 
 
 def _lots_maps_for_shipment(shipment):
     """
-    Build two lookup maps for lot display strings (lot # + qty/UoM):
+    Build two lookup maps for lot display entries (campaign + batch lot # + qty/UoM):
 
     - By Item.pk on the **lot** (warehouse lot's item row)
     - By **SKU** (stripped) — needed when the SO line points at a different Item row than the
@@ -138,13 +167,11 @@ def _lots_maps_for_shipment(shipment):
         if dedupe_key in seen:
             return
         seen.add(dedupe_key)
-        qty_part = _fmt_qty_uom(float(qty or 0), uom)
-        lot_part = (lot_number_for_display or lot.lot_number or "").strip() or "—"
-        fragment = f"{lot_part} ({qty_part})"
-        by_item[lot.item_id].append(fragment)
+        entry = _lot_entry(lot, qty, uom, lot_number_for_display)
+        by_item[lot.item_id].append(entry)
         sku_key = (getattr(lot.item, "sku", None) or "").strip()
         if sku_key:
-            by_sku[sku_key].append(fragment)
+            by_sku[sku_key].append(entry)
 
     logs = (
         LotTransactionLog.objects.filter(
@@ -176,10 +203,7 @@ def _lots_maps_for_shipment(shipment):
         _append_from_lot(lot, lot.lot_number, qty, uom)
 
     if by_item or by_sku:
-        return (
-            {k: "; ".join(v) for k, v in by_item.items()},
-            {k: "; ".join(v) for k, v in by_sku.items()},
-        )
+        return dict(by_item), dict(by_sku)
 
     return _lots_maps_from_allocations(shipment)
 
@@ -204,21 +228,35 @@ def _build_shipment_line_items(shipment):
             else str(qty)
         )
         qty_with_uom = f"{qty_display} {uom}".strip() if uom else qty_display
-        lot_str = lots_by_item_id.get(so_item.item_id, "") or (
-            lots_by_sku.get(sku_key, "") if sku_key else ""
+        lot_entries = list(lots_by_item_id.get(so_item.item_id) or []) or (
+            list(lots_by_sku.get(sku_key) or []) if sku_key else []
         )
-        if not lot_str:
-            lot_str = "Drop ship" if getattr(sales_order, "drop_ship", False) else "—"
+        if not lot_entries:
+            if getattr(sales_order, "drop_ship", False):
+                lot_str = "Drop ship"
+            else:
+                lot_str = "—"
+        else:
+            lot_str = _format_lot_entries_plain(lot_entries)
         items.append(
             {
                 "sku": sku[:40],
                 "description": (name or sku)[:50],
                 "quantity": qty_with_uom[:24],
+                "lot_entries": lot_entries,
                 "lots": lot_str[:500],
             }
         )
     if not items:
-        items = [{"sku": "—", "description": "—", "quantity": "—", "lots": "—"}]
+        items = [
+            {
+                "sku": "—",
+                "description": "—",
+                "quantity": "—",
+                "lots": "—",
+                "lot_entries": [],
+            }
+        ]
     return items
 
 

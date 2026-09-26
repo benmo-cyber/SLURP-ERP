@@ -25,6 +25,8 @@
     .items-table .col-qty { text-align: right; width: 14%; }
     .items-table .col-sku { width: 16%; }
     .items-table .col-lot { width: 18%; font-size: 8.5pt; }
+    .lot-campaign { font-weight: bold; display: block; line-height: 1.2; }
+    .lot-batch { display: block; color: #333; font-size: 8pt; margin-top: 1px; }
     .sign-off-section { margin-top: 18pt; padding-top: 10pt; border-top: 1px solid #333; }
     .sign-off-table { width: 100%; border-collapse: collapse; font-size: 9pt; }
     .sign-off-table td { width: 50%; vertical-align: bottom; padding: 8pt 12pt 0 0; }
@@ -92,7 +94,14 @@
       <tr>
         <td class="col-sku">{{ row.sku }}</td>
         <td>{{ row.description }}</td>
-        <td class="col-lot">{{ row.lot_number }}</td>
+        <td class="col-lot">
+          {% if row.campaign_code %}
+          <span class="lot-campaign">{{ row.campaign_code }}</span>
+          <span class="lot-batch">{{ row.lot_number }}</span>
+          {% else %}
+          {{ row.lot_number }}
+          {% endif %}
+        </td>
         <td class="col-qty">{{ row.quantity }}</td>
       </tr>
       {% endfor %}

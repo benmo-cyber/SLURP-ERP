@@ -11,13 +11,13 @@
 {% block main %}
 <div class="hs-bleed" style="padding:1.25rem 1.5rem 2rem">
   <div class="hs-pills" style="margin-bottom:1rem">
-    <a class="hs-pill {% if tab == 'register' %}active{% endif %}" href="{% url 'slurp_ui:finance_invoices' %}?tab=register{% if status_filter %}&amp;status={{ status_filter|urlencode }}{% endif %}">Invoice register</a>
+    <a class="hs-pill {% if tab == 'register' %}active{% endif %}" href="{% url 'slurp_ui:finance_invoices' %}?tab=register">Invoice register</a>
     <a class="hs-pill {% if tab == 'ar' %}active{% endif %}" href="{% url 'slurp_ui:finance_invoices' %}?tab=ar{% if ar_status_filter %}&amp;ar_status={{ ar_status_filter|urlencode }}{% endif %}">Receivables</a>
   </div>
 
   {% if tab == 'ar' %}
   <div class="hs-toolbar">
-    <form method="get" style="display:flex;gap:0.5rem;align-items:center">
+    <form method="get" style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap">
       <input type="hidden" name="tab" value="ar" />
       <select name="ar_status" onchange="this.form.submit()" class="hs-search" style="max-width:12rem">
         <option value="">All statuses</option>
@@ -26,6 +26,8 @@
         <option value="paid" {% if ar_status_filter == "paid" %}selected{% endif %}>Paid</option>
         <option value="overdue" {% if ar_status_filter == "overdue" %}selected{% endif %}>Overdue</option>
       </select>
+      <input class="hs-search" name="q" value="{{ request.GET.q }}" placeholder="Customer, invoice #, SO…" style="min-width:14rem" />
+      <button type="submit" class="hs-btn hs-btn-sm">Search</button>
     </form>
   </div>
 
@@ -74,13 +76,50 @@
   </div>
 
   {% else %}
-  <div class="hs-toolbar">
-    <form method="get" style="display:flex;gap:0.5rem;align-items:end">
+  <div class="hs-stat-row" style="margin-bottom:0.85rem">
+    <a class="hs-stat{% if status_filter == 'active' and not type_filter %} is-active{% endif %}"
+       href="{% url 'slurp_ui:finance_invoices' %}?tab=register&amp;status=active{% if show_all_dates %}&amp;all=1{% endif %}{% if date_from and not show_all_dates %}&amp;from={{ date_from }}{% endif %}{% if date_to %}&amp;to={{ date_to }}{% endif %}{% if q %}&amp;q={{ q|urlencode }}{% endif %}">
+      <div class="label">Active</div>
+      <div class="value">{{ register_counts.active|default:0 }}</div>
+    </a>
+    <a class="hs-stat{% if status_filter == 'draft' %} is-active{% endif %}"
+       href="{% url 'slurp_ui:finance_invoices' %}?tab=register&amp;status=draft{% if show_all_dates %}&amp;all=1{% endif %}{% if date_from and not show_all_dates %}&amp;from={{ date_from }}{% endif %}{% if date_to %}&amp;to={{ date_to }}{% endif %}{% if q %}&amp;q={{ q|urlencode }}{% endif %}">
+      <div class="label">Draft</div>
+      <div class="value">{{ register_counts.draft|default:0 }}</div>
+    </a>
+    <a class="hs-stat{% if status_filter == 'sent' %} is-active{% endif %}"
+       href="{% url 'slurp_ui:finance_invoices' %}?tab=register&amp;status=sent{% if show_all_dates %}&amp;all=1{% endif %}{% if date_from and not show_all_dates %}&amp;from={{ date_from }}{% endif %}{% if date_to %}&amp;to={{ date_to }}{% endif %}{% if q %}&amp;q={{ q|urlencode }}{% endif %}">
+      <div class="label">Issued</div>
+      <div class="value">{{ register_counts.sent|default:0 }}</div>
+    </a>
+    <a class="hs-stat{% if type_filter == 'credit' %} is-active{% endif %}"
+       href="{% url 'slurp_ui:finance_invoices' %}?tab=register&amp;type=credit{% if show_all_dates %}&amp;all=1{% endif %}{% if date_from and not show_all_dates %}&amp;from={{ date_from }}{% endif %}{% if date_to %}&amp;to={{ date_to }}{% endif %}{% if q %}&amp;q={{ q|urlencode }}{% endif %}">
+      <div class="label">Credits</div>
+      <div class="value">{{ register_counts.credit|default:0 }}</div>
+    </a>
+  </div>
+
+  <div class="hs-toolbar" style="margin-bottom:0.75rem">
+    <form method="get" style="display:flex;gap:0.5rem;align-items:end;flex-wrap:wrap;width:100%">
       <input type="hidden" name="tab" value="register" />
+      {% if show_all_dates %}<input type="hidden" name="all" value="1" />{% endif %}
+      <div class="form-row" style="margin:0;flex:1;min-width:12rem">
+        <label for="q">Search</label>
+        <input id="q" class="hs-search" name="q" value="{{ q }}" placeholder="Doc #, customer, SO…" style="width:100%" />
+      </div>
+      <div class="form-row" style="margin:0">
+        <label for="type">Type</label>
+        <select id="type" name="type">
+          <option value="" {% if not type_filter %}selected{% endif %}>Invoices + credits</option>
+          <option value="invoice" {% if type_filter == 'invoice' %}selected{% endif %}>Invoices only</option>
+          <option value="credit" {% if type_filter == 'credit' %}selected{% endif %}>Credit memos only</option>
+        </select>
+      </div>
       <div class="form-row" style="margin:0">
         <label for="status">Status</label>
-        <select id="status" name="status" onchange="this.form.submit()">
-          <option value="">All</option>
+        <select id="status" name="status">
+          <option value="" {% if not status_filter %}selected{% endif %}>All statuses</option>
+          <option value="active" {% if status_filter == 'active' %}selected{% endif %}>Active (draft / issued / overdue)</option>
           <option value="draft" {% if status_filter == 'draft' %}selected{% endif %}>Draft</option>
           <option value="sent" {% if status_filter == 'sent' %}selected{% endif %}>Issued</option>
           <option value="paid" {% if status_filter == 'paid' %}selected{% endif %}>Paid</option>
@@ -88,19 +127,37 @@
           <option value="cancelled" {% if status_filter == 'cancelled' %}selected{% endif %}>Cancelled</option>
         </select>
       </div>
+      <div class="form-row" style="margin:0">
+        <label for="from">From</label>
+        <input id="from" type="date" name="from" value="{{ date_from }}" />
+      </div>
+      <div class="form-row" style="margin:0">
+        <label for="to">To</label>
+        <input id="to" type="date" name="to" value="{{ date_to }}" />
+      </div>
+      <button type="submit" class="hs-btn hs-btn-primary hs-btn-sm">Apply</button>
+      <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:finance_invoices' %}?tab=register&amp;status=active">Active only</a>
+      <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:finance_invoices' %}?tab=register&amp;all=1">All dates</a>
     </form>
   </div>
 
   <div class="hs-card">
     <div class="hs-card-header">
       <h3>Invoice register</h3>
+      {% if page_obj %}
+      <span class="hs-muted" style="font-size:0.8rem">
+        {{ page_obj.start_index }}–{{ page_obj.end_index }} of {{ page_obj.paginator.count }}
+        {% if not show_all_dates and date_from %} · last 12 months default{% endif %}
+      </span>
+      {% endif %}
     </div>
     <div class="hs-card-body tight">
       <table class="hs-table">
         <thead>
           <tr>
-            <th>Invoice #</th>
-            <th>Customer / vendor</th>
+            <th>Doc #</th>
+            <th>Type</th>
+            <th>Customer</th>
             <th>SO</th>
             <th>Status</th>
             <th>Date</th>
@@ -111,8 +168,14 @@
         </thead>
         <tbody>
           {% for inv in invoices %}
-          <tr>
-            <td><a class="hs-entity-name" href="{% url 'slurp_ui:finance_invoice_detail' inv.id %}">{{ inv.invoice_number }}</a></td>
+          <tr{% if inv.is_credit_child %} class="inv-credit-row"{% endif %}>
+            <td{% if inv.is_credit_child %} style="padding-left:1.35rem"{% endif %}>
+              <a class="hs-entity-name" href="{% url 'slurp_ui:finance_invoice_detail' inv.id %}">{{ inv.invoice_number }}</a>
+            </td>
+            <td>
+              {% if inv.invoice_type == 'credit' %}<span class="hs-badge warn">Credit memo</span>
+              {% else %}<span class="hs-badge">Invoice</span>{% endif %}
+            </td>
             <td>{{ inv.customer_vendor_name }}</td>
             <td>{{ inv.sales_order.so_number|default:"—" }}</td>
             <td>
@@ -123,22 +186,34 @@
               {% else %}<span class="hs-badge">{{ inv.status_label }}</span>{% endif %}
             </td>
             <td>{{ inv.invoice_date }}</td>
-            <td>{{ inv.due_date }}</td>
-            <td>{{ inv.grand_total|money:2 }}</td>
+            <td>{% if inv.invoice_type == 'credit' %}—{% else %}{{ inv.due_date }}{% endif %}</td>
+            <td>{% if inv.invoice_type == 'credit' %}({{ inv.grand_total|money:2 }}){% else %}{{ inv.grand_total|money:2 }}{% endif %}</td>
             <td>
               <div class="hs-queue-actions">
                 <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:finance_invoice_pdf' inv.id %}">PDF</a>
-                {% if inv.status == 'draft' %}
+                {% if inv.status == 'draft' and inv.invoice_type != 'credit' %}
                 <a class="hs-btn hs-btn-sm hs-btn-primary" href="{% url 'slurp_ui:finance_invoice_issue' inv.id %}">Issue</a>
                 {% endif %}
               </div>
             </td>
           </tr>
           {% empty %}
-          <tr><td colspan="8"><div class="hs-empty">No invoices.</div></td></tr>
+          <tr><td colspan="9"><div class="hs-empty">No documents match these filters.</div></td></tr>
           {% endfor %}
         </tbody>
       </table>
+
+      {% if page_obj and page_obj.paginator.num_pages > 1 %}
+      <div style="display:flex;gap:0.5rem;align-items:center;justify-content:flex-end;padding:0.75rem;flex-wrap:wrap">
+        <span class="hs-muted" style="font-size:0.85rem">Page {{ page_obj.number }} / {{ page_obj.paginator.num_pages }}</span>
+        {% if page_obj.has_previous %}
+        <a class="hs-btn hs-btn-sm" href="?tab=register&amp;page={{ page_obj.previous_page_number }}&amp;q={{ q|urlencode }}&amp;type={{ type_filter|urlencode }}&amp;status={{ status_filter|urlencode }}&amp;from={{ date_from|urlencode }}&amp;to={{ date_to|urlencode }}{% if show_all_dates %}&amp;all=1{% endif %}">Previous</a>
+        {% endif %}
+        {% if page_obj.has_next %}
+        <a class="hs-btn hs-btn-sm" href="?tab=register&amp;page={{ page_obj.next_page_number }}&amp;q={{ q|urlencode }}&amp;type={{ type_filter|urlencode }}&amp;status={{ status_filter|urlencode }}&amp;from={{ date_from|urlencode }}&amp;to={{ date_to|urlencode }}{% if show_all_dates %}&amp;all=1{% endif %}">Next</a>
+        {% endif %}
+      </div>
+      {% endif %}
     </div>
   </div>
   {% endif %}

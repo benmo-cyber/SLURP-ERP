@@ -1,0 +1,86 @@
+{% extends "slurp_ui/base.html" %}
+{% block title %}Extend campaign shelf life — SLURP{% endblock %}
+{% block content %}
+<div class="modal-page" style="max-width:520px;margin:2rem auto">
+  <h2>Extend campaign shelf life</h2>
+  <p style="margin:0 0 0.75rem">
+    Campaign <strong>{{ campaign.campaign_code }}</strong>
+    {% if campaign.item %}— {{ campaign.item.sku }} ({{ campaign.item.name }}){% endif %}
+  </p>
+  <p style="margin:0 0 1rem;font-size:0.9rem;color:#64748b;line-height:1.45">
+    New expiration = <strong>QC date + extension months</strong> (composite sample for the whole campaign).
+    Updates every member lot expiration, regenerates batch master COAs, and re-issues the campaign COA.
+  </p>
+  {% if cert.expiration_date %}
+  <p style="margin:0 0 1rem;font-size:0.9rem">
+    Current campaign exp {{ cert.expiration_date|date:"M j, Y" }}
+  </p>
+  {% endif %}
+
+  {% if prior_sle_count %}
+  <div style="padding:0.75rem 0.9rem;background:#fffbeb;border:1px solid #fcd34d;border-radius:8px;color:#92400e;font-size:0.9rem;line-height:1.45;margin-bottom:1rem">
+    This campaign already has <strong>{{ prior_sle_count }}</strong> shelf life extension{{ prior_sle_count|pluralize }}.
+    Generally there should be only one — confirm below if you still need another.
+  </div>
+  {% endif %}
+
+  <form method="post">
+    {% csrf_token %}
+
+    {% if prior_sle_count %}
+    <label style="display:flex;gap:0.5rem;align-items:flex-start;margin-bottom:0.85rem;font-size:0.9rem">
+      <input type="checkbox" name="confirm_additional_extension" value="1" required style="margin-top:0.2rem" />
+      <span>I confirm adding another shelf life extension beyond the usual single extension.</span>
+    </label>
+    {% endif %}
+
+    <div class="form-group" style="margin-bottom:0.85rem">
+      <label for="qc_date">QC date *</label>
+      <input id="qc_date" name="qc_date" type="date" required value="{{ today }}"
+             style="width:100%;max-width:14rem;padding:0.45rem 0.55rem" />
+    </div>
+
+    <div class="form-group" style="margin-bottom:0.85rem">
+      <label for="extension_months">Extension months *</label>
+      <input id="extension_months" name="extension_months" type="number" min="1" step="1" required
+             {% if default_months %}value="{{ default_months }}"{% endif %}
+             style="width:100%;max-width:8rem;padding:0.45rem 0.55rem" />
+      {% if default_months %}
+      <div style="font-size:0.82rem;color:#64748b;margin-top:0.25rem">
+        Prefills formula shelf life ({{ default_months }} mo) — change if re-QC grants a different term.
+      </div>
+      {% endif %}
+    </div>
+
+    {% if qc_name %}
+    <div class="form-group" style="margin-bottom:0.85rem">
+      <label for="qc_result_value">{{ qc_name }} (optional — composite)</label>
+      <input id="qc_result_value" name="qc_result_value" type="number" step="any"
+             style="width:100%;max-width:12rem;padding:0.45rem 0.55rem" />
+      <div style="font-size:0.82rem;color:#64748b;margin-top:0.25rem">
+        Spec
+        {% if qc_min is not None and qc_max is not None %}
+        {{ qc_min|floatformat }} – {{ qc_max|floatformat }}
+        {% elif qc_min is not None %}
+        ≥ {{ qc_min|floatformat }}
+        {% elif qc_max is not None %}
+        ≤ {{ qc_max|floatformat }}
+        {% else %}
+        (from formula)
+        {% endif %}
+      </div>
+    </div>
+    {% endif %}
+
+    <div class="form-group" style="margin-bottom:1rem">
+      <label for="notes">Notes</label>
+      <textarea id="notes" name="notes" rows="2" style="width:100%;padding:0.45rem 0.55rem"></textarea>
+    </div>
+
+    <div class="form-actions" style="display:flex;gap:0.5rem">
+      <button type="submit" class="btn btn-primary">Extend shelf life</button>
+      <a class="btn btn-secondary" href="{{ next_url }}">Cancel</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

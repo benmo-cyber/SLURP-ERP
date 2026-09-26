@@ -1,20 +1,32 @@
 {% extends "slurp_ui/base_module.html" %}
-{% block title %}{% if list_batch_type == 'repack' %}Repacks{% else %}Production{% endif %} — SLURP{% endblock %}
-{% block module_title %}{% if list_batch_type == 'repack' %}Repacks{% else %}Batch Tickets{% endif %}{% endblock %}
+{% block title %}Production — SLURP{% endblock %}
+{% block module_title %}Production{% endblock %}
 {% block header_actions %}
-  {% if list_batch_type == 'repack' %}
-  <a href="{% url 'slurp_ui:production_create_batch' %}?batch_type=repack" class="btn btn-primary">Create Repack</a>
-  {% else %}
-  <a href="{% url 'slurp_ui:production_create_batch' %}" class="btn btn-primary">Create Batch Ticket</a>
-  {% endif %}
+  <a href="{% url 'slurp_ui:production_create_batch' %}" class="btn btn-primary">Create Ticket</a>
 {% endblock %}
 {% block main %}
-{% if list_batch_type == 'production' %}
+<div style="display:flex;flex-wrap:wrap;gap:0.45rem;align-items:center;margin-bottom:0.85rem">
+  <span style="color:#64748b;font-size:0.85rem;margin-right:0.25rem">Flow:</span>
+  <a class="btn {% if list_flow == 'all' %}btn-primary{% else %}btn-secondary{% endif %}"
+     style="padding:0.3rem 0.7rem;font-size:0.85rem"
+     href="{% url 'slurp_ui:production' %}">All</a>
+  <a class="btn {% if list_flow == 'production' %}btn-primary{% else %}btn-secondary{% endif %}"
+     style="padding:0.3rem 0.7rem;font-size:0.85rem"
+     href="{% url 'slurp_ui:production' %}?flow=production">Batch tickets</a>
+  <a class="btn {% if list_flow == 'repack' %}btn-primary{% else %}btn-secondary{% endif %}"
+     style="padding:0.3rem 0.7rem;font-size:0.85rem"
+     href="{% url 'slurp_ui:production' %}?flow=repack">Repacks</a>
+  <a class="btn {% if list_flow == 'rework' %}btn-primary{% else %}btn-secondary{% endif %}"
+     style="padding:0.3rem 0.7rem;font-size:0.85rem"
+     href="{% url 'slurp_ui:production' %}?flow=rework">Rework</a>
+</div>
+
+{% if list_flow == 'all' or list_flow == 'production' %}
 <form method="post" action="{% url 'slurp_ui:production_campaign_link' %}" id="campaign-batch-form">
   {% csrf_token %}
   <div style="display:flex;flex-wrap:wrap;gap:0.5rem;align-items:center;margin-bottom:0.85rem">
     <button type="submit" name="action" value="link" class="btn btn-primary"
-            onclick="return confirm('Link selected tickets into one campaign (same parent family + same ISO week)?');">
+            onclick="return confirm('Link selected tickets into one campaign (need 2+, same parent family + same ISO week)?');">
       Link campaign
     </button>
     <button type="submit" name="action" value="unlink" class="btn btn-secondary"
@@ -23,17 +35,18 @@
       Unlink campaign
     </button>
     <span style="color:#64748b;font-size:0.85rem">
-      Select tickets with the same parent family and production week. Unlink before moving a ticket to another week.
+      Select batch tickets with the same parent family and production week.
     </span>
   </div>
 </form>
 {% endif %}
+
 <table class="data-table">
   <thead>
     <tr>
-      {% if list_batch_type == 'production' %}<th style="width:2rem"></th>{% endif %}
+      {% if show_campaign %}<th style="width:2rem"></th>{% endif %}
       <th>Batch #</th>
-      <th>Type</th>
+      <th>Flow</th>
       <th>Finished good</th>
       <th>Status</th>
       <th>Ticket / Yield</th>
@@ -46,16 +59,25 @@
     {% for row in batch_rows %}
     {% with b=row.batch %}
     <tr>
-      {% if list_batch_type == 'production' %}
+      {% if show_campaign %}
       <td>
+        {% if b.batch_type == 'production' %}
         <input type="checkbox" name="batch_ids" value="{{ b.id }}" form="campaign-batch-form" />
+        {% endif %}
       </td>
       {% endif %}
       <td><a href="{% url 'slurp_ui:production_batch_detail' b.id %}">{{ b.batch_number }}</a></td>
-      <td>{{ b.batch_type }}</td>
+      <td>
+        <span class="partial-chip" style="
+          {% if b.batch_type == 'repack' %}background:#e0e7ff;color:#3730a3
+          {% elif b.batch_type == 'rework' %}background:#ffedd5;color:#9a3412
+          {% else %}background:#ecfdf5;color:#047857{% endif %}">
+          {{ row.flow_label }}
+        </span>
+      </td>
       <td>{{ b.finished_good_item.sku }}</td>
       <td>{{ b.status }}</td>
-      <td title="Ticket = planned size. Yield = quantity actual minus spill/waste (net). Pack breakout = full packs + remainder of that yield (partials to 0.01).">
+      <td title="Ticket = planned size. Yield = quantity actual minus spill/waste (net).">
         <span style="white-space:nowrap">
           <span style="color:#64748b;font-size:0.75rem;font-weight:650;text-transform:uppercase;letter-spacing:0.04em">Ticket</span>
           {{ row.ticket_display|floatformat:2 }} {{ row.display_uom }}
@@ -84,24 +106,26 @@
            href="{% url 'slurp_ui:production_batch_detail' b.id %}">Detail</a>
         <a class="btn btn-secondary" style="padding:0.35rem 0.7rem;font-size:0.85rem"
            href="{% url 'slurp_ui:production_batch_pdf' b.id %}" target="_blank">PDF</a>
-        {% if b.status != 'closed' %}
+        {% if row.can_adjust %}
         <a class="btn btn-secondary" style="padding:0.35rem 0.7rem;font-size:0.85rem"
            href="{% url 'slurp_ui:production_adjust_batch' b.id %}">Adjust</a>
+        {% endif %}
         {% if row.can_close %}
         <a class="btn btn-primary" style="padding:0.35rem 0.7rem;font-size:0.85rem"
            href="{% url 'slurp_ui:production_close_batch' b.id %}">Close</a>
-        {% else %}
+        {% elif b.status != 'closed' %}
         <span class="btn btn-secondary" style="padding:0.35rem 0.7rem;font-size:0.85rem;opacity:0.55;cursor:not-allowed"
               title="{{ row.close_blocked_reason }}">Close</span>
         {% endif %}
-        <button type="button" class="btn btn-secondary" style="padding:0.35rem 0.7rem;font-size:0.85rem"
-                onclick="alert('You must close the batch ticket before archiving.');">Archive</button>
-        {% else %}
+        {% if b.status == 'closed' %}
         <form method="post" action="{% url 'slurp_ui:production_archive_batch' b.id %}" style="display:inline">
           {% csrf_token %}
           <button type="submit" class="btn btn-secondary" style="padding:0.35rem 0.7rem;font-size:0.85rem"
-                  onclick="return confirm('Archive {{ b.batch_number }}? It will leave this list and move to Production → {% if list_batch_type == 'repack' %}Repack Archive{% else %}Batch Archive{% endif %}.');">Archive</button>
+                  onclick="return confirm('Archive {{ b.batch_number }}? It moves to Production → Archives.');">Archive</button>
         </form>
+        {% else %}
+        <button type="button" class="btn btn-secondary" style="padding:0.35rem 0.7rem;font-size:0.85rem"
+                onclick="alert('You must close the batch ticket before archiving.');">Archive</button>
         {% endif %}
         <form method="post" action="{% url 'slurp_ui:production_reverse_batch' b.id %}" style="display:inline">
           {% csrf_token %}
@@ -112,7 +136,7 @@
     </tr>
     {% endwith %}
     {% empty %}
-    <tr><td colspan="{% if list_batch_type == 'production' %}9{% else %}8{% endif %}">{% if list_batch_type == 'repack' %}No open repacks.{% else %}No open batch tickets.{% endif %}</td></tr>
+    <tr><td colspan="{% if show_campaign %}9{% else %}8{% endif %}">No open tickets{% if list_flow != 'all' %} for this flow{% endif %}.</td></tr>
     {% endfor %}
   </tbody>
 </table>

@@ -1,0 +1,80 @@
+{% if section_title %}
+<h3 class="prod-arch-section-title">{{ section_title }}</h3>
+{% endif %}
+<div class="prod-arch-table-scroll">
+<table class="data-table">
+  <thead>
+    <tr>
+      <th>Batch #</th>
+      <th>Type</th>
+      <th>Finished good</th>
+      {% if show_lot_qty %}<th>{{ lot_qty_label|default:"Lot qty" }}</th>{% endif %}
+      <th>Ticket / Yield</th>
+      <th>Closed</th>
+      <th>Archived</th>
+      <th class="prod-arch-actions-col">Actions</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for row in section_rows %}
+    {% with b=row.batch %}
+    <tr>
+      <td>
+        <a href="{% url 'slurp_ui:production_batch_detail' b.id %}">{{ b.batch_number }}</a>
+        <div class="prod-arch-row-pdf">
+          <a class="btn btn-primary" style="padding:0.3rem 0.65rem;font-size:0.8rem"
+             href="{% url 'slurp_ui:production_batch_pdf' b.id %}" target="_blank" rel="noopener">PDF</a>
+        </div>
+      </td>
+      <td>{{ b.batch_type }}</td>
+      <td>
+        {{ b.finished_good_item.sku }}
+        <div style="color:#64748b;font-size:0.82rem">{{ b.finished_good_item.name }}</div>
+      </td>
+      {% if show_lot_qty %}
+      <td>
+        {% if row.lot_qty != None %}
+          {{ row.lot_qty|floatformat:2 }}{% if row.lot_uom %} {{ row.lot_uom }}{% endif %}
+        {% else %}—{% endif %}
+      </td>
+      {% endif %}
+      <td>
+        {{ row.ticket_display|floatformat:2 }} {{ row.display_uom }}
+        {% if row.yield_display != None %}
+        · yield {{ row.yield_display|floatformat:2 }}
+        {% endif %}
+      </td>
+      <td>{% if b.closed_date %}{{ b.closed_date|date:"Y-m-d" }}{% else %}—{% endif %}</td>
+      <td>{% if b.archived_at %}{{ b.archived_at|date:"Y-m-d" }}{% else %}—{% endif %}</td>
+      <td class="prod-arch-actions-col" style="white-space:nowrap">
+        <a class="btn btn-primary" style="padding:0.35rem 0.7rem;font-size:0.85rem"
+           href="{% url 'slurp_ui:production_batch_pdf' b.id %}" target="_blank" rel="noopener">PDF</a>
+        <a class="btn btn-secondary" style="padding:0.35rem 0.7rem;font-size:0.85rem"
+           href="{% url 'slurp_ui:production_batch_detail' b.id %}">Detail</a>
+        {% if b.is_archived %}
+        <form method="post" action="{% url 'slurp_ui:production_unarchive_batch' b.id %}" style="display:inline">
+          {% csrf_token %}
+          <input type="hidden" name="next" value="{% url archive_url_name %}?{% for k,v in restore_params.items %}{{ k }}={{ v|urlencode }}{% if not forloop.last %}&amp;{% endif %}{% endfor %}" />
+          <button type="submit" class="btn btn-secondary" style="padding:0.35rem 0.7rem;font-size:0.85rem"
+                  onclick="return confirm('Restore {{ b.batch_number }} to the Production dash?');">Restore</button>
+        </form>
+        {% endif %}
+      </td>
+    </tr>
+    {% endwith %}
+    {% empty %}
+    <tr>
+      <td colspan="{% if show_lot_qty %}8{% else %}7{% endif %}">
+        {% if empty_msg %}
+          {{ empty_msg }}
+        {% elif q %}
+          No archived tickets match that search.
+        {% else %}
+          This folder is empty.
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>

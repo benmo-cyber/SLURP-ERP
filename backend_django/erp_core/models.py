@@ -485,12 +485,20 @@ class LotCoaCertificate(models.Model):
 
 
 class LotCoaCustomerCopy(models.Model):
-    """Customer-facing COA PDF for one lot allocation (lot + sales order line + qty)."""
+    """Customer-facing COA PDF for one lot allocation (lot + sales order line + qty).
+
+    Once ``coa_pdf`` is saved the row is immutable. Re-issues create a new row
+    (``is_current=True``) and mark prior rows ``is_current=False``.
+    """
 
     RESULT_DISPLAY_MODE_CHOICES = [
         ('actual', 'All actual results'),
         ('pass_fail', 'All Pass / Fail'),
         ('per_line', 'Per-test (item defaults / overrides)'),
+    ]
+    COA_BASIS_CHOICES = [
+        ('batch', 'Batch lot COA'),
+        ('campaign', 'Campaign COA'),
     ]
 
     certificate = models.ForeignKey(
@@ -498,10 +506,28 @@ class LotCoaCustomerCopy(models.Model):
         on_delete=models.CASCADE,
         related_name='customer_copies',
     )
-    sales_order_lot = models.OneToOneField(
+    sales_order_lot = models.ForeignKey(
         'SalesOrderLot',
         on_delete=models.CASCADE,
-        related_name='coa_customer_copy',
+        related_name='coa_customer_copies',
+    )
+    is_current = models.BooleanField(
+        default=True,
+        db_index=True,
+        help_text='Current customer PDF for this allocation. Prior issued copies stay for history.',
+    )
+    coa_basis = models.CharField(
+        max_length=16,
+        choices=COA_BASIS_CHOICES,
+        default='batch',
+        help_text='batch = this lot master; campaign = campaign composite (when available).',
+    )
+    campaign_certificate = models.ForeignKey(
+        'CampaignCoaCertificate',
+        on_delete=models.SET_NULL,
+        blank=True,
+        null=True,
+        related_name='customer_copies',
     )
     customer_name = models.CharField(max_length=255, blank=True, default='')
     customer_po = models.CharField(max_length=120, blank=True, default='')
@@ -540,6 +566,13 @@ class LotCoaCustomerCopy(models.Model):
         ordering = ['-created_at']
         verbose_name = 'Lot COA (customer copy)'
         verbose_name_plural = 'Lot COA customer copies'
+        constraints = [
+            models.UniqueConstraint(
+                fields=['sales_order_lot'],
+                condition=models.Q(is_current=True),
+                name='uniq_current_customer_coa_per_sol',
+            ),
+        ]
 
     def __str__(self):
         so = self.sales_order_lot.sales_order_item.sales_order.so_number
@@ -824,6 +857,133 @@ class CampaignLot(models.Model):
         return self.campaign_code
 
 
+class CampaignCoaCertificate(models.Model):
+    """Master COA for a campaign (weighted QC + max micros across member lots).
+
+    Issued when every linked batch lot is released. Re-issues create a new row;
+    prior rows stay for history (never overwrite PDF).
+    """
+
+    campaign = models.ForeignKey(
+        CampaignLot,
+        on_delete=models.CASCADE,
+        related_name="coa_certificates",
+    )
+    version = models.PositiveIntegerField(default=1)
+    is_current = models.BooleanField(default=True, db_index=True)
+    manufacture_date = models.DateField(
+        help_text="First calendar day any campaign batch was closed.",
+    )
+    expiration_date = models.DateTimeField(
+        help_text="manufacture_date + FPS / formula shelf_life_months.",
+    )
+    quantity_snapshot = models.FloatField(
+        blank=True,
+        null=True,
+        help_text="Sum of member net yields (item UOM) at issue.",
+    )
+    qc_parameter_name_snapshot = models.CharField(max_length=255, blank=True, default="")
+    qc_spec_min_snapshot = models.FloatField(blank=True, null=True)
+    qc_spec_max_snapshot = models.FloatField(blank=True, null=True)
+    qc_result_value = models.FloatField(
+        blank=True,
+        null=True,
+        help_text="Net-yield-weighted mean of member lot QC results.",
+    )
+    qc_result_pass = models.BooleanField(blank=True, null=True)
+    coa_pdf = models.FileField(upload_to="coa_pdfs/campaign/", blank=True, null=True)
+    recorded_by = models.CharField(
+        max_length=255,
+        blank=True,
+        default="",
+        help_text="Initials / username on first issue.",
+    )
+    issued_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    notes = models.TextField(blank=True, default="")
+
+    class Meta:
+        ordering = ["-issued_at"]
+        verbose_name = "Campaign COA certificate"
+        verbose_name_plural = "Campaign COA certificates"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["campaign", "version"],
+                name="uniq_campaign_coa_version",
+            ),
+        ]
+
+    def __str__(self):
+        return f"COA {self.campaign.campaign_code} v{self.version}"
+
+
+class CampaignCoaLineResult(models.Model):
+    """One micro/test row on a campaign COA (highest numeric across member lots)."""
+
+    certificate = models.ForeignKey(
+        CampaignCoaCertificate,
+        on_delete=models.CASCADE,
+        related_name="line_results",
+    )
+    item_line = models.ForeignKey(
+        "ItemCoaTestLine",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="campaign_coa_results",
+    )
+    test_name = models.CharField(max_length=255)
+    specification_text = models.TextField()
+    result_text = models.CharField(max_length=500)
+    passes = models.BooleanField(blank=True, null=True)
+
+    class Meta:
+        ordering = ["id"]
+        verbose_name = "Campaign COA line result"
+        verbose_name_plural = "Campaign COA line results"
+
+    def __str__(self):
+        return f"{self.test_name}: {self.result_text}"
+
+
+class CampaignShelfLifeExtension(models.Model):
+    """Campaign-level SLE; trickles to every member lot expiration + batch COAs."""
+
+    campaign = models.ForeignKey(
+        CampaignLot,
+        on_delete=models.CASCADE,
+        related_name="shelf_life_extensions",
+    )
+    qc_date = models.DateField()
+    extension_months = models.PositiveSmallIntegerField()
+    previous_expiration = models.DateTimeField(blank=True, null=True)
+    new_expiration = models.DateTimeField()
+    qc_parameter_name = models.CharField(max_length=255, blank=True, default="")
+    qc_spec_min = models.FloatField(blank=True, null=True)
+    qc_spec_max = models.FloatField(blank=True, null=True)
+    qc_result_value = models.FloatField(blank=True, null=True)
+    notes = models.TextField(blank=True, default="")
+    certificate = models.ForeignKey(
+        CampaignCoaCertificate,
+        on_delete=models.SET_NULL,
+        blank=True,
+        null=True,
+        related_name="shelf_life_extensions",
+    )
+    recorded_by = models.CharField(max_length=255, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        verbose_name = "Campaign shelf life extension"
+        verbose_name_plural = "Campaign shelf life extensions"
+
+    def __str__(self):
+        return (
+            f"SLE {self.campaign_id} +{self.extension_months}mo "
+            f"from {self.qc_date}"
+        )
+
+
 class ProductionBatch(models.Model):
     BATCH_TYPE_CHOICES = [
         ('production', 'Production'),
@@ -916,6 +1076,16 @@ class ProductionBatchInput(models.Model):
         help_text='Set for plant-utility inputs; otherwise taken from lot.item.',
     )
     quantity_used = models.FloatField()
+    quantity_packs = models.FloatField(
+        null=True,
+        blank=True,
+        help_text="Full-packs portion of quantity_used in item native UoM (from create-ticket packs field).",
+    )
+    quantity_remnant = models.FloatField(
+        null=True,
+        blank=True,
+        help_text="Remnant/partial portion of quantity_used in item native UoM (from create-ticket remnant field).",
+    )
 
     class Meta:
         ordering = ['id']

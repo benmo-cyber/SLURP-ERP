@@ -86,9 +86,16 @@ def link_batches_to_campaign(batch_ids: list[int]) -> tuple[CampaignLot, list[Pr
     """
     Link production batches into one campaign (same parent family + same ISO week
     of production_date). Returns (campaign, linked batches).
+
+    Requires at least two batches — a single ticket is not a campaign.
     """
     if not batch_ids:
         raise ValueError("Select at least one production batch.")
+    if len(set(batch_ids)) < 2:
+        raise ValueError(
+            "Select at least two production tickets to form a campaign. "
+            "A single batch stays as its own lot."
+        )
 
     batches = list(
         ProductionBatch.objects.filter(pk__in=batch_ids)
@@ -97,6 +104,11 @@ def link_batches_to_campaign(batch_ids: list[int]) -> tuple[CampaignLot, list[Pr
     )
     if len(batches) != len(set(batch_ids)):
         raise ValueError("One or more selected batches were not found.")
+    if len(batches) < 2:
+        raise ValueError(
+            "Select at least two production tickets to form a campaign. "
+            "A single batch stays as its own lot."
+        )
 
     for b in batches:
         if b.batch_type != "production":
@@ -145,7 +157,10 @@ def link_batches_to_campaign(batch_ids: list[int]) -> tuple[CampaignLot, list[Pr
 
 
 def unlink_batches_from_campaign(batch_ids: list[int]) -> list[ProductionBatch]:
-    """Clear campaign on selected production batches (does not delete CampaignLot)."""
+    """Clear campaign on selected production batches.
+
+    Deletes CampaignLot rows that no longer have any linked batches.
+    """
     if not batch_ids:
         raise ValueError("Select at least one batch to unlink.")
 
@@ -155,9 +170,28 @@ def unlink_batches_from_campaign(batch_ids: list[int]) -> list[ProductionBatch]:
     if not batches:
         raise ValueError("No matching batches found.")
 
+    orphan_campaign_ids: set[int] = set()
     with transaction.atomic():
         for b in batches:
             if b.campaign_id:
+                orphan_campaign_ids.add(b.campaign_id)
                 b.campaign = None
                 b.save(update_fields=["campaign", "updated_at"])
+        for cid in orphan_campaign_ids:
+            if not ProductionBatch.objects.filter(campaign_id=cid).exists():
+                CampaignLot.objects.filter(pk=cid).delete()
     return batches
+
+
+def campaign_member_batch_counts(campaign_ids: list[int]) -> dict[int, int]:
+    """Map CampaignLot id → number of linked production batches."""
+    if not campaign_ids:
+        return {}
+    from django.db.models import Count
+
+    rows = (
+        ProductionBatch.objects.filter(campaign_id__in=campaign_ids)
+        .values("campaign_id")
+        .annotate(n=Count("id"))
+    )
+    return {int(r["campaign_id"]): int(r["n"]) for r in rows}

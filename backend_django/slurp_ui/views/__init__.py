@@ -96,6 +96,9 @@ from .production import (
 )
 from .quality import (
     quality_ccps,
+    quality_campaign_coa_issue,
+    quality_campaign_coa_pdf,
+    quality_campaign_extend_shelf_life,
     quality_coa_customer_customize,
     quality_coa_customer_pdf,
     quality_coa_library,
@@ -284,6 +287,9 @@ __all__ = [
     "quality_lot_tracking",
     "quality_coa_library",
     "quality_coa_pdf",
+    "quality_campaign_coa_pdf",
+    "quality_campaign_coa_issue",
+    "quality_campaign_extend_shelf_life",
     "quality_coa_customer_pdf",
     "quality_coa_customer_customize",
     "quality_finished_goods",

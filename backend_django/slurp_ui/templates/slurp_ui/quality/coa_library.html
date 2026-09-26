@@ -5,7 +5,8 @@
 <div class="hs-bleed" style="padding:1.25rem 1.5rem 2rem">
   <p class="hs-section-note">
     <strong>Master COAs</strong> are issued when a lot is fully released from hold.
-    Campaign lots are grouped by campaign code (YYWW + parent).
+    Campaign lots are grouped by campaign code (YYWW + parent). Campaign COA uses
+    weighted QC and highest micros across member lots; SLE is campaign-level only.
     <strong>Customer COAs</strong> are generated per sales order allocation.
   </p>
 
@@ -33,12 +34,36 @@
   {% if campaign_sections %}
   {% for section in campaign_sections %}
   <div class="hs-card" style="margin-bottom:1rem">
-    <div class="hs-card-header">
-      <h3>Campaign {{ section.campaign_code }}</h3>
+    <div class="hs-card-header" style="display:flex;flex-wrap:wrap;gap:0.65rem;align-items:center;justify-content:space-between">
+      <h3 style="margin:0">Campaign {{ section.campaign_code }}</h3>
+      <div style="display:flex;flex-wrap:wrap;gap:0.45rem;align-items:center">
+        {% if section.has_shelf_life_extension %}
+        <span class="hs-badge" style="background:#ecfdf5;color:#065f46" title="{{ section.sle_count }} extension(s)">
+          Shelf life extended{% if section.sle_count > 1 %} ×{{ section.sle_count }}{% endif %}
+        </span>
+        {% endif %}
+        {% if section.camp_cert %}
+        <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:quality_campaign_coa_pdf' section.camp_cert.id %}" target="_blank">Campaign COA</a>
+        {% elif section.waiting_releases %}
+        <span class="hs-muted" style="font-size:0.85rem">
+          Campaign COA (waiting for {{ section.waiting_releases }} release{{ section.waiting_releases|pluralize }})
+        </span>
+        {% elif section.ready %}
+        <form method="post" action="{% url 'slurp_ui:quality_campaign_coa_issue' section.campaign_id %}" style="display:inline;margin:0">
+          {% csrf_token %}
+          <button type="submit" class="hs-btn hs-btn-sm hs-btn-primary">Issue Campaign COA</button>
+        </form>
+        {% else %}
+        <span class="hs-muted" style="font-size:0.85rem">Campaign COA pending</span>
+        {% endif %}
+        {% if section.can_extend_shelf_life %}
+        <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:quality_campaign_extend_shelf_life' section.campaign_id %}">Extend shelf life</a>
+        {% endif %}
+      </div>
     </div>
     <div class="hs-card-body tight">
       <table class="hs-table coa-library__table">
-        <thead><tr><th>Batch lot</th><th>SKU</th><th>Product</th><th>Issued</th><th>Notes</th><th>PDF</th><th></th></tr></thead>
+        <thead><tr><th>Batch lot</th><th>SKU</th><th>Product</th><th>Issued</th><th>Notes</th><th>PDF</th></tr></thead>
         <tbody>
           {% for row in section.rows %}
           <tr>
@@ -55,11 +80,6 @@
               {% if row.coa_pdf %}
               <a href="{% url 'slurp_ui:quality_coa_pdf' row.id %}" target="_blank">Download</a>
               {% else %}—{% endif %}
-            </td>
-            <td>
-              {% if row.can_extend_shelf_life %}
-              <a class="hs-btn hs-btn-sm" href="{% url 'slurp_ui:inventory_lot_extend_shelf_life' row.lot_id %}">Extend shelf life</a>
-              {% endif %}
             </td>
           </tr>
           {% endfor %}
@@ -110,7 +130,7 @@
     <div class="hs-card-header"><h3>Customer COAs</h3></div>
     <div class="hs-card-body tight">
       <table class="hs-table coa-library__table">
-        <thead><tr><th>Lot</th><th>SKU</th><th>SO #</th><th>Customer</th><th>Qty</th><th>PDF</th></tr></thead>
+        <thead><tr><th>Lot</th><th>SKU</th><th>SO #</th><th>Customer</th><th>Qty</th><th>Basis</th><th>PDF</th></tr></thead>
         <tbody>
           {% for row in customer_rows %}
           <tr>
@@ -120,6 +140,13 @@
             <td>{{ row.customer_name|default:"—" }}</td>
             <td>{{ row.quantity_snapshot|floatformat:2 }}</td>
             <td>
+              {% if row.coa_basis == 'campaign' %}
+              <span class="hs-badge" style="background:#eff6ff;color:#1e40af">Campaign</span>
+              {% else %}
+              <span class="hs-muted">Batch</span>
+              {% endif %}
+            </td>
+            <td>
               {% if row.coa_pdf %}
               <a href="{% url 'slurp_ui:quality_coa_customer_pdf' row.id %}" target="_blank">Download</a>
               {% else %}—{% endif %}
@@ -127,7 +154,7 @@
             </td>
           </tr>
           {% empty %}
-          <tr><td colspan="6"><div class="hs-empty">No customer COA copies found.</div></td></tr>
+          <tr><td colspan="7"><div class="hs-empty">No customer COA copies found.</div></td></tr>
           {% endfor %}
         </tbody>
       </table>

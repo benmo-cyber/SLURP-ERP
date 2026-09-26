@@ -31,6 +31,8 @@ from erp_core.formula_ingredient import (
     resolve_ingredient_select_value,
 )
 from erp_core.models import (
+    CampaignCoaCertificate,
+    CampaignLot,
     CriticalControlPoint,
     CoaTestCatalog,
     Formula,
@@ -48,17 +50,11 @@ from erp_core.models import (
     RDFormulaFamily,
     RDFormulaLine,
     SupplierDocument,
-
     SupplierSurvey,
-
     TemporaryException,
-
     Vendor,
-
     VendorContact,
-
     VendorHistory,
-
 )
 
 from erp_core.vendor_address_display import build_display_address
@@ -1129,12 +1125,22 @@ def quality_lot_tracking(request: HttpRequest) -> HttpResponse:
     lot_id = (request.GET.get("lot") or "").strip()
     candidates = resolve_lots_for_search(search) if search else []
     lot = None
+    suggestions_only = False
     if lot_id:
         lot = next((c for c in candidates if str(c.id) == lot_id), None)
         if lot is None:
             lot = Lot.objects.select_related("item", "source_lot").filter(pk=lot_id).first()
     elif len(candidates) == 1:
         lot = candidates[0]
+    elif len(candidates) > 1 and search:
+        # Exact/partial multi-match → picker. Digit-prefix suggestions also use picker.
+        suggestions_only = not any(
+            (c.lot_number or "").lower() == search.lower()
+            or (c.vendor_lot_number or "").lower() == search.lower()
+            or search.lower() in (c.lot_number or "").lower()
+            or search.lower() in (c.vendor_lot_number or "").lower()
+            for c in candidates
+        )
 
     balance = build_lot_mass_balance(lot) if lot is not None else None
     # Keep legacy names for any leftover template refs
@@ -1149,6 +1155,7 @@ def quality_lot_tracking(request: HttpRequest) -> HttpResponse:
             search=search,
             lot=lot,
             candidates=candidates if len(candidates) > 1 and lot is None else [],
+            suggestions_only=suggestions_only and lot is None,
             balance=balance,
             forward_trace=forward_trace,
             backward_trace=backward_trace,
@@ -1162,7 +1169,9 @@ def quality_lot_tracking(request: HttpRequest) -> HttpResponse:
 
 @login_required
 def quality_coa_library(request: HttpRequest) -> HttpResponse:
-    from erp_core.models import ProductionBatchOutput
+    from erp_core.campaign_coa import campaign_release_status, current_campaign_coa
+    from erp_core.campaign_lots import campaign_member_batch_counts
+    from erp_core.models import CampaignShelfLifeExtension
 
     tab = (request.GET.get("tab") or "customer").lower()
     if tab not in ("master", "customer"):
@@ -1175,10 +1184,15 @@ def quality_coa_library(request: HttpRequest) -> HttpResponse:
         .prefetch_related("lot__shelf_life_extensions")
         .order_by("-issued_at")
     )
-    customer_qs = LotCoaCustomerCopy.objects.select_related(
-        "certificate__lot__item",
-        "sales_order_lot__sales_order_item__sales_order",
-    ).order_by("-created_at")
+    customer_qs = (
+        LotCoaCustomerCopy.objects.filter(is_current=True)
+        .select_related(
+            "certificate__lot__item",
+            "campaign_certificate__campaign",
+            "sales_order_lot__sales_order_item__sales_order",
+        )
+        .order_by("-created_at")
+    )
 
     if sku:
         master_qs = master_qs.filter(lot__item__sku=sku)
@@ -1190,17 +1204,27 @@ def quality_coa_library(request: HttpRequest) -> HttpResponse:
 
     master_rows = list(master_qs[:200])
     lot_ids = [row.lot_id for row in master_rows if row.lot_id]
-    campaign_by_lot: dict[int, str] = {}
+    # lot_id → (campaign_code, campaign_id)
+    campaign_by_lot: dict[int, tuple[str, int]] = {}
     if lot_ids:
-        for lot_id, code in (
+        for lot_id, code, camp_id in (
             ProductionBatchOutput.objects.filter(lot_id__in=lot_ids)
             .exclude(batch__campaign_id__isnull=True)
-            .values_list("lot_id", "batch__campaign__campaign_code")
+            .values_list(
+                "lot_id",
+                "batch__campaign__campaign_code",
+                "batch__campaign_id",
+            )
         ):
-            if lot_id and code and lot_id not in campaign_by_lot:
-                campaign_by_lot[int(lot_id)] = code
+            if lot_id and code and camp_id and lot_id not in campaign_by_lot:
+                campaign_by_lot[int(lot_id)] = (code, int(camp_id))
 
-    campaign_groups: dict[str, list] = {}
+    member_counts = campaign_member_batch_counts(
+        list({cid for _code, cid in campaign_by_lot.values()})
+    )
+
+    campaign_groups: dict[int, list] = {}
+    campaign_meta: dict[int, str] = {}
     ungrouped = []
     for row in master_rows:
         lot = row.lot
@@ -1208,21 +1232,78 @@ def quality_coa_library(request: HttpRequest) -> HttpResponse:
         item_type = (getattr(item, "item_type", None) or "").strip()
         rem = float(getattr(lot, "quantity_remaining", 0) or 0)
         sle_count = lot.shelf_life_extensions.count() if lot is not None else 0
-        row.can_extend_shelf_life = (
-            item_type in ("finished_good", "distributed_item") and rem > 0
-        )
         row.sle_count = sle_count
         row.has_shelf_life_extension = sle_count > 0
-        row.campaign_code = campaign_by_lot.get(row.lot_id) or ""
-        if row.campaign_code:
-            campaign_groups.setdefault(row.campaign_code, []).append(row)
+        camp_info = campaign_by_lot.get(row.lot_id)
+        code = ""
+        cid = None
+        if camp_info:
+            code, cid = camp_info
+            if member_counts.get(cid, 0) < 2:
+                code = ""
+                cid = None
+        row.campaign_code = code
+        # Lot-level SLE only for non-campaign individuals
+        row.can_extend_shelf_life = (
+            not code
+            and item_type in ("finished_good", "distributed_item")
+            and rem > 0
+        )
+        if code and cid:
+            campaign_groups.setdefault(cid, []).append(row)
+            campaign_meta[cid] = code
         else:
             ungrouped.append(row)
 
-    campaign_sections = [
-        {"campaign_code": code, "rows": rows}
-        for code, rows in sorted(campaign_groups.items(), key=lambda kv: kv[0], reverse=True)
-    ]
+    campaigns = {
+        c.id: c
+        for c in CampaignLot.objects.filter(id__in=campaign_groups.keys()).select_related(
+            "item"
+        )
+    }
+    campaign_sections = []
+    for cid, rows in sorted(
+        campaign_groups.items(),
+        key=lambda kv: campaign_meta.get(kv[0], ""),
+        reverse=True,
+    ):
+        camp = campaigns.get(cid)
+        code = campaign_meta[cid]
+        status = campaign_release_status(camp) if camp else {"ready": False, "waiting_releases": 0}
+        camp_cert = current_campaign_coa(camp) if camp else None
+        sle_count = (
+            CampaignShelfLifeExtension.objects.filter(campaign_id=cid).count()
+            if camp
+            else 0
+        )
+        rem_any = any(
+            float(getattr(r.lot, "quantity_remaining", 0) or 0) > 0 for r in rows
+        )
+        item_type = ""
+        if camp and camp.item_id:
+            item_type = (camp.item.item_type or "").strip()
+        elif rows:
+            item_type = (
+                getattr(getattr(rows[0].lot, "item", None), "item_type", None) or ""
+            ).strip()
+        can_sle = bool(
+            camp_cert
+            and rem_any
+            and item_type in ("finished_good", "distributed_item")
+        )
+        campaign_sections.append(
+            {
+                "campaign_id": cid,
+                "campaign_code": code,
+                "rows": rows,
+                "waiting_releases": int(status.get("waiting_releases") or 0),
+                "ready": bool(status.get("ready")),
+                "camp_cert": camp_cert,
+                "sle_count": sle_count,
+                "has_shelf_life_extension": sle_count > 0,
+                "can_extend_shelf_life": can_sle,
+            }
+        )
 
     return render(
         request,
@@ -1273,7 +1354,142 @@ def quality_coa_pdf(request: HttpRequest, pk: int) -> HttpResponse:
     )
 
 
+@login_required
+def quality_campaign_coa_pdf(request: HttpRequest, pk: int) -> HttpResponse:
+    """Download current (or historical) campaign master COA PDF."""
+    cert = get_object_or_404(
+        CampaignCoaCertificate.objects.select_related("campaign"), pk=pk
+    )
+    if not cert.coa_pdf:
+        messages.error(request, "No PDF on file for this campaign COA.")
+        return redirect("slurp_ui:quality_coa_library")
+    return FileResponse(
+        cert.coa_pdf.open("rb"),
+        content_type="application/pdf",
+        filename=f"coa-campaign-{cert.campaign.campaign_code}-v{cert.version}.pdf",
+    )
 
+
+@login_required
+@require_http_methods(["POST"])
+def quality_campaign_coa_issue(request: HttpRequest, campaign_id: int) -> HttpResponse:
+    """Manually issue / re-issue campaign COA when all member lots are released."""
+    from erp_core.campaign_coa import CampaignCoaError, issue_or_reissue_campaign_coa
+
+    camp = get_object_or_404(CampaignLot.objects.select_related("item"), pk=campaign_id)
+    library_url = reverse("slurp_ui:quality_coa_library") + "?tab=master"
+    try:
+        cert = issue_or_reissue_campaign_coa(camp, user=request.user, force=True)
+        if cert is None:
+            messages.warning(
+                request,
+                f"Campaign {camp.campaign_code} is not ready for a campaign COA yet.",
+            )
+        else:
+            messages.success(
+                request,
+                f"Campaign COA issued for {camp.campaign_code} (v{cert.version}).",
+            )
+    except CampaignCoaError as e:
+        messages.error(request, e.message)
+    except Exception as e:
+        messages.error(request, str(e))
+    return redirect(library_url)
+
+
+@login_required
+@require_http_methods(["GET", "POST"])
+def quality_campaign_extend_shelf_life(
+    request: HttpRequest, campaign_id: int
+) -> HttpResponse:
+    """Campaign-level SLE — composite sample; trickles to every member lot."""
+    from datetime import datetime
+
+    from erp_core.campaign_coa import current_campaign_coa
+    from erp_core.formula_resolve import formula_for_item
+    from erp_core.models import CampaignShelfLifeExtension
+    from erp_core.shelf_life_extension import (
+        ShelfLifeExtensionError,
+        extend_campaign_shelf_life,
+    )
+
+    camp = get_object_or_404(CampaignLot.objects.select_related("item"), pk=campaign_id)
+    library_url = reverse("slurp_ui:quality_coa_library") + "?tab=master"
+    camp_cert = current_campaign_coa(camp)
+    if camp_cert is None:
+        messages.error(
+            request,
+            f"Issue the campaign COA for {camp.campaign_code} before extending shelf life.",
+        )
+        return redirect(library_url)
+
+    prior_sle_count = CampaignShelfLifeExtension.objects.filter(campaign=camp).count()
+    formula = formula_for_item(getattr(camp.item, "id", None))
+    qc_name = (getattr(formula, "qc_parameter_name", None) or "").strip() if formula else ""
+    qc_min = getattr(formula, "qc_spec_min", None) if formula else None
+    qc_max = getattr(formula, "qc_spec_max", None) if formula else None
+    default_months = getattr(formula, "shelf_life_months", None) if formula else None
+    today = timezone.localdate()
+
+    if request.method == "POST":
+        try:
+            if prior_sle_count >= 1 and not request.POST.get("confirm_additional_extension"):
+                raise ShelfLifeExtensionError(
+                    "This campaign already has a shelf life extension. "
+                    "Confirm to add another (generally only one extension is expected)."
+                )
+            raw_qc = (request.POST.get("qc_date") or "").strip()
+            if not raw_qc:
+                raise ShelfLifeExtensionError("QC date is required.")
+            qc_date = datetime.strptime(raw_qc, "%Y-%m-%d").date()
+            months_raw = (request.POST.get("extension_months") or "").strip()
+            if not months_raw:
+                raise ShelfLifeExtensionError("Extension months is required.")
+            months = int(months_raw)
+            qc_val = None
+            raw_qc_val = (request.POST.get("qc_result_value") or "").strip()
+            if raw_qc_val:
+                qc_val = float(raw_qc_val)
+            notes = (request.POST.get("notes") or "").strip()
+            ext = extend_campaign_shelf_life(
+                request.user,
+                camp,
+                qc_date=qc_date,
+                extension_months=months,
+                qc_result_value=qc_val,
+                notes=notes,
+            )
+            messages.success(
+                request,
+                f"Campaign {camp.campaign_code} shelf life extended +{ext.extension_months} mo "
+                f"from QC {ext.qc_date.isoformat()}. Member lots and COAs updated.",
+            )
+            return redirect(library_url)
+        except ShelfLifeExtensionError as e:
+            messages.error(request, e.message)
+        except ValueError as e:
+            messages.error(request, str(e))
+        except Exception as e:
+            messages.error(request, str(e))
+
+    # Reuse lot SLE template shape with a synthetic "lot" label via campaign context
+    return render(
+        request,
+        "slurp_ui/quality/extend_campaign_shelf_life.html",
+        _quality_ctx(
+            "coa-library",
+            campaign=camp,
+            cert=camp_cert,
+            next_url=library_url,
+            qc_name=qc_name,
+            qc_min=qc_min,
+            qc_max=qc_max,
+            default_months=default_months,
+            today=today.isoformat(),
+            prior_sle_count=prior_sle_count,
+            port_status="full",
+        ),
+    )
 
 
 @login_required
@@ -1305,224 +1521,177 @@ def quality_coa_customer_pdf(request: HttpRequest, pk: int) -> HttpResponse:
 
 
 @login_required
-
 @require_http_methods(["GET", "POST"])
-
 def quality_coa_customer_customize(request: HttpRequest, pk: int) -> HttpResponse:
+    """Pick campaign vs batch basis, which tests appear, and Pass/Fail vs actual.
 
-    """Pick which master tests appear on a customer COA and Pass/Fail vs actual."""
-
+    Issued PDFs are immutable: saving after a PDF exists creates a new current copy.
+    """
+    from erp_core.campaign_coa import current_campaign_coa, lot_campaign
+    from erp_core.coa_allocation import current_customer_coa
     from erp_core.coa_customer_options import apply_customer_coa_item_defaults
     from erp_core.coa_pdf_html import save_customer_copy_coa_pdf
 
     copy = get_object_or_404(
-
         LotCoaCustomerCopy.objects.select_related(
-
             "certificate__lot__item",
-
+            "campaign_certificate__campaign",
             "sales_order_lot__sales_order_item__sales_order",
-
         ).prefetch_related(
-
             "certificate__line_results",
-
             "certificate__lot__item__coa_test_lines",
-
         ),
-
         pk=pk,
-
     )
+    if not copy.is_current:
+        current = current_customer_coa(copy.sales_order_lot)
+        if current is not None:
+            return redirect("slurp_ui:quality_coa_customer_customize", pk=current.pk)
 
     cert = copy.certificate
-
-    # Ensure defaults exist for the form if never customized
+    lot = cert.lot
+    camp = lot_campaign(lot)
+    camp_cert = current_campaign_coa(camp) if camp else None
+    can_choose_campaign = camp_cert is not None
 
     if not copy.customization_saved and not (copy.included_line_result_ids or []):
-
         if apply_customer_coa_item_defaults(copy, cert, force=True):
-
             copy.save(
-
                 update_fields=[
-
                     "included_line_result_ids",
-
                     "include_qc_row",
-
                     "result_display_mode",
-
                     "line_display_overrides",
-
                     "updated_at",
-
                 ]
-
             )
 
-
-
     has_qc = bool(
-
-        (cert.qc_parameter_name_snapshot or "").strip()
-
-        or cert.qc_result_value is not None
-
+        (cert.qc_parameter_name_snapshot or "").strip() or cert.qc_result_value is not None
     )
+    if can_choose_campaign and (copy.coa_basis or "") == "campaign":
+        has_qc = bool(
+            (camp_cert.qc_parameter_name_snapshot or "").strip()
+            or camp_cert.qc_result_value is not None
+        )
 
     line_results = list(cert.line_results.all().order_by("id"))
-
     included_set = {int(x) for x in (copy.included_line_result_ids or [])}
-
     overrides = dict(copy.line_display_overrides or {})
 
-
-
     if request.method == "POST":
-
         mode = (request.POST.get("result_display_mode") or "per_line").strip().lower()
-
         if mode not in ("actual", "pass_fail", "per_line"):
-
             mode = "per_line"
+        basis = (request.POST.get("coa_basis") or copy.coa_basis or "batch").strip().lower()
+        if basis not in ("batch", "campaign"):
+            basis = "batch"
+        if basis == "campaign" and not can_choose_campaign:
+            basis = "batch"
+            messages.warning(
+                request,
+                "Campaign COA is not available yet — using batch lot COA.",
+            )
 
         include_qc = bool(request.POST.get("include_qc_row")) if has_qc else False
-
         selected: list[int] = []
-
         new_overrides: dict[str, str] = {}
-
         for lr in line_results:
-
             if request.POST.get(f"include_line_{lr.id}"):
-
                 selected.append(int(lr.id))
-
             disp = (request.POST.get(f"display_line_{lr.id}") or "actual").strip().lower()
-
             if disp not in ("actual", "pass_fail"):
-
                 disp = "actual"
-
             new_overrides[str(lr.id)] = disp
-
         if has_qc:
-
             qc_disp = (request.POST.get("display_qc") or "actual").strip().lower()
-
             if qc_disp not in ("actual", "pass_fail"):
-
                 qc_disp = "actual"
-
             new_overrides["qc"] = qc_disp
 
+        target_camp = camp_cert if basis == "campaign" else None
 
-
-        copy.included_line_result_ids = selected
-
-        copy.include_qc_row = include_qc
-
-        copy.result_display_mode = mode
-
-        copy.line_display_overrides = new_overrides
-
-        copy.customization_saved = True
-
-        copy.save(
-
-            update_fields=[
-
-                "included_line_result_ids",
-
-                "include_qc_row",
-
-                "result_display_mode",
-
-                "line_display_overrides",
-
-                "customization_saved",
-
-                "updated_at",
-
-            ]
-
-        )
+        # Immutable once PDF exists: spawn a new current copy.
+        if copy.coa_pdf:
+            LotCoaCustomerCopy.objects.filter(pk=copy.pk).update(is_current=False)
+            new_copy = LotCoaCustomerCopy(
+                sales_order_lot=copy.sales_order_lot,
+                certificate=cert,
+                is_current=True,
+                coa_basis=basis,
+                campaign_certificate=target_camp,
+                customer_name=copy.customer_name,
+                customer_po=copy.customer_po,
+                quantity_snapshot=copy.quantity_snapshot,
+                included_line_result_ids=selected,
+                include_qc_row=include_qc,
+                result_display_mode=mode,
+                line_display_overrides=new_overrides,
+                customization_saved=True,
+            )
+            new_copy.save()
+            copy = new_copy
+        else:
+            copy.included_line_result_ids = selected
+            copy.include_qc_row = include_qc
+            copy.result_display_mode = mode
+            copy.line_display_overrides = new_overrides
+            copy.customization_saved = True
+            copy.coa_basis = basis
+            copy.campaign_certificate = target_camp
+            copy.save(
+                update_fields=[
+                    "included_line_result_ids",
+                    "include_qc_row",
+                    "result_display_mode",
+                    "line_display_overrides",
+                    "customization_saved",
+                    "coa_basis",
+                    "campaign_certificate",
+                    "updated_at",
+                ]
+            )
 
         try:
-
             ok = save_customer_copy_coa_pdf(copy)
-
             if ok:
-
                 messages.success(request, "Customer COA updated and PDF regenerated.")
-
             else:
-
                 messages.warning(request, "Settings saved, but PDF generation failed.")
-
         except Exception as e:
-
             messages.error(request, f"Settings saved; PDF error: {e}")
 
-        return redirect("slurp_ui:quality_coa_customer_customize", pk=pk)
-
-
+        return redirect("slurp_ui:quality_coa_customer_customize", pk=copy.pk)
 
     so = copy.sales_order_lot.sales_order_item.sales_order
-
     rows = []
-
     for lr in line_results:
-
         rows.append(
-
             {
-
                 "line": lr,
-
                 "included": int(lr.id) in included_set,
-
                 "display": overrides.get(str(lr.id), "actual"),
-
             }
-
         )
 
-
-
     return render(
-
         request,
-
         "slurp_ui/quality/coa_customer_customize.html",
-
         _quality_ctx(
-
             "coa-library",
-
             copy=copy,
-
             certificate=cert,
-
             sales_order=so,
-
             has_qc=has_qc,
-
             qc_display=overrides.get("qc", "actual"),
-
             line_rows=rows,
-
             display_mode_choices=LotCoaCustomerCopy.RESULT_DISPLAY_MODE_CHOICES,
-
+            can_choose_campaign=can_choose_campaign,
+            campaign_cert=camp_cert,
+            campaign_code=(camp.campaign_code if camp else ""),
             port_status="full",
-
         ),
-
     )
-
-
-
 
 
 def _fps_parent_code(item: Item) -> str:

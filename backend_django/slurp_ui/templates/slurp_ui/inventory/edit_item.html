@@ -55,9 +55,9 @@
             </select>
           </div>
           <div class="form-group">
-            <label>Product category</label>
-            <select name="product_category">
-              <option value="">—</option>
+            <label>Product category *</label>
+            <select name="product_category" required>
+              <option value="" disabled {% if not item.product_category %}selected{% endif %}>— Select category —</option>
               {% for val, label in product_category_choices %}
               <option value="{{ val }}" {% if item.product_category == val %}selected{% endif %}>{{ label }}</option>
               {% endfor %}

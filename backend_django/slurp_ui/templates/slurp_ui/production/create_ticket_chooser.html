@@ -1,0 +1,32 @@
+{% extends "slurp_ui/base.html" %}
+{% block title %}Create Ticket — SLURP{% endblock %}
+{% block content %}
+<div class="modal-page create-batch-page" style="max-width:720px">
+  <h2>Create Ticket</h2>
+  <p style="color:#64748b;margin-bottom:1.25rem">
+    Choose the production flow. All tickets land on the same Production table (filter by type anytime).
+  </p>
+
+  <div style="display:grid;gap:0.85rem">
+    <a class="btn btn-primary" style="display:block;text-align:left;padding:1rem 1.15rem;line-height:1.35"
+       href="{% url 'slurp_ui:production_create_batch' %}?batch_type=production">
+      <strong style="display:block;font-size:1.05rem">Batch ticket</strong>
+      <span style="opacity:0.9;font-weight:400;font-size:0.9rem">Formula make — allocate ingredient lots, optional work-in partials, packaging.</span>
+    </a>
+    <a class="btn btn-secondary" style="display:block;text-align:left;padding:1rem 1.15rem;line-height:1.35"
+       href="{% url 'slurp_ui:production_create_batch' %}?batch_type=repack">
+      <strong style="display:block;font-size:1.05rem">Repack</strong>
+      <span style="opacity:0.85;font-weight:400;font-size:0.9rem">Relabel same SKU or pack-change to another pack size.</span>
+    </a>
+    <a class="btn btn-secondary" style="display:block;text-align:left;padding:1rem 1.15rem;line-height:1.35"
+       href="{% url 'slurp_ui:production_rework' %}">
+      <strong style="display:block;font-size:1.05rem">Rework</strong>
+      <span style="opacity:0.85;font-weight:400;font-size:0.9rem">Blend parent-family FG remnants (+ optional RM strength adjust) into a pack SKU.</span>
+    </a>
+  </div>
+
+  <div class="form-actions" style="margin-top:1.5rem">
+    <a class="btn btn-secondary" href="{% url 'slurp_ui:production' %}">Cancel</a>
+  </div>
+</div>
+{% endblock %}

@@ -500,14 +500,21 @@ def fill_invoice_template_pdf(template_path, invoice):
             except Exception:
                 items = []
         if items:
+            from .invoice_helpers import (
+                format_invoice_quantity_display,
+                format_invoice_unit_price_display,
+                unit_of_measure_for_invoice_line,
+            )
+
             it = items[0]
+            uom = unit_of_measure_for_invoice_line(it)
             qty = getattr(it, "quantity", None)
-            qty_str = f"{qty:.2f}" if qty is not None else ""
+            qty_str = format_invoice_quantity_display(qty, uom) if qty is not None else ""
             desc = (getattr(it, "description", None) or "").strip()
             if not desc and getattr(it, "item", None):
                 desc = (getattr(it.item, "name", None) or getattr(it.item, "sku", None) or "").strip()
             up = getattr(it, "unit_price", None)
-            up_str = fmt_dollar(up) if up is not None else ""
+            up_str = format_invoice_unit_price_display(up, uom) if up is not None else ""
             line_total = getattr(it, "total", None)
             if line_total is None and qty is not None and up is not None:
                 line_total = qty * up

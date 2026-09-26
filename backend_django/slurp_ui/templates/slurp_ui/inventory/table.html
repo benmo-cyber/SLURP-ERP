@@ -45,12 +45,16 @@
 
   {% if remainder_only %}
   <p style="margin:0 0 0.85rem;color:#9a3412;font-size:0.9rem">
-    Partials — remnant / opened packs only (typical leftover from a production run).
-    Full packs stay under Finished Goods / Raw Materials. Selling from here is uncommon but allowed.
+    Partials — remnant / opened packs (free or allocated to production/sales).
+    Available is free remnant only; open tickets show under Allocated to production
+    until close (same idea as full packs on
+    {% if tab == 'raw_material' %}Raw Materials{% elif tab == 'indirect_material' %}Indirect{% else %}Finished Goods{% endif %}).
+    Fully held lots with no free remnant stay off this list.
   </p>
   {% else %}
   <p style="margin:0 0 0.85rem;color:#64748b;font-size:0.88rem">
-    Full packs only. Remnants from production live under <strong>Partials</strong>.
+    Full packs only. Remnants live under <strong>Partials</strong>
+    (Finished Goods, Raw Materials, and Indirect each have their own).
   </p>
   {% endif %}
 
@@ -88,13 +92,16 @@
                  title="Expand vendors">▸</a>
               {% endif %}
               <span class="sku-master-label">{{ row.sku }}</span>
-              {% if row.vendor_count > 1 %}<span class="vendor-count-badge">{{ row.vendor_count }}</span>{% endif %}
-              {% if row.has_partials and not remainder_only %}<span class="inv-partial-chip" title="Also has remnant packs under Partials">Partial</span>{% endif %}
+              {% if row.vendor_count > 1 %}<span class="vendor-count-badge" title="{{ row.vendor_count }} vendors for this SKU">{{ row.vendor_count }}</span>{% endif %}
+              {% if row.has_partials and not remainder_only %}
+              <a class="inv-partial-chip" title="Open Partials for this SKU"
+                 href="?tab={{ tab }}&uom={{ display_uom }}&remainder=1&sku={{ row.sku|urlencode }}{% if row.sole_vendor %}&vendor={{ row.sole_vendor|urlencode }}{% endif %}">Partial</a>
+              {% endif %}
             </div>
           </td>
           <td>{{ row.description }}</td>
           <td><span class="inventory-type-badge inventory-type-badge--{{ row.item_type|default:'unknown' }}">{{ row.item_type }}</span></td>
-          <td><span class="inventory-category-badge">{{ row.product_category|default:"—" }}</span></td>
+          <td><span class="inventory-category-badge {% if row.product_category %}inventory-category-badge--{{ row.product_category }}{% else %}inventory-category-badge--none{% endif %}">{{ row.product_category_label|default:"—" }}</span></td>
           <td>{{ row.vendors_label }}</td>
           <td>{{ row.pack_label|default:row.pack_size_unit }}</td>
           <td class="{% if row.available > 0 %}available{% else %}unavailable{% endif %}">{{ row.available|floatformat:2 }} {{ row.qty_uom }}</td>
@@ -193,6 +200,9 @@
                              title="{% if not lot.manufacture_date or not lot.expiration_date %}Open lot — mfg/exp missing{% else %}Open lot detail{% endif %}">
                             {{ lot.lot_number }}
                           </a>
+                          {% if lot.campaign_code %}
+                          <span class="inv-campaign-lot" title="Campaign lot">{{ lot.campaign_code }}</span>
+                          {% endif %}
                           {% if lot.has_remainder %}<span class="inv-partial-chip">Partial</span>{% endif %}
                         </td>
                         <td style="font-size:0.85rem;{% if lot.has_remainder %}color:#9a3412;font-weight:600{% else %}color:#64748b{% endif %}">
@@ -214,7 +224,7 @@
                           <button type="button"
                                   class="lot-commit-sales-toggle"
                                   aria-expanded="false"
-                                  title="Show sales orders for this allocation">S {{ lot.committed_sales|floatformat:2 }}</button>{% else %}S {{ lot.committed_sales|floatformat:2 }}{% endif %} · P {{ lot.committed_prod|floatformat:2 }}
+                                  title="Show sales orders for this allocation">S {{ lot.committed_sales|floatformat:2 }} {{ lot.uom }}</button>{% else %}S {{ lot.committed_sales|floatformat:2 }} {{ lot.uom }}{% endif %} · P {{ lot.committed_prod|floatformat:2 }} {{ lot.uom }}
                         </td>
                         <td class="lot-table-col-actions" style="white-space:nowrap">
                           {% if lot.avail_native > 0 %}

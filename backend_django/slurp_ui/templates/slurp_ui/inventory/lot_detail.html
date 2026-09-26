@@ -72,7 +72,7 @@
         {{ pack_breakout|default:"—" }}
       </span>
       <span class="k">Committed</span>
-      <span class="v">Sales {{ committed_sales|floatformat:2 }} · Prod {{ committed_prod|floatformat:2 }}</span>
+      <span class="v">Sales {{ committed_sales|floatformat:2 }} {{ lot.item.unit_of_measure }} · Prod {{ committed_prod|floatformat:2 }} {{ lot.item.unit_of_measure }}</span>
     </div>
     {% if sales_allocs %}
     <div style="margin-top:0.85rem">

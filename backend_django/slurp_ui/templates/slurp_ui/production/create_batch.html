@@ -2,7 +2,7 @@
 {% block title %}Create Batch Ticket — SLURP{% endblock %}
 {% block content %}
 <div class="modal-page create-batch-page" style="max-width:960px">
-  <h2>Create {% if batch_type == 'repack' %}Repack{% else %}Batch Ticket (Production){% endif %}</h2>
+  <h2>Create Ticket — {% if batch_type == 'repack' %}Repack{% else %}Batch ticket{% endif %}</h2>
   <p style="color:#64748b;margin-bottom:1rem">
     {% if batch_type == 'repack' %}
     Select a parent SKU, then source and target pack.
@@ -14,11 +14,13 @@
     Conversion: <strong>1 kg = {{ lbs_per_kg }} lbs</strong>.
   </p>
 
-  <div style="display:flex;gap:0.5rem;margin-bottom:1rem">
+  <div style="display:flex;gap:0.5rem;margin-bottom:1rem;flex-wrap:wrap">
     <a class="btn {% if batch_type == 'production' %}btn-primary{% else %}btn-secondary{% endif %}"
-       href="{% url 'slurp_ui:production_create_batch' %}?batch_type=production">Production</a>
+       href="{% url 'slurp_ui:production_create_batch' %}?batch_type=production">Batch ticket</a>
     <a class="btn {% if batch_type == 'repack' %}btn-primary{% else %}btn-secondary{% endif %}"
        href="{% url 'slurp_ui:production_create_batch' %}?batch_type=repack">Repack</a>
+    <a class="btn btn-secondary"
+       href="{% url 'slurp_ui:production_rework' %}">Rework</a>
   </div>
 
   {% if batch_type == 'repack' %}
@@ -354,8 +356,11 @@
 
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem">
       <div class="form-row">
-        <label for="quantity_produced">Quantity to produce (<span class="uom-label">{{ display_uom }}</span>) *</label>
+        <label for="quantity_produced">Formula quantity (<span class="uom-label">{{ display_uom }}</span>) *</label>
         <input id="quantity_produced" name="quantity_produced" type="number" step="any" min="0" required />
+        <span class="form-hint" style="display:block;margin-top:0.25rem;color:#64748b;font-size:0.8rem">
+          Ingredient % targets use this size. Work-in partials below add to the batch total.
+        </span>
       </div>
       <div class="form-row">
         <label for="production_date">Production date</label>
@@ -364,9 +369,61 @@
       </div>
     </div>
 
+    <div id="batch-total-bar" style="margin:0.75rem 0 0.25rem;padding:0.55rem 0.75rem;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;font-size:0.9rem">
+      <strong>Batch total:</strong>
+      <span id="batch-total-val">0</span> <span class="uom-label">{{ display_uom }}</span>
+      <span id="batch-total-detail" style="color:#64748b;margin-left:0.35rem"></span>
+    </div>
+
+    {% if selected_formula %}
+    <h3 style="margin:1.25rem 0 0.35rem">Work in finished-good partials (optional)</h3>
+    <p style="margin:0 0 0.65rem;color:#64748b;font-size:0.9rem">
+      Remnants under this product’s <strong>parent family</strong> (same as Inventory → Partials).
+      Checking a lot <strong>adds its remnant to the batch total</strong> and puts it on the pick list.
+      Full packs stay on the source lot. Formula % math stays on formula quantity above.
+    </p>
+    {% if work_in_partial_lots %}
+    <div class="lots-list" style="margin-bottom:1rem" id="work-in-partials-list">
+      {% for pl in work_in_partial_lots %}
+      <label class="lot-row lot-row--partial" style="cursor:pointer">
+        <div class="lot-row-partial-main">
+          <input type="checkbox"
+                 class="work-in-partial-cb"
+                 name="work_in_partial"
+                 value="{{ pl.lot.id }}"
+                 data-remnant="{{ pl.available }}"
+                 data-uom="{{ pl.uom }}"
+                 style="margin-right:0.35rem" />
+          <span class="lot-number-badge">{{ pl.lot.lot_number }}</span>
+          {% if not pl.same_sku %}
+          <span class="partial-chip" style="background:#e0e7ff;color:#3730a3">{{ pl.lot.item.sku }}</span>
+          {% endif %}
+          <span class="partial-chip">Partial</span>
+          <span class="lot-available-inline">
+            {{ pl.available|floatformat:2 }} {{ pl.uom }} remnant
+            {% if not pl.is_pure_partial %}
+            <span style="color:#94a3b8">(of {{ pl.on_hand|floatformat:2 }} {{ pl.uom }} on hand)</span>
+            {% endif %}
+          </span>
+        </div>
+        <div class="lot-row-partial-meta">
+          {% if pl.pack_label %}<span>Pack {{ pl.pack_label }}</span>{% endif %}
+        </div>
+      </label>
+      {% endfor %}
+    </div>
+    {% else %}
+    <p style="margin:0 0 1rem;color:#94a3b8;font-size:0.875rem">
+      No remnant packs under this parent family right now.
+    </p>
+    {% endif %}
+    {% endif %}
+
     <h3 style="margin:1.25rem 0 0.35rem">Ingredients — allocate lots</h3>
     <p style="margin:0 0 0.85rem;color:#64748b;font-size:0.9rem">
-      Enter qty on one or more lots (including partials). Remaining = required − selected for that ingredient.
+      Enter qty on one or more lots. When a lot has an opened bag, use the main field for full packs
+      and the smaller field under it for the remnant — both count toward that ingredient.
+      Remaining = required − selected.
     </p>
 
     {% for row in ingredient_lot_choices %}
@@ -436,7 +493,8 @@
         {% for lr in row.lots %}
         <div class="lot-row{% if lr.is_partial %} is-partial{% endif %}"
              data-lot-id="{{ lr.lot.id }}"
-             data-avail="{{ lr.available_display }}">
+             data-avail="{{ lr.available_display }}"
+             {% if lr.remnant_display %}data-remnant="{{ lr.remnant_display }}"{% endif %}>
           <div class="lot-row-ident">
             {% if lr.is_partial %}<span class="partial-chip">Partial</span>{% endif %}
             <span class="lot-number-badge">{{ lr.lot.lot_number }}</span>
@@ -446,11 +504,14 @@
             <span class="lot-available-inline">
               avail {{ lr.available_display|floatformat:2 }} {{ display_uom }}
               ({{ lr.available_native|floatformat:2 }} {{ lr.native_uom }})
+              {% if lr.remnant_display and lr.remnant_display >= 0.01 %}
+              · <strong>{{ lr.remnant_display|floatformat:2 }} {{ display_uom }} remnant</strong>
+              {% endif %}
               {% if lr.pack_label %} · pack {{ lr.pack_label }}{% endif %}
             </span>
           </div>
           <div class="lot-row-qty">
-            <label for="ing_qty_{{ row.ingredient.id }}_{{ lr.lot.id }}">Qty to use (<span class="uom-label">{{ display_uom }}</span>)</label>
+            <label for="ing_qty_{{ row.ingredient.id }}_{{ lr.lot.id }}">Full packs (<span class="uom-label">{{ display_uom }}</span>)</label>
             <div style="display:flex;flex-wrap:wrap;gap:0.4rem;align-items:center">
               <input id="ing_qty_{{ row.ingredient.id }}_{{ lr.lot.id }}"
                      name="ing_qty_{{ row.ingredient.id }}_{{ lr.lot.id }}"
@@ -458,12 +519,32 @@
                      step="any"
                      min="0"
                      max="{{ lr.available_display }}"
-                     class="quantity-input lot-qty-input"
+                     class="quantity-input lot-qty-input lot-packs-input"
                      placeholder="0" />
-              <button type="button" class="btn-fill-remaining" title="Fill up to remaining need, capped by available">
+              <button type="button" class="btn-fill-remaining" title="Fill remaining need into full packs (leaves remnant field as-is)">
                 Fill remaining
               </button>
             </div>
+            {% if lr.remnant_display and lr.remnant_display >= 0.01 %}
+            <div class="lot-remnant-qty">
+              <label for="ing_remnant_qty_{{ row.ingredient.id }}_{{ lr.lot.id }}">
+                Remnant (max {{ lr.remnant_display|floatformat:2 }} <span class="uom-label">{{ display_uom }}</span>)
+              </label>
+              <div style="display:flex;flex-wrap:wrap;gap:0.4rem;align-items:center">
+                <input id="ing_remnant_qty_{{ row.ingredient.id }}_{{ lr.lot.id }}"
+                       name="ing_remnant_qty_{{ row.ingredient.id }}_{{ lr.lot.id }}"
+                       type="number"
+                       step="any"
+                       min="0"
+                       max="{{ lr.remnant_display }}"
+                       class="quantity-input lot-qty-input lot-remnant-input"
+                       placeholder="0" />
+                <button type="button" class="btn-fill-remnant" title="Fill the remnant field with the opened-bag amount">
+                  Fill remnant
+                </button>
+              </div>
+            </div>
+            {% endif %}
           </div>
         </div>
         {% endfor %}
@@ -580,32 +661,6 @@
     </details>
     {% endif %}
 
-    {% if work_in_partial_lots %}
-    <h3 style="margin:1.25rem 0 0.35rem">Work in finished-good partials (optional)</h3>
-    <p style="margin:0 0 0.65rem;color:#64748b;font-size:0.9rem">
-      Partials under this product’s <strong>parent family</strong> (any pack variant).
-      Selected qty is added to produced output when the batch closes — formula math stays unchanged.
-    </p>
-    <div class="lots-list" style="margin-bottom:1rem">
-      {% for pl in work_in_partial_lots %}
-      <label class="lot-row lot-row--partial" style="cursor:pointer">
-        <div class="lot-row-partial-main">
-          <input type="checkbox" name="work_in_partial" value="{{ pl.lot.id }}" style="margin-right:0.35rem" />
-          <span class="lot-number-badge">{{ pl.lot.lot_number }}</span>
-          {% if not pl.same_sku %}
-          <span class="partial-chip" style="background:#e0e7ff;color:#3730a3">{{ pl.lot.item.sku }}</span>
-          {% endif %}
-          <span class="partial-chip">Partial</span>
-          <span class="lot-available-inline">{{ pl.available|floatformat:2 }} {{ pl.uom }} remaining</span>
-        </div>
-        <div class="lot-row-partial-meta">
-          {% if pl.pack_label %}<span>Pack {{ pl.pack_label }}</span>{% endif %}
-        </div>
-      </label>
-      {% endfor %}
-    </div>
-    {% endif %}
-
     <div class="form-row">
       <label for="notes">Notes</label>
       <textarea id="notes" name="notes" rows="2"></textarea>
@@ -644,6 +699,35 @@
       return isFinite(v) && v > 0 ? v : 0;
     }
 
+    function workInSumDisplay() {
+      var sum = 0;
+      document.querySelectorAll('.work-in-partial-cb:checked').forEach(function (cb) {
+        var rem = parseFloat(cb.getAttribute('data-remnant') || '0');
+        var uom = (cb.getAttribute('data-uom') || displayUom).toLowerCase();
+        if (uom === 'lb') uom = 'lbs';
+        if (!isFinite(rem) || rem <= 0) return;
+        sum += convert(rem, uom, displayUom);
+      });
+      return normalize(sum);
+    }
+
+    function updateBatchTotal() {
+      var formula = parseFloat(qtyInput && qtyInput.value ? qtyInput.value : '0');
+      if (!isFinite(formula)) formula = 0;
+      formula = normalize(formula);
+      var wi = workInSumDisplay();
+      var total = normalize(formula + wi);
+      var totalEl = document.getElementById('batch-total-val');
+      var detailEl = document.getElementById('batch-total-detail');
+      if (totalEl) totalEl.textContent = String(total);
+      if (detailEl) {
+        detailEl.textContent = wi > 0
+          ? '(formula ' + formula + ' + work-in ' + wi + ')'
+          : '(formula only)';
+      }
+      return total;
+    }
+
     function updateIngredientBalance(row) {
       if (!row || !qtyInput) return;
       var pct = parseFloat(row.getAttribute('data-pct') || '0');
@@ -656,11 +740,16 @@
         utilInp.value = String(required);
       }
       var selected = 0;
-      row.querySelectorAll('.lot-qty-input').forEach(function (inp) {
-        var q = parseQty(inp);
-        selected += q;
-        var lotRow = inp.closest('.lot-row');
-        if (lotRow) lotRow.classList.toggle('selected', q > 0);
+      row.querySelectorAll('.lot-row').forEach(function (lotRow) {
+        var packs = parseQty(lotRow.querySelector('.lot-packs-input'));
+        var remnant = parseQty(lotRow.querySelector('.lot-remnant-input'));
+        // Utility / single-field rows still use .lot-qty-input without packs class
+        if (!lotRow.querySelector('.lot-packs-input') && !lotRow.querySelector('.lot-remnant-input')) {
+          packs = parseQty(lotRow.querySelector('.lot-qty-input'));
+        }
+        var total = normalize(packs + remnant);
+        selected += total;
+        lotRow.classList.toggle('selected', total > 0);
       });
       selected = normalize(selected);
       var remaining = normalize(required - selected);
@@ -683,18 +772,27 @@
 
     function recalcAll() {
       document.querySelectorAll('.ingredient-row').forEach(updateIngredientBalance);
+      updateBatchTotal();
+      updatePkgSuggest();
     }
 
     if (qtyInput) {
       qtyInput.addEventListener('input', function () {
         recalcAll();
-        updatePkgSuggest();
       });
       qtyInput.addEventListener('change', function () {
         recalcAll();
-        updatePkgSuggest();
       });
     }
+
+    document.querySelectorAll('.work-in-partial-cb').forEach(function (cb) {
+      cb.addEventListener('change', function () {
+        var row = cb.closest('.lot-row');
+        if (row) row.classList.toggle('selected', cb.checked);
+        updateBatchTotal();
+        updatePkgSuggest();
+      });
+    });
 
     document.querySelectorAll('.lot-qty-input').forEach(function (inp) {
       inp.addEventListener('input', function () {
@@ -710,13 +808,16 @@
       btn.addEventListener('click', function () {
         var lotRow = btn.closest('.lot-row');
         var ingRow = btn.closest('.ingredient-row');
-        var inp = lotRow.querySelector('.lot-qty-input');
+        var packsInp = lotRow && lotRow.querySelector('.lot-packs-input');
+        var remnantInp = lotRow && lotRow.querySelector('.lot-remnant-input');
+        var inp = packsInp || (lotRow && lotRow.querySelector('.lot-qty-input'));
         if (!lotRow || !ingRow || !inp) return;
         updateIngredientBalance(ingRow);
         var remaining = parseFloat(ingRow.querySelector('.rem-val').textContent || '0');
-        // Remaining already subtracts this input's current qty — add it back so fill replaces
-        var current = parseQty(inp);
-        var need = normalize(remaining + current);
+        var currentPacks = parseQty(packsInp || inp);
+        var currentRemnant = parseQty(remnantInp);
+        // Remaining already subtracts packs+remnant — add packs back so fill replaces packs only
+        var need = normalize(remaining + currentPacks);
         if (need <= 0) {
           inp.value = '';
           updateIngredientBalance(ingRow);
@@ -724,10 +825,33 @@
         }
         var avail = parseFloat(lotRow.getAttribute('data-avail') || '0');
         if (!isFinite(avail)) avail = 0;
-        var fill = normalize(Math.min(need, avail));
+        var remnantMax = parseFloat(lotRow.getAttribute('data-remnant') || '0');
+        if (!isFinite(remnantMax)) remnantMax = 0;
+        // Cap packs so packs + remnant field ≤ lot avail
+        var room = normalize(Math.max(0, avail - currentRemnant));
+        var fill = normalize(Math.min(need, room));
         inp.value = fill > 0 ? String(fill) : '';
         updateIngredientBalance(ingRow);
         inp.focus();
+      });
+    });
+
+    document.querySelectorAll('.btn-fill-remnant').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var lotRow = btn.closest('.lot-row');
+        var ingRow = btn.closest('.ingredient-row');
+        var remnantInp = lotRow && lotRow.querySelector('.lot-remnant-input');
+        if (!lotRow || !ingRow || !remnantInp) return;
+        var remnantMax = parseFloat(lotRow.getAttribute('data-remnant') || '0');
+        if (!isFinite(remnantMax) || remnantMax <= 0) return;
+        updateIngredientBalance(ingRow);
+        var remaining = parseFloat(ingRow.querySelector('.rem-val').textContent || '0');
+        var currentRemnant = parseQty(remnantInp);
+        var need = normalize(remaining + currentRemnant);
+        var fill = normalize(Math.min(remnantMax, need > 0 ? need : remnantMax));
+        remnantInp.value = fill > 0 ? String(fill) : '';
+        updateIngredientBalance(ingRow);
+        remnantInp.focus();
       });
     });
 
@@ -791,7 +915,7 @@
     function updatePkgSuggest() {
       var hint = document.getElementById('pkg-suggest-hint');
       var packNet = hint ? parseFloat(hint.getAttribute('data-pack-net') || '0') : 0;
-      var base = parseFloat(qtyInput.value || '0');
+      var base = updateBatchTotal();
       if (!isFinite(packNet) || packNet <= 0 || !isFinite(base) || base <= 0) {
         document.querySelectorAll('.pkg-pref-row').forEach(function (row) {
           if (row.getAttribute('data-suggest') !== '1') return;

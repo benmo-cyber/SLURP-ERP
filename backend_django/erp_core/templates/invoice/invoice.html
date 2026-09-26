@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Invoice {{ invoice_number }}</title>
+  <title>{% if is_credit %}Credit Memo{% else %}Invoice{% endif %} {{ invoice_number }}</title>
   <style>
     @page { size: letter; margin: 0.5in; }
     body { font-family: Arial, Helvetica, sans-serif; font-size: 9pt; color: #000; margin: 0; line-height: 1.25; }
@@ -47,8 +47,10 @@
         <div class="company-addr">6431 Michels Drive, Washington, MO 63090<br/>Phone: 314-835-8207</div>
       </td>
       <td class="inv-right">
-        <div class="inv-title">INVOICE</div>
-        <div class="inv-meta">INVOICE # {{ invoice_number }}<br/>DATE: {{ invoice_date }}</div>
+        <div class="inv-title">{{ doc_title }}</div>
+        <div class="inv-meta">{{ doc_number_label }} {{ invoice_number }}<br/>DATE: {{ invoice_date }}
+          {% if is_credit %}<br/>ORIG INVOICE #: {{ source_invoice_number }}{% if rma_number and rma_number != '—' %}<br/>RMA #: {{ rma_number }}{% endif %}{% endif %}
+        </div>
       </td>
     </tr>
   </table>
@@ -109,12 +111,17 @@
     <tr><td class="label">SUBTOTAL</td><td class="value">{{ subtotal }}</td></tr>
     <tr><td class="label">SALES TAX</td><td class="value">{{ tax }}</td></tr>
     <tr><td class="label">SHIPPING</td><td class="value">{{ shipping }}</td></tr>
-    <tr><td class="label total-row">TOTAL DUE</td><td class="value total-row">{{ total_due }}</td></tr>
+    <tr><td class="label total-row">{{ total_label }}</td><td class="value total-row">{{ total_due }}</td></tr>
   </table>
 
   <div class="footer">
+    {% if is_credit %}
+    <p>This credit memo reduces amounts owed on the original invoice referenced above.</p>
+    <p>For credit-related questions, contact Greg Morris: greg.morris@wildwoodingredients.com.</p>
+    {% else %}
     <p>Make all checks payable to Wildwood Ingredients, LLC.</p>
     <p>Thank you for your business! For invoice related questions, contact Greg Morris: greg.morris@wildwoodingredients.com.</p>
+    {% endif %}
   </div>
 </body>
 </html>

@@ -225,7 +225,7 @@ def create_customer_credit_memo(
     if subtotal <= 0:
         raise SellFlowError("Credit amount must be greater than zero.")
 
-    from .views import generate_invoice_number, generate_lot_number, log_lot_transaction
+    from .views import generate_credit_memo_number, generate_lot_number, log_lot_transaction
 
     today = timezone.localdate()
     actor = getattr(user, "username", None) or "system"
@@ -235,14 +235,20 @@ def create_customer_credit_memo(
     payment = None
 
     with transaction.atomic():
-        inv_notes = (
-            f"CREDIT MEMO for SO {so.so_number}"
-            + (f" / source invoice {source_invoice.invoice_number}" if source_invoice else "")
-            + (f"\n{notes.strip()}" if notes and notes.strip() else "")
-            + f"\nCreated by {actor}"
+        credit_number = generate_credit_memo_number(
+            source_invoice, sales_order=so
         )
+        inv_notes_parts = [
+            f"Credit memo against invoice "
+            f"{source_invoice.invoice_number if source_invoice else '—'} "
+            f"/ SO {so.so_number}",
+        ]
+        if notes and notes.strip():
+            inv_notes_parts.append(notes.strip())
+        inv_notes_parts.append(f"Created by {actor}")
+        inv_notes = "\n".join(inv_notes_parts)
         credit = Invoice.objects.create(
-            invoice_number=generate_invoice_number(),
+            invoice_number=credit_number,
             invoice_type="credit",
             customer_vendor_name=so.customer_name
             or (so.customer.name if so.customer_id else ""),

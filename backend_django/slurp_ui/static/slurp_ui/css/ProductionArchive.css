@@ -170,3 +170,97 @@
 .prod-arch-folder.is-product .prod-arch-folder-icon::before {
   background: #60a5fa;
 }
+
+.prod-arch-lot-card {
+  margin: 0 0 1.15rem;
+  padding: 1rem 1.1rem;
+  background: var(--pa-surface);
+  border: 1px solid rgba(30, 42, 58, 0.1);
+  border-radius: 12px;
+}
+
+.prod-arch-lot-card h3 {
+  margin: 0 0 0.55rem;
+  font-size: 1.05rem;
+  font-weight: 750;
+  color: var(--pa-ink);
+  letter-spacing: -0.02em;
+}
+
+.prod-arch-lot-note {
+  margin: 0 0 0.75rem;
+  font-size: 0.88rem;
+  color: var(--pa-muted);
+}
+
+.prod-arch-lot-meta {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+  gap: 0.65rem 1rem;
+  margin-bottom: 0.85rem;
+}
+
+.prod-arch-lot-meta .k {
+  display: block;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--pa-muted);
+  margin-bottom: 0.15rem;
+}
+
+.prod-arch-lot-meta .v {
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: var(--pa-ink);
+}
+
+.prod-arch-lot-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  margin: 0;
+}
+
+.prod-arch-section-title {
+  margin: 1.25rem 0 0.55rem;
+  font-size: 0.95rem;
+  font-weight: 750;
+  color: var(--pa-ink);
+  letter-spacing: -0.01em;
+}
+
+.prod-arch-section-title:first-of-type {
+  margin-top: 0.35rem;
+}
+
+.prod-arch-table-scroll {
+  overflow-x: auto;
+  margin-bottom: 1rem;
+  border-radius: 10px;
+  border: 1px solid rgba(30, 42, 58, 0.08);
+  background: #fff;
+}
+
+.prod-arch-table-scroll .data-table {
+  margin: 0;
+  min-width: 52rem;
+}
+
+.prod-arch-row-pdf {
+  margin-top: 0.35rem;
+}
+
+.prod-arch-actions-col {
+  position: sticky;
+  right: 0;
+  background: #fff;
+  box-shadow: -6px 0 10px rgba(30, 42, 58, 0.06);
+  z-index: 1;
+}
+
+.prod-arch-table-scroll thead .prod-arch-actions-col {
+  background: #f8fafc;
+}

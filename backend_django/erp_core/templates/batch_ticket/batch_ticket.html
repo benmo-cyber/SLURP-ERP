@@ -77,6 +77,9 @@
           {% if campaign_lot_code %}
           <tr><th>Campaign Lot Code:</th><td>{{ campaign_lot_code }}</td></tr>
           {% endif %}
+          {% if output_lots %}
+          <tr><th>Output Lot:</th><td><strong>{{ output_lots }}</strong></td></tr>
+          {% endif %}
           <tr><th>Batch Size:</th><td>{{ batch_size }}</td></tr>
           <tr><th>Pack Size:</th><td>{{ pack_size }}</td></tr>
         </table>
@@ -210,6 +213,9 @@
           {% if campaign_lot_code %}
           <tr><th>Campaign Lot Code:</th><td>{{ campaign_lot_code }}</td></tr>
           {% endif %}
+          {% if output_lots %}
+          <tr><th>Output Lot:</th><td><strong>{{ output_lots }}</strong></td></tr>
+          {% endif %}
           <tr><th>Batch Size:</th><td>{{ batch_size }}</td></tr>
           <tr><th>Pack Size:</th><td>{{ pack_size }}</td></tr>
         </table>
@@ -293,7 +299,7 @@
     {% if closed_summary.output_lots %}
     <tr>
       <th>Output lot(s)</th>
-      <td colspan="3">{{ closed_summary.output_lots }}</td>
+      <td colspan="3"><strong>{{ closed_summary.output_lots }}</strong></td>
     </tr>
     {% endif %}
     {% if closed_summary.qc_parameter or closed_summary.qc_actual %}
